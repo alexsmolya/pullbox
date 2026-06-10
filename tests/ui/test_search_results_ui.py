@@ -1,0 +1,510 @@
+"""Tests for the HTMX interactive search results UI route.
+
+Verifies:
+- GET /htmx/issues/{id}/search-results returns 200 with HTML partial
+- Confidence badge CSS classes are rendered correctly
+- Matched results have grab buttons; rejected results have explicit override grab buttons
+- Nonexistent issue returns 404
+- No indexers configured returns empty results partial
+- Low-confidence results render with correct styling
+- Search time is displayed
+
+Run:
+    pytest tests/ui/test_search_results_ui.py -v
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import sys
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from pullbox.models import Base
+from pullbox.models.issue import Issue, IssueStatus
+from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.models.user import APIKey, User
+from pullbox.providers.base import ReleaseResult
+from pullbox.services.auth_service import AuthService
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-search-results-ui")
+
+
+# ── Test Data ──────────────────────────────────────────────────────────
+
+
+def _make_release(
+    title: str,
+    indexer_name: str = "NZBgeek",
+    *,
+    size_bytes: int | None = 100_000_000,
+    age_days: int | None = 5,
+    is_torrent: bool = False,
+) -> ReleaseResult:
+    return ReleaseResult(
+        title=title,
+        indexer_name=indexer_name,
+        download_url=f"https://indexer.example.com/dl/{title.replace(' ', '_')}",
+        size_bytes=size_bytes,
+        age_days=age_days,
+        seeders=10 if is_torrent else None,
+        leechers=2 if is_torrent else None,
+        grabs=50 if not is_torrent else None,
+        is_torrent=is_torrent,
+        category="comics",
+        published_at=None,
+    )
+
+
+# ── Fixtures ───────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def _db_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+@pytest.fixture
+async def _api_key_header(
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> str:
+    """Create a test user + API key, return the raw key string."""
+    raw_key = "pb_k1_" + "e" * 64
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    async with _db_factory() as session:
+        user = User(
+            username="uisearchuser",
+            password_hash=AuthService.hash_password("Test@1234"),
+        )
+        session.add(user)
+        await session.flush()
+        session.add(APIKey(user_id=user.id, key_hash=key_hash, name="ui-search-test"))
+        await session.commit()
+    return raw_key
+
+
+@pytest.fixture
+async def client(
+    _db_factory: async_sessionmaker[AsyncSession],
+    _api_key_header: str,
+) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client authenticated via API key (bypasses CSRF)."""
+    from pullbox.api.deps import get_db_dep
+    from pullbox.api.middleware import reset_setup_cache
+    from pullbox.app import create_app
+
+    app = create_app()
+    # Keep setup/auth middleware on the same in-memory database as the route deps.
+    app.state.db_session_factory = _db_factory
+
+    async def _override_db() -> AsyncGenerator[AsyncSession, None]:
+        async with _db_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_db_dep] = _override_db
+    reset_setup_cache()
+
+    transport = ASGITransport(app=app)  # type: ignore[arg-type]
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"X-Api-Key": _api_key_header},
+    ) as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+    reset_setup_cache()
+
+
+async def _create_issue(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    series_title: str = "Batman",
+    year_start: int = 2016,
+    issue_number: float = 1.0,
+) -> int:
+    """Seed a series + issue, return the issue_id."""
+    async with factory() as session:
+        series = Series(
+            comicvine_id=99900,
+            title=series_title,
+            sort_title=series_title,
+            year_start=year_start,
+            status=SeriesStatus.CONTINUING,
+            series_type=SeriesType.STANDARD,
+            monitored=True,
+            issue_count=1,
+        )
+        session.add(series)
+        await session.flush()
+
+        issue = Issue(
+            series_id=series.id,
+            comicvine_id=50001,
+            issue_number=issue_number,
+            title=f"Issue #{int(issue_number)}",
+            status=IssueStatus.WANTED,
+        )
+        session.add(issue)
+        await session.commit()
+        return issue.id
+
+
+# ── Tests ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_htmx_search_results_returns_partial(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /htmx/issues/{id}/search-results returns 200 with HTML content."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [
+        _make_release("Batman 001 (2016).cbz"),
+        _make_release("Superman 005 (2020).cbr"),
+    ]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    html = resp.text
+    assert 'data-testid="issue-search-results"' in html
+    assert 'data-testid="issue-search-results-summary"' in html
+    assert 'data-testid="issue-search-results-table"' in html
+    # Should contain at least one result title
+    assert "Batman 001 (2016).cbz" in html
+
+
+@pytest.mark.asyncio
+async def test_confidence_badges_rendered(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """HTML response contains confidence badge CSS classes for matched results."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [
+        _make_release("Batman 001 (2016).cbz"),  # HIGH (exact + year)
+        _make_release("Batman 001.cbz"),  # MEDIUM (exact, no year)
+    ]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert "pill-success" in html
+    assert "pill-warning" in html
+
+
+@pytest.mark.asyncio
+async def test_grab_button_present_for_matched(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Matched results have Grab; rejected results have an explicit override."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [
+        _make_release("Batman 001 (2016).cbz"),  # match
+        _make_release("Superman 005 (2020).cbr"),  # reject
+    ]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    # Matched results should have a grab button
+    assert "Grab" in html
+    assert "window.issueSearchResultActions" in html
+    assert '@click="grabRelease($el)"' in html
+    assert '@click="blockRelease($el)"' in html
+    # Rejected results should show rejection info and an explicit manual override
+    assert "Rejected" in html
+    assert "Grab anyway" in html
+    assert '@click="grabRejectedRelease($el)"' in html
+
+
+@pytest.mark.asyncio
+async def test_empty_results_message(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Empty search results show a 'no results' message."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert "No results found" in html
+    assert 'data-testid="issue-search-results-empty-state"' in html
+
+
+@pytest.mark.asyncio
+async def test_nonexistent_issue_returns_404(client: AsyncClient) -> None:
+    """Missing issue returns 404."""
+    resp = await client.get("/htmx/issues/99999/search-results")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_no_indexers_returns_empty_partial(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """No configured indexers returns the partial with empty results."""
+    issue_id = await _create_issue(_db_factory)
+
+    with patch(
+        "pullbox.composition.providers.build_registry",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    html = resp.text
+    assert "No results found" in html
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_badge_rendered(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """LOW confidence fuzzy matches render with orange badge styling."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [
+        _make_release("Batmans 001.cbz"),  # fuzzy match, no year → LOW
+    ]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert "pill-warning" in html
+
+
+@pytest.mark.asyncio
+async def test_search_time_displayed(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Search time is rendered with a compact unit in the results header."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [_make_release("Batman 001 (2016).cbz")]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert re.search(r"\b\d+(?:\.\d)?(?:ms|s)\b", html)
+
+
+@pytest.mark.asyncio
+async def test_torrent_peers_render_as_plain_row_text(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Torrent peers render inline in the row instead of inside a pill."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [
+        _make_release("Batman 001 (2016).cbz", is_torrent=True),
+    ]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert "10 / 2" in html
+    assert re.search(r'class="pill[^"]*">\s*10 / 2\s*</span>', html) is None
+
+
+@pytest.mark.asyncio
+async def test_rejection_reason_displayed(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Rejected results show the specific rejection reason text."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [
+        _make_release("Superman 005 (2020).cbr"),  # series mismatch
+        _make_release("Batman 001 (2016) covers only.cbz"),  # ignore word
+    ]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    # Should contain both rejected items
+    assert "rejected" in html.lower()
+    assert "Superman 005 (2020).cbr" in html
+
+
+@pytest.mark.asyncio
+async def test_result_counts_in_header(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Header shows matched and rejected counts."""
+    issue_id = await _create_issue(_db_factory)
+
+    mock_results = [
+        _make_release("Batman 001 (2016).cbz"),  # match
+        _make_release("Superman 005 (2020).cbr"),  # reject
+        _make_release("Random Garbage"),  # reject
+    ]
+
+    mock_registry = AsyncMock()
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=(mock_registry, {}),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService.search_for_issue",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ),
+    ):
+        resp = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'data-testid="issue-search-results-summary"' in html
+    assert re.search(r">\s*1\s*</span>\s*matched", html)
+    assert re.search(r">\s*2\s*</span>\s*rejected", html)

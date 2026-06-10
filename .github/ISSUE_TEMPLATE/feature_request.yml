@@ -1,0 +1,60 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for Pullbox
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for Pullbox? We'd love to hear it! Please describe the feature
+        and why it would be useful.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of Pullbox does this relate to?
+      options:
+        - Series Management
+        - Downloads / Acquisition
+        - Library / File Management
+        - Import / Collection Import
+        - Settings / Configuration
+        - Health / Monitoring
+        - Security / Authentication
+        - Utilities
+        - UI / Frontend
+        - API
+        - Docker / Deployment
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the feature you'd like to see.
+      placeholder: What would you like Pullbox to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Why is this feature important to you? What problem does it solve?
+      placeholder: As a user, I want to... so that...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: If you have ideas on how this could be implemented, share them here.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered any workarounds or alternative approaches?

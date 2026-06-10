@@ -1,0 +1,46 @@
+{% from "components/settings_shell.html" import ui_icon %}
+
+{% if total_files == 0 %}
+<section data-testid="library-empty-state" class="section-card overflow-hidden">
+  <div class="section-body py-12">
+    <div class="grid gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(280px,0.9fr)] lg:items-center">
+      <div class="space-y-4">
+        <div class="flex h-16 w-16 items-center justify-center rounded-full bg-pb-card-hover text-pb-text-dim">
+          <svg class="h-8 w-8" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+          </svg>
+        </div>
+        <div class="space-y-3">
+          <p class="section-eyebrow">Start here</p>
+          <h2 class="text-2xl font-semibold tracking-tight text-pb-text">The library is ready for its first files.</h2>
+          <p class="max-w-2xl text-sm leading-7 text-pb-text-sec">
+            Import a collection or let new downloads complete, and this page will turn into the living overview for library health, storage, and cleanup work.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <a href="/import" class="btn-primary">Import collection</a>
+          <a href="/settings?tab=media" class="btn-ghost">Open media settings</a>
+        </div>
+      </div>
+
+      <div class="info-panel info-panel-muted">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Recommended first steps</p>
+        <div class="mt-4 space-y-2">
+          <div class="checklist-item">
+            <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+            <span>Confirm the library root is pointed at the storage location you want to keep long term</span>
+          </div>
+          <div class="checklist-item">
+            <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+            <span>Run your first import or download flow so Pullbox can start building the library picture</span>
+          </div>
+          <div class="checklist-item">
+            <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+            <span>Come back here to review storage, matching, and format coverage as the library grows</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endif %}

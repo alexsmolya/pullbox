@@ -1,0 +1,24 @@
+{% from "components/page_dock.html" import page_dock %}
+
+{% set security_status_items = [] %}
+{% if tab == "audit_log" %}
+  {% set security_status_items = [
+    {"label": "section", "value": "Audit Log"},
+    {"label": "events", "value": "0 records"},
+    {"label": "filter", "value": "All events"},
+    {"label": "range", "value": "Last 7 days"},
+  ] %}
+{% endif %}
+
+<div data-testid="security-footer-dock">
+  {% if tab == "audit_log" %}
+    {{ page_dock(
+      page=1,
+      total_pages=1,
+      base_url="/security?tab=audit_log",
+      status_items=security_status_items
+    ) }}
+  {% else %}
+    {{ page_dock(page=1, total_pages=1, status_items=[]) }}
+  {% endif %}
+</div>

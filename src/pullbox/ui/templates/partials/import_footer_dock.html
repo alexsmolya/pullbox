@@ -1,0 +1,48 @@
+{% from "components/page_dock.html" import page_dock, status_dock %}
+
+{% if tab == "history" %}
+  {% set history_stats = history_stats|default({'active': 0, 'resumable': 0, 'results_ready': 0}) %}
+{% endif %}
+
+<div data-testid="import-footer-dock">
+  {% if tab == "unmatched" %}
+    {% set _base_url = "/import?tab=unmatched&view=" ~ (view|default("all")) %}
+    {{ page_dock(
+      page=page,
+      total_pages=total_pages,
+      base_url=_base_url,
+      status_items=[
+        {"led": "amber" if orphaned_count|default(0) > 0 else "off", "label": "unmatched", "value": orphaned_count|default(0)|string},
+        {"label": "dismissed", "value": dismissed_count|default(0)|string},
+        {"label": "visible", "value": (items|default([])|length)|string},
+      ],
+      hx_target="#import-orphaned-results",
+      hx_swap="outerHTML",
+      hx_select="",
+      hx_base_url=_base_url
+    ) }}
+  {% elif tab == "history" %}
+    {% set _base_params = ["tab=history"] %}
+    {% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+    {% if sort and sort != "-created_at" %}{% set _ = _base_params.append("sort=" ~ sort) %}{% endif %}
+    {% set _base_url = "/import" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+    {{ page_dock(
+      page=page,
+      total_pages=total_pages,
+      base_url=_base_url,
+      status_items=[
+        {"label": "jobs", "value": total_jobs|default(0)|string},
+        {"led": "amber" if history_stats['active'] > 0 else "off", "label": "active", "value": history_stats['active']|string},
+        {"led": "amber" if history_stats['resumable'] > 0 else "off", "label": "resumable", "value": history_stats['resumable']|string},
+        {"label": "results", "value": history_stats['results_ready']|string},
+      ],
+      hx_target="#import-history-results",
+      hx_swap="outerHTML",
+      hx_select="",
+      hx_base_url=_base_url,
+      hx_sync="#import-history-results:replace"
+    ) }}
+  {% else %}
+    {% include "partials/import_collection_footer_dock.html" %}
+  {% endif %}
+</div>

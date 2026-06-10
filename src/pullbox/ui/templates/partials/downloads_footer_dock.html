@@ -1,0 +1,43 @@
+{% from "components/page_dock.html" import page_dock, status_dock %}
+
+<div data-testid="downloads-footer-dock">
+  {% if tab == "history" %}
+    {% set _base_params = ["tab=history"] %}
+    {% if status_filter %}{% set _ = _base_params.append("status=" ~ status_filter) %}{% endif %}
+    {% if client_filter %}{% set _ = _base_params.append("client=" ~ client_filter) %}{% endif %}
+    {% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+    {% if sort and sort != "-updated_at" %}{% set _ = _base_params.append("sort=" ~ sort) %}{% endif %}
+    {% set _full_base = "/downloads" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+    {% set _hx_params = [] %}
+    {% if status_filter %}{% set _ = _hx_params.append("status=" ~ status_filter) %}{% endif %}
+    {% if client_filter %}{% set _ = _hx_params.append("client=" ~ client_filter) %}{% endif %}
+    {% if search_query %}{% set _ = _hx_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+    {% if sort and sort != "-updated_at" %}{% set _ = _hx_params.append("sort=" ~ sort) %}{% endif %}
+    {% set _hx_base = "/htmx/downloads/history" ~ ("?" ~ _hx_params|join("&") if _hx_params else "") %}
+    {% set _history_status_items = [
+      {"label": "total", "value": history_total|string ~ " records"},
+      {"label": "completed", "value": history_completed_count|string},
+      {"label": "failed", "value": history_failed_count|string},
+      {"label": "cancelled", "value": history_cancelled_count|string},
+    ] %}
+    {{ page_dock(
+      page=page,
+      total_pages=history_pages,
+      base_url=_full_base,
+      status_items=_history_status_items,
+      hx_target="#downloads-history-results",
+      hx_swap="outerHTML",
+      hx_select="",
+      hx_base_url=_hx_base,
+      hx_sync="#downloads-history-results:replace"
+    ) }}
+  {% else %}
+    {% set _queue_speed = combined_speed_bytes if combined_speed_bytes is defined else 0 %}
+    {{ status_dock(status_items=[
+      {"led": "green" if active_count > 0 else "off", "label": "active", "value": active_count|string},
+      {"led": "amber" if waiting_count > 0 else "off", "label": "queued", "value": waiting_count|string},
+      {"label": "speed", "value": (_queue_speed|dlspeed) if _queue_speed > 0 else "idle"},
+      {"label": "paused", "value": paused_count|string if paused_count > 0 else "none"},
+    ]) }}
+  {% endif %}
+</div>

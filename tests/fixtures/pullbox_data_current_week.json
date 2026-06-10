@@ -1,0 +1,77 @@
+{
+  "store_date": "2026-03-11",
+  "count": 2,
+  "last_updated": "2026-03-10T12:15:00+00:00",
+  "issues": [
+    {
+      "locg_issue_id": 1511525,
+      "locg_series_id": 178012,
+      "locg_url": "https://leagueofcomicgeeks.com/comic/1511525/absolute-batman-18",
+      "title": "Absolute Batman #18",
+      "display_title": "Absolute Batman #18 Cover A",
+      "issue_number": "18",
+      "price": 4.99,
+      "currency": "USD",
+      "store_date": "2026-03-11",
+      "release_week_date": "2026-03-04",
+      "cover_url": "https://cdn.example.com/1511525.jpg",
+      "variant_count": 3,
+      "community_rating": 4.5,
+      "community_counts": {
+        "pull": 2500,
+        "have": 1800,
+        "read": 1200,
+        "want": 900,
+        "pick": 150
+      },
+      "publisher": {
+        "name": "DC Comics",
+        "locg_publisher_id": 501,
+        "excluded": false,
+        "excluded_reason": null
+      },
+      "series": {
+        "title": "Absolute Batman",
+        "locg_series_id": 178012,
+        "locg_url": "https://leagueofcomicgeeks.com/comics/series/178012/absolute-batman",
+        "start_year": 2024,
+        "volume": "2024"
+      }
+    },
+    {
+      "locg_issue_id": 1512401,
+      "locg_series_id": 179450,
+      "locg_url": "https://leagueofcomicgeeks.com/comic/1512401/transformers-19",
+      "title": "Transformers #19",
+      "display_title": "Transformers #19 Cover A",
+      "issue_number": "19",
+      "price": 3.99,
+      "currency": "USD",
+      "store_date": "2026-03-11",
+      "release_week_date": "2026-03-11",
+      "cover_url": "https://cdn.example.com/1512401.jpg",
+      "variant_count": 5,
+      "community_rating": 4.2,
+      "community_counts": {
+        "pull": 1840,
+        "have": 910,
+        "read": 640,
+        "want": 500,
+        "pick": 88
+      },
+      "publisher": {
+        "name": "Image Comics",
+        "locg_publisher_id": 502,
+        "excluded": false,
+        "excluded_reason": null
+      },
+      "series": {
+        "title": "Transformers",
+        "locg_series_id": 179450,
+        "locg_url": "https://leagueofcomicgeeks.com/comics/series/179450/transformers",
+        "start_year": 2023,
+        "volume": "2023"
+      }
+    }
+  ]
+}

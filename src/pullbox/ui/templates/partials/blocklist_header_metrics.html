@@ -1,0 +1,67 @@
+{% set _blocklist_gauge_total = total if total > 0 else 1 %}
+{% set _failed_offset = (113.1 * (1 - (failed_count / _blocklist_gauge_total)))|round(1) %}
+{% set _rejected_offset = (113.1 * (1 - (rejected_count / _blocklist_gauge_total)))|round(1) %}
+{% set _manual_offset = (113.1 * (1 - (manual_count / _blocklist_gauge_total)))|round(1) %}
+
+<div class="downloads-header-copy">
+  <h1 class="downloads-title">BLOCK<span>LIST</span></h1>
+  <p class="downloads-subtitle">
+    {{ total }} blocked · {{ failed_count }} failed · {{ rejected_count }} rejected · {{ manual_count }} manual
+  </p>
+</div>
+
+<div data-testid="blocklist-gauges" class="downloads-gauges">
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-error"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _failed_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-error">{{ failed_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Failed</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-warning"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _rejected_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-warning">{{ rejected_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Rejected</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-info"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _manual_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-info">{{ manual_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Manual</div>
+  </div>
+</div>

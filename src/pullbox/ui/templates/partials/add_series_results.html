@@ -1,0 +1,100 @@
+<section
+  id="add-series-results"
+  data-testid="add-series-results"
+  class="add-series-results-shell space-y-3"
+>
+  <div
+    id="add-series-results-loading"
+    data-testid="add-series-results-loading"
+    class="add-series-results-loading htmx-indicator"
+    role="status"
+    aria-live="polite"
+  >
+    <div class="add-series-results-loading-card">
+      <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      <div>
+        <p class="add-series-results-loading-title">Searching ComicVine</p>
+        <p class="add-series-results-loading-copy">Large catalogs can take a moment.</p>
+      </div>
+    </div>
+  </div>
+
+  {% if is_preview_search and search_query %}
+    <div
+      data-testid="add-series-preview-notice"
+      class="add-series-preview-notice"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="add-series-preview-notice-icon" aria-hidden="true">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div class="add-series-preview-notice-body">
+        <p class="add-series-preview-notice-title">Quick preview</p>
+        <p class="add-series-preview-notice-copy">
+          {% if search_shown_count %}
+            Showing {{ search_shown_count }} fast ComicVine match{% if search_shown_count != 1 %}es{% endif %}.
+          {% else %}
+            No quick matches were found in the fast preview.
+          {% endif %}
+          Press Enter or search all results to load the full ComicVine result set.
+        </p>
+      </div>
+      <a
+        data-testid="add-series-full-search-button"
+        href="{{ add_series_full_search_url }}"
+        hx-get="{{ add_series_full_search_url }}"
+        hx-target="#add-series-results"
+        hx-swap="morph:outerHTML"
+        hx-push-url="true"
+        hx-sync="#add-series-search-form:replace"
+        hx-indicator="#add-series-results-loading"
+        class="btn-primary btn-sm add-series-preview-notice-action"
+      >
+        Search all ComicVine results
+      </a>
+    </div>
+  {% endif %}
+
+  {% if search_error %}
+    <div class="inline-alert inline-alert-danger">
+      <svg class="inline-alert-icon h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+      </svg>
+      <span>{{ search_error }}</span>
+    </div>
+  {% elif search_results %}
+    <div data-testid="add-series-results-list" class="add-series-results-list">
+      {% for r in search_results %}
+        {% include "partials/search_result_card.html" %}
+      {% endfor %}
+    </div>
+  {% elif search_query %}
+    <div data-testid="add-series-empty-state" class="add-series-empty-state">
+      <svg class="mx-auto h-10 w-10 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      <p class="add-series-empty-title">No ComicVine matches</p>
+      <p class="add-series-empty-copy">
+        Try the exact title, add the year, or remove punctuation and subtitles from the search.
+      </p>
+    </div>
+  {% else %}
+    <div data-testid="add-series-empty-state" class="add-series-empty-state">
+      <svg class="mx-auto h-10 w-10 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      <p class="add-series-empty-title">Search ComicVine</p>
+      <p class="add-series-empty-copy">
+        Type a series name above to find and add it to your library.
+      </p>
+    </div>
+  {% endif %}
+</section>

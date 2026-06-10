@@ -1,0 +1,44 @@
+{#- Infinite scroll items partial — returns series cards/rows + next sentinel.
+    Used by grid, compact, and list views when partial=scroll is requested.
+    Expects: series_data, page, total_pages, sort, filter_query, view_mode -#}
+
+{% for item in series_data %}
+  {% set s = item.series %}
+  {% set owned_count = item.owned_count %}
+  {% set wanted_count = item.wanted_count %}
+  {% if view_mode == 'list' %}
+    {% include "partials/series_list_row.html" %}
+  {% elif view_mode == 'compact' %}
+    {% include "partials/series_card_compact.html" %}
+  {% else %}
+    {% include "partials/series_card.html" %}
+  {% endif %}
+{% endfor %}
+
+{#- Next page sentinel (or nothing if last page) -#}
+{% if page < total_pages %}
+{% set next_qs = "page=" ~ (page + 1) ~ "&partial=scroll&view_mode=" ~ view_mode %}
+{% if filter_query %}{% set next_qs = next_qs ~ "&" ~ filter_query %}{% endif %}
+{% if view_mode == 'list' %}
+<tr hx-get="/series?{{ next_qs }}"
+    hx-trigger="revealed"
+    hx-swap="outerHTML">
+  <td colspan="6" class="py-4 text-center">
+    <svg class="w-6 h-6 animate-spin text-pb-text-dim mx-auto" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+    </svg>
+  </td>
+</tr>
+{% else %}
+<div hx-get="/series?{{ next_qs }}"
+     hx-trigger="revealed"
+     hx-swap="outerHTML"
+     class="{{ 'col-span-full' if view_mode == 'grid' else '' }} py-4 flex justify-center">
+  <svg class="w-6 h-6 animate-spin text-pb-text-dim" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+  </svg>
+</div>
+{% endif %}
+{% endif %}

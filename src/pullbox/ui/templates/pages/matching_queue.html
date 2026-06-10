@@ -1,0 +1,468 @@
+{% extends "base.html" %}
+{% from "components/pagination.html" import pagination %}
+{% from "components/settings_shell.html" import inline_alert, section_card, ui_icon %}
+
+{% block title %}Matching Queue — {{ instance_name() }}{% endblock %}
+{% block page_title %}Matching Queue{% endblock %}
+
+{% set ns = namespace(parsed=0, issue=0, comicinfo=0) %}
+{% if files %}
+  {% for f in files %}
+    {% if f.parsed_series %}
+      {% set ns.parsed = ns.parsed + 1 %}
+    {% endif %}
+    {% if f.parsed_issue_number is not none %}
+      {% set ns.issue = ns.issue + 1 %}
+    {% endif %}
+    {% if f.has_comicinfo %}
+      {% set ns.comicinfo = ns.comicinfo + 1 %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+
+{% block content %}
+<div id="matching-queue-app" class="space-y-6" x-data="matchingQueue()">
+  <div class="section-card">
+    <div class="section-body space-y-6">
+      <div class="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+        <div class="max-w-3xl space-y-3">
+          <a href="/library" class="inline-flex items-center gap-2 text-sm font-medium text-pb-text-sec transition-colors hover:text-pb-text">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
+            </svg>
+            Back to library
+          </a>
+          <p class="section-eyebrow">Manual matching</p>
+          <h2 class="text-2xl font-semibold tracking-tight text-pb-text">
+            Finish the files that still need a human decision.
+          </h2>
+          <p class="text-sm leading-7 text-pb-text-sec">
+            Pullbox already parsed titles, issue numbers, years, and embedded metadata where it could. Use those clues to connect each file to the right issue before it lands in the wrong place.
+          </p>
+        </div>
+
+        <div class="w-full xl:max-w-sm info-panel info-panel-muted">
+          <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Best next move</p>
+          <p class="mt-3 text-sm leading-6 text-pb-text-sec">
+            {% if total > 0 %}
+              Start with files that already have a series title and issue hint. Those usually clear out the fastest and leave the tougher cases for later.
+            {% else %}
+              No action is needed right now. New items only land here when Pullbox cannot make a confident match on its own.
+            {% endif %}
+          </p>
+          <div class="mt-4 space-y-2">
+            <div class="checklist-item">
+              <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+              <span>Match the strongest clues first</span>
+            </div>
+            <div class="checklist-item">
+              <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+              <span>Confirm the exact issue before saving</span>
+            </div>
+            <div class="checklist-item">
+              <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+              <span>Leave uncertain files for a later pass</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="stat-card">
+          <p class="stat-card-kicker">Unmatched files</p>
+          <p class="stat-card-value">{{ total }}</p>
+          <p class="stat-card-copy">Everything waiting for a manual issue decision across the full queue.</p>
+        </div>
+        <div class="stat-card">
+          <p class="stat-card-kicker">On this page</p>
+          <p class="stat-card-value">{{ files|length if files else 0 }}</p>
+          <p class="stat-card-copy">Review the current page, then use pagination to keep moving through the queue.</p>
+        </div>
+        <div class="stat-card">
+          <p class="stat-card-kicker">Series clues</p>
+          <p class="stat-card-value">{{ ns.parsed }}</p>
+          <p class="stat-card-copy">These files already have a parsed series title that can seed your first search.</p>
+        </div>
+        <div class="stat-card">
+          <p class="stat-card-kicker">Issue clues</p>
+          <p class="stat-card-value">{{ ns.issue }}</p>
+          <p class="stat-card-copy">Parsed issue numbers help narrow the series down to the final issue selection.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if files %}
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
+      {% call section_card(
+        title="Files waiting for review",
+        description="Remove items from the queue one confident match at a time.",
+        eyebrow="Queue",
+        class_name="min-w-0"
+      ) %}
+        <div class="flex flex-col gap-3 border-b border-pb-border pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="pill-neutral">Page {{ page }} of {{ total_pages }}</span>
+            <span class="pill-info">{{ ns.parsed }} with series clues</span>
+            <span class="pill-warning">{{ ns.issue }} with issue clues</span>
+            {% if ns.comicinfo %}
+              <span class="pill-success">{{ ns.comicinfo }} with ComicInfo</span>
+            {% endif %}
+          </div>
+          <p class="text-xs leading-5 text-pb-text-sec">Matching a file removes it from this page immediately.</p>
+        </div>
+
+        <div class="mt-4 space-y-3">
+          {% for f in files %}
+            {% include "partials/matching_item.html" %}
+          {% endfor %}
+        </div>
+
+        {% if total_pages > 1 %}
+          <div class="mt-6 border-t border-pb-border pt-4">
+            {{ pagination(page, total_pages, "/library/matching", "#content") }}
+          </div>
+        {% endif %}
+      {% endcall %}
+
+      <div class="space-y-4">
+        <div class="info-panel">
+          <p class="section-eyebrow">Good matching habits</p>
+          <h3 class="mt-2 text-base font-semibold text-pb-text">Use the clues in the filename, then confirm the issue details.</h3>
+          <div class="mt-4 space-y-3">
+            <div class="flex items-start gap-3">
+              <span class="step-badge h-7 w-7 text-[11px]">1</span>
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-pb-text">Search by the parsed title first</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">If the file already includes a series clue, use it before trying a broader search.</p>
+              </div>
+            </div>
+            <div class="flex items-start gap-3">
+              <span class="step-badge h-7 w-7 text-[11px]">2</span>
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-pb-text">Use the issue number to verify</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">Treat the issue number, year, and publisher as confirmation, not just loose hints.</p>
+              </div>
+            </div>
+            <div class="flex items-start gap-3">
+              <span class="step-badge h-7 w-7 text-[11px]">3</span>
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-pb-text">Skip uncertain matches</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">A file can stay in the queue longer. It is better to wait than to link it to the wrong issue.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="info-panel info-panel-muted">
+          <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Signals on this page</p>
+          <div class="mt-4 space-y-3 text-sm">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="font-medium text-pb-text">Parsed series title</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">These usually match quickly with a short library search.</p>
+              </div>
+              <span class="count-badge count-badge-info">{{ ns.parsed }}</span>
+            </div>
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="font-medium text-pb-text">Parsed issue number</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">Issue hints help you confirm the right title once you have found the series.</p>
+              </div>
+              <span class="count-badge count-badge-warning">{{ ns.issue }}</span>
+            </div>
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="font-medium text-pb-text">Embedded ComicInfo</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">Embedded metadata is often the fastest tie-breaker on similar titles.</p>
+              </div>
+              <span class="count-badge count-badge-success">{{ ns.comicinfo }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
+      <div class="section-card">
+        <div class="section-body py-12 text-center">
+          <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-pb-success-dim text-pb-success">
+            {{ ui_icon("check", "h-8 w-8") }}
+          </div>
+          <h2 class="mt-6 text-2xl font-semibold tracking-tight text-pb-text">Everything in the library is matched.</h2>
+          <p class="mx-auto mt-3 max-w-2xl text-sm leading-7 text-pb-text-sec">
+            New files only appear here when Pullbox needs help choosing the exact issue. Right now there is nothing waiting for manual review.
+          </p>
+          <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+            <a href="/library" class="btn-ghost">Back to library</a>
+            <a href="/import?tab=unmatched" class="btn-primary">Open import cleanup</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-4">
+        <div class="info-panel info-panel-muted">
+          <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">What happens next</p>
+          <div class="mt-4 space-y-2">
+            <div class="checklist-item">
+              <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+              <span>Automatic matching keeps running during imports and library updates</span>
+            </div>
+            <div class="checklist-item">
+              <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+              <span>Only uncertain files return here for a manual decision</span>
+            </div>
+            <div class="checklist-item">
+              <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+              <span>You can reopen this queue any time from the library</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <div x-show="showModal" x-cloak class="modal-shell" @keydown.escape.window="showModal = false">
+    <div class="modal-backdrop"
+         @click="showModal = false"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"></div>
+
+    <div class="modal-panel max-w-5xl"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 scale-100"
+         x-transition:leave-end="opacity-0 scale-95">
+      <div class="modal-header">
+        <div class="min-w-0">
+          <p class="section-eyebrow">Manual match</p>
+          <h3 class="mt-2 text-lg font-semibold text-pb-text">Choose the exact issue for this file.</h3>
+          <p class="mt-1 text-sm text-pb-text-sec">
+            Search the library, pick the correct series, and then select the issue that matches the file you downloaded.
+          </p>
+        </div>
+        <button @click="showModal = false" class="icon-btn shrink-0" aria-label="Close match modal">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div class="grid gap-6 p-5 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
+          <div class="space-y-4">
+            <div class="info-panel info-panel-muted">
+              <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">File to match</p>
+              <div class="mt-4 flex items-start gap-4">
+                <div class="match-file-format" :class="formatToneClass(selectedFormat)">
+                  <span x-text="selectedFormat ? '.' + selectedFormat : 'FILE'"></span>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="break-words text-sm font-semibold text-pb-text" x-text="selectedFileName"></p>
+                  <p class="mt-1 text-xs text-pb-text-sec" x-text="selectedLibraryRoot ? 'From ' + selectedLibraryRoot : 'Library source unavailable'"></p>
+                </div>
+              </div>
+              <div class="mt-4 flex flex-wrap items-center gap-2 text-xs">
+                <span x-show="selectedParsedSeries" x-cloak class="pill-info">Series: <span x-text="selectedParsedSeries"></span></span>
+                <span x-show="selectedParsedIssue" x-cloak class="pill-warning">Issue: #<span x-text="selectedParsedIssue"></span></span>
+                <span x-show="selectedParsedYear" x-cloak class="pill-neutral">Year: <span x-text="selectedParsedYear"></span></span>
+                <span x-show="selectedHasComicinfo" x-cloak class="pill-success">ComicInfo.xml present</span>
+              </div>
+            </div>
+
+            <div class="info-panel">
+              <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">What makes a confident match</p>
+              <div class="mt-4 space-y-2">
+                <div class="checklist-item">
+                  <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                  <span>The series title lines up with the filename</span>
+                </div>
+                <div class="checklist-item">
+                  <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                  <span>The issue number matches the file naming or embedded metadata</span>
+                </div>
+                <div class="checklist-item">
+                  <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                  <span>Year and publisher help separate similar runs of the same title</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div class="floating-panel">
+              <div class="border-b border-pb-border px-5 py-4">
+                <p class="text-sm font-semibold text-pb-text">1. Find the series</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">Start with the parsed title if it looks right, then broaden the search only when you need to.</p>
+              </div>
+              <div class="space-y-4 p-5">
+                <div class="space-y-2">
+                  <label class="block text-xs font-medium uppercase tracking-[0.12em] text-pb-text-dim">Search library series</label>
+                  <input type="search"
+                         x-model="seriesQuery"
+                         @input.debounce.300ms="searchSeries()"
+                         placeholder="Search series title..."
+                         class="input-pb w-full">
+                </div>
+
+                <template x-if="seriesQuery.length < 2">
+                  <div class="info-panel info-panel-muted text-center">
+                    <p class="text-sm font-medium text-pb-text">Type at least two characters to search.</p>
+                    <p class="mt-1 text-xs leading-5 text-pb-text-sec">Series names work best. Add the year only when you need to separate similar titles.</p>
+                  </div>
+                </template>
+
+                <div id="match-series-results-content"></div>
+              </div>
+            </div>
+
+            <div class="floating-panel">
+              <div class="border-b border-pb-border px-5 py-4">
+                <p class="text-sm font-semibold text-pb-text">2. Pick the issue</p>
+                <p class="mt-1 text-xs leading-5 text-pb-text-sec">Choose the issue only after you have selected the correct series.</p>
+              </div>
+              <div class="p-5">
+                <template x-if="!selectedSeriesId">
+                  <div class="info-panel info-panel-muted text-center">
+                    <p class="text-sm font-medium text-pb-text">Choose a series first.</p>
+                    <p class="mt-1 text-xs leading-5 text-pb-text-sec">The issue list appears here as soon as you pick the title that matches the file.</p>
+                  </div>
+                </template>
+
+                <div id="match-issue-list-content"></div>
+              </div>
+            </div>
+
+            <div x-show="matchError" x-cloak>
+              {% call inline_alert(tone="danger", class_name="w-full") %}
+                <p x-text="matchError"></p>
+              {% endcall %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <p class="text-xs leading-5 text-pb-text-sec">Matching removes the file from this queue immediately and keeps the library history accurate.</p>
+        <button @click="showModal = false" class="btn-ghost">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function matchingQueue() {
+  return {
+    showModal: false,
+    selectedFileId: null,
+    selectedFileName: "",
+    selectedParsedSeries: "",
+    selectedParsedIssue: "",
+    selectedParsedYear: "",
+    selectedLibraryRoot: "",
+    selectedFormat: "",
+    selectedHasComicinfo: false,
+    seriesQuery: "",
+    selectedSeriesId: null,
+    matchError: "",
+
+    openMatch(fileId, fileName, parsedSeries, parsedIssue, parsedYear, libraryRoot, hasComicinfo, fileFormat) {
+      this.selectedFileId = fileId;
+      this.selectedFileName = fileName;
+      this.selectedParsedSeries = parsedSeries || "";
+      this.selectedParsedIssue = parsedIssue;
+      this.selectedParsedYear = parsedYear || "";
+      this.selectedLibraryRoot = libraryRoot || "";
+      this.selectedHasComicinfo = hasComicinfo;
+      this.selectedFormat = fileFormat || "";
+      this.seriesQuery = parsedSeries || "";
+      this.selectedSeriesId = null;
+      this.matchError = "";
+      this.showModal = true;
+      document.getElementById("match-series-results-content").innerHTML = "";
+      document.getElementById("match-issue-list-content").innerHTML = "";
+      if (this.seriesQuery.length >= 2) {
+        this.$nextTick(() => this.searchSeries());
+      }
+    },
+
+    searchSeries() {
+      this.selectedSeriesId = null;
+      document.getElementById("match-issue-list-content").innerHTML = "";
+      if (this.seriesQuery.length < 2) {
+        document.getElementById("match-series-results-content").innerHTML = "";
+        return;
+      }
+      const el = document.getElementById("match-series-results-content");
+      htmx.ajax("GET", "/htmx/matching/series?q=" + encodeURIComponent(this.seriesQuery), { target: el, swap: "innerHTML" });
+    },
+
+    selectSeries(seriesId) {
+      this.selectedSeriesId = seriesId;
+      const el = document.getElementById("match-issue-list-content");
+      htmx.ajax("GET", "/htmx/matching/issues?series_id=" + seriesId, { target: el, swap: "innerHTML" });
+    },
+
+    matchToIssue(issueId) {
+      this.matchError = "";
+      fetch("/api/v1/library/match", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "{{ csrf_token }}",
+        },
+        body: JSON.stringify({ library_file_id: this.selectedFileId, issue_id: issueId }),
+      })
+        .then(res => {
+          if (res.ok) return res.json();
+          return res.json().then(data => { throw new Error((data.error && data.error.message) || "Match failed."); });
+        })
+        .then(() => {
+          this.showModal = false;
+          if (typeof showToast === "function") showToast({ message: "File matched successfully!", level: "success" });
+          const row = document.getElementById("match-file-" + this.selectedFileId);
+          if (row) row.remove();
+        })
+        .catch(err => {
+          this.matchError = err.message;
+        });
+    },
+
+    formatToneClass(format) {
+      switch ((format || "").toLowerCase()) {
+        case "cbz":
+          return "match-file-format-cbz";
+        case "cbr":
+          return "match-file-format-cbr";
+        case "pdf":
+          return "match-file-format-pdf";
+        default:
+          return "match-file-format-other";
+      }
+    },
+  };
+}
+
+function openMatchModal(ds) {
+  const comp = Alpine.$data(document.getElementById("matching-queue-app"));
+  comp.openMatch(
+    parseInt(ds.id),
+    ds.name,
+    ds.series || null,
+    ds.issue || "",
+    ds.year || "",
+    ds.root || "",
+    ds.comicinfo === "true",
+    ds.format || ""
+  );
+}
+</script>
+{% endblock %}

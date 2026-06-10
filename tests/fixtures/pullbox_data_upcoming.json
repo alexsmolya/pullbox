@@ -1,0 +1,87 @@
+{
+  "weeks": [
+    {
+      "store_date": "2026-03-18",
+      "count": 1,
+      "issues": [
+        {
+          "locg_issue_id": 1513007,
+          "locg_series_id": 178012,
+          "locg_url": "https://leagueofcomicgeeks.com/comic/1513007/absolute-batman-19",
+          "title": "Absolute Batman #19",
+          "display_title": "Absolute Batman #19 Cover A",
+          "issue_number": "19",
+          "price": 4.99,
+          "currency": "USD",
+          "store_date": "2026-03-18",
+          "release_week_date": "2026-03-18",
+          "cover_url": "https://cdn.example.com/1513007.jpg",
+          "variant_count": 4,
+          "community_rating": 4.4,
+          "community_counts": {
+            "pull": 2200,
+            "have": 300,
+            "read": 150,
+            "want": 760,
+            "pick": 122
+          },
+          "publisher": {
+            "name": "DC Comics",
+            "locg_publisher_id": 501,
+            "excluded": false,
+            "excluded_reason": null
+          },
+          "series": {
+            "title": "Absolute Batman",
+            "locg_series_id": 178012,
+            "locg_url": "https://leagueofcomicgeeks.com/comics/series/178012/absolute-batman",
+            "start_year": 2024,
+            "volume": "2024"
+          }
+        }
+      ]
+    },
+    {
+      "store_date": "2026-03-25",
+      "count": 1,
+      "issues": [
+        {
+          "locg_issue_id": 1514020,
+          "locg_series_id": 180901,
+          "locg_url": "https://leagueofcomicgeeks.com/comic/1514020/absolute-flash-1",
+          "title": "Absolute Flash #1",
+          "display_title": "Absolute Flash #1 Cover A",
+          "issue_number": "1",
+          "price": 4.99,
+          "currency": "USD",
+          "store_date": "2026-03-25",
+          "release_week_date": "2026-03-18",
+          "cover_url": "https://cdn.example.com/1514020.jpg",
+          "variant_count": 9,
+          "community_rating": null,
+          "community_counts": {
+            "pull": 3100,
+            "have": 0,
+            "read": 0,
+            "want": 1400,
+            "pick": 260
+          },
+          "publisher": {
+            "name": "DC Comics",
+            "locg_publisher_id": 501,
+            "excluded": false,
+            "excluded_reason": null
+          },
+          "series": {
+            "title": "Absolute Flash",
+            "locg_series_id": 180901,
+            "locg_url": "https://leagueofcomicgeeks.com/comics/series/180901/absolute-flash",
+            "start_year": 2026,
+            "volume": "2026"
+          }
+        }
+      ]
+    }
+  ],
+  "lookahead_weeks": 2
+}

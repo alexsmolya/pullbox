@@ -1,0 +1,287 @@
+{#- System: Backup tab -#}
+{% from "components/settings_shell.html" import section_header, ui_icon %}
+
+<div class="space-y-6 pt-6" x-data="backupManager()" x-init="loadBackups()">
+  <section class="section-card">
+    {% call section_header(
+      eyebrow="Restore points",
+      title="Database backups",
+      description="Create, download, restore, or delete database restore points from one compact registry.",
+      title_style="plain"
+    ) %}
+      <button @click="createBackup()" :disabled="creating" class="btn-primary btn-sm gap-2" type="button">
+      <svg x-show="!creating" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/>
+      </svg>
+      <svg x-show="creating" x-cloak class="h-4 w-4 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+      </svg>
+      <span x-text="creating ? 'Creating...' : 'Backup now'"></span>
+      </button>
+    {% endcall %}
+
+    <div class="section-body space-y-4">
+      <p class="text-sm leading-6 text-pb-text-sec">
+        These restore points back up Pullbox's database only. They do not include comics or downloaded media files.
+      </p>
+
+      <div x-show="loading" class="info-panel info-panel-muted py-10 text-center text-sm text-pb-text-dim">
+        Loading backups...
+      </div>
+
+      <div x-show="!loading && backups.length === 0" class="info-panel info-panel-muted py-10 text-center">
+        <svg class="mx-auto mb-3 h-10 w-10 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/>
+        </svg>
+        <p class="text-sm text-pb-text-sec">No backups found.</p>
+        <p class="mt-1 text-xs text-pb-text-dim">Create a backup now to establish your first restore point.</p>
+      </div>
+
+      <div x-show="!loading && backups.length > 0" class="downloads-table-wrap" data-testid="system-backups-table">
+        <div class="overflow-x-auto">
+          <table class="downloads-table min-w-[880px]">
+            <thead>
+              <tr>
+                <th>Filename</th>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Version</th>
+                <th class="is-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(b, idx) in backups" :key="b.filename">
+                <tr>
+                  <td>
+                    <div class="min-w-0">
+                      <p class="system-registry-filename break-all text-pb-text" x-text="b.filename"></p>
+                      <p class="downloads-mono-dim-cell mt-1" x-text="idx === 0 ? 'Latest visible restore point' : 'Restore point'"></p>
+                    </div>
+                  </td>
+                  <td class="downloads-mono-cell" x-text="formatDate(b.created_at)"></td>
+                  <td>
+                    <span
+                      class="pill uppercase tracking-wider"
+                      :class="backupTypePillClass(b.backup_type)"
+                      x-text="backupTypeLabel(b.backup_type)"
+                    ></span>
+                  </td>
+                  <td class="downloads-mono-cell" x-text="formatSize(b.size_bytes)"></td>
+                  <td class="downloads-mono-cell" x-text="b.pullbox_version || '—'"></td>
+                  <td class="is-right">
+                    <div class="downloads-action-group is-hover-reveal justify-end">
+                      <a :href="'/api/v1/system/backups/' + b.filename" class="downloads-action-btn" data-tip="Download" data-tip-pos="left" aria-label="Download backup" hx-boost="false">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                          <polyline points="7,10 12,15 17,10"/>
+                          <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                      </a>
+                      <button @click="confirmRestore(b.filename)" class="downloads-action-btn is-warn" data-tip="Restore" data-tip-pos="left" aria-label="Restore backup" type="button">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <polyline points="23,4 23,10 17,10"/>
+                          <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                        </svg>
+                      </button>
+                      <button @click="confirmDelete(b.filename)" class="downloads-action-btn is-danger" data-tip="Delete" data-tip-pos="left" aria-label="Delete backup" type="button">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div x-show="restoreModal" x-cloak class="modal-shell" @keydown.escape.window="restoreModal = false">
+    <div class="modal-backdrop"></div>
+    <div class="modal-panel max-w-md" @click.outside="restoreModal = false">
+      <div class="modal-header">
+        <div class="flex items-center gap-3">
+          <div class="flex h-10 w-10 items-center justify-center rounded-full bg-pb-warning-dim text-pb-warning">
+            {{ ui_icon("warning", "h-5 w-5") }}
+          </div>
+          <div>
+            <h3 class="text-lg font-semibold text-pb-text">Restore backup</h3>
+            <p class="text-xs text-pb-text-sec">This action cannot be undone.</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-body px-5 py-4 space-y-4">
+        <p class="text-sm leading-6 text-pb-text-sec">
+          Restore from <span class="font-mono text-pb-warning" x-text="restoreFilename"></span>?
+        </p>
+        <div class="info-panel info-panel-muted">
+          <div class="space-y-2 text-xs leading-6 text-pb-text-sec">
+            <p><span class="font-semibold text-pb-text">Current database:</span> a safety backup is created before overwrite.</p>
+            <p><span class="font-semibold text-pb-text">After restore:</span> restart Pullbox before the restored database becomes active.</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button @click="restoreModal = false" class="btn-ghost btn-sm">Cancel</button>
+        <button @click="doRestore()" :disabled="restoring" class="btn-warning btn-sm">
+          <span x-text="restoring ? 'Restoring...' : 'Restore backup'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="deleteModal" x-cloak class="modal-shell" @keydown.escape.window="deleteModal = false">
+    <div class="modal-backdrop"></div>
+    <div class="modal-panel max-w-md" @click.outside="deleteModal = false">
+      <div class="modal-header">
+        <div class="flex items-center gap-3">
+          <div class="flex h-10 w-10 items-center justify-center rounded-full bg-pb-error-dim text-pb-error">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-lg font-semibold text-pb-text">Delete backup</h3>
+          </div>
+        </div>
+      </div>
+      <div class="modal-body px-5 py-4">
+        <p class="text-sm leading-6 text-pb-text-sec">
+          Delete <span class="font-mono text-pb-error" x-text="deleteFilename"></span>? This cannot be undone.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button @click="deleteModal = false" class="btn-ghost btn-sm">Cancel</button>
+        <button @click="doDelete()" :disabled="deleting" class="btn-danger btn-sm">
+          <span x-text="deleting ? 'Deleting...' : 'Delete backup'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function backupManager() {
+  return {
+    backups: [],
+    loading: true,
+    creating: false,
+
+    restoreModal: false,
+    restoreFilename: '',
+    restoring: false,
+
+    deleteModal: false,
+    deleteFilename: '',
+    deleting: false,
+
+    loadBackups() {
+      this.loading = true;
+      fetch('/api/v1/system/backups', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => { this.backups = data; })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to load backups.', level: 'error' });
+        })
+        .finally(() => { this.loading = false; });
+    },
+
+    latestBackupLabel() {
+      if (!this.backups.length) return 'None';
+      return this.formatDate(this.backups[0].created_at);
+    },
+
+    backupTypeLabel(type) {
+      if (!type) return 'unknown';
+      return type;
+    },
+
+    backupTypePillClass(type) {
+      if (type === 'manual') return 'pill-info';
+      if (type === 'scheduled') return 'pill-success';
+      return 'pill-neutral';
+    },
+
+    createBackup() {
+      this.creating = true;
+      fetch('/api/v1/system/backup', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          if (typeof showToast === 'function') showToast({ message: data.message, level: 'success' });
+          this.loadBackups();
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to create backup.', level: 'error' });
+        })
+        .finally(() => { this.creating = false; });
+    },
+
+    confirmRestore(filename) {
+      this.restoreFilename = filename;
+      this.restoreModal = true;
+    },
+
+    doRestore() {
+      this.restoring = true;
+      fetch('/api/v1/system/restore/' + this.restoreFilename, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.restoreModal = false;
+          if (typeof showToast === 'function') showToast({ message: data.message, level: 'success' });
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to restore backup.', level: 'error' });
+        })
+        .finally(() => { this.restoring = false; });
+    },
+
+    confirmDelete(filename) {
+      this.deleteFilename = filename;
+      this.deleteModal = true;
+    },
+
+    doDelete() {
+      this.deleting = true;
+      fetch('/api/v1/system/backups/' + this.deleteFilename, {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.deleteModal = false;
+          if (typeof showToast === 'function') showToast({ message: data.message, level: 'success' });
+          this.loadBackups();
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to delete backup.', level: 'error' });
+        })
+        .finally(() => { this.deleting = false; });
+    },
+
+    formatDate(iso) { return _pb.formatShort(iso); },
+
+    formatSize(bytes) {
+      if (!bytes) return '—';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let val = bytes;
+      for (const unit of units) {
+        if (val < 1024) return val.toFixed(unit === 'B' ? 0 : 1) + ' ' + unit;
+        val /= 1024;
+      }
+      return val.toFixed(1) + ' TB';
+    },
+  };
+}
+</script>

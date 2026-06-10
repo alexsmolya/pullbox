@@ -1,0 +1,10 @@
+{% from "components/page_dock.html" import status_dock %}
+
+<div data-testid="dashboard-footer-dock">
+  {{ status_dock(status_items=[
+    {"label": "sys", "value": dashboard_view.footer.monitored_count|string ~ " monitored"},
+    {"label": "alerts", "value": dashboard_view.footer.alert_count|string},
+    {"label": "downloads", "value": dashboard_view.footer.active_download_count|string ~ " active"},
+    {"label": "acquisition", "value": dashboard_view.footer.completion_percent|string ~ "%"},
+  ]) }}
+</div>

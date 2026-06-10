@@ -1,0 +1,19 @@
+<div
+  id="pp-history-header-metrics"
+  data-testid="pp-history-header-metrics"
+  class="downloads-header-summary"
+  hx-swap-oob="outerHTML"
+>
+  {% include "partials/pp_history_header_metrics.html" %}
+</div>
+<input
+  id="pp-history-sort-input"
+  type="hidden"
+  name="sort"
+  value="{{ sort }}"
+  hx-swap-oob="outerHTML"
+>
+<div id="page-footer-dock" data-testid="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/pp_footer_dock.html" %}
+</div>
+{% include "partials/pp_history_results.html" %}

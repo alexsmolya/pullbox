@@ -1,0 +1,88 @@
+<div
+  x-data="issueSearchModal()"
+  @open-search.window="open($event.detail)"
+>
+  <div
+    x-show="searchOpen"
+    x-cloak
+    data-testid="issue-search-modal"
+    class="modal-shell"
+    @keydown.escape.window="searchOpen && close()"
+  >
+    <div class="modal-backdrop" @click="close()"></div>
+
+    <div
+      x-show="searchOpen"
+      x-transition:enter="transition ease-out duration-200"
+      x-transition:enter-start="opacity-0 scale-95"
+      x-transition:enter-end="opacity-100 scale-100"
+      x-transition:leave="transition ease-in duration-150"
+      x-transition:leave-start="opacity-100 scale-100"
+      x-transition:leave-end="opacity-0 scale-95"
+      class="modal-panel issue-search-modal-panel"
+      @click.stop
+    >
+      <div class="modal-header issue-search-modal-header">
+        <div class="min-w-0">
+          <h3 class="issue-search-modal-title">ISSUE <span>SEARCH</span></h3>
+          <p class="issue-search-modal-subtitle">
+            <span x-text="searchSeriesTitle"></span>
+            <span x-show="searchSeriesYear">(<span x-text="searchSeriesYear"></span>)</span>
+            — Issue #<span x-text="searchIssueNum"></span>
+          </p>
+          <div
+            id="issue-search-modal-stats"
+            data-testid="issue-search-modal-stats"
+            class="issue-search-modal-stats"
+            x-show="!searching"
+            x-cloak
+          ></div>
+        </div>
+        <button
+          data-testid="issue-search-close"
+          @click="close()"
+          class="issue-search-modal-close ml-4 shrink-0"
+          aria-label="Close"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body issue-search-modal-body min-h-0">
+        <div
+          x-show="searching"
+          class="issue-search-loading-state flex flex-col items-center justify-center px-6 py-12 text-center"
+        >
+          <svg class="h-8 w-8 animate-spin text-pb-interactive" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          <p class="issue-search-loading-title mt-3">Searching indexers</p>
+          <p class="issue-search-loading-copy mt-1">
+            Gathering candidate releases across configured sources
+          </p>
+        </div>
+
+        <div x-show="!searching" id="issue-search-modal-body" class="min-h-0"></div>
+      </div>
+
+      <div class="modal-footer issue-search-modal-footer">
+        <div
+          id="issue-search-modal-footer-meta"
+          data-testid="issue-search-modal-footer-meta"
+          class="issue-search-modal-footer-meta"
+        ></div>
+        <button
+          type="button"
+          data-testid="issue-search-modal-footer-close"
+          class="btn-ghost btn-sm issue-search-modal-footer-close"
+          @click="close()"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

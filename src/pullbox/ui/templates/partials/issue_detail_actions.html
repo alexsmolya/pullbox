@@ -1,0 +1,72 @@
+{% set primary_action_classes = "btn-primary" %}
+{% set secondary_action_classes = "btn-ghost" %}
+{% set emphasis_action_classes = "btn-warning" %}
+
+<div data-testid="issue-detail-actions" class="series-domain-actions-buttons">
+  {% if issue.status.value in ["wanted", "unknown"] %}
+  <button
+    :disabled="searching"
+    data-testid="issue-action-search"
+    @click="triggerIssueSearch()"
+    class="{{ primary_action_classes }}"
+  >
+    <span x-show="!searching">Search</span>
+    <span x-show="searching" x-cloak class="flex items-center gap-1.5">
+      <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+      Searching...
+    </span>
+  </button>
+  {% endif %}
+  {% if issue.status.value == "owned" and issue.library_file %}
+  <a
+    href="/api/v1/issues/{{ issue.id }}/download-file"
+    hx-boost="false"
+    download
+    data-testid="issue-action-download"
+    class="{{ secondary_action_classes }}"
+  >
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M7.5 12l4.5 4.5m0 0l4.5-4.5M12 16.5V3"/>
+    </svg>
+    Download
+  </a>
+  {% endif %}
+  {% if issue.status.value != "owned" or not issue.library_file %}
+  <button
+    @click="openImportFileBrowser()"
+    data-testid="issue-action-import"
+    class="{{ emphasis_action_classes }}"
+  >
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+    </svg>
+    Import File
+  </button>
+  {% endif %}
+
+  <button
+    data-testid="issue-action-manual-search"
+    @click="openManualSearchModal()"
+    class="{{ secondary_action_classes }} disabled:cursor-wait"
+  >
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+    </svg>
+    {% if issue.status.value == "owned" %}Find alternative{% else %}Manual search{% endif %}
+  </button>
+
+  {% if issue.status.value in ["wanted", "skipped", "unknown"] %}
+  <button
+    data-testid="issue-action-toggle"
+    @click="toggleIssueStatus()"
+    :disabled="togglingStatus"
+    class="{{ secondary_action_classes }}"
+  >
+    <span x-show="!togglingStatus">{% if issue.status.value == "wanted" %}Mark Skipped{% else %}Mark Wanted{% endif %}</span>
+    <span x-show="togglingStatus" x-cloak class="flex items-center gap-1.5">
+      <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+      Updating...
+    </span>
+  </button>
+  {% endif %}
+</div>

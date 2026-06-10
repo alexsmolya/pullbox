@@ -1,0 +1,15 @@
+<div
+  data-testid="import-collection-page"
+  class="space-y-4"
+  x-data="importCollectionPage({
+    resumeStep: {{ resume_step or 1 }},
+    resumeJobId: {{ resume_job_id or 'null' }},
+    resumeJobStatus: {{ resume_job_status|tojson|forceescape }},
+  })"
+  x-init="init()"
+  x-effect="loadCurrentStep()"
+  @wizard:advance.window="handleWizardAdvance($event.detail)"
+>
+  {% include "partials/import_collection_stepper.html" %}
+  {% include "partials/import_collection_body.html" %}
+</div>

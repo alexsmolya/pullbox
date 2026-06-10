@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Downloads — {{ instance_name() }}{% endblock %}
+{% block page_title %}Downloads{% endblock %}
+
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div data-testid="downloads-page" class="space-y-6" x-data="downloadsPage({ csrfToken: '{{ csrf_token }}' })">
+  {% include "partials/downloads_body.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/downloads_footer_dock.html" %}
+{% endblock %}

@@ -1,0 +1,206 @@
+{#- Utilities: Job Queue tab — prototype-aligned queue tables with expandable logs -#}
+<script id="utilities-queue-initial-data" type="application/json">{{ {"jobs": initial_jobs|default([]), "stats": initial_stats|default({})}|tojson }}</script>
+<div
+  data-testid="utilities-queue-panel"
+  x-data="utilitiesQueue({ csrfToken: '{{ csrf_token }}' })"
+  x-init="init()"
+  class="space-y-6"
+>
+  <section data-testid="utilities-queue-active-section" class="space-y-3">
+    <p class="utilities-section-label">Active Jobs</p>
+    <div class="utilities-queue-table-wrap">
+      <template x-if="runningJobs.length > 0">
+        <div class="overflow-x-auto">
+          <table class="utilities-queue-table">
+            <thead>
+              <tr>
+                <th style="width: 28px" class="c">SYS</th>
+                <th>Job</th>
+                <th style="width: 96px" class="c">Items</th>
+                <th style="width: 210px">Progress</th>
+                <th style="width: 96px">Elapsed</th>
+                <th style="width: 120px" class="r">Actions</th>
+              </tr>
+            </thead>
+            <template x-for="job in runningJobs" :key="job.id">
+              <tbody data-testid="utilities-queue-active-job">
+                <tr class="utilities-queue-row">
+                  <td class="c align-top">
+                    <span
+                      class="utilities-queue-led"
+                      :class="{
+                        'utilities-queue-led-green': job.state === 'RUNNING',
+                        'utilities-queue-led-amber': job.state === 'PAUSED' || job.state === 'PAUSING',
+                        'utilities-queue-led-blue': job.state === 'CANCELLING',
+                      }"
+                    ></span>
+                  </td>
+                  <td class="align-top">
+                    <div class="utilities-queue-job-name text-sm font-medium text-pb-text" x-text="job.display_name"></div>
+                    <div class="utilities-queue-job-type" x-text="job.job_type"></div>
+                    <div class="utilities-queue-job-meta" x-text="stateLabel(job)"></div>
+                  </td>
+                  <td class="c align-top">
+                    <span class="utilities-queue-items" x-text="(job.completed_items || 0) + '/' + (job.total_items || 0)"></span>
+                  </td>
+                  <td class="align-top utilities-queue-progress-cell">
+                    <div class="series-mission-control-bar">
+                      <div class="series-mission-control-bar-track">
+                        <div
+                          class="series-mission-control-bar-fill"
+                          :class="job.state === 'PAUSED' || job.state === 'PAUSING' ? 'series-mission-control-bar-fill-amber' : 'series-mission-control-bar-fill-green'"
+                          :style="'width:' + Math.max(0, Math.min(100, Math.round(job.progress_pct || 0))) + '%'"
+                        ></div>
+                      </div>
+                      <span
+                        class="series-mission-control-bar-pct"
+                        :class="job.state === 'PAUSED' || job.state === 'PAUSING' ? 'series-mission-control-bar-pct-amber' : 'series-mission-control-bar-pct-green'"
+                        x-text="Math.round(job.progress_pct || 0) + '%'"
+                      ></span>
+                    </div>
+                  </td>
+                  <td class="align-top">
+                    <span class="utilities-queue-time" x-text="elapsedLabel(job)"></span>
+                  </td>
+                  <td class="r align-top">
+                    <div class="utilities-queue-actions">
+                      <button
+                        x-show="job.state === 'RUNNING'"
+                        x-cloak
+                        type="button"
+                        data-testid="utilities-queue-active-job-pause"
+                        @click="controlJob(job.id, 'pause')"
+                        class="utilities-queue-act-btn"
+                        data-tip="Pause job"
+                        data-tip-pos="left"
+                        aria-label="Pause job"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" d="M9 6v12"/>
+                          <path stroke-linecap="round" d="M15 6v12"/>
+                        </svg>
+                      </button>
+                      <button
+                        x-show="job.state === 'PAUSED'"
+                        x-cloak
+                        type="button"
+                        data-testid="utilities-queue-active-job-resume"
+                        @click="controlJob(job.id, 'resume')"
+                        class="utilities-queue-act-btn"
+                        data-tip="Resume job"
+                        data-tip-pos="left"
+                        aria-label="Resume job"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M8 6l10 6-10 6V6z"/>
+                        </svg>
+                      </button>
+                      <button
+                        x-show="['RUNNING','PAUSED','PAUSING','CANCELLING'].includes(job.state)"
+                        x-cloak
+                        type="button"
+                        data-testid="utilities-queue-active-job-cancel"
+                        @click="controlJob(job.id, 'cancel')"
+                        class="utilities-queue-act-btn utilities-queue-act-btn-danger"
+                        data-tip="Cancel job"
+                        data-tip-pos="left"
+                        aria-label="Cancel job"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </template>
+          </table>
+        </div>
+      </template>
+
+      <template x-if="runningJobs.length === 0">
+        <div data-testid="utilities-queue-empty" class="utilities-queue-empty">
+          <svg class="mx-auto h-10 w-10 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/>
+          </svg>
+          <p class="utilities-queue-empty-title">No active jobs right now</p>
+          <p class="utilities-queue-empty-copy">Start a run from the tools tab and it will show up here while it is processing.</p>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <section data-testid="utilities-queue-queued-section" class="space-y-3">
+    <p class="utilities-section-label">Queued</p>
+    <div class="utilities-queue-table-wrap">
+      <template x-if="queuedJobs.length > 0">
+        <div class="overflow-x-auto">
+          <table class="utilities-queue-table">
+            <thead>
+              <tr>
+                <th style="width: 28px" class="c">SYS</th>
+                <th>Job</th>
+                <th style="width: 96px" class="c">Items</th>
+                <th style="width: 210px">Progress</th>
+                <th style="width: 96px">Elapsed</th>
+                <th style="width: 120px" class="r">Actions</th>
+              </tr>
+            </thead>
+            <template x-for="job in queuedJobs" :key="job.id">
+              <tbody data-testid="utilities-queue-active-job">
+                <tr class="utilities-queue-row">
+                  <td class="c align-top">
+                    <span class="utilities-queue-led utilities-queue-led-blue"></span>
+                  </td>
+                  <td class="align-top">
+                    <div class="utilities-queue-job-name text-sm font-medium text-pb-text" x-text="job.display_name"></div>
+                    <div class="utilities-queue-job-type" x-text="job.job_type"></div>
+                    <div class="utilities-queue-job-meta" x-text="job.queue_position != null ? '#' + (job.queue_position + 1) + ' in queue' : 'Waiting in queue'"></div>
+                  </td>
+                  <td class="c align-top">
+                    <span class="utilities-queue-items" x-text="'0/' + (job.total_items || 0)"></span>
+                  </td>
+                  <td class="align-top utilities-queue-progress-cell">
+                    <div class="series-mission-control-bar">
+                      <div class="series-mission-control-bar-track">
+                        <div class="series-mission-control-bar-fill series-mission-control-bar-fill-blue" style="width: 0%"></div>
+                      </div>
+                      <span class="series-mission-control-bar-pct text-pb-text-dim">—</span>
+                    </div>
+                  </td>
+                  <td class="align-top">
+                    <span class="utilities-queue-time">waiting</span>
+                  </td>
+                  <td class="r align-top">
+                    <div class="utilities-queue-actions">
+                      <button
+                        type="button"
+                        @click="controlJob(job.id, 'cancel')"
+                        class="utilities-queue-act-btn utilities-queue-act-btn-danger"
+                        data-tip="Cancel job"
+                        data-tip-pos="left"
+                        aria-label="Cancel job"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </template>
+          </table>
+        </div>
+      </template>
+
+      <template x-if="queuedJobs.length === 0">
+        <div class="utilities-queue-empty utilities-queue-empty-compact">
+          <p class="utilities-queue-empty-title">No queued jobs</p>
+          <p class="utilities-queue-empty-copy">New work will wait here when the running slot is already occupied.</p>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

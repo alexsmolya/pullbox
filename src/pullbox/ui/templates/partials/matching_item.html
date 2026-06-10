@@ -1,0 +1,67 @@
+{#- Single unmatched file row for the matching queue -#}
+
+<div class="match-file-card" id="match-file-{{ f.id }}">
+  <div class="match-file-format
+    {%- if f.file_format.value == 'cbz' %} match-file-format-cbz
+    {%- elif f.file_format.value == 'cbr' %} match-file-format-cbr
+    {%- elif f.file_format.value == 'pdf' %} match-file-format-pdf
+    {%- else %} match-file-format-other
+    {%- endif %}">
+    <span>.{{ f.file_format.value }}</span>
+  </div>
+
+  <div class="min-w-0 flex-1">
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div class="min-w-0 flex-1">
+        <p class="break-words text-base font-semibold text-pb-text" title="{{ f.file_name }}">{{ f.file_name }}</p>
+        <p class="mt-2 text-sm leading-6 text-pb-text-sec">
+          {% if f.parsed_series %}
+            Start by searching <span class="font-medium text-pb-text">{{ f.parsed_series }}</span> and then confirm the issue details before you match it.
+          {% else %}
+            No reliable series clue was parsed from the filename. Search the most distinctive words manually and confirm the issue before you save.
+          {% endif %}
+        </p>
+
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          {% if f.parsed_series %}
+            <span class="pill-info">Series: {{ f.parsed_series }}</span>
+          {% endif %}
+          {% if f.parsed_issue_number is not none %}
+            <span class="pill-warning">Issue: #{{ f.parsed_issue_number|issue_num }}</span>
+          {% endif %}
+          {% if f.parsed_year %}
+            <span class="pill-neutral">Year: {{ f.parsed_year }}</span>
+          {% endif %}
+          {% if f.has_comicinfo %}
+            <span class="pill-success">ComicInfo.xml present</span>
+          {% endif %}
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-pb-text-sec">
+          <span>{{ f.library_root.name }}</span>
+          <span class="text-pb-text-dim">&middot;</span>
+          <span>{{ f.file_size|filesize }}</span>
+        </div>
+      </div>
+
+      <div class="match-file-card-actions">
+        <button type="button"
+                data-id="{{ f.id }}"
+                data-name="{{ f.file_name }}"
+                data-series="{{ f.parsed_series or '' }}"
+                data-issue="{{ f.parsed_issue_number|issue_num if f.parsed_issue_number is not none else '' }}"
+                data-year="{{ f.parsed_year or '' }}"
+                data-root="{{ f.library_root.name }}"
+                data-comicinfo="{{ 'true' if f.has_comicinfo else 'false' }}"
+                data-format="{{ f.file_format.value }}"
+                onclick="openMatchModal(this.dataset)"
+                class="btn-primary w-full whitespace-nowrap lg:w-auto">
+          Match file
+        </button>
+        <p class="text-xs leading-5 text-pb-text-dim lg:max-w-[11rem] lg:text-right">
+          Choose the exact issue that belongs with this download so the library history stays accurate.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>

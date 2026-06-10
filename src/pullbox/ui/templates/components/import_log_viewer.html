@@ -1,0 +1,70 @@
+{% from "components/log_viewer.html" import log_viewer %}
+
+{% macro import_log_viewer(
+  job_id,
+  title="Import log",
+  root_testid="",
+  search_history_key="pullbox.searchHistory.importLogs",
+  live=false,
+  max_height="320px",
+  size_value="50",
+  class_name=""
+) %}
+<div
+  x-data="importJobLogViewerData({
+    jobId: {{ job_id }},
+    title: {{ title|tojson|forceescape }},
+    live: {{ 'true' if live else 'false' }},
+    pollMs: 1000
+  })"
+  x-init="init()"
+  class="{{ class_name }}"
+>
+  {{ log_viewer(
+    root_testid=root_testid,
+    title_expr="viewerTitle",
+    levels=["DEBUG", "INFO", "WARNING", "ERROR"],
+    search_root_testid=(root_testid ~ "-search-field") if root_testid else "",
+    search_input_testid=(root_testid ~ "-search-input") if root_testid else "",
+    search_clear_testid=(root_testid ~ "-search-clear") if root_testid else "",
+    search_panel_testid=(root_testid ~ "-search-history-panel") if root_testid else "",
+    search_history_key=search_history_key,
+    search_model="searchQuery",
+    size_name="import_log_page_size",
+    size_value=size_value,
+    size_options=[
+      ("25", "25"),
+      ("50", "50"),
+      ("100", "100"),
+      ("250", "250"),
+    ],
+    size_root_testid=(root_testid ~ "-size-select") if root_testid else "",
+    size_model="pageSize",
+    size_change="currentPage = 1; expandedIdx = null",
+    show_live=true,
+    live_expr="isLive",
+    live_toggle_action="toggleLive()",
+    live_testid=(root_testid ~ "-live-toggle") if root_testid else "",
+    show_download=true,
+    download_href_expr="downloadHref",
+    download_testid=(root_testid ~ "-download") if root_testid else "",
+    show_refresh=true,
+    refresh_action="_refreshLogs(true)",
+    refresh_loading_expr="loadingContent",
+    refresh_testid=(root_testid ~ "-refresh") if root_testid else "",
+    loading_expr="loadingContent",
+    entries_expr="displayEntries",
+    body_testid=(root_testid ~ "-body") if root_testid else "",
+    max_height=max_height,
+    empty_text_expr="emptyMessage",
+    show_pagination=true,
+    current_page_expr="currentPage",
+    total_pages_expr="totalPages",
+    prev_action="prevPage()",
+    next_action="nextPage()",
+    footer_status_text_expr="footerStatusText",
+    footer_status_show_expr="isLive",
+    footer_status_label_expr="'Live updates'",
+  ) }}
+</div>
+{% endmacro %}

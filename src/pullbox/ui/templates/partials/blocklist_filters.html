@@ -1,0 +1,61 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/search_field.html" import search_field %}
+{% set _oob = oob|default(false) %}
+<section
+  id="blocklist-filters"
+  data-testid="blocklist-filters"
+  {% if _oob %}hx-swap-oob="outerHTML"{% endif %}
+  class="space-y-4"
+>
+  <div class="flex flex-col gap-4 rounded-xl border border-pb-border bg-pb-card px-5 py-4">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h2 class="text-base font-semibold text-pb-text">Release Blocklist</h2>
+        {% include "partials/blocklist_count.html" %}
+      </div>
+      <p class="text-xs text-pb-text-dim">
+        Blocked releases stay out of automated searches until you remove them here.
+      </p>
+    </div>
+
+    <form
+      data-testid="blocklist-filter-form"
+      class="flex flex-col gap-3 lg:flex-row lg:items-center"
+      autocomplete="off"
+      hx-get="/blocklist"
+      hx-target="#blocklist-results-body"
+      hx-swap="outerHTML"
+      hx-push-url="true"
+      hx-trigger="submit, change from:input[name='reason']"
+    >
+      {{ search_field(
+        name="search",
+        value=search_query,
+        placeholder="Search blocked releases...",
+        input_testid="blocklist-search-input",
+        clear_testid="blocklist-search-clear",
+        panel_testid="blocklist-search-history-panel",
+        root_testid="blocklist-search-field",
+        mode="remote",
+        history_key="pullbox.searchHistory.blocklist",
+        debounce_ms=250,
+        class_name="flex-1 lg:max-w-md",
+      ) }}
+
+      {{ dropdown_select(
+        name="reason",
+        value=reason_filter,
+        options=[
+          ("", "All Reasons"),
+          ("failed", "Failed"),
+          ("rejected", "Rejected"),
+          ("manual", "Manual"),
+        ],
+        root_testid="blocklist-filter-reason",
+        class_name="w-full lg:w-52"
+      ) }}
+
+      <input type="hidden" name="sort" value="{{ sort | default('-created_at') }}">
+    </form>
+  </div>
+</section>

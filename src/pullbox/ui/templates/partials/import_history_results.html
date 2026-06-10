@@ -1,0 +1,248 @@
+{% set active_statuses = ['pending', 'scanning', 'pausing', 'paused', 'analyzing', 'matching', 'file_matching', 'review', 'importing', 'cancelling', 'rolling_back'] %}
+{% set refresh_qs = "tab=history&sort=" ~ sort ~ "&page=" ~ page %}
+{% if search_query %}{% set refresh_qs = refresh_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif %}
+{%- macro sort_header(field, label, extra_classes="", width="") -%}
+  {%- set current_field = sort.lstrip("-") -%}
+  {%- set current_desc = sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  {%- set sort_qs = "tab=history&sort=" ~ next_sort ~ "&page=1" -%}
+  {%- if search_query %}{% set sort_qs = sort_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif -%}
+  <th class="{{ extra_classes }} {{ width }}">
+    <button
+      type="button"
+      data-testid="import-history-sort-{{ field }}"
+      hx-get="/import?{{ sort_qs }}"
+      hx-target="#import-history-results"
+      hx-swap="outerHTML"
+      hx-sync="#import-history-results:replace"
+      hx-push-url="true"
+      class="downloads-sort-btn{% if current_field == field %} is-active{% endif %}"
+    >
+      <span>{{ label }}</span>
+      <svg class="downloads-sort-chevron{% if current_field == field and not current_desc %} is-desc{% endif %}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </th>
+{%- endmacro -%}
+
+<section
+  id="import-history-results"
+  data-testid="import-history-results"
+  {% if history_has_live_jobs %}
+    hx-get="/import?{{ refresh_qs }}"
+    hx-trigger="every 1s [window.importHistoryRefreshEnabled()], refresh"
+    hx-target="#import-history-results"
+    hx-swap="outerHTML"
+    hx-push-url="false"
+  {% endif %}
+>
+  {% if jobs %}
+    <table data-testid="import-history-table" class="downloads-table">
+      <thead>
+        <tr>
+          <th class="is-center w-[28px]"></th>
+          {{ sort_header("source_path", "Source Path") }}
+          {{ sort_header("source_type", "Type", width="w-[92px]") }}
+          {{ sort_header("status", "Status", width="w-[112px]") }}
+          {{ sort_header("series_found", "Found", extra_classes="is-right", width="w-[76px]") }}
+          {{ sort_header("series_imported", "Imported", extra_classes="is-right", width="w-[88px]") }}
+          {{ sort_header("series_failed", "Failed", extra_classes="is-right", width="w-[72px]") }}
+          {{ sort_header("series_no_match", "No Match", extra_classes="is-right", width="w-[96px]") }}
+          {{ sort_header("created_at", "Created", extra_classes="is-right hidden lg:table-cell", width="w-[128px]") }}
+          <th class="is-right w-[108px]"></th>
+        </tr>
+      </thead>
+      {% for job in jobs %}
+        {% set is_active = job.status.value in active_statuses %}
+        {% set row_tone = "downloads-led-off" %}
+        {% if is_active %}
+          {% set row_tone = "downloads-led-blue" %}
+        {% elif job.status.value == 'completed' %}
+          {% set row_tone = "downloads-led-green" %}
+        {% elif job.status.value == 'failed' %}
+          {% set row_tone = "downloads-led-amber" %}
+        {% endif %}
+        {% set status_tone = {
+          'pending': 'pill-neutral',
+          'scanning': 'pill-info',
+          'pausing': 'pill-warning',
+          'paused': 'pill-warning',
+          'analyzing': 'pill-info',
+          'matching': 'pill-info',
+          'file_matching': 'pill-info',
+          'review': 'pill-warning',
+          'importing': 'pill-info',
+          'cancelling': 'pill-warning',
+          'rolling_back': 'pill-warning',
+          'rolled_back': 'pill-neutral',
+          'completed': 'pill-success',
+          'failed': 'pill-error',
+          'cancelled': 'pill-neutral',
+        } %}
+        {% set control_state = job_control_states.get(job.id, {}) %}
+        {% set metrics = job_history_metrics.get(job.id, {}) %}
+        {% set resume_step = job_resume_steps.get(job.id) %}
+        {% set progress_phase = (job.progress_snapshot or {}).get('phase', '') %}
+        {% set clears_history = job.status.value in ['completed', 'failed', 'cancelled', 'rolled_back'] %}
+        <tbody x-bind:data-import-history-expanded="isLogPanelOpen({{ job.id }}) ? 'true' : 'false'">
+          <tr
+            id="import-job-row-{{ job.id }}"
+            data-testid="import-history-job-{{ job.id }}"
+            data-import-history-clearable="{{ 'true' if clears_history else 'false' }}"
+          >
+            <td class="is-center"><span class="downloads-led {{ row_tone }}"></span></td>
+            <td>
+              <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                <span class="block truncate" data-tooltip-measure>{{ job.source_path }}</span>
+              </span>
+            </td>
+            <td>
+              <span class="pill {% if job.source_type.value == 'mylar3' %}pill-info{% else %}pill-neutral{% endif %}">
+                {{ 'Mylar3' if job.source_type.value == 'mylar3' else 'Folder' }}
+              </span>
+            </td>
+            <td>
+              <span class="pill {{ status_tone.get(job.status.value, 'pill-neutral') }}">
+                {{ job.status.value|replace('_', ' ')|title }}
+              </span>
+            </td>
+            <td class="downloads-mono-cell is-right">{{ metrics.get("series_found", job.series_found or 0) }}</td>
+            <td class="downloads-mono-cell is-right">{{ metrics.get("series_imported", job.series_imported or 0) }}</td>
+            <td class="downloads-mono-cell is-right{% if metrics.get("series_failed", job.series_failed or 0) %} text-pb-error{% endif %}">{{ metrics.get("series_failed", job.series_failed or 0) }}</td>
+            <td class="downloads-mono-cell is-right{% if metrics.get("series_no_match", job.series_no_match or 0) %} text-pb-warning{% endif %}">{{ metrics.get("series_no_match", job.series_no_match or 0) }}</td>
+            <td class="downloads-mono-cell is-right hidden lg:table-cell">
+              {{ job.created_at|localtime|safe if job.created_at else '—' }}
+            </td>
+            <td class="is-right">
+              <div class="downloads-action-group import-history-action-group justify-end">
+                <button
+                  type="button"
+                  data-testid="import-history-log-toggle-{{ job.id }}"
+                  @click="toggleLogPanel({{ job.id }})"
+                  class="downloads-action-btn import-history-action-btn"
+                  :aria-expanded="isLogPanelOpen({{ job.id }}) ? 'true' : 'false'"
+                  data-tip="View log"
+                  data-tip-pos="left"
+                  aria-label="Toggle import log details"
+                >
+                  <svg class="import-history-action-icon transition-transform" :class="isLogPanelOpen({{ job.id }}) && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                </button>
+
+                {% if resume_step is not none %}
+                  {% set resume_tip = 'Resume' if control_state.get('can_resume') else ('View import progress' if resume_step == 4 else ('Open review' if resume_step == 3 else 'View matching progress')) %}
+                  <button
+                    type="button"
+                    data-testid="import-history-resume-{{ job.id }}"
+                    class="downloads-action-btn import-history-action-btn is-warn"
+                    @click="resumeActiveImport({{ job.id }}, {{ resume_step if resume_step is not none else 'null' }}, '{{ job.status.value }}', '{{ progress_phase }}')"
+                    data-tip="{{ resume_tip }}"
+                    data-tip-pos="left"
+                    aria-label="{{ resume_tip }}"
+                  >
+                    <svg class="import-history-action-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12l-7.5 7.5M3 12h17.25"/>
+                    </svg>
+                  </button>
+                {% endif %}
+
+                {% if control_state.get('can_view_results') %}
+                  <a
+                    href="/import?tab=collection&resume_job_id={{ job.id }}&resume_step=5"
+                    data-testid="import-history-results-{{ job.id }}"
+                    class="downloads-action-btn import-history-action-btn"
+                    data-tip="View results"
+                    data-tip-pos="left"
+                    aria-label="View import results"
+                  >
+                    <svg class="import-history-action-icon import-history-action-icon--detail" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5V6.75A2.25 2.25 0 0012.75 4.5h-6A2.25 2.25 0 004.5 6.75v10.5A2.25 2.25 0 006.75 19.5h10.5A2.25 2.25 0 0019.5 17.25v-6A2.25 2.25 0 0017.25 9H13.5A1.5 1.5 0 0112 7.5V3.75"/>
+                    </svg>
+                  </a>
+                {% endif %}
+
+                {% if control_state.get('can_rollback') %}
+                  <button
+                    type="button"
+                    data-testid="import-history-rollback-{{ job.id }}"
+                    class="downloads-action-btn import-history-action-btn is-warn"
+                    @click="rollbackJob({{ job.id }})"
+                    data-tip="Rollback"
+                    data-tip-pos="left"
+                    aria-label="Rollback import"
+                  >
+                    <svg class="import-history-action-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h13.5a4.5 4.5 0 010 9H14.25"/>
+                    </svg>
+                  </button>
+                {% endif %}
+
+                {% if control_state.get('can_retry') %}
+                  <button
+                    type="button"
+                    data-testid="import-history-retry-{{ job.id }}"
+                    @click="retryJob({{ job.id }})"
+                    class="downloads-action-btn import-history-action-btn is-warn"
+                    data-tip="Retry"
+                    data-tip-pos="left"
+                    aria-label="Retry import as a new job"
+                  >
+                    <svg class="import-history-action-icon import-history-action-icon--detail" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M21 4v6h-6"/>
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M20.49 15A9 9 0 1112 3a8.96 8.96 0 018.49 6"/>
+                    </svg>
+                  </button>
+                {% endif %}
+
+                {% if control_state.get('can_delete') %}
+                  <button
+                    type="button"
+                    data-testid="import-history-delete-{{ job.id }}"
+                    @click="openDeleteModal({{ job.id }})"
+                    class="downloads-action-btn import-history-action-btn is-danger"
+                    data-tip="Delete"
+                    data-tip-pos="left"
+                    aria-label="Delete import job"
+                  >
+                    <svg class="import-history-action-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                    </svg>
+                  </button>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          <tr
+            x-show="isLogPanelOpen({{ job.id }})"
+            x-cloak
+            data-testid="import-history-log-detail-{{ job.id }}"
+            class="downloads-error-row table-detail-row"
+          >
+            <td colspan="10">
+              <div id="log-panel-{{ job.id }}" data-testid="import-history-log-panel-{{ job.id }}"></div>
+            </td>
+          </tr>
+        </tbody>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div data-testid="import-history-empty" class="downloads-empty-state is-history">
+      <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      {% if search_query %}
+        <p class="downloads-empty-title">No matching import history</p>
+        <p class="downloads-empty-copy">Try widening the search or clearing the active query.</p>
+      {% else %}
+        <p class="downloads-empty-title">No import history</p>
+        <p class="downloads-empty-copy">Start a collection import and saved jobs will appear here.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</section>

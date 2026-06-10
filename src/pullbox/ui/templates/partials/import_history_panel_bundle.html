@@ -1,0 +1,6 @@
+{% set oob = true %}
+{% include "partials/import_header.html" %}
+{% include "partials/import_history_panel.html" %}
+<div id="page-footer-dock" data-testid="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/import_footer_dock.html" %}
+</div>

@@ -1,0 +1,67 @@
+<section
+  id="dashboard-download-exceptions-region"
+  data-testid="dashboard-download-exceptions"
+  class="dashboard-section"
+  hx-get="/htmx/dashboard/download-exceptions-panel"
+  hx-trigger="every 30s [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <p class="dashboard-section__label">
+    Download Exceptions{% if dashboard_view.download_exceptions %} ({{ dashboard_view.download_exceptions|length }}){% endif %}
+  </p>
+  {% if dashboard_view.download_exceptions %}
+    <div class="dashboard-table-wrap">
+      <table class="dashboard-table">
+        <thead>
+          <tr>
+            <th class="c dashboard-table__status-col">SYS</th>
+            <th>Exception</th>
+            <th>State</th>
+            <th>When</th>
+            <th class="r">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for exception in dashboard_view.download_exceptions %}
+            <tr data-testid="dashboard-download-exception-{{ exception.key }}">
+              <td class="c">
+                {% set exception_led_class = "dashboard-led--off" %}
+                {% if exception.led_tone == "green" %}
+                  {% set exception_led_class = "dashboard-led--green" %}
+                {% elif exception.led_tone == "amber" %}
+                  {% set exception_led_class = "dashboard-led--amber" %}
+                {% elif exception.led_tone == "red" %}
+                  {% set exception_led_class = "dashboard-led--red" %}
+                {% elif exception.led_tone == "blue" %}
+                  {% set exception_led_class = "dashboard-led--blue" %}
+                {% endif %}
+                <span
+                  data-testid="dashboard-download-exception-sys-led"
+                  class="dashboard-led dashboard-led--sys {{ exception_led_class }}"
+                ></span>
+              </td>
+              <td>
+                <span class="dashboard-table__name">{{ exception.title }}</span>
+                <div class="dashboard-table__detail">{{ exception.detail }}</div>
+              </td>
+              <td>
+                <span class="pill {{ dashboard_state_pill_tone(exception.state) }}">{{ exception.state_label }}</span>
+              </td>
+              <td class="dashboard-table__mono">{{ exception.timing_label }}</td>
+              <td class="r">
+                <a href="{{ exception.href }}" class="dashboard-table__link">View →</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div data-testid="dashboard-download-exception-all-clear" class="dashboard-quiet-note">
+      <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+      </svg>
+      <p>No download exceptions need attention right now.</p>
+    </div>
+  {% endif %}
+</section>

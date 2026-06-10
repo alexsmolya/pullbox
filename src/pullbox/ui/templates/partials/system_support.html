@@ -1,0 +1,430 @@
+{#- System: Support tab -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import field_note, section_card, ui_icon %}
+
+<div x-data="supportManager()" class="space-y-6 pt-6">
+  {% call section_card(
+    title="Before you report",
+    eyebrow="Workflow",
+    title_style="plain"
+  ) %}
+    <div class="space-y-3">
+      <div class="flex gap-3 rounded-lg border border-pb-border bg-pb-card-hover/20 px-4 py-3">
+        <span class="step-badge shrink-0">1</span>
+        <div class="min-w-0">
+          <p class="text-sm font-medium text-pb-text">Reproduce it</p>
+          <p class="mt-1 text-sm leading-6 text-pb-text-sec">Confirm the exact steps and whether the issue is reliable or intermittent.</p>
+        </div>
+      </div>
+      <div class="flex gap-3 rounded-lg border border-pb-border bg-pb-card-hover/20 px-4 py-3">
+        <span class="step-badge shrink-0">2</span>
+        <div class="min-w-0">
+          <p class="text-sm font-medium text-pb-text">Check logs</p>
+          <p class="mt-1 text-sm leading-6 text-pb-text-sec">Look for warnings or errors around the time it happened before you file the report.</p>
+        </div>
+      </div>
+      <div class="flex gap-3 rounded-lg border border-pb-border bg-pb-card-hover/20 px-4 py-3">
+        <span class="step-badge shrink-0">3</span>
+        <div class="min-w-0">
+          <p class="text-sm font-medium text-pb-text">Download diagnostics</p>
+          <p class="mt-1 text-sm leading-6 text-pb-text-sec">Grab the diagnostic ZIP so the report includes sanitized logs, config, and runtime context.</p>
+        </div>
+      </div>
+      <div class="flex gap-3 rounded-lg border border-pb-border bg-pb-card-hover/20 px-4 py-3">
+        <span class="step-badge shrink-0">4</span>
+        <div class="min-w-0">
+          <p class="text-sm font-medium text-pb-text">Capture visuals when useful</p>
+          <p class="mt-1 text-sm leading-6 text-pb-text-sec">Screenshots or a short recording help when the problem is visual or timing-sensitive.</p>
+        </div>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Debug logging",
+    eyebrow="Diagnostics",
+    title_style="plain",
+    class_name="overflow-visible",
+    attrs='data-testid="system-support-debug-card"'
+  ) %}
+    <template x-if="debugStatus.active">
+      <div class="space-y-4">
+        <div class="inline-alert inline-alert-warning">
+          <span class="inline-alert-icon">{{ ui_icon("warning", "h-4 w-4") }}</span>
+          <div class="min-w-0">
+            <p class="font-medium">Debug logging is active.</p>
+            <p class="mt-1 text-xs leading-5 opacity-90">
+              Level <span class="font-mono uppercase" x-text="debugStatus.level"></span>
+              &middot;
+              Base <span class="font-mono uppercase" x-text="debugStatus.base_level"></span>
+              &middot;
+              <span x-text="debugStatus.remaining_minutes > 0
+                ? debugStatus.remaining_minutes + ' minute' + (debugStatus.remaining_minutes !== 1 ? 's' : '') + ' remaining'
+                : 'Expiring soon'"></span>
+            </p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <button @click="disableDebugLogging()" :disabled="debugLoading" class="btn-ghost btn-sm gap-2">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/>
+            </svg>
+            Disable debug now
+          </button>
+          <p class="text-xs leading-5 text-pb-text-dim">
+            Reproduce the issue, then download the diagnostic package before the timer expires.
+          </p>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="!debugStatus.active">
+      <div class="space-y-4">
+        <p class="text-sm leading-6 text-pb-text-sec">
+          Temporarily raise logging detail right before you reproduce an issue. Pullbox automatically returns to the normal level when the timer expires.
+        </p>
+
+        <div class="space-y-2">
+          <div class="flex flex-wrap items-end gap-3">
+            <div class="w-full max-w-[16rem] min-w-0">
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec">Capture duration</label>
+              {{ dropdown_select(
+                name="debug_duration",
+                value="15",
+                options=[
+                  ("15", "15 minutes"),
+                  ("30", "30 minutes"),
+                  ("60", "1 hour"),
+                  ("120", "2 hours"),
+                  ("240", "4 hours"),
+                  ("480", "8 hours"),
+                  ("1440", "24 hours"),
+                ],
+                root_testid="system-support-debug-duration-select",
+                class_name="w-full",
+                local_model="debugDuration"
+              ) }}
+            </div>
+
+            <button @click="enableDebugLogging()" :disabled="debugLoading" class="btn-primary btn-md gap-2 shrink-0">
+              <svg x-show="!debugLoading" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18"/>
+              </svg>
+              <svg x-show="debugLoading" x-cloak class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              Enable debug logging
+            </button>
+          </div>
+
+          {% call field_note(tone="warning", icon="warning") %}
+            Use the shortest window that still lets you reproduce the problem.
+          {% endcall %}
+        </div>
+      </div>
+    </template>
+  {% endcall %}
+
+  {% call section_card(
+    title="Diagnostic package",
+    eyebrow="Export",
+    title_style="plain"
+  ) %}
+    <div class="space-y-4">
+      <p class="text-sm leading-6 text-pb-text-sec">
+        Download the sanitized ZIP we use for most investigations. It captures the current system state without exposing stored secrets.
+      </p>
+
+      <div class="grid gap-2 md:grid-cols-2">
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>System and runtime information</span>
+        </div>
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>Last 5 days of log files</span>
+        </div>
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>Sanitized configuration</span>
+        </div>
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>Sanitized database copy</span>
+        </div>
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>Download and search history</span>
+        </div>
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>Scheduler and disk status</span>
+        </div>
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>Health check results</span>
+        </div>
+        <div class="checklist-item">
+          <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+          <span>Import job history</span>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-3 border-t border-pb-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <span class="pill pill-info gap-2 self-start text-xs">
+          {{ ui_icon("lock", "h-3.5 w-3.5") }}
+          Privacy safe - keys, passwords &amp; tokens stripped
+        </span>
+        <button @click="downloadDiagnostic()" :disabled="diagnosticLoading" class="btn-primary btn-sm gap-2">
+          <svg x-show="!diagnosticLoading" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+          </svg>
+          <svg x-show="diagnosticLoading" x-cloak class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+          <span x-text="diagnosticLoading ? 'Generating...' : 'Download package'"></span>
+        </button>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Report a bug",
+    eyebrow="GitHub",
+    title_style="plain"
+  ) %}
+    <div class="grid gap-4 md:grid-cols-2">
+      <a href="https://github.com/pullboxapp/pullbox/issues/new?template=bug_report.yml" target="_blank" rel="noopener" class="action-card">
+        <div class="action-card-icon bg-pb-error-dim text-pb-error">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008zm8.25-3.758c0 4.763-3.673 8.703-8.344 8.957a1.97 1.97 0 01-.312 0C6.923 21.695 3.25 17.755 3.25 12.992c0-4.842 3.908-8.766 8.75-8.766s8.75 3.924 8.75 8.766z"/>
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <p class="action-card-title">Bug report</p>
+          <p class="action-card-copy">Use this when something is broken, inconsistent, or behaving differently than expected.</p>
+        </div>
+      </a>
+
+      <a href="https://github.com/pullboxapp/pullbox/issues/new?template=feature_request.yml" target="_blank" rel="noopener" class="action-card">
+        <div class="action-card-icon bg-pb-warning-dim text-pb-warning">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18"/>
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <p class="action-card-title">Feature request</p>
+          <p class="action-card-copy">Use this when the workflow is missing something or the product behavior could be better.</p>
+        </div>
+      </a>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Tips for a great report",
+    eyebrow="Reference",
+    title_style="plain"
+  ) %}
+    <div class="grid gap-6 md:grid-cols-2">
+      <div class="space-y-2">
+        <p class="inline-flex items-center gap-2 text-sm font-medium text-pb-success">
+          {{ ui_icon("check", "h-4 w-4") }}
+          <span>Include</span>
+        </p>
+        <ul class="list-disc space-y-2 pl-5 text-sm leading-6 text-pb-text-sec">
+          <li>Steps to reproduce</li>
+          <li>Expected result versus actual result</li>
+          <li>The diagnostic package from this page</li>
+          <li>Screenshots or recordings for UI issues</li>
+          <li>Browser details when the problem is visual</li>
+        </ul>
+      </div>
+      <div class="space-y-2">
+        <p class="inline-flex items-center gap-2 text-sm font-medium text-pb-error">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6 6 18"/>
+          </svg>
+          <span>Avoid</span>
+        </p>
+        <ul class="list-disc space-y-2 pl-5 text-sm leading-6 text-pb-text-sec">
+          <li>“It doesn’t work” without reproduction details</li>
+          <li>Multiple unrelated issues in one report</li>
+          <li>Pasting raw logs instead of attaching the diagnostic ZIP</li>
+        </ul>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Community",
+    eyebrow="Connect",
+    title_style="plain"
+  ) %}
+    <div class="grid gap-4 md:grid-cols-3">
+      <a href="https://discord.com/channels/1484661929657106644/1484662608022732810" target="_blank" rel="noopener" class="action-card">
+        <div class="action-card-icon bg-pb-info-dim text-pb-info">
+          <svg class="h-5 w-5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
+            <path fill-rule="evenodd" d="M1.5 2.75a.25.25 0 01.25-.25h8.5a.25.25 0 01.25.25v5.5a.25.25 0 01-.25.25h-3.5a.75.75 0 00-.53.22L3.5 11.44V9.25a.75.75 0 00-.75-.75h-1a.25.25 0 01-.25-.25v-5.5zM1.75 1A1.75 1.75 0 000 2.75v5.5C0 9.216.784 10 1.75 10H2v1.543a1.457 1.457 0 002.487 1.03L7.061 10h3.189A1.75 1.75 0 0012 8.25v-5.5A1.75 1.75 0 0010.25 1h-8.5zM14.5 4.75a.25.25 0 00-.25-.25h-.5a.75.75 0 110-1.5h.5c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0114.25 12H14v1.543a1.457 1.457 0 01-2.487 1.03L9.22 12.28a.75.75 0 111.06-1.06l2.22 2.22v-2.19a.75.75 0 01.75-.75h1a.25.25 0 00.25-.25v-5.5z"/>
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <p class="action-card-title">Discussions</p>
+          <p class="action-card-copy">Ask for help or pressure-test an idea before opening an issue.</p>
+        </div>
+      </a>
+
+      <a href="https://github.com/pullboxapp/pullbox" target="_blank" rel="noopener" class="action-card">
+        <div class="action-card-icon">
+          <svg class="h-5 w-5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
+            <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <p class="action-card-title">GitHub</p>
+          <p class="action-card-copy">Browse source, release history, and issue context before you file something new.</p>
+        </div>
+      </a>
+
+      <a href="https://reddit.com/r/Pullbox" target="_blank" rel="noopener" class="action-card">
+        <div class="action-card-icon">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M14.238 15.348c.085.084.085.221 0 .306-.465.462-1.194.687-2.231.687l-.008-.002-.008.002c-1.036 0-1.766-.225-2.231-.688-.085-.084-.085-.221 0-.305.084-.084.222-.084.307 0 .379.377 1.008.561 1.924.561l.008.002.008-.002c.915 0 1.544-.184 1.924-.561.085-.084.223-.084.307 0zm-3.44-2.418c0-.507-.414-.919-.922-.919-.509 0-.922.412-.922.919 0 .506.414.918.922.918.508.001.922-.411.922-.918zm4.916-.919c-.509 0-.922.412-.922.919 0 .506.414.918.922.918.508 0 .922-.412.922-.918 0-.507-.413-.919-.922-.919zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5.8 11.333c.012.167.018.335.018.503 0 2.566-2.99 4.647-6.677 4.647-3.688 0-6.677-2.081-6.677-4.647 0-.168.006-.336.018-.503A1.745 1.745 0 013.2 12c0-.965.786-1.75 1.75-1.75.455 0 .87.178 1.178.468 1.158-.825 2.754-1.356 4.546-1.42l.868-4.083a.342.342 0 01.407-.265l2.89.607a1.227 1.227 0 011.16-.823c.679 0 1.23.55 1.23 1.23 0 .679-.551 1.228-1.23 1.228-.672 0-1.218-.542-1.228-1.212l-2.58-.541-.766 3.605c1.77.075 3.344.603 4.488 1.42.308-.29.723-.468 1.178-.468.964 0 1.75.786 1.75 1.75 0 .537-.243 1.017-.622 1.336z"/>
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <p class="action-card-title">Reddit</p>
+          <p class="action-card-copy">Use the community subreddit for broader feedback and lightweight discussion.</p>
+        </div>
+      </a>
+    </div>
+  {% endcall %}
+</div>
+
+<script>
+function supportManager() {
+  return {
+    diagnosticLoading: false,
+    debugLoading: false,
+    debugDuration: '15',
+    debugStatus: { active: false, level: null, base_level: null, expires_at: null, remaining_minutes: null },
+    _debugTimer: null,
+
+    init() {
+      this.loadDebugStatus();
+    },
+
+    loadDebugStatus() {
+      fetch('/api/v1/system/debug-logging', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.debugStatus = data;
+          this._startCountdown();
+        })
+        .catch(() => {});
+    },
+
+    enableDebugLogging() {
+      this.debugLoading = true;
+      fetch('/api/v1/system/debug-logging', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({
+          duration_minutes: parseInt(this.debugDuration),
+          level: 'debug',
+        }),
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.debugStatus = data;
+          this._startCountdown();
+          if (typeof showToast === 'function') showToast({
+            message: `Debug logging enabled for ${this.debugDuration} minutes.`,
+            level: 'success',
+          });
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message || 'Failed to enable debug logging.', level: 'error' });
+        })
+        .finally(() => { this.debugLoading = false; });
+    },
+
+    disableDebugLogging() {
+      this.debugLoading = true;
+      fetch('/api/v1/system/debug-logging', {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.debugStatus = data;
+          this._stopCountdown();
+          if (typeof showToast === 'function') showToast({
+            message: 'Debug logging disabled. Reverted to normal level.',
+            level: 'success',
+          });
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message || 'Failed to disable debug logging.', level: 'error' });
+        })
+        .finally(() => { this.debugLoading = false; });
+    },
+
+    _startCountdown() {
+      this._stopCountdown();
+      if (!this.debugStatus.active) return;
+      this._debugTimer = setInterval(() => {
+        if (this.debugStatus.remaining_minutes > 0) {
+          this.debugStatus.remaining_minutes--;
+        } else {
+          this._stopCountdown();
+          this.loadDebugStatus();
+        }
+      }, 60000);
+    },
+
+    _stopCountdown() {
+      if (this._debugTimer) {
+        clearInterval(this._debugTimer);
+        this._debugTimer = null;
+      }
+    },
+
+    downloadDiagnostic() {
+      this.diagnosticLoading = true;
+      fetch('/api/v1/system/diagnostic-package', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => {
+          if (!r.ok) throw new Error('Failed to generate diagnostic package');
+          const cd = r.headers.get('content-disposition') || '';
+          const match = cd.match(/filename="?([^";\s]+)"?/);
+          this._diagFilename = match ? match[1] : 'pullbox-diagnostic.zip';
+          return r.blob();
+        })
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = this._diagFilename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          if (typeof showToast === 'function') showToast({ message: 'Diagnostic package downloaded.', level: 'success' });
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message || 'Failed to generate package.', level: 'error' });
+        })
+        .finally(() => { this.diagnosticLoading = false; });
+    },
+  };
+}
+</script>

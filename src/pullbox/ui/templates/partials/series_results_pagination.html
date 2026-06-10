@@ -1,0 +1,9 @@
+{% from "components/pagination.html" import pagination %}
+
+{% if per_page > 0 and total_pages > 1 %}
+  {% if filter_query %}
+    {{ pagination(page, total_pages, "/series?" ~ filter_query, "#series-results-body", "outerHTML", hx_select="") }}
+  {% else %}
+    {{ pagination(page, total_pages, "/series", "#series-results-body", "outerHTML", hx_select="") }}
+  {% endif %}
+{% endif %}

@@ -1,0 +1,30 @@
+<div
+  data-testid="utilities-mass-convert-footer-dock"
+  x-data="{ scope: 'Select folders', files: '0', steps: '2 of 3' }"
+  x-on:utilities:mass-convert-footer.window="
+    scope = $event.detail.scope;
+    files = $event.detail.files;
+    steps = $event.detail.steps;
+  "
+>
+  <div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+    <div class="page-dock-status" data-testid="page-dock-status">
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">tool</span>
+        <strong class="page-dock-status-value">Mass Convert</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">scope</span>
+        <strong class="page-dock-status-value" x-text="scope">Select folders</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">files</span>
+        <strong class="page-dock-status-value" x-text="files">0</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">steps</span>
+        <strong class="page-dock-status-value" x-text="steps">2 of 3</strong>
+      </span>
+    </div>
+  </div>
+</div>

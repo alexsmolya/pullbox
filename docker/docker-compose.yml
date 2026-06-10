@@ -1,0 +1,52 @@
+# Pullbox — Docker Compose example
+#
+# Usage:
+#   docker compose up -d
+#
+# config.xml is auto-generated on first run inside the pullbox-data volume.
+# It contains Pullbox's application secret, so keep /data durable and backed up.
+# Keep /data for Pullbox-managed state only. Mount library/download folders
+# separately so SQLite stays off host bind mounts.
+#
+# Recommended multi-system/NAS model:
+# - Mount your shared library path at /comics
+# - Mount your shared completed-downloads path at /downloads
+# - Mount any manual import/drop-folder path at /imports
+# - In Pullbox, keep each client's Remote Path client-specific, but set
+#   Download Directory to /downloads for the normal Radarr-style setup
+
+services:
+  pullbox:
+    image: ghcr.io/pullboxapp/pullbox:latest
+    container_name: pullbox
+    restart: unless-stopped
+    ports:
+      - "8585:8585"
+    volumes:
+      - pullbox-data:/data
+      - /path/to/your/comics:/comics
+      - /path/to/your/shared-downloads:/downloads
+      - /path/to/your/imports:/imports
+      # Optional native HTTPS certificate mount. Files must be readable by UID 65532.
+      # - /path/to/your/certs:/config/certs:ro
+    environment:
+      - TZ=America/New_York
+      - PULLBOX_DB_URL=sqlite+aiosqlite:////data/pullbox.db
+      - PULLBOX_SQLITE_JOURNAL_MODE=WAL
+      - PULLBOX_LIBRARY_ROOT=/comics
+      - PULLBOX_COVERS_DIR=/comics/.covers
+      # Optional overrides (config.xml handles the rest):
+      # - PULLBOX_PORT=8585
+      # - PULLBOX_BASE_URL=https://comics.example.com
+      # Optional application-secret override. Leave unset unless intentionally
+      # managing the secret outside /data/config.xml.
+      # - PULLBOX_SECRET_KEY=replace-with-a-stable-random-secret
+      # Native HTTPS uses the normal Pullbox port; remap the external Docker port if needed.
+      # - PULLBOX_HTTPS_ENABLED=true
+      # - PULLBOX_HTTPS_CERT_PATH=/config/certs/pullbox.crt
+      # - PULLBOX_HTTPS_KEY_PATH=/config/certs/pullbox.key
+      # - PULLBOX_HTTPS_CERT_ROOT=/config/certs
+
+volumes:
+  pullbox-data:
+    name: pullbox-data

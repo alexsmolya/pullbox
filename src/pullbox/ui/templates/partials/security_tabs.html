@@ -1,0 +1,30 @@
+{% from "components/admin_workspace.html" import workspace_nav_shell %}
+
+{% call workspace_nav_shell(
+  testid="security-tabs",
+  aria_label="Security sections"
+) %}
+  {% for tab_item in security_tabs %}
+  {% set is_active = tab == tab_item.key %}
+  <a
+    href="/security?tab={{ tab_item.key }}"
+    hx-get="/htmx/security/{{ tab_item.key }}"
+    hx-target="#security-content"
+    hx-swap="outerHTML"
+    hx-push-url="/security?tab={{ tab_item.key }}"
+    class="admin-nav-link {% if is_active %}admin-nav-link-active{% endif %}"
+    data-testid="security-tab-{{ tab_item.key }}"
+    data-admin-nav-link="v1"
+    {% if is_active %}aria-current="page"{% endif %}
+    >
+      <span class="admin-nav-link-icon">
+        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="{{ tab_item.icon }}" />
+        </svg>
+      </span>
+      <span class="admin-nav-link-copy">
+        <span class="admin-nav-link-title">{{ tab_item.label }}</span>
+      </span>
+    </a>
+  {% endfor %}
+{% endcall %}

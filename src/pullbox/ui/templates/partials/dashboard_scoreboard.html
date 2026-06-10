@@ -1,0 +1,19 @@
+<section
+  id="dashboard-scoreboard-region"
+  data-testid="dashboard-scoreboard"
+  class="dashboard-scoreboard"
+  hx-get="/htmx/dashboard/scoreboard"
+  hx-trigger="every 5m [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  {% for item in dashboard_view.scoreboard %}
+    <article
+      data-testid="dashboard-scorecard-{{ item.key }}"
+      class="dashboard-scoreboard__item"
+    >
+      <span class="dashboard-scoreboard__label">{{ item.label }}</span>
+      <span class="dashboard-scoreboard__value">{{ item.value_label }}</span>
+      <span class="dashboard-scoreboard__delta">{{ item.delta_label }}</span>
+    </article>
+  {% endfor %}
+</section>

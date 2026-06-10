@@ -1,0 +1,669 @@
+"""Tests for InterventionService — ESM Phase 2, Task 2.2.
+
+Covers:
+- Creating pending matches (with deduplication)
+- Approving pending matches (sends to download client)
+- Rejecting pending matches (with optional reason)
+- Listing pending matches (with filters and pagination)
+- Expiring stale pending matches
+
+Run:
+    pytest tests/unit/test_intervention_service.py -v
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from pullbox.models import Base
+from pullbox.models.download import DownloadHistory, DownloadState
+from pullbox.models.issue import Issue, IssueStatus, IssueType
+from pullbox.models.library import MatchConfidence
+from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
+from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.providers.base import ReleaseResult
+from pullbox.services.release_validator import ValidationResult
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def db_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_fk(dbapi_conn: object, _rec: object) -> None:
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")  # type: ignore[union-attr]
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+def _make_series(
+    *,
+    title: str = "Batman",
+    comicvine_id: int = 99900,
+    year_start: int = 2016,
+) -> Series:
+    return Series(
+        comicvine_id=comicvine_id,
+        title=title,
+        sort_title=title,
+        year_start=year_start,
+        status=SeriesStatus.CONTINUING,
+        series_type=SeriesType.STANDARD,
+        monitored=True,
+        issue_count=10,
+    )
+
+
+def _make_issue(series_id: int, *, issue_number: float = 1.0) -> Issue:
+    return Issue(
+        series_id=series_id,
+        comicvine_id=50000 + int(issue_number),
+        issue_number=issue_number,
+        title=f"Issue #{int(issue_number)}",
+        status=IssueStatus.WANTED,
+        issue_type=IssueType.ISSUE,
+    )
+
+
+async def _seed_issue(
+    session: AsyncSession,
+    *,
+    series_title: str = "Batman",
+    issue_number: float = 1.0,
+) -> Issue:
+    series = _make_series(title=series_title)
+    session.add(series)
+    await session.flush()
+    issue = _make_issue(series.id, issue_number=issue_number)
+    session.add(issue)
+    await session.flush()
+    return issue
+
+
+def _make_release(
+    title: str = "Batman 001 (2016).cbz",
+    *,
+    download_url: str = "https://indexer.example.com/dl/123",
+) -> ReleaseResult:
+    return ReleaseResult(
+        title=title,
+        indexer_name="NZBgeek",
+        download_url=download_url,
+        size_bytes=100_000_000,
+        age_days=2,
+        seeders=None,
+        leechers=None,
+        grabs=50,
+        is_torrent=False,
+        category="7030",
+        published_at=None,
+    )
+
+
+def _make_validation(
+    release: ReleaseResult,
+    *,
+    confidence: MatchConfidence = MatchConfidence.MEDIUM,
+    similarity: float = 0.88,
+) -> ValidationResult:
+    parsed = MagicMock(spec="ParsedRelease")
+    parsed.series_name = "Batman"
+    parsed.issue_number = 1.0
+    parsed.year = 2016
+    parsed.issue_type = IssueType.ISSUE
+    parsed.original_title = release.title
+
+    return ValidationResult(
+        is_match=True,
+        confidence=confidence,
+        parsed=parsed,
+        release=release,
+        series_similarity=similarity,
+        issue_match=True,
+        year_match=True,
+        issue_type_match=True,
+    )
+
+
+def _make_pending(
+    issue_id: int,
+    *,
+    url: str = "https://indexer.example.com/dl/123",
+    status: PendingMatchStatus = PendingMatchStatus.PENDING,
+    confidence: str = "medium",
+    created_at: datetime | None = None,
+) -> PendingMatch:
+    pm = PendingMatch(
+        issue_id=issue_id,
+        release_title="Batman 001.cbz",
+        download_url=url,
+        is_torrent=False,
+        file_size=100_000_000,
+        confidence=confidence,
+        match_details={"indexer_name": "NZBgeek", "age_days": 2},
+        status=status,
+    )
+    if created_at is not None:
+        pm.created_at = created_at
+    return pm
+
+
+def _mock_download_service() -> AsyncMock:
+    svc = AsyncMock()
+    download = MagicMock(spec=DownloadHistory)
+    download.id = 1
+    download.state = DownloadState.SENT
+    download.title = "Batman 001.cbz"
+    svc.send_to_client.return_value = download
+    return svc
+
+
+# ── TestCreatePendingMatch ────────────────────────────────────────────
+
+
+class TestCreatePendingMatch:
+    """Tests for InterventionService.create_pending_match."""
+
+    @pytest.mark.asyncio
+    async def test_creates_pending_match(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Creates a PendingMatch record with correct fields."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            release = _make_release()
+            validation = _make_validation(release)
+
+            result = await svc.create_pending_match(session, issue.id, release, validation)
+            await session.commit()
+
+        assert result is not None
+        assert result.issue_id == issue.id
+        assert result.release_title == release.title
+        assert result.download_url == release.download_url
+        assert result.confidence == "medium"
+        assert result.status == PendingMatchStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_dedup_existing_pending(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Returns None if matching pending exists for issue+URL."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            release = _make_release()
+            validation = _make_validation(release)
+
+            # First creation succeeds
+            result1 = await svc.create_pending_match(session, issue.id, release, validation)
+            await session.commit()
+            assert result1 is not None
+
+        async with db_factory() as session:
+            # Second creation with same issue+URL returns None
+            result2 = await svc.create_pending_match(session, issue.id, release, validation)
+            assert result2 is None
+
+    @pytest.mark.asyncio
+    async def test_stores_match_details(self, db_factory: async_sessionmaker[AsyncSession]) -> None:
+        """match_details JSON populated from ValidationResult."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            release = _make_release()
+            validation = _make_validation(release, similarity=0.92)
+
+            result = await svc.create_pending_match(session, issue.id, release, validation)
+            await session.commit()
+
+        assert result is not None
+        details = result.match_details
+        assert details["parsed_series"] == "Batman"
+        assert details["series_similarity"] == 0.92
+        assert details["issue_match"] is True
+        assert details["year_match"] is True
+        assert details["indexer_name"] == "NZBgeek"
+        assert details["age_days"] == 2
+
+
+# ── TestApproveMatch ──────────────────────────────────────────────────
+
+
+class TestApproveMatch:
+    """Tests for InterventionService.approve_match."""
+
+    @pytest.mark.asyncio
+    async def test_approve_sends_to_client(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Approving a match calls send_to_client with correct args."""
+        from pullbox.services.intervention_service import InterventionService
+
+        mock_dl = _mock_download_service()
+        svc = InterventionService(download_service=mock_dl)
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            pm = _make_pending(issue.id)
+            session.add(pm)
+            await session.commit()
+            pm_id = pm.id
+
+        async with db_factory() as session:
+            await svc.approve_match(session, pm_id)
+            await session.commit()
+
+        mock_dl.send_to_client.assert_called_once()
+        call_args = mock_dl.send_to_client.call_args
+        # Verify the release was reconstructed
+        release_arg = call_args[1].get("release") or call_args[0][1]
+        assert release_arg.title == "Batman 001.cbz"
+
+    @pytest.mark.asyncio
+    async def test_approve_updates_status(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Status changes from PENDING to APPROVED."""
+        from pullbox.services.intervention_service import InterventionService
+
+        mock_dl = _mock_download_service()
+        svc = InterventionService(download_service=mock_dl)
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            pm = _make_pending(issue.id)
+            session.add(pm)
+            await session.commit()
+            pm_id = pm.id
+
+        async with db_factory() as session:
+            await svc.approve_match(session, pm_id)
+            await session.commit()
+
+        async with db_factory() as session:
+            result = await session.get(PendingMatch, pm_id)
+            assert result is not None
+            assert result.status == PendingMatchStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_approve_sets_resolved_at(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """resolved_at and resolved_by are set on approval."""
+        from pullbox.services.intervention_service import InterventionService
+
+        mock_dl = _mock_download_service()
+        svc = InterventionService(download_service=mock_dl)
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            pm = _make_pending(issue.id)
+            session.add(pm)
+            await session.commit()
+            pm_id = pm.id
+
+        async with db_factory() as session:
+            await svc.approve_match(session, pm_id)
+            await session.commit()
+
+        async with db_factory() as session:
+            result = await session.get(PendingMatch, pm_id)
+            assert result is not None
+            assert result.resolved_at is not None
+            assert result.resolved_by == "user"
+
+    @pytest.mark.asyncio
+    async def test_approve_non_pending_raises(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Cannot approve an already-approved match."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            pm = _make_pending(issue.id, status=PendingMatchStatus.APPROVED)
+            session.add(pm)
+            await session.commit()
+            pm_id = pm.id
+
+        async with db_factory() as session:
+            with pytest.raises(ValueError, match=r"not.*pending"):
+                await svc.approve_match(session, pm_id)
+
+    @pytest.mark.asyncio
+    async def test_approve_missing_raises(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Approving non-existent ID raises ValueError."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            with pytest.raises(ValueError, match="not found"):
+                await svc.approve_match(session, 99999)
+
+
+# ── TestRejectMatch ───────────────────────────────────────────────────
+
+
+class TestRejectMatch:
+    """Tests for InterventionService.reject_match."""
+
+    @pytest.mark.asyncio
+    async def test_reject_updates_status(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Status changes from PENDING to REJECTED."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            pm = _make_pending(issue.id)
+            session.add(pm)
+            await session.commit()
+            pm_id = pm.id
+
+        async with db_factory() as session:
+            await svc.reject_match(session, pm_id)
+            await session.commit()
+
+        async with db_factory() as session:
+            result = await session.get(PendingMatch, pm_id)
+            assert result is not None
+            assert result.status == PendingMatchStatus.REJECTED
+            assert result.resolved_at is not None
+            assert result.resolved_by == "user"
+
+    @pytest.mark.asyncio
+    async def test_reject_stores_reason(self, db_factory: async_sessionmaker[AsyncSession]) -> None:
+        """Optional reason string is stored in match_details."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            pm = _make_pending(issue.id)
+            session.add(pm)
+            await session.commit()
+            pm_id = pm.id
+
+        async with db_factory() as session:
+            await svc.reject_match(session, pm_id, reason="Wrong volume")
+            await session.commit()
+
+        async with db_factory() as session:
+            result = await session.get(PendingMatch, pm_id)
+            assert result is not None
+            assert result.match_details.get("rejection_reason") == "Wrong volume"
+
+    @pytest.mark.asyncio
+    async def test_reject_non_pending_raises(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Cannot reject non-PENDING match."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            pm = _make_pending(issue.id, status=PendingMatchStatus.REJECTED)
+            session.add(pm)
+            await session.commit()
+            pm_id = pm.id
+
+        async with db_factory() as session:
+            with pytest.raises(ValueError, match=r"not.*pending"):
+                await svc.reject_match(session, pm_id)
+
+
+# ── TestGetPending ────────────────────────────────────────────────────
+
+
+class TestGetPending:
+    """Tests for InterventionService.get_pending."""
+
+    @pytest.mark.asyncio
+    async def test_returns_pending_only_by_default(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Default filter returns only PENDING status."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            session.add(_make_pending(issue.id, url="https://a.com/1"))
+            session.add(
+                _make_pending(
+                    issue.id,
+                    url="https://a.com/2",
+                    status=PendingMatchStatus.APPROVED,
+                )
+            )
+            session.add(
+                _make_pending(
+                    issue.id,
+                    url="https://a.com/3",
+                    status=PendingMatchStatus.REJECTED,
+                )
+            )
+            await session.commit()
+
+        async with db_factory() as session:
+            items, total = await svc.get_pending(session)
+            assert total == 1
+            assert len(items) == 1
+            assert items[0].status == PendingMatchStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_filter_by_series(self, db_factory: async_sessionmaker[AsyncSession]) -> None:
+        """series_id filter works."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue1 = await _seed_issue(session, series_title="Batman")
+            series1_id = issue1.series_id
+
+            series2 = _make_series(title="Superman", comicvine_id=99901)
+            session.add(series2)
+            await session.flush()
+            issue2 = _make_issue(series2.id, issue_number=5.0)
+            session.add(issue2)
+            await session.flush()
+
+            session.add(_make_pending(issue1.id, url="https://a.com/1"))
+            session.add(_make_pending(issue2.id, url="https://a.com/2"))
+            await session.commit()
+
+        async with db_factory() as session:
+            items, total = await svc.get_pending(session, series_id=series1_id)
+            assert total == 1
+            assert items[0].issue.series_id == series1_id
+
+    @pytest.mark.asyncio
+    async def test_filter_by_confidence(self, db_factory: async_sessionmaker[AsyncSession]) -> None:
+        """confidence filter works."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            session.add(_make_pending(issue.id, url="https://a.com/1", confidence="medium"))
+            session.add(_make_pending(issue.id, url="https://a.com/2", confidence="low"))
+            await session.commit()
+
+        async with db_factory() as session:
+            items, total = await svc.get_pending(session, confidence="low")
+            assert total == 1
+            assert items[0].confidence == "low"
+
+    @pytest.mark.asyncio
+    async def test_pagination(self, db_factory: async_sessionmaker[AsyncSession]) -> None:
+        """Returns correct page and total_count."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            for i in range(5):
+                session.add(_make_pending(issue.id, url=f"https://a.com/{i}"))
+            await session.commit()
+
+        async with db_factory() as session:
+            items, total = await svc.get_pending(session, page=1, per_page=2)
+            assert total == 5
+            assert len(items) == 2
+
+        async with db_factory() as session:
+            items, total = await svc.get_pending(session, page=3, per_page=2)
+            assert total == 5
+            assert len(items) == 1  # page 3: items 5 of 5
+
+
+# ── TestExpireStale ───────────────────────────────────────────────────
+
+
+class TestExpireStale:
+    """Tests for InterventionService.expire_stale."""
+
+    @pytest.mark.asyncio
+    async def test_expires_old_pending(self, db_factory: async_sessionmaker[AsyncSession]) -> None:
+        """Pending matches older than threshold get EXPIRED."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            old = _make_pending(
+                issue.id,
+                url="https://a.com/old",
+                created_at=datetime.now(UTC) - timedelta(days=31),
+            )
+            session.add(old)
+            await session.commit()
+            old_id = old.id
+
+        async with db_factory() as session:
+            count = await svc.expire_stale(session, max_age_days=30)
+            await session.commit()
+
+        assert count == 1
+
+        async with db_factory() as session:
+            result = await session.get(PendingMatch, old_id)
+            assert result is not None
+            assert result.status == PendingMatchStatus.EXPIRED
+
+    @pytest.mark.asyncio
+    async def test_does_not_expire_recent(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Recent pending matches are not expired."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            recent = _make_pending(issue.id, url="https://a.com/recent")
+            session.add(recent)
+            await session.commit()
+
+        async with db_factory() as session:
+            count = await svc.expire_stale(session, max_age_days=30)
+            await session.commit()
+
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_does_not_expire_approved(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Already-approved matches are not expired."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            approved = _make_pending(
+                issue.id,
+                url="https://a.com/approved",
+                status=PendingMatchStatus.APPROVED,
+                created_at=datetime.now(UTC) - timedelta(days=60),
+            )
+            session.add(approved)
+            await session.commit()
+
+        async with db_factory() as session:
+            count = await svc.expire_stale(session, max_age_days=30)
+            await session.commit()
+
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_count(self, db_factory: async_sessionmaker[AsyncSession]) -> None:
+        """Returns the number of expired entries."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            for i in range(3):
+                session.add(
+                    _make_pending(
+                        issue.id,
+                        url=f"https://a.com/old{i}",
+                        created_at=datetime.now(UTC) - timedelta(days=45),
+                    )
+                )
+            # One recent one should NOT be expired
+            session.add(_make_pending(issue.id, url="https://a.com/recent"))
+            await session.commit()
+
+        async with db_factory() as session:
+            count = await svc.expire_stale(session, max_age_days=30)
+            await session.commit()
+
+        assert count == 3

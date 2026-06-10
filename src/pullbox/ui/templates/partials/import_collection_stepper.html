@@ -1,0 +1,32 @@
+<nav data-testid="import-collection-stepper" class="grid gap-4 lg:grid-cols-[repeat(5,minmax(0,1fr))]">
+  {% set steps = [
+    (1, "Source"),
+    (2, "Scan"),
+    (3, "Review"),
+    (4, "Import"),
+    (5, "Results"),
+  ] %}
+  {% for num, label in steps %}
+    <div
+      class="workflow-step"
+      :class="step > {{ num }} ? 'workflow-step-complete' : step === {{ num }} ? 'workflow-step-active' : ''"
+    >
+      <div class="flex items-center gap-3">
+        <span class="workflow-step-badge">
+          <template x-if="step > {{ num }}">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+            </svg>
+          </template>
+          <template x-if="step <= {{ num }}">
+            <span>{{ num }}</span>
+          </template>
+        </span>
+        <div class="min-w-0">
+          <p class="workflow-step-label">Step {{ num }}</p>
+          <p class="workflow-step-title">{{ label }}</p>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</nav>

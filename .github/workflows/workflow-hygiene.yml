@@ -1,0 +1,80 @@
+---
+# Pullbox Workflow Hygiene
+# Validates GitHub Actions workflow syntax and expressions with actionlint.
+#
+# Security: All actions pinned to full SHA. actionlint runs from an immutable
+# container image digest.
+
+name: Workflow Hygiene
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, develop]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-hygiene-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh docker
+
+      - name: Run actionlint
+        env:
+          ACTIONLINT_IMAGE: docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/repo" \
+            -w /repo \
+            "$ACTIONLINT_IMAGE" \
+            -shellcheck= -pyflakes=
+
+  # Stable aggregate required check for branch rulesets.
+  workflow-hygiene-required:
+    name: Workflow Hygiene Required
+    runs-on: ubuntu-latest
+    needs:
+      - actionlint
+    if: always()
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify workflow hygiene jobs
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          failed = {
+              name: info.get("result")
+              for name, info in needs.items()
+              if info.get("result") != "success"
+          }
+          if failed:
+              print(f"Workflow hygiene jobs did not all pass: {failed}", file=sys.stderr)
+              sys.exit(1)
+          print("All workflow hygiene jobs passed.")
+          PY

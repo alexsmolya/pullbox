@@ -1,0 +1,82 @@
+{#- Shared breadcrumb/context bar for detail and workflow pages. -#}
+
+{% macro page_context(
+  eyebrow="",
+  breadcrumbs=[],
+  summary="",
+  chips=[],
+  note_title="",
+  note_copy="",
+  class_name="",
+  attrs="",
+  back_href="",
+  back_label="Back",
+  back_testid=""
+) -%}
+  <header class="page-context-card {{ class_name }}" {{ attrs|safe }}>
+    <div class="space-y-4">
+      {% if back_href %}
+        <a
+          href="{{ back_href }}"
+          hx-boost="false"
+          {% if back_testid %}data-testid="{{ back_testid }}"{% endif %}
+          class="page-context-back-link"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
+          </svg>
+          <span>{{ back_label }}</span>
+        </a>
+      {% endif %}
+
+      <div class="page-context-grid">
+        <div class="space-y-4">
+          {% if breadcrumbs %}
+            <nav class="page-context-breadcrumbs" aria-label="Breadcrumb">
+              {% for crumb in breadcrumbs %}
+                {% if not loop.first %}
+                  <svg class="page-context-separator" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+                  </svg>
+                {% endif %}
+                {% if crumb[1] %}
+                  <a href="{{ crumb[1] }}" hx-boost="false" class="page-context-link">{{ crumb[0] }}</a>
+                {% else %}
+                  <span class="font-medium text-pb-text">{{ crumb[0] }}</span>
+                {% endif %}
+              {% endfor %}
+            </nav>
+          {% endif %}
+
+          <div class="space-y-2">
+            {% if eyebrow %}
+              <p class="section-eyebrow">{{ eyebrow }}</p>
+            {% endif %}
+            {% if summary %}
+              <p class="page-context-summary">{{ summary|safe }}</p>
+            {% endif %}
+          </div>
+
+          {% if chips %}
+            <div class="page-context-chip-row">
+              {% for chip in chips %}
+                <span class="utility-token">{{ chip }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+
+        {% if note_title or note_copy %}
+          <div class="page-context-note">
+            {% if note_title %}
+              <p class="page-context-note-title">{{ note_title }}</p>
+            {% endif %}
+            {% if note_copy %}
+              <p class="page-context-note-copy">{{ note_copy|safe }}</p>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+{%- endmacro %}

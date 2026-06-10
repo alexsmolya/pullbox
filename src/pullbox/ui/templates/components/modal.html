@@ -1,0 +1,50 @@
+{#- Modal dialog component — uses Alpine.js for show/hide with transitions. -#}
+{% macro modal(id, title, alpine_var="showModal") %}
+<div x-show="{{ alpine_var }}"
+     x-transition:enter="transition ease-out duration-200"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
+     x-transition:leave="transition ease-in duration-150"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     x-cloak
+     class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+     @keydown.escape.window="{{ alpine_var }} = false"
+     id="{{ id }}"
+     role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
+
+  {#- Backdrop -#}
+  <div class="modal-backdrop" @click="{{ alpine_var }} = false"></div>
+
+  {#- Dialog -#}
+  <div x-show="{{ alpine_var }}"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0 scale-95"
+       x-transition:enter-end="opacity-100 scale-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100 scale-100"
+       x-transition:leave-end="opacity-0 scale-95"
+       class="relative bg-pb-card rounded-t-xl sm:rounded-xl shadow-2xl border border-pb-border
+              w-full max-w-lg max-h-[95vh] sm:max-h-[90vh] overflow-y-auto
+              safe-area-pb"
+       @click.stop>
+
+    {#- Header -#}
+    <div class="flex items-center justify-between px-6 py-4 border-b border-pb-border">
+      <h3 id="{{ id }}-title" class="text-lg font-semibold text-pb-text">{{ title }}</h3>
+      <button @click="{{ alpine_var }} = false"
+              class="text-pb-text-sec hover:text-pb-text transition-colors"
+              aria-label="Close">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    {#- Body -#}
+    <div class="px-6 py-4">
+      {{ caller() }}
+    </div>
+  </div>
+</div>
+{% endmacro %}

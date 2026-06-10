@@ -1,0 +1,30 @@
+<div
+  data-testid="utilities-export-footer-dock"
+  x-data='{ format: {{ "JSON (pretty)"|tojson }}, fields: {{ (export_default_fields|length|string)|tojson }}, dest: {{ utility_export_folder|tojson }} }'
+  x-on:utilities:export-footer.window="
+    format = $event.detail.format;
+    fields = $event.detail.fields;
+    dest = $event.detail.dest;
+  "
+>
+  <div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+    <div class="page-dock-status" data-testid="page-dock-status">
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">tool</span>
+        <strong class="page-dock-status-value">Export Library</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">format</span>
+        <strong class="page-dock-status-value" x-text="format">JSON (pretty)</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">fields</span>
+        <strong class="page-dock-status-value" x-text="fields">{{ export_default_fields|length }}</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">dest</span>
+        <strong class="page-dock-status-value max-w-[16rem] truncate" x-text="dest">{{ utility_export_folder }}</strong>
+      </span>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,30 @@
+<div
+  data-testid="utilities-mass-rename-footer-dock"
+  x-data="{ target: 'Files', scope: 'Select folders', changes: '0' }"
+  x-on:utilities:mass-rename-footer.window="
+    target = $event.detail.target;
+    scope = $event.detail.scope;
+    changes = $event.detail.changes;
+  "
+>
+  <div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+    <div class="page-dock-status" data-testid="page-dock-status">
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">tool</span>
+        <strong class="page-dock-status-value">Mass Rename</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">target</span>
+        <strong class="page-dock-status-value" x-text="target">Files</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">scope</span>
+        <strong class="page-dock-status-value" x-text="scope">Select folders</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">changes</span>
+        <strong class="page-dock-status-value" x-text="changes">0</strong>
+      </span>
+    </div>
+  </div>
+</div>

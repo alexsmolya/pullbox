@@ -1,0 +1,475 @@
+"""Tests for Step 4 import execution progress helpers."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+
+from pullbox.core.exceptions import JobPausedError
+from pullbox.models.import_job import ImportedFile, ImportJob, ImportJobStatus
+from pullbox.services.import_active_file_progress import ActiveFileProgressSettings
+from pullbox.services.import_job_execution_progress import (
+    await_prefetch_with_metadata_progress,
+    build_report_file_progress_callback,
+    build_series_metadata_progress_emitter,
+)
+from pullbox.services.import_progress_runtime import (
+    ImportProgressFileProfile,
+    ImportProgressSettings,
+    import_group_progress_plan,
+)
+
+
+def _job() -> ImportJob:
+    return ImportJob(
+        id=42,
+        source_path="/tmp/imports",
+        status=ImportJobStatus.IMPORTING,
+    )
+
+
+def _file() -> ImportedFile:
+    return ImportedFile(
+        id=99,
+        import_job_id=42,
+        import_series_id=7,
+        file_path="/imports/Alpha 001.cbz",
+        file_name="Alpha 001.cbz",
+        file_size=1024,
+    )
+
+
+def _callback_kwargs(**overrides: Any) -> dict[str, Any]:
+    settings = ImportProgressSettings(
+        move_to_library=True,
+        convert_to_preferred_format=True,
+        update_embedded_comicinfo_from_match=True,
+    )
+    plan = import_group_progress_plan(
+        settings,
+        [
+            ImportProgressFileProfile(
+                file_id=99,
+                file_path="/imports/Alpha 001.cbz",
+                file_size=1024,
+            )
+        ],
+    )
+    kwargs: dict[str, Any] = {
+        "session": object(),
+        "job_id": 42,
+        "job": _job(),
+        "job_started_at": datetime(2026, 6, 9, 12, 0, tzinfo=UTC),
+        "progress_callback": object(),
+        "progress_session_factory": None,
+        "estimate_remaining_seconds": lambda _started_at, _progress: 123,
+        "group_progress_plans": {7: plan},
+        "shared_progress_settings": settings,
+        "group_progress_weights": [plan.total_weight],
+        "group_index": 0,
+        "total_groups": 1,
+        "series_id": 7,
+        "series_name": "Alpha",
+        "series_found": 3,
+        "stats": {
+            "series_imported": 1,
+            "series_failed": 2,
+            "total_files_imported": 4,
+            "total_files_failed": 5,
+        },
+        "progress_state": {
+            "file_id": None,
+            "stage": None,
+            "pct": None,
+            "emitted_at": 0.0,
+        },
+        "revision_state": {"value": 11},
+        "active_file_progress_settings": ActiveFileProgressSettings(
+            move_to_library=True,
+            convert_to_preferred_format=True,
+            update_embedded_comicinfo_from_match=True,
+        ),
+        "monotonic_time": lambda: 10.0,
+        "active_file_progress_emit_interval_seconds": 0.2,
+        "live_only_active_file_stages": frozenset({"transferring", "rewriting"}),
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.asyncio
+async def test_report_file_progress_persists_durable_stage_boundary() -> None:
+    active_calls: list[dict[str, Any]] = []
+    live_calls: list[dict[str, Any]] = []
+
+    async def emit_active_file_progress(*args: Any, **kwargs: Any) -> None:
+        active_calls.append({"args": args, "kwargs": kwargs})
+
+    async def emit_live_progress(*args: Any, **kwargs: Any) -> None:
+        live_calls.append({"args": args, "kwargs": kwargs})
+
+    callback = build_report_file_progress_callback(
+        **_callback_kwargs(
+            emit_active_file_progress=emit_active_file_progress,
+            emit_live_progress=emit_live_progress,
+        )
+    )
+
+    await callback(
+        imp_file=_file(),
+        file_index=1,
+        total_files=1,
+        stage="finalizing",
+        current=1,
+        total=1,
+        unit="file",
+    )
+
+    assert len(active_calls) == 1
+    assert live_calls == []
+    event = active_calls[0]["kwargs"]["event"]
+    assert event.ephemeral_progress is False
+    assert event.progress_revision == 12
+    assert event.current_series_id == 7
+    assert event.current_series_name == "Alpha"
+    assert event.current_file_id == 99
+    assert event.current_file_name == "Alpha 001.cbz"
+    assert event.current_file_stage == "finalizing"
+    assert event.current_file_progress_current == 1
+    assert event.current_file_progress_total == 1
+    assert event.current_file_progress_unit == "file"
+    assert event.series_imported == 1
+    assert event.series_failed == 2
+    assert event.series_found == 3
+    assert event.total_files_imported == 4
+    assert event.total_files_failed == 5
+    assert event.estimated_seconds_remaining == 123
+    assert event.current_item_kind == "file"
+    assert event.current_item_stage == "finalizing"
+    assert event.current_item_progress_pct == event.current_file_progress_pct
+    assert active_calls[0]["args"][0] is not None
+    assert active_calls[0]["args"][1] is None
+    assert active_calls[0]["kwargs"]["job_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_report_file_progress_emits_live_only_for_transfer_stage() -> None:
+    active_calls: list[dict[str, Any]] = []
+    live_calls: list[dict[str, Any]] = []
+    revision_state = {"value": 11}
+
+    async def emit_active_file_progress(**kwargs: Any) -> None:
+        active_calls.append(kwargs)
+
+    async def emit_live_progress(*args: Any, **kwargs: Any) -> None:
+        live_calls.append({"args": args, "kwargs": kwargs})
+
+    callback = build_report_file_progress_callback(
+        **_callback_kwargs(
+            revision_state=revision_state,
+            emit_active_file_progress=emit_active_file_progress,
+            emit_live_progress=emit_live_progress,
+        )
+    )
+
+    await callback(
+        imp_file=_file(),
+        file_index=1,
+        total_files=1,
+        stage="transferring",
+        current=1,
+        total=4,
+        unit="bytes",
+    )
+
+    assert active_calls == []
+    assert len(live_calls) == 1
+    assert live_calls[0]["args"][0].id == 42
+    event = live_calls[0]["args"][1]
+    assert event.ephemeral_progress is True
+    assert event.current_file_stage == "transferring"
+    assert live_calls[0]["kwargs"]["revision_state"] is revision_state
+    assert live_calls[0]["kwargs"]["started_at"] == datetime(2026, 6, 9, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_report_file_progress_throttles_unchanged_live_progress() -> None:
+    active_calls: list[dict[str, Any]] = []
+    live_calls: list[dict[str, Any]] = []
+    tick_values = iter([10.0, 10.1])
+
+    async def emit_active_file_progress(**kwargs: Any) -> None:
+        active_calls.append(kwargs)
+
+    async def emit_live_progress(*args: Any, **kwargs: Any) -> None:
+        live_calls.append({"args": args, "kwargs": kwargs})
+
+    callback = build_report_file_progress_callback(
+        **_callback_kwargs(
+            monotonic_time=lambda: next(tick_values),
+            emit_active_file_progress=emit_active_file_progress,
+            emit_live_progress=emit_live_progress,
+        )
+    )
+
+    for _ in range(2):
+        await callback(
+            imp_file=_file(),
+            file_index=1,
+            total_files=1,
+            stage="transferring",
+            current=1,
+            total=4,
+            unit="bytes",
+        )
+
+    assert active_calls == []
+    assert len(live_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_series_metadata_progress_emitter_persists_durable_event() -> None:
+    persisted_events: list[Any] = []
+    live_events: list[Any] = []
+    revision_state = {"value": 20}
+    kwargs = _callback_kwargs(revision_state=revision_state)
+
+    async def emit_progress(
+        session: object, job: ImportJob, event: object, callback: object
+    ) -> None:
+        persisted_events.append(
+            {
+                "session": session,
+                "job": job,
+                "event": event,
+                "callback": callback,
+            }
+        )
+
+    async def emit_live_progress(*args: Any, **kwargs: Any) -> None:
+        live_events.append({"args": args, "kwargs": kwargs})
+
+    emitter = build_series_metadata_progress_emitter(
+        session=kwargs["session"],
+        job_id=42,
+        job=kwargs["job"],
+        job_started_at=kwargs["job_started_at"],
+        progress_callback=kwargs["progress_callback"],
+        emit_progress=emit_progress,
+        emit_live_progress=emit_live_progress,
+        estimate_remaining_seconds=kwargs["estimate_remaining_seconds"],
+        group_progress_plans=kwargs["group_progress_plans"],
+        shared_progress_settings=kwargs["shared_progress_settings"],
+        group_progress_weights=kwargs["group_progress_weights"],
+        stats=lambda: kwargs["stats"],
+        series_found=3,
+        revision_state=revision_state,
+    )
+
+    await emitter(
+        group_index=0,
+        total_groups=1,
+        series_id=7,
+        series_name="Alpha",
+        message="Fetching ComicVine metadata for Alpha (review group 1/1)...",
+        current_item_stage="metadata_fetch",
+        current_item_progress_pct=8,
+    )
+
+    assert revision_state["value"] == 21
+    assert kwargs["job"].progress_revision == 21
+    assert live_events == []
+    assert len(persisted_events) == 1
+    event = persisted_events[0]["event"]
+    assert event.job_id == 42
+    assert event.status == ImportJobStatus.IMPORTING
+    assert event.phase == "importing"
+    assert event.progress_revision == 21
+    assert event.current_series_id == 7
+    assert event.current_series_name == "Alpha"
+    assert event.current_file_id is None
+    assert event.current_item_kind == "series"
+    assert event.current_item_stage == "metadata_fetch"
+    assert event.current_item_progress_pct == 8
+    assert event.series_imported == 1
+    assert event.series_failed == 2
+    assert event.series_found == 3
+    assert event.total_files_imported == 4
+    assert event.total_files_failed == 5
+
+
+@pytest.mark.asyncio
+async def test_series_metadata_progress_emitter_emits_live_heartbeat() -> None:
+    persisted_events: list[Any] = []
+    live_events: list[Any] = []
+    revision_state = {"value": 20}
+    kwargs = _callback_kwargs(revision_state=revision_state)
+
+    async def emit_progress(*args: Any, **kwargs: Any) -> None:
+        persisted_events.append({"args": args, "kwargs": kwargs})
+
+    async def emit_live_progress(*args: Any, **kwargs: Any) -> None:
+        live_events.append({"args": args, "kwargs": kwargs})
+
+    emitter = build_series_metadata_progress_emitter(
+        session=kwargs["session"],
+        job_id=42,
+        job=kwargs["job"],
+        job_started_at=kwargs["job_started_at"],
+        progress_callback=kwargs["progress_callback"],
+        emit_progress=emit_progress,
+        emit_live_progress=emit_live_progress,
+        estimate_remaining_seconds=kwargs["estimate_remaining_seconds"],
+        group_progress_plans=kwargs["group_progress_plans"],
+        shared_progress_settings=kwargs["shared_progress_settings"],
+        group_progress_weights=kwargs["group_progress_weights"],
+        stats=lambda: kwargs["stats"],
+        series_found=3,
+        revision_state=revision_state,
+    )
+
+    await emitter(
+        group_index=0,
+        total_groups=1,
+        series_id=7,
+        series_name="Alpha",
+        message="Still fetching ComicVine metadata for Alpha (5s elapsed)...",
+        current_item_stage="metadata_fetch_wait",
+        current_item_progress_pct=36,
+        live_only=True,
+    )
+
+    assert persisted_events == []
+    assert len(live_events) == 1
+    assert live_events[0]["args"][0].id == 42
+    event = live_events[0]["args"][1]
+    assert event.ephemeral_progress is False
+    assert event.current_item_kind == "series"
+    assert event.current_item_stage == "metadata_fetch_wait"
+    assert event.current_item_progress_pct == 36
+    assert live_events[0]["kwargs"]["revision_state"] is revision_state
+
+
+@pytest.mark.asyncio
+async def test_series_metadata_progress_emitter_noops_without_progress_callback() -> None:
+    persisted_events: list[Any] = []
+    live_events: list[Any] = []
+    kwargs = _callback_kwargs(progress_callback=None)
+
+    emitter = build_series_metadata_progress_emitter(
+        session=kwargs["session"],
+        job_id=42,
+        job=kwargs["job"],
+        job_started_at=kwargs["job_started_at"],
+        progress_callback=None,
+        emit_progress=lambda *args, **kwargs: persisted_events.append((args, kwargs)),
+        emit_live_progress=lambda *args, **kwargs: live_events.append((args, kwargs)),
+        estimate_remaining_seconds=kwargs["estimate_remaining_seconds"],
+        group_progress_plans=kwargs["group_progress_plans"],
+        shared_progress_settings=kwargs["shared_progress_settings"],
+        group_progress_weights=kwargs["group_progress_weights"],
+        stats=lambda: kwargs["stats"],
+        series_found=3,
+        revision_state=kwargs["revision_state"],
+    )
+
+    await emitter(
+        group_index=0,
+        total_groups=1,
+        series_id=7,
+        series_name="Alpha",
+        message="Fetching ComicVine metadata for Alpha...",
+        current_item_stage="metadata_fetch",
+        current_item_progress_pct=8,
+    )
+
+    assert persisted_events == []
+    assert live_events == []
+
+
+@pytest.mark.asyncio
+async def test_await_prefetch_with_metadata_progress_emits_heartbeat_and_prepare_events() -> None:
+    release_prefetch = asyncio.Event()
+    progress_calls: list[dict[str, Any]] = []
+    monotonic_values = iter([100.0, 105.0])
+
+    async def prefetch() -> tuple[dict[str, int], list[dict[str, int]]]:
+        await release_prefetch.wait()
+        return ({"series": 19752}, [{"issue": 1}])
+
+    async def emit_metadata_progress(**kwargs: Any) -> None:
+        progress_calls.append(kwargs)
+
+    async def raise_if_cancelled(_session: object, _job_id: int) -> None:
+        release_prefetch.set()
+
+    result = await await_prefetch_with_metadata_progress(
+        asyncio.create_task(prefetch()),
+        group_index=0,
+        total_groups=1,
+        series_id=7,
+        series_name="2000AD",
+        session=object(),
+        job_id=42,
+        raise_if_cancelled=raise_if_cancelled,
+        emit_series_metadata_progress=emit_metadata_progress,
+        heartbeat_seconds=0.01,
+        monotonic_time=lambda: next(monotonic_values),
+    )
+
+    assert result == ({"series": 19752}, [{"issue": 1}])
+    assert [call["current_item_stage"] for call in progress_calls] == [
+        "metadata_fetch",
+        "metadata_fetch_wait",
+        "series_records",
+    ]
+    assert progress_calls[0]["message"] == (
+        "Fetching ComicVine metadata for 2000AD (review group 1/1)..."
+    )
+    assert progress_calls[1]["message"] == (
+        "Still fetching ComicVine metadata for 2000AD "
+        "(5s elapsed)... Large series can take a few minutes."
+    )
+    assert progress_calls[1]["current_item_progress_pct"] == 36
+    assert progress_calls[1]["live_only"] is True
+    assert progress_calls[2]["message"] == "Preparing series records for 2000AD..."
+
+
+@pytest.mark.asyncio
+async def test_await_prefetch_with_metadata_progress_cancels_task_on_pause() -> None:
+    task_cancelled = False
+
+    async def prefetch() -> tuple[dict[str, int], list[dict[str, int]]]:
+        nonlocal task_cancelled
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            task_cancelled = True
+            raise
+        return ({"series": 19752}, [])
+
+    async def emit_metadata_progress(**_kwargs: Any) -> None:
+        return None
+
+    async def raise_if_cancelled(_session: object, _job_id: int) -> None:
+        raise JobPausedError
+
+    with pytest.raises(JobPausedError):
+        await await_prefetch_with_metadata_progress(
+            asyncio.create_task(prefetch()),
+            group_index=0,
+            total_groups=1,
+            series_id=7,
+            series_name="2000AD",
+            session=object(),
+            job_id=42,
+            raise_if_cancelled=raise_if_cancelled,
+            emit_series_metadata_progress=emit_metadata_progress,
+            heartbeat_seconds=0.01,
+            monotonic_time=lambda: 1.0,
+        )
+
+    assert task_cancelled is True

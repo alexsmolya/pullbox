@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}DB Check & Cleanup — {{ instance_name() }}{% endblock %}
+{% block page_title %}Utilities{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div
+  data-testid="utilities-db-check-page"
+  class="utilities-tool-page space-y-6"
+  x-data='utilitiesDbCheckPage({ csrfToken: "{{ csrf_token }}", defaultLibraryRoot: {{ db_check_default_root|tojson }} })'
+>
+  {% include "partials/utilities_db_check_header.html" %}
+  {% include "partials/utilities_db_check_workspace.html" %}
+
+  {% include "components/file_browser.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/utilities_db_check_footer_dock.html" %}
+{% endblock %}

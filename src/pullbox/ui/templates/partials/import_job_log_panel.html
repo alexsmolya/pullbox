@@ -1,0 +1,10 @@
+{% from "components/import_log_viewer.html" import import_log_viewer %}
+
+{{ import_log_viewer(
+  job.id,
+  title="Import log · Job #" ~ job.id,
+  root_testid="import-history-log-viewer-" ~ job.id,
+  live=job.status.value in ['pending', 'scanning', 'analyzing', 'matching', 'file_matching', 'review', 'importing'],
+  max_height="420px",
+  class_name="my-2"
+) }}

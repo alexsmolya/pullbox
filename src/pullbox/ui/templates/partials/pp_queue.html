@@ -1,0 +1,267 @@
+<section
+  id="post-processing-content"
+  data-testid="post-processing-content"
+  class="downloads-view"
+  hx-get="/htmx/post-processing/queue"
+  hx-trigger="every 2s [window.postProcessingQueueRefreshEnabled()], post-processing:refresh from:body"
+  hx-target="#post-processing-content"
+  hx-swap="outerHTML"
+>
+  <div data-testid="post-processing-header" class="downloads-header">
+    <div class="downloads-header-main">
+      <div
+        id="pp-queue-header-metrics"
+        data-testid="pp-queue-header-metrics"
+        class="downloads-header-summary"
+      >
+        {% include "partials/pp_queue_header_metrics.html" %}
+      </div>
+
+      <div data-testid="post-processing-header-actions" class="downloads-header-actions">
+        {% include "partials/pp_tabs.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="pp-queue-panel" class="downloads-panel-stack">
+    <section data-testid="pp-queue-active-section" class="downloads-section">
+      <p class="downloads-section-label">Active Imports</p>
+      <div class="downloads-table-wrap is-clipped">
+        {% if active_items %}
+          <table data-testid="pp-queue-active-table" class="downloads-table">
+            <thead>
+              <tr>
+                <th class="is-center w-[28px]"></th>
+                <th>Release</th>
+                <th>Issue</th>
+                <th>Client</th>
+                <th class="w-[110px]">Status</th>
+                <th class="w-[180px]">Progress</th>
+                <th class="w-[92px]">Speed</th>
+                <th class="w-[72px]">Time</th>
+                <th class="is-right w-[96px]"></th>
+              </tr>
+            </thead>
+            {% for dl in active_items %}
+              {% set live = live_status_map.get(dl.id) if live_status_map is defined else none %}
+              {% set phase_label = live.phase_label if live and live.phase_label is defined else "Queued for import" %}
+              {% set status_label = live.status_label if live and live.status_label is defined else phase_label %}
+              {% set shows_transfer_metrics = live.shows_transfer_metrics if live and live.shows_transfer_metrics is defined else false %}
+              {% set state_tone = live.state_tone if live and live.state_tone is defined else "active" %}
+              {% set phase_progress_pct = live.phase_progress_pct if live and live.phase_progress_pct is defined else none %}
+              {% set phase_progress_label = live.phase_progress_label if live and live.phase_progress_label is defined else none %}
+              {% set transfer_progress_pct = live.transfer_progress_pct if live and live.transfer_progress_pct is defined else none %}
+              {% set transfer_done_bytes = live.transfer_done_bytes if live and live.transfer_done_bytes is defined else none %}
+              {% set transfer_total_bytes = live.transfer_total_bytes if live and live.transfer_total_bytes is defined else none %}
+              {% set transfer_speed_bytes = live.transfer_speed_bytes if live and live.transfer_speed_bytes is defined else none %}
+              {% set transfer_eta_seconds = live.transfer_eta_seconds if live and live.transfer_eta_seconds is defined else none %}
+              {% set progress_bar_pct = transfer_progress_pct if shows_transfer_metrics else phase_progress_pct %}
+              {% set progress_tone = "is-green" if state_tone == "success" or (transfer_progress_pct is not none and transfer_progress_pct >= 100) else ("is-amber" if shows_transfer_metrics else "is-blue") %}
+              {% set phase_pill = "pill-warning" %}
+              {% if state_tone == "success" %}
+                {% set phase_pill = "pill-success" %}
+              {% elif phase_label == "Queued for import" %}
+                {% set phase_pill = "pill-info" %}
+              {% endif %}
+              <tbody
+                x-data="{
+                  expanded: (window._ppQueueExpanded || new Set()).has({{ dl.id }}),
+                  loadDetails() {
+                    this.$nextTick(() => {
+                      const source = this.$refs.detailToggle;
+                      const url = source && source.getAttribute('hx-get');
+                      const targetSelector = source && source.getAttribute('hx-target');
+                      const target = targetSelector && document.querySelector(targetSelector);
+                      if (!window.htmx || !source || !url || !target || target.dataset.testid === 'pp-queue-item-detail-content') {
+                        return;
+                      }
+                      window.htmx.ajax('GET', url, {
+                        source,
+                        target: targetSelector,
+                        swap: source.getAttribute('hx-swap') || 'outerHTML',
+                      });
+                    });
+                  },
+                  toggle() {
+                    this.expanded = !this.expanded;
+                    window._ppQueueExpanded = window._ppQueueExpanded || new Set();
+                    this.expanded ? window._ppQueueExpanded.add({{ dl.id }}) : window._ppQueueExpanded.delete({{ dl.id }});
+                    if (this.expanded) {
+                      this.loadDetails();
+                    }
+                  }
+                }"
+                x-init="if (expanded) loadDetails()"
+              >
+                <tr data-testid="pp-queue-item">
+                  <td class="is-center"><span class="downloads-led downloads-led-amber"></span></td>
+                  <td>
+                    <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                      <span class="block truncate" data-tooltip-measure>{{ dl.title }}</span>
+                    </span>
+                  </td>
+                  <td>
+                    {% if dl.issue and dl.issue.series %}
+                      <a href="/issues/{{ dl.issue.id }}" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+                    {% else %}
+                      <span class="downloads-muted-text">No linked issue</span>
+                    {% endif %}
+                  </td>
+                  <td class="downloads-mono-cell">{{ download_client_label(dl.download_client.value) }}</td>
+                  <td>
+                    <span class="pill {{ phase_pill }} max-w-full justify-center text-center leading-tight" data-testid="pp-queue-item-phase">{{ status_label }}</span>
+                  </td>
+                  <td>
+                    <div class="downloads-progress-cell">
+                      {% if progress_bar_pct is not none %}
+                        <span class="downloads-progress-track">
+                          <span
+                            data-testid="pp-queue-item-progress-bar"
+                            class="downloads-progress-fill {{ progress_tone }}"
+                            style="width: {{ progress_bar_pct }}%"
+                          ></span>
+                        </span>
+                      {% endif %}
+                      <span class="downloads-progress-pct{% if progress_tone == 'is-amber' %} downloads-progress-pct-warning{% endif %}{% if progress_tone == 'is-green' %} downloads-progress-pct-success{% endif %}" data-testid="pp-queue-item-progress-summary">
+                        {% if shows_transfer_metrics and transfer_progress_pct is not none %}
+                          {{ transfer_progress_pct|round(0)|int }}% · {{ transfer_done_bytes|filesize }} / {{ transfer_total_bytes|filesize }}
+                        {% elif state_tone == "success" %}
+                          Complete
+                        {% elif phase_progress_label %}
+                          {{ phase_progress_label }}
+                        {% else %}
+                          Pending
+                        {% endif %}
+                      </span>
+                    </div>
+                  </td>
+                  <td class="downloads-mono-cell" data-testid="pp-queue-item-speed">
+                    {% if shows_transfer_metrics and transfer_speed_bytes %}
+                      {{ transfer_speed_bytes|dlspeed }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="downloads-mono-cell" data-testid="pp-queue-item-time">
+                    {% if shows_transfer_metrics and transfer_eta_seconds is not none and transfer_eta_seconds > 0 %}
+                      {{ transfer_eta_seconds|eta }} left
+                    {% elif live and state_tone != "success" %}
+                      {{ live.elapsed_seconds|eta }} elapsed
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="is-right">
+                    <button
+                      type="button"
+                      data-testid="pp-queue-item-details-toggle"
+                      x-ref="detailToggle"
+                      @click="toggle()"
+                      hx-get="/htmx/post-processing/queue/{{ dl.id }}/detail"
+                      hx-target="#pp-queue-detail-content-{{ dl.id }}"
+                      hx-swap="outerHTML"
+                      hx-trigger="pp-load-detail"
+                      :aria-expanded="expanded ? 'true' : 'false'"
+                      class="downloads-action-btn"
+                      data-tip="Details"
+                      data-tip-pos="left"
+                      aria-label="Toggle details"
+                    >
+                      <svg class="transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+                <tr x-show="expanded" x-cloak class="table-detail-row">
+                  <td colspan="9" class="!p-0">
+                    <div
+                      id="pp-queue-detail-content-{{ dl.id }}"
+                      data-testid="pp-queue-item-detail-placeholder"
+                      class="border-t border-pb-border bg-pb-surface px-4 py-4 text-xs text-pb-text-dim sm:px-5"
+                    >
+                      Expand this import to load source and library path details.
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            {% endfor %}
+          </table>
+        {% else %}
+          <div data-testid="pp-queue-empty" class="downloads-empty-state is-compact">
+            <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/>
+            </svg>
+            <p class="downloads-empty-title">No active imports</p>
+            <p class="downloads-empty-copy">Completed downloads will appear here while Pullbox is moving, validating, and filing them.</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section data-testid="pp-queue-imported-section" class="downloads-section">
+      <p class="downloads-section-label">Recently Imported</p>
+      <div class="downloads-table-wrap is-clipped">
+        {% if recent_imported_items %}
+          <table data-testid="pp-queue-imported-table" class="downloads-table">
+            <thead>
+              <tr>
+                <th class="is-center w-[28px]"></th>
+                <th>Release</th>
+                <th>Issue</th>
+                <th class="w-[96px]">Result</th>
+                <th>Client</th>
+                <th class="w-[80px] is-right">Size</th>
+                <th class="w-[120px] is-right">Imported</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for dl in recent_imported_items %}
+                <tr>
+                  <td class="is-center"><span class="downloads-led downloads-led-green"></span></td>
+                  <td>
+                    <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                      <span class="block truncate" data-tooltip-measure>{{ dl.title }}</span>
+                    </span>
+                  </td>
+                  <td>
+                    {% if dl.issue and dl.issue.series %}
+                      <a href="/issues/{{ dl.issue.id }}" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+                    {% else %}
+                      <span class="downloads-muted-text">—</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <span class="pill pill-success">
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                      </svg>
+                      Imported
+                    </span>
+                  </td>
+                  <td class="downloads-mono-cell">{{ download_client_label(dl.download_client.value) }}</td>
+                  <td class="downloads-mono-cell is-right">
+                    {% if dl.file_size %}
+                      {{ dl.file_size|filesize }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="downloads-mono-cell is-right">{{ (dl.imported_at or dl.updated_at)|localtime }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div data-testid="pp-queue-imported-empty" class="downloads-empty-state is-compact">
+            <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+            </svg>
+            <p class="downloads-empty-title">No recent imports</p>
+            <p class="downloads-empty-copy">Successfully imported files will linger here briefly before dropping into history.</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+</section>

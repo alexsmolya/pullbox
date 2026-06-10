@@ -1,0 +1,109 @@
+"""Unit coverage for background manual issue import progress handling."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from pullbox.tasks import issue_import_task
+
+
+class _FakeSession:
+    async def __aenter__(self) -> _FakeSession:
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
+
+
+class _FakeSessionFactory:
+    def __call__(self) -> _FakeSession:
+        return _FakeSession()
+
+
+@pytest.mark.asyncio
+async def test_run_issue_import_accepts_positional_progress_callbacks(monkeypatch) -> None:
+    """Converter-style positional progress callbacks should not fail the run."""
+
+    issue_import_task._issue_import_states.clear()
+
+    prepared = SimpleNamespace(
+        source_path=Path("/tmp/imports/Henchgirl 001.pdf"),
+        issue=SimpleNamespace(series=SimpleNamespace(library_root_id=1)),
+        issue_id=7,
+        ingest_policy=SimpleNamespace(
+            normalize_imported_archives_to_cbz=True,
+            update_embedded_comicinfo_from_match=True,
+        ),
+    )
+
+    async def fake_execute_manual_issue_import(
+        session,
+        prepared_arg,
+        *,
+        allow_resource_safety_exception=False,
+        preparation_progress_callback=None,
+        transfer_progress_callback=None,
+        comicinfo_progress_callback=None,
+    ):
+        assert prepared_arg is prepared
+        assert allow_resource_safety_exception is True
+        assert preparation_progress_callback is not None
+        assert transfer_progress_callback is not None
+        assert comicinfo_progress_callback is not None
+
+        preparation_progress_callback("rendering", 1, 4, "pages")
+        transfer_progress_callback(512, 1024)
+        comicinfo_progress_callback("rewriting", 1, 2, "entries")
+
+        return SimpleNamespace(
+            issue_id=7,
+            library_file=SimpleNamespace(
+                id=99,
+                file_name="Henchgirl 001.cbz",
+                file_path="/comics/Henchgirl (2020)/Henchgirl 001.cbz",
+                file_size=123456,
+                file_format=SimpleNamespace(value="cbz"),
+                match_confidence=SimpleNamespace(value="manual"),
+            ),
+        )
+
+    monkeypatch.setattr(
+        issue_import_task,
+        "get_session_factory",
+        lambda: _FakeSessionFactory(),
+    )
+    monkeypatch.setattr(
+        issue_import_task,
+        "prepare_manual_issue_import",
+        AsyncMock(return_value=prepared),
+    )
+    monkeypatch.setattr(
+        issue_import_task,
+        "execute_manual_issue_import",
+        fake_execute_manual_issue_import,
+    )
+
+    await issue_import_task._run_issue_import(
+        7,
+        {
+            "file_path": "/tmp/imports/Henchgirl 001.pdf",
+            "move_to_library": True,
+            "allow_resource_safety_exception": True,
+        },
+    )
+
+    state = issue_import_task.get_issue_import_progress_state(7)
+    assert state is not None
+    assert state.state == "completed"
+    assert state.file_name == "Henchgirl 001.cbz"
+    assert state.match_confidence == "manual"

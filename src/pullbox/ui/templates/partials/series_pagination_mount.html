@@ -1,0 +1,24 @@
+{% from "components/page_dock.html" import page_dock %}
+
+{% set pagination_base_url = "/series?" ~ filter_query if filter_query else "/series" %}
+{% set pagination_hx_base_url = pagination_base_url %}
+{% set dock_status = [
+  {"led": "green", "label": "monitored", "value": registry_metrics.monitored_count|string},
+  {"led": "off", "label": "paused", "value": registry_metrics.paused_count|string},
+  {"label": "acquisition", "value": registry_metrics.completion_pct|string ~ "%"},
+  {"label": "wanted", "value": registry_metrics.wanted_issue_count|string},
+  {"label": "library", "value": registry_metrics.library_size_bytes|filesize},
+] %}
+
+<div id="series-pagination" data-testid="series-pagination" class="px-4 sm:px-6">
+  {{ page_dock(
+    page=page,
+    total_pages=total_pages,
+    base_url=pagination_base_url,
+    status_items=dock_status,
+    hx_target="#series-results-body",
+    hx_swap="morph:innerHTML",
+    hx_select="",
+    hx_base_url=pagination_hx_base_url
+  ) }}
+</div>

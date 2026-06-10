@@ -1,0 +1,8 @@
+<p
+  id="blocklist-count"
+  data-testid="blocklist-count"
+  {% if count_oob|default(false) %}hx-swap-oob="outerHTML"{% endif %}
+  class="table-toolbar-copy"
+>
+  {{ total }} blocked release{{ "s" if total != 1 else "" }}
+</p>

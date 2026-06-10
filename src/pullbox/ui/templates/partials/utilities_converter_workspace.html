@@ -1,0 +1,205 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import inline_alert, section_card, ui_icon %}
+
+<div data-testid="utilities-converter-workspace" class="space-y-6">
+  <section>
+    {% call section_card(
+      class_name="utility-workspace-shell utility-workspace-shell-visible",
+      body_class="utility-workspace-body utility-tool-body"
+    ) %}
+      <p class="utility-tool-section-label">Conversion Setup</p>
+      <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-end">
+        <div class="space-y-2">
+          <label class="utility-tool-field-label">Source format</label>
+          {{ dropdown_select(
+            name="converter_source_format",
+            value="cbr",
+            options=[
+              ("cbr", "CBR (.cbr)"),
+              ("cb7", "CB7 (.cb7)"),
+              ("pdf", "PDF (.pdf)"),
+              ("cbz", "CBZ (.cbz) — repack"),
+            ],
+            root_testid="utilities-converter-source-format",
+            class_name="w-full utility-tool-select",
+            local_model="sourceFormat",
+            local_on_change="selectedFiles = []; clearPreview()"
+          ) }}
+        </div>
+        <div class="hidden pb-2 text-pb-text-dim md:flex md:items-center md:justify-center">
+          <svg class="h-[18px] w-[18px]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+          </svg>
+        </div>
+        <div class="space-y-2">
+          <label class="utility-tool-field-label">Output</label>
+          <div class="utility-tool-output-field">
+            CBZ (.cbz)
+          </div>
+        </div>
+      </div>
+
+      <div x-show="sourceFormat === 'pdf'" x-cloak class="info-panel info-panel-muted">
+        <label class="utility-tool-field-label">PDF rasterization quality</label>
+        <div class="mt-3">
+          {{ dropdown_select(
+            name="converter_pdf_quality",
+            value="high",
+            options=[
+              ("high", "High (300 DPI, PNG)"),
+              ("medium", "Medium (200 DPI, JPEG 90%)"),
+              ("low", "Low (150 DPI, JPEG 80%)"),
+            ],
+            root_testid="utilities-converter-pdf-quality",
+            class_name="w-full max-w-xs utility-tool-select",
+            local_model="pdfQuality"
+          ) }}
+        </div>
+        <p class="mt-3 text-xs leading-5 text-pb-text-dim">
+          Higher quality produces larger files. PDF conversion is lossy because each page is rasterized into images.
+        </p>
+      </div>
+
+      <div x-show="validationError" x-cloak data-testid="utilities-converter-error">
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <p x-text="validationError"></p>
+        {% endcall %}
+      </div>
+    {% endcall %}
+  </section>
+
+  {% call section_card(
+    class_name="utility-workspace-shell",
+    body_class="utility-workspace-body utility-tool-body"
+  ) %}
+    <div class="utility-tool-section-row">
+      <p class="utility-tool-section-label !mb-0">Files to Convert</p>
+      <button type="button" @click="openFilePicker()"
+              data-testid="utilities-converter-browse-files"
+              class="btn-ghost utility-tool-browse-button">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+        </svg>
+        Browse
+      </button>
+    </div>
+
+    <div x-show="selectedFiles.length > 0" x-cloak
+         data-testid="utilities-converter-selected-files"
+         class="utility-tool-table-wrap">
+      <div data-testid="utilities-converter-selected-files-table" class="overflow-x-auto">
+        <table class="utility-tool-table min-w-[440px]">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th class="r">Size</th>
+              <th class="r w-12"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="(file, idx) in selectedFiles" :key="file.path">
+              <tr>
+                <td class="max-w-[280px]">
+                  <div class="truncate utility-tool-table-mono" x-text="file.name"></div>
+                </td>
+                <td class="r utility-tool-table-mono"
+                    x-text="file.size ? formatBytes(file.size) : '—'"></td>
+                <td class="r">
+                  <button
+                    type="button"
+                    @click="removeSelectedFileAt(idx)"
+                    class="btn-ghost btn-sm !min-h-8 !w-8 !px-0 !py-0 hover:border-pb-error/40 hover:bg-pb-error-dim hover:text-pb-error"
+                    data-tip="Remove"
+                    data-tip-pos="left"
+                    aria-label="Remove file"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div x-show="selectedFiles.length === 0"
+         data-testid="utilities-converter-selected-files-empty"
+         class="utility-empty-state">
+      <svg class="mx-auto mb-3 h-6 w-6 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+      </svg>
+      <p class="text-sm text-pb-text-sec">No files selected yet.</p>
+      <p class="mt-1 text-xs text-pb-text-dim">Use “Browse” to choose the archives you want to convert.</p>
+    </div>
+
+    <div class="utility-tool-action-footer">
+      <div class="settings-footer-actions">
+        <a href="/utilities" class="btn-ghost">Cancel</a>
+        <button type="button" @click="startConversion()"
+                data-testid="utilities-converter-start"
+                :disabled="selectedFiles.length === 0 || submitting"
+                class="btn-primary">
+          <span x-show="!submitting">Start conversion</span>
+          <span x-show="submitting">Submitting...</span>
+        </button>
+      </div>
+    </div>
+  {% endcall %}
+
+  <div x-show="preview" x-cloak data-testid="utilities-converter-preview-panel">
+    {% call section_card(
+      class_name="utility-workspace-shell",
+      body_class="p-0"
+    ) %}
+      <div class="utility-workspace-body !pb-0">
+        <div class="utility-tool-section-row">
+          <p class="utility-tool-section-label !mb-0">Conversion Preview</p>
+          <span class="pill pill-info">
+            <span x-text="preview ? preview.total_count : 0"></span> files
+          </span>
+        </div>
+      </div>
+      <div data-testid="utilities-converter-preview-table" class="overflow-hidden">
+        <template x-if="preview && preview.files && preview.files.length > 0">
+          <div class="overflow-x-auto">
+            <table class="utility-tool-table min-w-[620px]">
+              <thead>
+                <tr>
+                  <th>Source File</th>
+                  <th>Output File</th>
+                  <th class="r">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="file in (preview ? preview.files : [])" :key="file.path">
+                  <tr>
+                    <td class="max-w-[260px]">
+                      <div class="truncate utility-tool-table-mono" x-text="file.path"></div>
+                    </td>
+                    <td class="max-w-[260px]">
+                      <div class="truncate utility-tool-table-mono" x-text="file.output_path || file.path"></div>
+                    </td>
+                    <td class="r utility-tool-table-mono" x-text="formatBytes(file.size_bytes)"></td>
+                  </tr>
+                </template>
+                <tr x-show="preview && preview.total_count > preview.files.length">
+                  <td colspan="3" class="px-3 py-2 text-xs italic text-pb-text-dim"
+                      x-text="preview ? '+ ' + (preview.total_count - preview.files.length) + ' more files...' : ''"></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <div x-show="preview && preview.total_count === 0" class="table-empty">
+          <p class="table-empty-copy">No matching files were found for the current source format.</p>
+        </div>
+      </div>
+    {% endcall %}
+  </div>
+</div>

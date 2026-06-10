@@ -1,0 +1,885 @@
+"""Unit tests for import background tasks and startup recovery."""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from pullbox.core.exceptions import JobCancelledError, JobPausedError
+from pullbox.models.import_job import ImportJob, ImportJobStatus, ImportSourceType
+from pullbox.schemas.import_job import ImportProgressEvent
+from pullbox.tasks.import_task import (
+    ImportRunner,
+    _build_import_service,
+    _publish_progress_event,
+    get_highest_visible_progress_revision,
+    get_latest_progress_event,
+    get_progress_queue,
+    recover_stuck_import_jobs,
+    remove_progress_queue,
+    run_import_execute_task,
+    run_import_scan_task,
+    set_latest_progress_event,
+    trigger_import_execute,
+    trigger_import_scan,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+
+async def _create_job(
+    session: AsyncSession,
+    *,
+    status: ImportJobStatus = ImportJobStatus.PENDING,
+    source_path: str = "/tmp/comics",
+) -> ImportJob:
+    """Insert an ImportJob for test setup."""
+    job = ImportJob(
+        source_path=source_path,
+        source_type=ImportSourceType.FILESYSTEM,
+        status=status,
+    )
+    session.add(job)
+    await session.flush()
+    return job
+
+
+# ── Test: Progress Queues ────────────────────────────────────────────────
+
+
+class TestProgressQueues:
+    """Test SSE progress queue management."""
+
+    def test_get_creates_queue(self) -> None:
+        """get_progress_queue creates a new queue if none exists."""
+        queue = get_progress_queue(99999)
+        assert queue is not None
+        assert queue.empty()
+        remove_progress_queue(99999)
+
+    def test_get_returns_same_queue(self) -> None:
+        """get_progress_queue returns same queue for same job_id."""
+        q1 = get_progress_queue(88888)
+        q2 = get_progress_queue(88888)
+        assert q1 is q2
+        remove_progress_queue(88888)
+
+    def test_remove_cleans_up(self) -> None:
+        """remove_progress_queue removes the queue."""
+        get_progress_queue(77777)
+        set_latest_progress_event(
+            ImportProgressEvent(
+                job_id=77777,
+                status=ImportJobStatus.SCANNING,
+                phase="scanning",
+                progress=10,
+                message="progress",
+            )
+        )
+        remove_progress_queue(77777)
+        q = get_progress_queue(77777)
+        assert q.empty()
+        assert get_latest_progress_event(77777) is None
+        remove_progress_queue(77777)
+
+    def test_latest_event_cache_round_trips(self) -> None:
+        """Latest progress event cache returns the most recent event."""
+        event = ImportProgressEvent(
+            job_id=66666,
+            status=ImportJobStatus.MATCHING,
+            phase="matching",
+            progress=55,
+            message="Matching 5/9...",
+        )
+
+        set_latest_progress_event(event)
+        cached = get_latest_progress_event(66666)
+
+        assert cached is not None
+        assert cached.progress == 55
+        remove_progress_queue(66666)
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_progress_does_not_replace_latest_durable_event(self) -> None:
+        job_id = 55555
+        queue = get_progress_queue(job_id)
+        durable_event = ImportProgressEvent(
+            job_id=job_id,
+            status=ImportJobStatus.IMPORTING,
+            phase="importing",
+            progress=40,
+            progress_revision=4,
+            message="Processed 2/5 review groups",
+        )
+        ephemeral_event = ImportProgressEvent(
+            job_id=job_id,
+            status=ImportJobStatus.IMPORTING,
+            ephemeral_progress=True,
+            phase="importing",
+            progress=43,
+            progress_revision=99,
+            current_file_name="Persephone.2022.Hybrid.Comic.eBook-BitBook.pdf",
+            current_file_stage="finalizing",
+            current_file_progress_current=3,
+            current_file_progress_total=4,
+            current_file_progress_pct=99,
+            current_file_progress_unit="steps",
+            message="Processing file 1/1 in review group 3/5",
+        )
+
+        with patch("pullbox.tasks.import_task.publish", new_callable=AsyncMock):
+            await _publish_progress_event(durable_event)
+            await _publish_progress_event(ephemeral_event)
+
+        cached = get_latest_progress_event(job_id)
+        assert cached is not None
+        assert cached.progress_revision == 4
+        assert cached.message == "Processed 2/5 review groups"
+        assert get_highest_visible_progress_revision(job_id) == 99
+        queued = await asyncio.wait_for(queue.get(), timeout=0.1)
+        assert queued.progress_revision == 4
+        assert queue.empty()
+        remove_progress_queue(job_id)
+
+    @pytest.mark.asyncio
+    async def test_durable_progress_revision_beats_prior_ephemeral_progress(self) -> None:
+        job_id = 44444
+        durable_event = ImportProgressEvent(
+            job_id=job_id,
+            status=ImportJobStatus.FILE_MATCHING,
+            phase="file_matching",
+            progress=74,
+            progress_revision=12,
+            message="Matching files to issues...",
+        )
+        ephemeral_event = ImportProgressEvent(
+            job_id=job_id,
+            status=ImportJobStatus.FILE_MATCHING,
+            ephemeral_progress=True,
+            phase="file_matching",
+            progress=74,
+            progress_revision=27,
+            message="Still loading issue targets...",
+        )
+        review_event = ImportProgressEvent(
+            job_id=job_id,
+            status=ImportJobStatus.REVIEW,
+            phase="review",
+            progress=100,
+            progress_revision=13,
+            message="Ready for review",
+        )
+
+        with patch("pullbox.tasks.import_task.publish", new_callable=AsyncMock) as publish:
+            await _publish_progress_event(durable_event)
+            await _publish_progress_event(ephemeral_event)
+            await _publish_progress_event(review_event)
+
+        cached = get_latest_progress_event(job_id)
+        assert cached is not None
+        assert cached.status == ImportJobStatus.REVIEW
+        assert cached.progress == 100
+        assert cached.progress_revision == 28
+        assert get_highest_visible_progress_revision(job_id) == 28
+        published_payload = publish.call_args_list[-1].args[2]
+        assert published_payload["progress_revision"] == 28
+        remove_progress_queue(job_id)
+
+
+# ── Test: run_import_scan_task ───────────────────────────────────────────
+
+
+class TestRunImportScanTask:
+    """Test the background scan task function."""
+
+    @pytest.mark.asyncio
+    async def test_scan_task_calls_service(self, db_session: AsyncSession) -> None:
+        """run_import_scan_task creates session and calls start_scan."""
+        job = await _create_job(db_session)
+        await db_session.commit()
+
+        mock_service = AsyncMock()
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_scan_task(job.id)
+
+        mock_service.start_scan.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_scan_task_marks_failed_on_exception(self, db_session: AsyncSession) -> None:
+        """If start_scan raises, job is marked FAILED."""
+        job = await _create_job(db_session)
+        await db_session.commit()
+
+        mock_service = AsyncMock()
+        mock_service.start_scan.side_effect = RuntimeError("Scan exploded")
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_scan_task(job.id)
+
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.FAILED
+        assert job.error_message is not None
+
+    @pytest.mark.asyncio
+    async def test_scan_task_emits_review_terminal_event_and_cleans_queue(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Successful scan emits REVIEW so step 2 can complete cleanly."""
+        job = await _create_job(db_session)
+        await db_session.commit()
+        queue = get_progress_queue(job.id)
+
+        mock_service = AsyncMock()
+
+        async def complete_scan(session, job_id, progress_callback=None):
+            import_job = await session.get(ImportJob, job_id)
+            assert import_job is not None
+            import_job.status = ImportJobStatus.REVIEW
+            import_job.error_message = None
+            await session.flush()
+
+        mock_service.start_scan.side_effect = complete_scan
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_scan_task(job.id)
+
+        event = await asyncio.wait_for(queue.get(), timeout=0.1)
+        assert event.status == ImportJobStatus.REVIEW
+        assert event.phase == "review"
+        assert event.progress == 100
+        assert event.message == "Ready for review"
+
+        replacement_queue = get_progress_queue(job.id)
+        assert replacement_queue is not queue
+        assert replacement_queue.empty()
+        remove_progress_queue(job.id)
+
+    @pytest.mark.asyncio
+    async def test_scan_task_purges_cancelled_job_and_cleans_queue(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Cancelled scans emit CANCELLED and purge the transient job row."""
+        job = await _create_job(db_session, status=ImportJobStatus.CANCELLED)
+        job.error_message = "Import cancelled by user."
+        await db_session.commit()
+        queue = get_progress_queue(job.id)
+
+        mock_service = AsyncMock()
+        mock_service.start_scan.side_effect = JobCancelledError("cancelled")
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_scan_task(job.id)
+
+        event = await asyncio.wait_for(queue.get(), timeout=0.1)
+        assert event.status == ImportJobStatus.CANCELLED
+        assert event.phase == "done"
+        assert event.progress == 100
+        assert event.message == "Import cancelled by user."
+        assert await db_session.get(ImportJob, job.id) is None
+
+        replacement_queue = get_progress_queue(job.id)
+        assert replacement_queue is not queue
+        assert replacement_queue.empty()
+        remove_progress_queue(job.id)
+
+
+# ── Test: run_import_execute_task ────────────────────────────────────────
+
+
+class TestRunImportExecuteTask:
+    """Test the background import execution task."""
+
+    @pytest.mark.asyncio
+    async def test_execute_task_calls_service(self, db_session: AsyncSession) -> None:
+        """run_import_execute_task calls run_import on the service."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        await db_session.commit()
+
+        mock_service = AsyncMock()
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_execute_task(job.id)
+
+        mock_service.run_import.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_task_cancelled_import_runs_automatic_rollback(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Cancelled imports unwind recorded changes before becoming CANCELLED history rows."""
+        from datetime import UTC, datetime
+
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        job.import_started_at = datetime.now(UTC)
+        job.error_message = "Import cancelled by user."
+        await db_session.commit()
+
+        mock_service = AsyncMock()
+        mock_service.run_import.side_effect = JobCancelledError("cancelled")
+
+        async def _complete_cancel_rollback(session, job_id, progress_callback=None):
+            import_job = await session.get(ImportJob, job_id)
+            assert import_job is not None
+            import_job.status = ImportJobStatus.CANCELLED
+            import_job.control_request = "none"
+            import_job.progress_snapshot = {
+                "status": ImportJobStatus.CANCELLED.value,
+                "mode": "import",
+                "phase": "done",
+                "progress": 100,
+                "message": "Import cancelled by user.",
+            }
+            await session.flush()
+
+        mock_service.rollback_import.side_effect = _complete_cancel_rollback
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_execute_task(job.id)
+
+        await db_session.refresh(job)
+        mock_service.rollback_import.assert_awaited_once()
+        assert job.status == ImportJobStatus.CANCELLED
+        assert job.progress_snapshot["status"] == ImportJobStatus.CANCELLED.value
+        assert job.progress_snapshot["phase"] == "done"
+        assert job.progress_snapshot["message"] == "Import cancelled by user."
+
+    @pytest.mark.asyncio
+    async def test_execute_task_keeps_truthful_paused_snapshot(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Paused imports keep their exact import checkpoint instead of being terminalized."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        job.progress_snapshot = {
+            "status": ImportJobStatus.IMPORTING.value,
+            "mode": "import",
+            "phase": "importing",
+            "progress": 64,
+            "message": "Processing file 2/5 in review group 8/25",
+            "current_series_name": "Fearscape",
+            "current_file_name": "Fearscape Vol 02.pdf",
+            "current_file_stage": "rendering",
+            "current_file_progress_pct": 42,
+        }
+        await db_session.commit()
+
+        mock_service = AsyncMock()
+        mock_service.run_import.side_effect = JobPausedError("paused")
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_execute_task(job.id)
+
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.PAUSED
+        assert job.progress_snapshot["status"] == ImportJobStatus.PAUSED.value
+        assert job.progress_snapshot["phase"] == "importing"
+        assert job.progress_snapshot["progress"] == 64
+        assert job.progress_snapshot["message"] == "Import is paused."
+        assert job.progress_snapshot["current_file_name"] == "Fearscape Vol 02.pdf"
+        assert job.progress_snapshot["current_file_stage"] == "rendering"
+        assert job.progress_snapshot["control_state"]["can_resume"] is True
+        assert job.progress_snapshot["control_state"]["can_cancel"] is True
+        assert int(job.progress_snapshot["progress_revision"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_execute_task_marks_failed_on_exception(self, db_session: AsyncSession) -> None:
+        """If run_import raises, job is marked FAILED."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        await db_session.commit()
+
+        mock_service = AsyncMock()
+        mock_service.run_import.side_effect = RuntimeError("Import exploded")
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_execute_task(job.id)
+
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.FAILED
+        assert job.error_message is not None
+
+    @pytest.mark.asyncio
+    async def test_execute_task_terminal_failure_revision_beats_live_only_progress(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Terminal failure snapshots must outrank any live-only file progress already seen."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        job.progress_snapshot = {
+            "status": "importing",
+            "mode": "import",
+            "phase": "importing",
+            "progress": 91,
+            "message": "Finalizing imported file",
+            "progress_revision": 12,
+        }
+        job.progress_revision = 12
+        await db_session.commit()
+
+        set_latest_progress_event(
+            ImportProgressEvent(
+                job_id=job.id,
+                status=ImportJobStatus.IMPORTING,
+                mode="import",
+                phase="importing",
+                progress=99,
+                message="Finalizing imported file",
+                progress_revision=25,
+                current_file_name="Persephone.2022.Hybrid.Comic.eBook-BitBook.pdf",
+                current_file_stage="finalizing",
+                current_file_progress_current=3,
+                current_file_progress_total=4,
+                current_file_progress_pct=99,
+                current_file_progress_unit="steps",
+            )
+        )
+
+        mock_service = AsyncMock()
+        mock_service.run_import.side_effect = RuntimeError("Import exploded")
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_execute_task(job.id)
+
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.FAILED
+        assert int(job.progress_snapshot["progress_revision"]) > 25
+        remove_progress_queue(job.id)
+
+    @pytest.mark.asyncio
+    async def test_execute_task_persists_completed_terminal_snapshot(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Successful execute persists a truthful completed snapshot for refresh-driven UI."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        job.progress_snapshot = {
+            "status": "importing",
+            "mode": "import",
+            "phase": "importing",
+            "progress": 64,
+            "message": "Processing file 2/5 in review group 8/25",
+            "current_series_name": "Fearscape",
+            "current_file_name": "Fearscape Vol 02.pdf",
+            "current_file_stage": "rendering",
+            "current_file_progress_pct": 42,
+            "control_state": {"can_pause": True, "can_cancel": True},
+        }
+        await db_session.commit()
+
+        mock_service = AsyncMock()
+
+        async def complete_import(session, job_id, progress_callback=None):
+            import_job = await session.get(ImportJob, job_id)
+            assert import_job is not None
+            import_job.status = ImportJobStatus.COMPLETED
+            import_job.total_files_imported = 1
+            import_job.error_message = None
+            await session.flush()
+
+        mock_service.run_import.side_effect = complete_import
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_execute_task(job.id)
+
+        await db_session.refresh(job)
+        assert job.progress_snapshot["status"] == ImportJobStatus.COMPLETED.value
+        assert job.progress_snapshot["phase"] == "done"
+        assert job.progress_snapshot["progress"] == 100
+        assert job.progress_snapshot["message"] == "Import complete."
+        assert job.progress_snapshot["current_file_name"] is None
+        assert job.progress_snapshot["current_file_stage"] is None
+        assert job.progress_snapshot["control_state"]["can_pause"] is False
+        assert "control_state" in job.progress_snapshot
+
+
+# ── Test: Startup Recovery ───────────────────────────────────────────────
+
+
+class TestStartupRecovery:
+    """Test recover_stuck_import_jobs at startup."""
+
+    @pytest.mark.asyncio
+    async def test_scanning_job_recovered(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Job in SCANNING state is paused on startup recovery."""
+        job = await _create_job(db_session, status=ImportJobStatus.SCANNING)
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        recovered = await recover_stuck_import_jobs(factory)
+
+        assert recovered == 1
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.PAUSED
+        snapshot = job.progress_snapshot or {}
+        assert snapshot.get("status") == ImportJobStatus.PAUSED.value
+        assert snapshot.get("pause_reason") == "startup_recovery"
+        assert snapshot.get("recovered_status") == ImportJobStatus.SCANNING.value
+
+    @pytest.mark.asyncio
+    async def test_analyzing_job_recovered(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Job in ANALYZING state is paused on startup recovery."""
+        job = await _create_job(db_session, status=ImportJobStatus.ANALYZING)
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        recovered = await recover_stuck_import_jobs(factory)
+        assert recovered == 1
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.PAUSED
+        assert (job.progress_snapshot or {}).get("phase") == "analyzing"
+
+    @pytest.mark.asyncio
+    async def test_importing_job_recovered(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Job in IMPORTING state is paused and keeps importing phase on restart."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        recovered = await recover_stuck_import_jobs(factory)
+        assert recovered == 1
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.PAUSED
+        assert (job.progress_snapshot or {}).get("phase") == "importing"
+        assert (job.progress_snapshot or {}).get("recovered_status") == (
+            ImportJobStatus.IMPORTING.value
+        )
+
+    @pytest.mark.asyncio
+    async def test_file_matching_job_recovered(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Job in FILE_MATCHING state is paused on startup recovery."""
+        job = await _create_job(db_session, status=ImportJobStatus.FILE_MATCHING)
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        recovered = await recover_stuck_import_jobs(factory)
+        assert recovered == 1
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.PAUSED
+        assert (job.progress_snapshot or {}).get("phase") == "file_matching"
+
+    @pytest.mark.asyncio
+    async def test_recover_and_dispatch_auto_resumes_startup_recovered_job(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Startup-recovered paused jobs are restored and handed to the runner."""
+        job = await _create_job(db_session, status=ImportJobStatus.FILE_MATCHING)
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        runner = ImportRunner(factory)
+        start_if_idle = AsyncMock()
+        runner._start_if_idle = start_if_idle
+
+        recovered = await runner.recover_and_dispatch()
+
+        assert recovered == 1
+        start_if_idle.assert_awaited_once_with(job.id)
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.FILE_MATCHING
+        snapshot = job.progress_snapshot or {}
+        assert snapshot["status"] == ImportJobStatus.FILE_MATCHING.value
+        assert snapshot["phase"] == "file_matching"
+        assert "pause_reason" not in snapshot
+        assert "recovered_status" not in snapshot
+
+    @pytest.mark.asyncio
+    async def test_recover_and_dispatch_leaves_user_paused_job_alone(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Ordinary user-paused jobs do not auto-resume at startup."""
+        job = await _create_job(db_session, status=ImportJobStatus.PAUSED)
+        job.progress_snapshot = {
+            "status": ImportJobStatus.PAUSED.value,
+            "mode": "scan",
+            "phase": "file_matching",
+            "message": "Import scan is paused.",
+        }
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        runner = ImportRunner(factory)
+        start_if_idle = AsyncMock()
+        runner._start_if_idle = start_if_idle
+
+        recovered = await runner.recover_and_dispatch()
+
+        assert recovered == 0
+        start_if_idle.assert_not_awaited()
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.PAUSED
+
+    @pytest.mark.asyncio
+    async def test_runner_uses_phase_resume_for_scan_states(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Recovered matching phases resume in-place instead of restarting scan."""
+        job = await _create_job(db_session, status=ImportJobStatus.FILE_MATCHING)
+        job.progress_snapshot = {
+            "status": ImportJobStatus.FILE_MATCHING.value,
+            "mode": "scan",
+            "phase": "file_matching",
+        }
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        runner = ImportRunner(factory)
+        mock_service = AsyncMock()
+
+        async def complete_resume(session, job_id, progress_callback=None):
+            import_job = await session.get(ImportJob, job_id)
+            assert import_job is not None
+            import_job.status = ImportJobStatus.REVIEW
+            await session.flush()
+
+        mock_service.resume_scan_phase.side_effect = complete_resume
+
+        with (
+            patch("pullbox.tasks.import_task._build_import_service", return_value=mock_service),
+            patch("pullbox.tasks.import_task.publish", new_callable=AsyncMock),
+        ):
+            await runner._run_job(job.id)
+
+        mock_service.resume_scan_phase.assert_awaited_once()
+        mock_service.start_scan.assert_not_called()
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.REVIEW
+
+    @pytest.mark.asyncio
+    async def test_review_job_untouched(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Job in REVIEW state is NOT reset — awaiting user action."""
+        job = await _create_job(db_session, status=ImportJobStatus.REVIEW)
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        recovered = await recover_stuck_import_jobs(factory)
+
+        assert recovered == 0
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.REVIEW
+
+    @pytest.mark.asyncio
+    async def test_completed_job_untouched(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Job in COMPLETED state is NOT reset."""
+        await _create_job(db_session, status=ImportJobStatus.COMPLETED)
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        recovered = await recover_stuck_import_jobs(factory)
+        assert recovered == 0
+
+    @pytest.mark.asyncio
+    async def test_no_stuck_jobs(self, async_engine: object) -> None:
+        """No stuck jobs returns 0."""
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        recovered = await recover_stuck_import_jobs(factory)
+        assert recovered == 0
+
+
+# ── Test: _build_import_service ──────────────────────────────────────────
+
+
+class TestBuildImportService:
+    """Test service construction helper."""
+
+    @pytest.mark.asyncio
+    async def test_builds_service_with_cv_key(
+        self, db_session: AsyncSession, tmp_path: object
+    ) -> None:
+        """_build_import_service constructs ImportService with dependencies."""
+        from unittest.mock import MagicMock
+
+        mock_settings = MagicMock()
+        mock_settings.comicvine_rate_limit = 1.0
+        mock_settings.covers_dir = tmp_path
+        mock_settings.metadata_refresh_days = 30
+
+        with (
+            patch(
+                "pullbox.composition.services.get_comicvine_api_key",
+                new_callable=AsyncMock,
+                return_value="test-key",
+            ),
+            patch("pullbox.composition.services.get_settings", return_value=mock_settings),
+        ):
+            from pullbox.services.import_service import ImportService
+
+            service = await _build_import_service(db_session)
+            assert isinstance(service, ImportService)
+
+    @pytest.mark.asyncio
+    async def test_builds_service_without_cv_key(
+        self, db_session: AsyncSession, tmp_path: object
+    ) -> None:
+        """_build_import_service works even without a CV API key."""
+        from unittest.mock import MagicMock
+
+        mock_settings = MagicMock()
+        mock_settings.comicvine_rate_limit = 1.0
+        mock_settings.covers_dir = tmp_path
+        mock_settings.metadata_refresh_days = 30
+
+        with (
+            patch(
+                "pullbox.composition.services.get_comicvine_api_key",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("pullbox.composition.services.get_settings", return_value=mock_settings),
+        ):
+            from pullbox.services.import_service import ImportService
+
+            service = await _build_import_service(db_session)
+            assert isinstance(service, ImportService)
+
+
+# ── Test: Trigger functions ──────────────────────────────────────────────
+
+
+class TestTriggerFunctions:
+    """Test on-demand trigger functions."""
+
+    @pytest.mark.asyncio
+    async def test_trigger_import_scan(self) -> None:
+        """trigger_import_scan hands work to the durable import runner."""
+        mock_runner = AsyncMock()
+        with patch("pullbox.tasks.import_task.get_import_runner", return_value=mock_runner):
+            trigger_import_scan(42)
+            await asyncio.sleep(0)
+        mock_runner.request_scan.assert_awaited_once_with(42)
+
+    @pytest.mark.asyncio
+    async def test_trigger_import_execute(self) -> None:
+        """trigger_import_execute hands work to the durable import runner."""
+        mock_runner = AsyncMock()
+        with patch("pullbox.tasks.import_task.get_import_runner", return_value=mock_runner):
+            trigger_import_execute(42)
+            await asyncio.sleep(0)
+        mock_runner.request_execute.assert_awaited_once_with(42)

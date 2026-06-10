@@ -1,0 +1,245 @@
+{% from "components/settings_shell.html" import ui_icon %}
+
+<div
+  class="modal-shell"
+  data-testid="import-series-details-modal"
+  x-data="importSeriesDetailsModalData({
+    jobId: {{ job.id }},
+    seriesId: {{ imported_series.id }}
+  })"
+  x-show="open"
+  @keydown.escape.window="close()"
+>
+  <div
+    class="modal-backdrop"
+    @click="close()"
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0"
+    x-transition:enter-end="opacity-100"
+  ></div>
+
+  <div
+    class="modal-panel max-h-[calc(100vh-5rem)] min-h-0 max-w-4xl"
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+    x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+    @click.outside="close()"
+  >
+    <div class="modal-header shrink-0">
+      <div class="space-y-1">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-brand">Series details</p>
+        <h3 class="text-base font-semibold text-pb-text">
+          {{ imported_series.raw_series_name }}{% if imported_series.raw_year %} ({{ imported_series.raw_year }}){% endif %}
+        </h3>
+        <p class="text-xs leading-5 text-pb-text-dim">
+          All the files tied to this series for review.
+        </p>
+      </div>
+      <button
+        @click="close()"
+        class="icon-btn icon-btn-sm"
+        aria-label="Close series details"
+        type="button"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body min-h-0">
+      <div class="space-y-4 px-5 py-5">
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <span class="pill pill-success">{{ imported_series.files_matched }} Importable files</span>
+          <span class="pill pill-neutral">{{ imported_series.files_already_owned }} Already Owned</span>
+          <span class="pill pill-neutral">{{ imported_series.files_duplicate }} Extra Incoming Files</span>
+          <span class="pill {% if imported_series.files_conflict > 0 %}pill-warning{% else %}pill-neutral{% endif %}">{{ imported_series.files_conflict }} Conflicts</span>
+          <span class="pill {% if imported_series.files_no_match > 0 %}pill-warning{% else %}pill-neutral{% endif %}">{{ imported_series.files_no_match }} No Match</span>
+        </div>
+
+        {% if imported_series.status.value == 'duplicate' %}
+        <section class="rounded-xl border border-pb-border bg-pb-card-hover/35 px-4 py-3">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="space-y-1">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Duplicate-series review</p>
+              {% if duplicate_merge_actionable %}
+              <p class="text-sm text-pb-text-sec">
+                This existing-library series still has wanted or missing issue targets. Choose which importable files should continue into the final import.
+              </p>
+              {% else %}
+              <p class="text-sm text-pb-text-sec">
+                This existing-library series is informational only because no wanted or missing issue targets remain.
+              </p>
+              <p class="text-xs text-pb-text-dim">
+                Replacement and upgrade paths stay disabled here, so this drawer remains informational only.
+              </p>
+              {% endif %}
+            </div>
+            {% if duplicate_merge_actionable %}
+            <div class="flex flex-wrap items-center justify-end gap-2">
+              <span class="downloads-mono-dim-cell">{{ duplicate_scope_selected_count }} of {{ duplicate_scope_importable_count }} importable selected</span>
+              <button
+                type="button"
+                class="chip-btn chip-btn-sm chip-btn-info"
+                data-testid="import-series-details-select-all-duplicate"
+                @click="bulkDuplicateFileSelection(true)"
+              >
+                Select all importable
+              </button>
+              <button
+                type="button"
+                class="chip-btn chip-btn-sm chip-btn-neutral"
+                data-testid="import-series-details-deselect-all-duplicate"
+                @click="bulkDuplicateFileSelection(false)"
+              >
+                Deselect all
+              </button>
+            </div>
+            {% endif %}
+          </div>
+        </section>
+        {% endif %}
+
+        {% for group in file_groups %}
+        <section
+          class="space-y-3"
+          data-testid="import-series-details-group-{{ group.key }}"
+        >
+          <div class="flex flex-wrap items-start justify-between gap-3 px-1">
+            <div>
+              <h4 class="text-sm font-semibold text-pb-text">{{ group.label }}</h4>
+              <p class="mt-1 text-xs leading-5 text-pb-text-dim">{{ group.description }}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="pill pill-neutral">{{ group.count }}</span>
+            </div>
+          </div>
+
+          <div class="mt-3 space-y-3">
+            {% for row in group.rows %}
+            <article
+              class="rounded-lg border border-pb-border bg-pb-card-hover/35 px-3 py-3"
+              {% if row.metadata_conflict %}data-testid="import-series-details-metadata-conflict"{% endif %}
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0 space-y-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <p class="truncate text-sm font-medium text-pb-text">{{ row.file_name }}</p>
+                    <span class="pill pill-muted">{{ row.file_size | filesize }}</span>
+                    {% if row.has_comicinfo %}
+                    <span class="pill pill-success">ComicInfo</span>
+                    {% endif %}
+                  </div>
+                  <p class="truncate font-mono text-[11px] text-pb-text-dim">{{ row.file_path }}</p>
+                  {% if row.matched_issue_label %}
+                  <p class="text-xs text-pb-text-sec">Matched issue: {{ row.matched_issue_label }}</p>
+                  {% endif %}
+                  {% if row.match_confidence %}
+                  <p class="text-xs text-pb-text-dim">Confidence: {{ row.match_confidence|replace('_', ' ')|title }}</p>
+                  {% endif %}
+                </div>
+
+                {% if row.is_importable_duplicate %}
+                <label class="inline-flex items-center gap-2 text-xs text-pb-text-sec">
+                  <input
+                    type="checkbox"
+                    {% if row.include_in_import %}checked{% endif %}
+                    data-testid="import-series-details-duplicate-file-select"
+                    @change="toggleDuplicateFileSelection({{ row.id }}, $event.target.checked)"
+                    class="checkbox-pb"
+                  >
+                  <span>Import this matched file</span>
+                </label>
+                {% elif group.key == 'conflict' %}
+                <span class="pill pill-warning">Use Conflicts tab</span>
+                {% elif group.key == 'already_owned' %}
+                <span class="pill pill-neutral">Library duplicate</span>
+                {% elif group.key == 'duplicate_file' %}
+                <span class="pill pill-neutral">Excluded</span>
+                {% elif group.key == 'no_match' %}
+                <span class="pill pill-warning">Diagnostics only</span>
+                {% else %}
+                <span class="pill pill-success">Included</span>
+                {% endif %}
+              </div>
+
+              {% if group.key == 'conflict' %}
+              <p class="mt-3 text-sm text-pb-text-sec">Resolve keep choices from the Conflicts tab when you are ready.</p>
+              {% elif group.key == 'already_owned' %}
+              <p class="mt-3 text-sm text-pb-text-sec">This file points to an issue that is already owned in your library, so it remains informational only.</p>
+              {% elif group.key == 'duplicate_file' %}
+              <p class="mt-3 text-sm text-pb-text-sec">{{ row.duplicate_reason_label }}</p>
+              {% if row.duplicate_keep_label %}
+              <p class="mt-1 text-xs text-pb-text-dim">Kept incoming file {{ row.duplicate_keep_label }}</p>
+              {% endif %}
+              {% elif row.metadata_conflict %}
+              <div class="mt-3 space-y-3">
+                <div class="rounded-lg border border-pb-warning/40 bg-pb-warning-dim px-3 py-3 text-sm text-pb-warning">
+                  {% if row.metadata_conflict_type == 'archive_entry_issue_number_mismatch' %}
+                  <p class="font-medium">The archive page names disagree with the outer filename.</p>
+                  <p class="mt-1 text-xs leading-5 text-pb-text-sec">Review this file manually before import; Pullbox did not silently change the issue assignment.</p>
+                  {% else %}
+                  <p class="font-medium">The file name and embedded ComicInfo.xml point to different series.</p>
+                  <p class="mt-1 text-xs leading-5 text-pb-text-sec">Review this file manually to verify its provenance.</p>
+                  {% endif %}
+                  {% if row.metadata_conflict_reason %}
+                  <p class="mt-2 text-xs leading-5 text-pb-text-sec">{{ row.metadata_conflict_reason }}</p>
+                  {% endif %}
+                </div>
+
+                <div class="grid gap-3 md:grid-cols-2">
+                  <section class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Parsed From File Name</p>
+                    <dl class="mt-3 space-y-2 text-sm text-pb-text-sec">
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Series</dt>
+                        <dd class="text-pb-text">{{ row.filename_series_label or 'Unknown' }}</dd>
+                      </div>
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Issue</dt>
+                        <dd class="text-pb-text">{{ row.parsed_issue_number or 'Unknown' }}</dd>
+                      </div>
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Year</dt>
+                        <dd class="text-pb-text">{{ row.parsed_year or 'Unknown' }}</dd>
+                      </div>
+                    </dl>
+                  </section>
+
+                  <section class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Embedded ComicInfo.xml</p>
+                    <dl class="mt-3 space-y-2 text-sm text-pb-text-sec">
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Series</dt>
+                        <dd class="text-pb-text">{{ row.comicinfo.series if row.comicinfo else 'Unknown' }}</dd>
+                      </div>
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Number</dt>
+                        <dd class="text-pb-text">{{ row.comicinfo.number if row.comicinfo else 'Unknown' }}</dd>
+                      </div>
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Year</dt>
+                        <dd class="text-pb-text">{{ row.comicinfo.year if row.comicinfo else 'Unknown' }}</dd>
+                      </div>
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Title</dt>
+                        <dd class="text-pb-text">{{ row.comicinfo.title if row.comicinfo else 'Unknown' }}</dd>
+                      </div>
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <dt class="text-pb-text-dim">Web</dt>
+                        <dd class="break-all text-pb-text">{{ row.comicinfo.web if row.comicinfo else 'Unknown' }}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                </div>
+              </div>
+              {% endif %}
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>

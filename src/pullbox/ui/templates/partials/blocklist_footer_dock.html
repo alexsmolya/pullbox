@@ -1,0 +1,23 @@
+{% from "components/page_dock.html" import page_dock %}
+
+{% set _base_params = [] %}
+{% if reason_filter %}{% set _ = _base_params.append("reason=" ~ reason_filter) %}{% endif %}
+{% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+{% if sort and sort != "-created_at" %}{% set _ = _base_params.append("sort=" ~ sort) %}{% endif %}
+{% set _base_url = "/blocklist" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+
+{{ page_dock(
+  page=page,
+  total_pages=total_pages,
+  base_url=_base_url,
+  status_items=[
+    {"label": "total", "value": total|string ~ " blocked"},
+    {"label": "failed", "value": failed_count|string},
+    {"label": "rejected", "value": rejected_count|string},
+    {"label": "manual", "value": manual_count|string},
+  ],
+  hx_target="#blocklist-results-body",
+  hx_swap="outerHTML",
+  hx_select="",
+  hx_base_url=_base_url
+) }}

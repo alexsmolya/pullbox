@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Import — {{ instance_name() }}{% endblock %}
+{% block page_title %}Import{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div data-testid="import-page" class="downloads-view">
+  <div data-testid="import-shell" class="space-y-4">
+    {% include "partials/import_body.html" %}
+  </div>
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/import_footer_dock.html" %}
+{% endblock %}

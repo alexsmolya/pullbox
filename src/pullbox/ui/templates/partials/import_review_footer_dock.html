@@ -1,0 +1,50 @@
+{% from "components/page_dock.html" import page_dock %}
+
+{% if import_review_footer_mode == "conflicts" %}
+  {% set conflict_pagination_base_url = conflict_footer_base_url|default("/import/" ~ job.id ~ "/review-partial?status=conflicts&sort=" ~ sort) %}
+  {% set conflict_pagination_target = conflict_footer_hx_target|default("#import-step-review-shell") %}
+  {% set conflict_pagination_swap = conflict_footer_hx_swap|default("outerHTML") %}
+  {% set conflict_pagination_sync = conflict_footer_hx_sync|default("#import-step-review-shell:replace") %}
+  <div data-testid="import-conflicts-pagination" class="px-4 sm:px-6">
+    {{ page_dock(
+      page=page,
+      total_pages=total_pages,
+      base_url=conflict_pagination_base_url,
+      status_items=[
+        {"label": "visible", "value": conflict_groups|length|string},
+        {"label": "conflicts", "value": total_groups|string},
+        {"label": "per page", "value": page_size|string},
+      ],
+      hx_target=conflict_pagination_target,
+      hx_swap=conflict_pagination_swap,
+      hx_select="",
+      hx_base_url=conflict_pagination_base_url,
+      hx_sync=conflict_pagination_sync,
+      hx_push_url="false"
+    ) }}
+  </div>
+{% else %}
+  {% set total_pages = ((total - 1) // page_size) + 1 if total > 0 else 1 %}
+  {% set review_pagination_params = [] %}
+  {% if status_filter %}{% set _ = review_pagination_params.append("status=" ~ status_filter) %}{% endif %}
+  {% if sort %}{% set _ = review_pagination_params.append("sort=" ~ sort) %}{% endif %}
+  {% set review_pagination_base_url = "/import/" ~ job.id ~ "/review-partial" ~ ("?" ~ review_pagination_params|join("&") if review_pagination_params else "") %}
+  <div data-testid="import-review-pagination" class="px-4 sm:px-6">
+    {{ page_dock(
+      page=page,
+      total_pages=total_pages,
+      base_url=review_pagination_base_url,
+      status_items=[
+        {"label": "visible", "value": series_items|length|string},
+        {"label": "total", "value": total|string},
+        {"label": "per page", "value": page_size|string},
+      ],
+      hx_target="#import-step-review-shell",
+      hx_swap="outerHTML",
+      hx_select="",
+      hx_base_url=review_pagination_base_url,
+      hx_sync="#import-step-review-shell:replace",
+      hx_push_url="false"
+    ) }}
+  </div>
+{% endif %}

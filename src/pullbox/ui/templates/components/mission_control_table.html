@@ -1,0 +1,13 @@
+{% macro mission_control_table(table_testid, wrap_testid="", wrap_class="", table_class="") %}
+  <div
+    {% if wrap_testid %}data-testid="{{ wrap_testid }}"{% endif %}
+    class="series-mission-control-table-wrap{% if wrap_class %} {{ wrap_class }}{% endif %}"
+  >
+    <table
+      data-testid="{{ table_testid }}"
+      class="series-mission-control-table{% if table_class %} {{ table_class }}{% endif %}"
+    >
+      {{ caller() }}
+    </table>
+  </div>
+{% endmacro %}

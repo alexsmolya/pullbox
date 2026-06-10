@@ -1,0 +1,178 @@
+"""File conflict detection helpers for import review."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pullbox.models.import_job import ImportedFile, ImportedFileStatus
+from pullbox.services.import_duplicates import confidence_rank
+
+
+def preferred_conflict_reasons(
+    preferred: ImportedFile,
+    others: list[ImportedFile],
+) -> list[str]:
+    """Explain why the preferred file won the conflict tiebreaker."""
+    reasons: list[str] = []
+    if preferred.has_comicinfo and any(not other.has_comicinfo for other in others):
+        reasons.append("ComicInfo metadata present")
+    if others:
+        max_other_confidence = max(confidence_rank(other.match_confidence) for other in others)
+        if confidence_rank(preferred.match_confidence) > max_other_confidence:
+            reasons.append("Higher match confidence")
+        max_other_size = max(other.file_size for other in others)
+        if preferred.file_size > max_other_size:
+            reasons.append("Largest file size")
+    if not reasons:
+        reasons.append("Won the metadata tiebreaker")
+    return reasons
+
+
+def rejected_conflict_reasons(
+    candidate: ImportedFile,
+    preferred: ImportedFile,
+) -> list[str]:
+    """Explain why a conflicting file was not selected."""
+    reasons: list[str] = []
+    if preferred.has_comicinfo and not candidate.has_comicinfo:
+        reasons.append("No ComicInfo metadata")
+    if confidence_rank(candidate.match_confidence) < confidence_rank(preferred.match_confidence):
+        reasons.append("Lower match confidence than the preferred file")
+    if candidate.file_size < preferred.file_size:
+        reasons.append("Smaller file than the preferred file")
+    if not reasons:
+        reasons.append("Lost the metadata tiebreaker")
+    return reasons
+
+
+def issue_identity_key(imp_file: ImportedFile) -> int | float | None:
+    """Return the best available issue identity for conflict grouping."""
+    key: int | float | None = imp_file.matched_issue_id
+    if key is None and imp_file.matched_issue_cv_id is not None:
+        key = float(-imp_file.matched_issue_cv_id)
+    if key is None and imp_file.parsed_issue_number is not None:
+        key = -imp_file.parsed_issue_number - 0.001
+    return key
+
+
+def _mark_conflict_group(
+    group: list[ImportedFile],
+    *,
+    group_counter: int,
+    scope: str,
+) -> dict[str, Any]:
+    def sort_key(imp_file: ImportedFile) -> tuple[int, int, int]:
+        return (
+            1 if imp_file.has_comicinfo else 0,
+            confidence_rank(imp_file.match_confidence),
+            imp_file.file_size,
+        )
+
+    group.sort(key=sort_key, reverse=True)
+    preferred = group[0]
+    preferred_reasons = preferred_conflict_reasons(preferred, group[1:])
+
+    for idx, imp_file in enumerate(group):
+        imp_file.status = ImportedFileStatus.CONFLICT
+        imp_file.conflict_group_id = group_counter
+        imp_file.is_preferred = idx == 0
+        imp_file.include_in_import = False
+        imp_file.diagnostics = {
+            "kind": "file_conflict",
+            "scope": scope,
+            "conflict_group_id": group_counter,
+            "group_size": len(group),
+            "preferred_file_id": preferred.id,
+            "preferred_file_name": preferred.file_name,
+            "preferred_reasons": preferred_reasons,
+            "selection_basis": {
+                "has_comicinfo": imp_file.has_comicinfo,
+                "match_confidence": imp_file.match_confidence,
+                "file_size": imp_file.file_size,
+            },
+            "why_not_selected": (
+                [] if idx == 0 else rejected_conflict_reasons(imp_file, preferred)
+            ),
+            "previous_diagnostics": dict(imp_file.diagnostics or {}),
+        }
+
+    return {
+        "kind": "file_conflict",
+        "scope": scope,
+        "conflict_group_id": group_counter,
+        "group_size": len(group),
+        "preferred_file_id": preferred.id,
+        "preferred_file_name": preferred.file_name,
+        "preferred_reasons": preferred_reasons,
+        "files": [
+            {
+                "file_id": imp_file.id,
+                "file_name": imp_file.file_name,
+                "is_preferred": imp_file.is_preferred,
+                "why_not_selected": (imp_file.diagnostics or {}).get(
+                    "why_not_selected",
+                    [],
+                ),
+            }
+            for imp_file in group
+        ],
+    }
+
+
+def detect_conflicts(
+    files: list[ImportedFile],
+    group_counter: int,
+    *,
+    scope: str = "series_row",
+) -> tuple[int, int, list[dict[str, Any]]]:
+    """Group matched files by issue, mark conflicts, apply tiebreakers."""
+    by_issue: dict[int | float, list[ImportedFile]] = {}
+    for imp_file in files:
+        if imp_file.status != ImportedFileStatus.MATCHED:
+            continue
+        key = issue_identity_key(imp_file)
+        if key is not None:
+            by_issue.setdefault(key, []).append(imp_file)
+
+    conflict_count = 0
+    group_details: list[dict[str, Any]] = []
+    for _issue_id, group in by_issue.items():
+        if len(group) < 2:
+            continue
+
+        group_counter += 1
+        group_details.append(_mark_conflict_group(group, group_counter=group_counter, scope=scope))
+        conflict_count += len(group)
+
+    return conflict_count, group_counter, group_details
+
+
+def detect_cross_series_conflicts(
+    files: list[ImportedFile],
+    group_counter: int,
+    *,
+    target_series_key_by_file_id: dict[int, tuple[str, int]],
+) -> tuple[int, int, list[dict[str, Any]]]:
+    """Detect issue conflicts spanning multiple import-series rows."""
+    by_target_issue: dict[tuple[tuple[str, int], int | float], list[ImportedFile]] = {}
+    for imp_file in files:
+        if imp_file.status != ImportedFileStatus.MATCHED or imp_file.id is None:
+            continue
+        target_series_key = target_series_key_by_file_id.get(imp_file.id)
+        issue_key = issue_identity_key(imp_file)
+        if target_series_key is None or issue_key is None:
+            continue
+        by_target_issue.setdefault((target_series_key, issue_key), []).append(imp_file)
+
+    conflict_count = 0
+    group_details: list[dict[str, Any]] = []
+    for (_target_series_key, _issue_key), group in by_target_issue.items():
+        if len(group) < 2 or len({imp_file.import_series_id for imp_file in group}) < 2:
+            continue
+        group_counter += 1
+        group_details.append(
+            _mark_conflict_group(group, group_counter=group_counter, scope="cross_series")
+        )
+        conflict_count += len(group)
+
+    return conflict_count, group_counter, group_details

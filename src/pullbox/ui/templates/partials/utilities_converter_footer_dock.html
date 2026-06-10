@@ -1,0 +1,9 @@
+{% from "components/page_dock.html" import status_dock %}
+
+<div data-testid="utilities-converter-footer-dock">
+  {{ status_dock(status_items=[
+    {"label": "tool", "value": "File Converter"},
+    {"label": "target", "value": "CBZ"},
+    {"label": "scope", "value": "manual"},
+  ]) }}
+</div>

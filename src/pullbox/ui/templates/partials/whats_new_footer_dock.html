@@ -1,0 +1,23 @@
+{% from "components/page_dock.html" import page_dock %}
+
+{% set active_cache = current_week.cache if active_window == "current" and current_week else upcoming.cache if active_window == "upcoming" and upcoming else none %}
+{% set status_items = [
+  {"led": "green" if active_window == "current" else "amber", "label": "window", "value": "this week" if active_window == "current" else "coming soon"},
+  {"label": "week", "value": selected_upcoming_week if active_window == "upcoming" and selected_upcoming_week else "current"},
+  {"label": "releases", "value": total|string},
+  {"label": "per page", "value": per_page|string},
+  {"label": "cache", "value": active_cache.status|title if active_cache else "Empty"},
+] %}
+<div id="whats-new-pagination" data-testid="whats-new-pagination" class="px-4 sm:px-6">
+  {{ page_dock(
+    page=page,
+    total_pages=total_pages,
+    base_url=pagination_base_url,
+    status_items=status_items,
+    hx_target="#whats-new-results-body",
+    hx_swap="outerHTML",
+    hx_select="",
+    hx_base_url=pagination_base_url,
+    hx_sync="#whats-new-results-body:replace"
+  ) }}
+</div>

@@ -1,0 +1,1310 @@
+{#- Settings: Download Clients tab -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import section_card, section_header, settings_footer, settings_row, ui_icon %}
+{%- set client_icon_map = {'sabnzbd': 'SAB', 'nzbget': 'NZB', 'qbittorrent': 'qBt', 'transmission': 'TR', 'deluge': 'DL'} -%}
+{%- set client_proto_map = {'sabnzbd': 'Usenet', 'nzbget': 'Usenet', 'qbittorrent': 'Torrent', 'transmission': 'Torrent', 'deluge': 'Torrent'} -%}
+{%- set client_proto_pill_map = {'sabnzbd': 'pill-warning', 'nzbget': 'pill-warning', 'qbittorrent': 'pill-info', 'transmission': 'pill-info', 'deluge': 'pill-info'} -%}
+{%- set client_accent_map = {
+  'sabnzbd': 'bg-pb-warning-dim text-pb-warning',
+  'nzbget': 'bg-pb-warning-dim text-pb-warning',
+  'qbittorrent': 'bg-pb-info-dim text-pb-info',
+  'transmission': 'bg-pb-success-dim text-pb-success',
+  'deluge': 'bg-pb-purple-dim text-pb-purple'
+} -%}
+{%- set client_picker_hover_map = {
+  'sabnzbd': 'hover:border-pb-warning/40 hover:bg-pb-warning-dim',
+  'nzbget': 'hover:border-pb-warning/40 hover:bg-pb-warning-dim',
+  'qbittorrent': 'hover:border-pb-info/40 hover:bg-pb-info-dim',
+  'transmission': 'hover:border-pb-success/40 hover:bg-pb-success-dim',
+  'deluge': 'hover:border-pb-purple/40 hover:bg-pb-purple-dim'
+} -%}
+
+<div class="space-y-6 pt-6" x-data="clientsSettings()">
+  <section class="section-card" data-testid="settings-clients-registry-card">
+    {% call section_header(
+      title="Client registry",
+      eyebrow="Connections",
+      title_style="plain"
+    ) %}
+      <div class="section-header-actions" data-testid="settings-clients-registry-actions">
+        <button
+          @click="testAll()"
+          :disabled="testingAll"
+          class="btn-ghost btn-sm gap-2"
+          data-testid="settings-clients-test-all"
+        >
+          <svg class="h-3.5 w-3.5" :class="testingAll && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728"/>
+          </svg>
+          <span x-text="testingAll ? 'Testing...' : 'Test All'"></span>
+        </button>
+        <button
+          @click="openAdd()"
+          class="btn-primary btn-sm gap-2"
+          data-testid="settings-clients-add-client"
+        >
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+          </svg>
+          <span>Add Client</span>
+        </button>
+      </div>
+    {% endcall %}
+
+    <div class="section-body">
+      <div class="settings-connection-list" data-testid="settings-clients-registry-list">
+        {% if clients %}
+          {% for c in clients %}
+          {%- set ct = c.client_type.value -%}
+          {%- set client_status = client_status_seed.get(c.id) if client_status_seed is defined else none -%}
+          {%- set client_status_healthy = client_status.get('healthy') if client_status else none -%}
+          {%- set client_status_message = client_status.get('message') if client_status else '' -%}
+          <article
+            @click="openEdit({{ c.id }})"
+            role="button"
+            data-testid="settings-clients-registry-entry"
+            class="settings-connection-card {% if not c.enabled %}settings-connection-card-muted{% endif %}"
+          >
+            <div class="flex items-start gap-4">
+              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-xs font-bold tracking-tight {{ client_accent_map.get(ct, 'bg-pb-card-hover text-pb-text-sec') }}">
+                {{ client_icon_map.get(ct, '?') }}
+              </div>
+
+              <div class="min-w-0 flex-1 space-y-3">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-pb-text">{{ c.name }}</p>
+                    <p class="mt-1 truncate font-mono text-[11px] text-pb-text-dim">{{ c.url }}</p>
+                  </div>
+                  <button
+                    @click.stop="quickDelete({{ c.id }}, '{{ c.name | e }}')"
+                    data-testid="settings-clients-delete-{{ c.id }}"
+                    class="downloads-action-btn is-danger"
+                    data-tip="Delete"
+                    data-tip-pos="left"
+                    aria-label="Delete {{ c.name | e }}"
+                    title="Delete {{ c.name | e }}"
+                    type="button"
+                  >
+                    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="flex items-start justify-between gap-3">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="pill {{ client_proto_pill_map.get(ct, 'pill-info') }}">{{ client_proto_map.get(ct, ct) }}</span>
+                    <span class="pill pill-purple">Priority {{ c.priority }}</span>
+                    {% if c.enabled %}
+                      <span class="pill pill-success">Enabled</span>
+                    {% else %}
+                      <span class="pill pill-warning">Disabled</span>
+                    {% endif %}
+                    <span
+                      data-testid="settings-clients-health-{{ c.id }}"
+                      class="pill {% if client_status_healthy is sameas true %}pill-success{% elif client_status_healthy is sameas false %}pill-error{% else %}pill-info{% endif %}"
+                      :class="testResults[{{ c.id }}]
+                        ? (testResults[{{ c.id }}].healthy ? 'pill-success' : 'pill-error')
+                        : 'pill-info'"
+                      x-text="testResults[{{ c.id }}]
+                        ? (testResults[{{ c.id }}].healthy ? 'Healthy' : 'Issue')
+                        : 'Pending'"
+                      >{% if client_status_healthy is sameas true %}Healthy{% elif client_status_healthy is sameas false %}Issue{% else %}Pending{% endif %}</span>
+                  </div>
+                  <p
+                    data-testid="settings-clients-version-{{ c.id }}"
+                    class="shrink-0 text-right font-mono text-[11px] leading-5 text-pb-text-dim"
+                    x-text="clientVersionLabel({{ c.id }})"
+                  >{{ client_status_message or 'Version pending' }}</p>
+                </div>
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        {% else %}
+          <div class="info-panel info-panel-muted">
+            <p class="text-sm font-semibold text-pb-text">No download clients configured yet.</p>
+            <p class="mt-2 text-sm leading-6 text-pb-text-sec">
+              Start by adding the tool Pullbox should send work to. Once the first client is connected, the health and automation controls on this page become much more useful.
+            </p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  {% call section_card(
+    title="Import automation",
+    description="Control how Pullbox discovers completed downloads and starts the import workflow.",
+    eyebrow="Policy",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="settings-clients-import-card"'
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% call settings_row(label="Auto-Import", help="Automatically import completed downloads into the library.") %}
+          <div class="flex items-center pt-1">
+            {% set auto_import = configs.get('auto_import_enabled', 'true') %}
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input type="checkbox" name="auto_import_enabled" value="true" {% if auto_import == 'true' %}checked{% endif %} class="peer toggle-input">
+              <span class="toggle-switch"></span>
+            </label>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Check Interval", help="How often to poll download clients for completed items.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" name="download_poll_interval_seconds" value="{{ configs.get('download_poll_interval_seconds', '3') }}" min="3" max="300" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">seconds</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Recovery Sweep Interval", help="How often to run the completed-download recovery sweep. Normal completion handoff is triggered immediately when downloads finish.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" name="process_completed_interval_seconds" value="{{ configs.get('process_completed_interval_seconds', '300') }}" min="300" max="600" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">seconds</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost">Reset</button>
+          <button type="submit" :disabled="!isDirty" class="btn-primary">Save Changes</button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Failure recovery",
+    description="Decide when Pullbox should retry, wait, or give up on a troubled download.",
+    eyebrow="Policy",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="settings-clients-failure-card"'
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% call settings_row(label="Redownload on Failure", help="Automatically search for an alternative release when a download fails.") %}
+          <div class="flex items-center pt-1">
+            {% set redownload = configs.get('redownload_on_failure', 'true') %}
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input type="checkbox" name="redownload_on_failure" value="true" {% if redownload == 'true' %}checked{% endif %} class="peer toggle-input">
+              <span class="toggle-switch"></span>
+            </label>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Max Retries", help="Maximum alternative releases to try before marking permanently failed.") %}
+          <input type="number" name="max_download_retries" value="{{ configs.get('max_download_retries', '3') }}" min="0" max="10" class="input-pb w-24">
+        {% endcall %}
+
+        {% call settings_row(label="Stall Timeout", help="Mark downloads as stalled after this many hours with no progress.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" name="stall_timeout_hours" value="{{ configs.get('stall_timeout_hours', '1') }}" min="1" max="24" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">hours</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost">Reset</button>
+          <button type="submit" :disabled="!isDirty" class="btn-primary">Save Changes</button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="History retention",
+    description="Keep enough operational history to debug routing issues without holding on to stale data longer than necessary.",
+    eyebrow="Cleanup",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="settings-clients-history-card"'
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% call settings_row(label="History Retention", help="How long to keep completed download history.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" name="history_retention_days" value="{{ configs.get('history_retention_days', '90') }}" min="1" max="365" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">days</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost">Reset</button>
+          <button type="submit" :disabled="!isDirty" class="btn-primary">Save Changes</button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {# ════════════════════════════════════════════════════════════════════
+     CLIENT MODAL — Add and Edit
+     ════════════════════════════════════════════════════════════════════ #}
+  <div x-show="showModal" x-cloak
+       data-testid="settings-clients-modal"
+       class="modal-shell"
+       @keydown.escape.window="fileBrowser.show ? closeFileBrowser() : closeModal()">
+
+    {# Backdrop #}
+    <div class="modal-backdrop"
+         data-testid="settings-clients-modal-backdrop"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         @click="closeModal()"></div>
+
+    <div class="modal-panel max-w-lg max-h-[90vh]"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+         x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 translate-y-0 scale-100"
+         x-transition:leave-end="opacity-0 translate-y-2 scale-95">
+
+      {# Modal header #}
+      <div class="modal-header">
+        <div class="flex items-center gap-3">
+          <template x-if="form.client_type === 'sabnzbd'">
+            <div class="w-7 h-7 rounded-lg {{ client_accent_map['sabnzbd'] }} flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+              </svg>
+            </div>
+          </template>
+          <template x-if="form.client_type === 'nzbget'">
+            <div class="w-7 h-7 rounded-lg {{ client_accent_map['nzbget'] }} flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+              </svg>
+            </div>
+          </template>
+          <template x-if="form.client_type === 'qbittorrent'">
+            <div class="w-7 h-7 rounded-lg {{ client_accent_map['qbittorrent'] }} flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+          </template>
+          <template x-if="form.client_type === 'transmission'">
+            <div class="w-7 h-7 rounded-lg {{ client_accent_map['transmission'] }} flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+          </template>
+          <template x-if="form.client_type === 'deluge'">
+            <div class="w-7 h-7 rounded-lg {{ client_accent_map['deluge'] }} flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+          </template>
+          <h3 class="text-sm font-semibold text-pb-text"
+              x-text="modalMode === 'add'
+                ? (form.client_type ? 'Add ' + clientTypeLabel(form.client_type) : 'Add Download Client')
+                : 'Edit ' + form.name"></h3>
+        </div>
+        <button @click="closeModal()"
+                class="icon-btn icon-btn-sm">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      {# Step 1 — type picker (add mode, before type chosen) #}
+      <div x-show="modalMode === 'add' && !form.client_type" class="p-5 overflow-y-auto">
+        <p class="text-sm text-pb-text-sec mb-4">What type of download client are you adding?</p>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <button @click="form.client_type = 'sabnzbd'"
+                  :disabled="existingTypes.includes('sabnzbd')"
+                  :class="existingTypes.includes('sabnzbd') ? 'opacity-40 cursor-not-allowed' : '{{ client_picker_hover_map['sabnzbd'] }}'"
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all">
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ client_accent_map['sabnzbd'] }}">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+              </svg>
+            </div>
+            <p class="text-sm font-semibold text-pb-text">SABnzbd</p>
+            <p class="text-[11px] mt-0.5" :class="existingTypes.includes('sabnzbd') ? 'text-pb-text-dim' : 'text-pb-text-dim'"
+               x-text="existingTypes.includes('sabnzbd') ? 'Already configured' : 'Usenet download client'"></p>
+          </button>
+          <button @click="form.client_type = 'nzbget'"
+                  :disabled="existingTypes.includes('nzbget')"
+                  :class="existingTypes.includes('nzbget') ? 'opacity-40 cursor-not-allowed' : '{{ client_picker_hover_map['nzbget'] }}'"
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all">
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ client_accent_map['nzbget'] }}">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+              </svg>
+            </div>
+            <p class="text-sm font-semibold text-pb-text">NZBGet</p>
+            <p class="text-[11px] mt-0.5" :class="existingTypes.includes('nzbget') ? 'text-pb-text-dim' : 'text-pb-text-dim'"
+               x-text="existingTypes.includes('nzbget') ? 'Already configured' : 'Usenet download client'"></p>
+          </button>
+          <button @click="form.client_type = 'qbittorrent'"
+                  :disabled="existingTypes.includes('qbittorrent')"
+                  :class="existingTypes.includes('qbittorrent') ? 'opacity-40 cursor-not-allowed' : '{{ client_picker_hover_map['qbittorrent'] }}'"
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all">
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ client_accent_map['qbittorrent'] }}">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+            <p class="text-sm font-semibold text-pb-text">qBittorrent</p>
+            <p class="text-[11px] mt-0.5" :class="existingTypes.includes('qbittorrent') ? 'text-pb-text-dim' : 'text-pb-text-dim'"
+               x-text="existingTypes.includes('qbittorrent') ? 'Already configured' : 'BitTorrent download client'"></p>
+          </button>
+          <button @click="form.client_type = 'transmission'"
+                  :disabled="existingTypes.includes('transmission')"
+                  :class="existingTypes.includes('transmission') ? 'opacity-40 cursor-not-allowed' : '{{ client_picker_hover_map['transmission'] }}'"
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all">
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ client_accent_map['transmission'] }}">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+            <p class="text-sm font-semibold text-pb-text">Transmission</p>
+            <p class="text-[11px] mt-0.5" :class="existingTypes.includes('transmission') ? 'text-pb-text-dim' : 'text-pb-text-dim'"
+               x-text="existingTypes.includes('transmission') ? 'Already configured' : 'BitTorrent download client'"></p>
+          </button>
+          <button @click="form.client_type = 'deluge'"
+                  :disabled="existingTypes.includes('deluge')"
+                  :class="existingTypes.includes('deluge') ? 'opacity-40 cursor-not-allowed' : '{{ client_picker_hover_map['deluge'] }}'"
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all">
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ client_accent_map['deluge'] }}">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+            <p class="text-sm font-semibold text-pb-text">Deluge</p>
+            <p class="text-[11px] mt-0.5" :class="existingTypes.includes('deluge') ? 'text-pb-text-dim' : 'text-pb-text-dim'"
+               x-text="existingTypes.includes('deluge') ? 'Already configured' : 'BitTorrent download client'"></p>
+          </button>
+        </div>
+      </div>
+
+      {# Step 2 / Edit — full form #}
+      <form x-show="form.client_type && (modalMode === 'edit' || form.client_type)"
+            @submit.prevent="saveClient()"
+            class="flex flex-col flex-1 min-h-0"
+            data-testid="settings-clients-modal-form">
+        <template x-if="form.client_type === 'sabnzbd' || form.client_type === 'deluge'">
+          <input
+            type="text"
+            name="client_password_username"
+            :value="form.name || 'download-client'"
+            autocomplete="username"
+            class="hidden"
+            tabindex="-1"
+            aria-hidden="true"
+          >
+        </template>
+
+        {# Scrollable body: form fields + status banners #}
+        <div class="modal-body">
+        <div class="px-5 py-4 space-y-4">
+
+          {# Name + Enabled toggle #}
+          <div class="grid grid-cols-[1fr_auto] gap-4 items-end">
+            <div>
+              <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Name</label>
+              <input type="text" x-model="form.name" placeholder="My Client Name"
+                     autocomplete="nickname"
+                     class="input-pb">
+            </div>
+            <div class="pb-2">
+              <label class="relative inline-flex items-center cursor-pointer gap-2">
+                <input type="checkbox" x-model="form.enabled" class="peer toggle-input">
+                <span class="toggle-switch"></span>
+                <span class="text-xs text-pb-text-sec">Enabled</span>
+              </label>
+            </div>
+          </div>
+
+          {# Host URL #}
+          <div>
+            <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Host URL</label>
+            <input type="url" x-model="form.url" placeholder="http://localhost:8080"
+                   autocomplete="url"
+                   class="input-pb font-mono"
+                   :class="modalError ? 'field-invalid' : ''">
+            <p class="text-[11px] text-pb-text-dim mt-1">Use the address Pullbox can reach, including protocol and port.</p>
+            <p class="text-[11px] text-pb-text-dim mt-1">In Docker, <code class="text-pb-text-sec">localhost</code> and <code class="text-pb-text-sec">127.0.0.1</code> point to the host machine.</p>
+          </div>
+
+          {# SABnzbd: API key (masked) #}
+          <template x-if="form.client_type === 'sabnzbd'">
+            <div>
+              <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                API Key
+                <template x-if="modalMode === 'edit' && form.has_api_key">
+                  <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
+                </template>
+              </label>
+              <input type="password" x-model="form.api_key" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                     autocomplete="new-password"
+                     class="input-pb font-mono">
+            </div>
+          </template>
+
+          {# qBittorrent: username + password #}
+          <template x-if="form.client_type === 'qbittorrent'">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Username</label>
+                <input type="text" x-model="form.username" placeholder="admin"
+                       name="qbittorrent_username"
+                       autocomplete="username"
+                       class="input-pb">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                  Password
+                  <template x-if="modalMode === 'edit' && form.has_password">
+                    <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
+                  </template>
+                </label>
+                <input type="password" x-model="form.password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                       autocomplete="new-password"
+                       class="input-pb">
+              </div>
+            </div>
+          </template>
+
+          {# NZBGet: username + password #}
+          <template x-if="form.client_type === 'nzbget'">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Username</label>
+                <input type="text" x-model="form.username" placeholder="nzbget"
+                       name="nzbget_username"
+                       autocomplete="username"
+                       class="input-pb">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                  Password
+                  <template x-if="modalMode === 'edit' && form.has_password">
+                    <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
+                  </template>
+                </label>
+                <input type="password" x-model="form.password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                       autocomplete="new-password"
+                       class="input-pb">
+              </div>
+            </div>
+          </template>
+
+          {# Transmission: username + password #}
+          <template x-if="form.client_type === 'transmission'">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Username</label>
+                <input type="text" x-model="form.username" placeholder="admin"
+                       name="transmission_username"
+                       autocomplete="username"
+                       class="input-pb">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                  Password
+                  <template x-if="modalMode === 'edit' && form.has_password">
+                    <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
+                  </template>
+                </label>
+                <input type="password" x-model="form.password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                       autocomplete="new-password"
+                       class="input-pb">
+              </div>
+            </div>
+          </template>
+
+          {# Deluge: password only #}
+          <template x-if="form.client_type === 'deluge'">
+            <div>
+              <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                Password
+                <template x-if="modalMode === 'edit' && form.has_password">
+                  <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
+                </template>
+              </label>
+              <input type="password" x-model="form.password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                     autocomplete="new-password"
+                     class="input-pb">
+            </div>
+          </template>
+
+          {# Category #}
+          <div>
+            <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+              Category <span class="text-pb-text-dim font-normal">— optional</span>
+            </label>
+            <input type="text" x-model="form.category" placeholder="pullbox"
+                   autocomplete="off"
+                   class="input-pb w-48">
+            <p class="text-[11px] text-pb-text-dim mt-1">Use the client category or label Pullbox should manage.</p>
+          </div>
+
+          {# Advanced collapsible section #}
+          <div x-data="{ open: false }">
+            <button type="button" @click="open = !open"
+                    class="flex items-center gap-1.5 text-xs text-pb-text-sec transition-colors hover:text-pb-text">
+              <svg class="w-3.5 h-3.5 transition-transform duration-150" :class="open && 'rotate-90'"
+                   fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+              </svg>
+              Advanced Settings
+            </button>
+            <div x-show="open" class="mt-3 space-y-3 pl-5 border-l border-pb-border">
+
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                  Download Directory <span class="text-pb-text-dim font-normal">— optional</span>
+                </label>
+                <div class="flex items-center gap-1.5">
+                  <input type="text" x-model="form.download_dir" placeholder="/downloads"
+                         autocomplete="off"
+                         class="input-pb flex-1 font-mono">
+                  <button type="button" @click="openFileBrowser('download_dir', form.download_dir)"
+                          class="icon-btn icon-btn-sm shrink-0"
+                          title="Browse directories">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+                    </svg>
+                  </button>
+                </div>
+                <p class="text-[11px] text-pb-text-dim mt-1">Path inside Pullbox where completed downloads are mounted, usually <code class="text-pb-text-sec">/downloads</code>.</p>
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                  Remote Path <span class="text-pb-text-dim font-normal">— optional</span>
+                </label>
+                <input type="text" x-model="form.remote_path" placeholder="/data/downloads"
+                       autocomplete="off"
+                       class="input-pb font-mono">
+                <p class="text-[11px] text-pb-text-dim mt-1">Path reported by the client; only set this when it differs from Pullbox.</p>
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Priority</label>
+                <div class="flex items-center gap-2">
+                  <input type="number" x-model.number="form.priority" min="1" max="100"
+                         class="input-pb w-20">
+                  <span class="text-xs text-pb-text-dim">1 = highest, 100 = lowest</span>
+                </div>
+              </div>
+
+              {# SABnzbd-specific options #}
+              <template x-if="form.client_type === 'sabnzbd'">
+                <div class="space-y-3 pt-2 border-t border-pb-border/50">
+                  <p class="text-[11px] text-pb-text-dim uppercase tracking-wider font-medium">SABnzbd Options</p>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Download Priority</label>
+                    {{ dropdown_select(
+                      name="sab_priority",
+                      value="",
+                      options=[
+                        ("", "Default"),
+                        ("-100", "Default (SAB)"),
+                        ("2", "Force"),
+                        ("1", "High"),
+                        ("0", "Normal"),
+                        ("-1", "Low"),
+                      ],
+                      root_testid="settings-clients-sab-priority-select",
+                      class_name="w-40",
+                      local_model="form.sab_priority"
+                    ) }}
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Post-Processing</label>
+                    {{ dropdown_select(
+                      name="sab_post_processing",
+                      value="",
+                      options=[
+                        ("", "Default"),
+                        ("0", "None"),
+                        ("1", "Repair"),
+                        ("2", "Repair + Unpack"),
+                        ("3", "Repair + Unpack + Delete"),
+                      ],
+                      root_testid="settings-clients-sab-post-processing-select",
+                      class_name="w-56",
+                      local_model="form.sab_post_processing"
+                    ) }}
+                  </div>
+                </div>
+              </template>
+
+              {# qBittorrent-specific options #}
+              <template x-if="form.client_type === 'qbittorrent'">
+                <div class="space-y-3 pt-2 border-t border-pb-border/50">
+                  <p class="text-[11px] text-pb-text-dim uppercase tracking-wider font-medium">qBittorrent Options</p>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Content Layout</label>
+                    {{ dropdown_select(
+                      name="qbt_content_layout",
+                      value="",
+                      options=[
+                        ("", "Default"),
+                        ("Original", "Original"),
+                        ("Subfolder", "Create Subfolder"),
+                        ("NoSubfolder", "No Subfolder"),
+                      ],
+                      root_testid="settings-clients-qbt-content-layout-select",
+                      class_name="w-48",
+                      local_model="form.qbt_content_layout"
+                    ) }}
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                      Ratio Limit <span class="text-pb-text-dim font-normal">— 0 = unlimited</span>
+                    </label>
+                    <input type="number" x-model.number="form.qbt_ratio_limit" min="0" max="100" step="0.1"
+                           class="input-pb w-24"
+                           placeholder="0">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                      Seeding Time Limit <span class="text-pb-text-dim font-normal">— minutes, 0 = unlimited</span>
+                    </label>
+                    <input type="number" x-model.number="form.qbt_seeding_time_limit" min="0" max="525600"
+                           class="input-pb w-24"
+                           placeholder="0">
+                  </div>
+                </div>
+              </template>
+
+              {# NZBGet-specific options #}
+              <template x-if="form.client_type === 'nzbget'">
+                <div class="space-y-3 pt-2 border-t border-pb-border/50">
+                  <p class="text-[11px] text-pb-text-dim uppercase tracking-wider font-medium">NZBGet Options</p>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Priority</label>
+                    {{ dropdown_select(
+                      name="nzbget_priority",
+                      value="",
+                      options=[
+                        ("", "Default"),
+                        ("900", "Force"),
+                        ("100", "Very High"),
+                        ("50", "High"),
+                        ("0", "Normal"),
+                        ("-50", "Low"),
+                        ("-100", "Very Low"),
+                      ],
+                      root_testid="settings-clients-nzbget-priority-select",
+                      class_name="w-40",
+                      local_model="form.nzbget_priority"
+                    ) }}
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Post Processing</label>
+                    {{ dropdown_select(
+                      name="nzbget_post_processing",
+                      value="",
+                      options=[
+                        ("", "Default"),
+                        ("0", "None (pp0)"),
+                        ("1", "Repair (pp1)"),
+                        ("2", "Repair + Unpack (pp2)"),
+                        ("3", "Repair + Unpack + Delete (pp3)"),
+                      ],
+                      root_testid="settings-clients-nzbget-post-processing-select",
+                      class_name="w-56",
+                      local_model="form.nzbget_post_processing"
+                    ) }}
+                  </div>
+                </div>
+              </template>
+
+              {# Transmission-specific options #}
+              <template x-if="form.client_type === 'transmission'">
+                <div class="space-y-3 pt-2 border-t border-pb-border/50">
+                  <p class="text-[11px] text-pb-text-dim uppercase tracking-wider font-medium">Transmission Options</p>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Bandwidth Priority</label>
+                    {{ dropdown_select(
+                      name="transmission_bandwidth_priority",
+                      value="",
+                      options=[
+                        ("", "Default"),
+                        ("-1", "Low"),
+                        ("0", "Normal"),
+                        ("1", "High"),
+                      ],
+                      root_testid="settings-clients-transmission-bandwidth-priority-select",
+                      class_name="w-40",
+                      local_model="form.transmission_bandwidth_priority"
+                    ) }}
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                      Seed Ratio Limit <span class="text-pb-text-dim font-normal">— 0 = unlimited</span>
+                    </label>
+                    <input type="number" x-model.number="form.transmission_seed_ratio_limit" min="0" max="100" step="0.1"
+                           class="input-pb w-24"
+                           placeholder="0">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                      Seed Idle Limit <span class="text-pb-text-dim font-normal">— minutes, 0 = unlimited</span>
+                    </label>
+                    <input type="number" x-model.number="form.transmission_seed_idle_limit" min="0" max="525600"
+                           class="input-pb w-24"
+                           placeholder="0">
+                  </div>
+                </div>
+              </template>
+
+              {# Deluge-specific options #}
+              <template x-if="form.client_type === 'deluge'">
+                <div class="space-y-3 pt-2 border-t border-pb-border/50">
+                  <p class="text-[11px] text-pb-text-dim uppercase tracking-wider font-medium">Deluge Options</p>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Label</label>
+                    <input type="text" x-model="form.deluge_label" placeholder="pullbox"
+                           autocomplete="off"
+                           class="input-pb w-48">
+                    <p class="text-[11px] text-pb-text-dim mt-1">Requires Label plugin enabled in Deluge</p>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                      Max Ratio <span class="text-pb-text-dim font-normal">— 0 = unlimited</span>
+                    </label>
+                    <input type="number" x-model.number="form.deluge_max_ratio" min="0" max="100" step="0.1"
+                           class="input-pb w-24"
+                           placeholder="0">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+                      Move Completed Path <span class="text-pb-text-dim font-normal">— optional</span>
+                    </label>
+                    <div class="flex items-center gap-1.5">
+                      <input type="text" x-model="form.deluge_move_completed_path" placeholder="/downloads/complete"
+                             autocomplete="off"
+                             class="input-pb flex-1 font-mono">
+                      <button type="button" @click="openFileBrowser('deluge_move_completed_path', form.deluge_move_completed_path)"
+                              class="icon-btn icon-btn-sm shrink-0"
+                              title="Browse directories">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </template>
+
+            </div>
+          </div>
+
+        </div>
+
+        {# Test result banner #}
+        <div x-ref="testResultBanner" x-show="testMessage" x-transition class="border-t border-pb-border px-5 py-3">
+          <div class="inline-alert"
+               :class="testSuccess ? 'inline-alert-success' : 'inline-alert-danger'">
+            <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path x-show="testSuccess" stroke-linecap="round" stroke-linejoin="round"
+                    d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              <path x-show="!testSuccess" stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+            </svg>
+            <span x-text="testMessage"></span>
+          </div>
+        </div>
+
+        {# Save error banner #}
+        <div x-show="modalError" x-transition
+             class="border-t border-pb-border px-5 py-3">
+          <div class="inline-alert inline-alert-danger">
+            <p class="text-xs" x-text="modalError"></p>
+          </div>
+        </div>
+
+        </div>{# end scrollable body #}
+
+        {# Footer — always visible, never scrolls #}
+        <div class="modal-footer">
+
+          {# Delete button — edit mode only #}
+          <div>
+            <template x-if="modalMode === 'edit'">
+              <button type="button" @click="deleteClient()"
+                      class="btn-ghost btn-sm gap-1.5 text-pb-error hover:border-pb-error/40 hover:text-pb-error">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                </svg>
+                Delete
+              </button>
+            </template>
+          </div>
+
+          {# Right: back / test / cancel / save #}
+          <div class="flex items-center gap-2">
+            <template x-if="modalMode === 'add' && form.client_type">
+              <button type="button" @click="form.client_type = ''"
+                      class="btn-ghost btn-sm">
+                &larr; Back
+              </button>
+            </template>
+
+            <button type="button" @click="testModal()" :disabled="testing || !form.url"
+                    class="btn-ghost btn-sm gap-1.5">
+              <svg class="w-3.5 h-3.5" :class="testing && 'animate-spin'"
+                   fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a4 4 0 010-5.656m5.656 0a4 4 0 010 5.656M12 12h.008v.008H12V12z"/>
+              </svg>
+              <span x-text="testing ? 'Testing...' : 'Test'"></span>
+            </button>
+
+            <button type="button" @click="closeModal()"
+                    class="btn-ghost btn-sm">
+              Cancel
+            </button>
+
+            <button type="submit"
+                    :disabled="saving || !form.name || !form.url || !form.client_type || (modalMode === 'add' && !testSuccess)"
+                    class="btn-primary btn-sm">
+              <span x-text="saving ? 'Saving...' : (modalMode === 'add' ? 'Add Client' : 'Save Changes')"></span>
+            </button>
+          </div>
+
+        </div>
+      </form>
+
+    </div>
+  </div>
+
+  {# ── File Browser Modal (shared component) ────────────────────────── #}
+  {% include 'components/file_browser.html' %}
+
+</div>
+
+<script>
+function clientsSettings() {
+  return {
+    ...fileBrowserMixin({ csrfToken: '{{ csrf_token }}' }),
+    existingTypes: [{% for c in clients %}'{{ c.client_type.value }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+    testResults: {{ client_status_seed|default({}, true)|tojson }},
+    testingAll: false,
+    statusCacheCookieName: 'pb_client_status_cache',
+
+    healthyClientCount() {
+      return Object.values(this.testResults).filter(result => result && result.healthy).length;
+    },
+
+    clientVersionLabel(clientId) {
+      const result = this.testResults?.[clientId];
+      if (!result) return 'Version pending';
+      if (!result.message) return 'Version unavailable';
+      return result.message;
+    },
+
+    persistClientStatusCache() {
+      try {
+        const payload = {};
+        Object.entries(this.testResults || {}).forEach(([clientId, result]) => {
+          if (
+            result
+            && typeof result === 'object'
+            && typeof result.healthy === 'boolean'
+            && typeof result.message === 'string'
+            && result.message.trim()
+          ) {
+            payload[clientId] = {
+              healthy: result.healthy,
+              message: result.message.trim(),
+            };
+          }
+        });
+        document.cookie = `${this.statusCacheCookieName}=${encodeURIComponent(JSON.stringify(payload))}; Max-Age=2592000; Path=/; SameSite=Lax`;
+      } catch (_error) {
+        // Ignore cache persistence problems; the live status UI still works.
+      }
+    },
+
+    setClientResult(clientId, result) {
+      this.testResults[clientId] = result;
+      this.persistClientStatusCache();
+    },
+
+    failingClientCount() {
+      return Object.values(this.testResults).filter(result => result && !result.healthy).length;
+    },
+
+    testedClientCount() {
+      return Object.keys(this.testResults).length;
+    },
+
+    init() {
+      this.persistClientStatusCache();
+      {% if clients %}this._silentTestAll();{% endif %}
+    },
+
+    showModal: false,
+    modalMode: 'add',
+    editingId: null,
+    saving: false,
+    testing: false,
+    testMessage: '',
+    testSuccess: false,
+    modalError: '',
+    _testGeneration: 0,
+
+    form: {
+      client_type: '', name: '', url: '', enabled: true, priority: 50,
+      api_key: '', has_api_key: false, username: '', password: '', has_password: false,
+      category: '', download_dir: '', remote_path: '',
+      sab_priority: '', sab_post_processing: '',
+      qbt_content_layout: '', qbt_ratio_limit: 0, qbt_seeding_time_limit: 0,
+      nzbget_priority: '', nzbget_post_processing: '',
+      transmission_bandwidth_priority: '', transmission_seed_ratio_limit: 0, transmission_seed_idle_limit: 0,
+      deluge_label: '', deluge_max_ratio: 0, deluge_move_completed_path: '',
+    },
+
+    blankForm() {
+      return {
+        client_type: '', name: '', url: '', enabled: true, priority: 50,
+        api_key: '', has_api_key: false, username: '', password: '', has_password: false,
+        category: '', download_dir: '', remote_path: '',
+        sab_priority: '', sab_post_processing: '',
+        qbt_content_layout: '', qbt_ratio_limit: 0, qbt_seeding_time_limit: 0,
+        nzbget_priority: '', nzbget_post_processing: '',
+        transmission_bandwidth_priority: '', transmission_seed_ratio_limit: 0, transmission_seed_idle_limit: 0,
+        deluge_label: '', deluge_max_ratio: 0, deluge_move_completed_path: '',
+      };
+    },
+
+    openAdd() {
+      this.modalMode = 'add';
+      this.editingId = null;
+      this.form = this.blankForm();
+      this._testGeneration++;
+      this.testing = false;
+      this.testMessage = '';
+      this.modalError = '';
+      this.showModal = true;
+    },
+
+    openEdit(id) {
+      this.modalMode = 'edit';
+      this.editingId = id;
+      this._testGeneration++;
+      this.testing = false;
+      this.testMessage = '';
+      this.modalError = '';
+      fetch(`/api/v1/clients/${id}`, {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed to load client'); return r.json(); })
+        .then(data => {
+          this.form = {
+            client_type: data.client_type,
+            name: data.name,
+            url: data.url,
+            enabled: data.enabled,
+            priority: data.priority,
+            api_key: '',
+            has_api_key: data.has_api_key,
+            username: data.username || '',
+            password: '',
+            has_password: data.has_password,
+            category: data.category || '',
+            download_dir: data.download_dir || '',
+            remote_path: data.remote_path || '',
+            sab_priority: data.sab_priority || '',
+            sab_post_processing: data.sab_post_processing || '',
+            qbt_content_layout: data.qbt_content_layout || '',
+            qbt_ratio_limit: data.qbt_ratio_limit || 0,
+            qbt_seeding_time_limit: data.qbt_seeding_time_limit || 0,
+            nzbget_priority: data.nzbget_priority || '',
+            nzbget_post_processing: data.nzbget_post_processing || '',
+            transmission_bandwidth_priority: data.transmission_bandwidth_priority ?? '',
+            transmission_seed_ratio_limit: data.transmission_seed_ratio_limit || 0,
+            transmission_seed_idle_limit: data.transmission_seed_idle_limit || 0,
+            deluge_label: data.deluge_label || '',
+            deluge_max_ratio: data.deluge_max_ratio || 0,
+            deluge_move_completed_path: data.deluge_move_completed_path || '',
+          };
+          this.showModal = true;
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    closeModal() {
+      this.showModal = false;
+      this._testGeneration++;
+      this.testing = false;
+      this.testMessage = '';
+      this.modalError = '';
+    },
+
+    clientTypeLabel(type) {
+      const labels = {
+        sabnzbd: 'SABnzbd', nzbget: 'NZBGet', qbittorrent: 'qBittorrent',
+        transmission: 'Transmission', deluge: 'Deluge',
+      };
+      return labels[type] || type;
+    },
+
+    saveClient() {
+      this.saving = true;
+      this.modalError = '';
+
+      const body = {
+        name: this.form.name,
+        url: this.form.url,
+        enabled: this.form.enabled,
+        priority: Number(this.form.priority),
+        category: this.form.category || null,
+        download_dir: this.form.download_dir || null,
+        remote_path: this.form.remote_path || null,
+      };
+
+      if (this.form.client_type === 'sabnzbd') {
+        if (this.form.api_key) body.api_key = this.form.api_key;
+        body.sab_priority = this.form.sab_priority || null;
+        body.sab_post_processing = this.form.sab_post_processing || null;
+      } else if (this.form.client_type === 'nzbget') {
+        body.username = this.form.username || null;
+        if (this.form.password) body.password = this.form.password;
+        body.nzbget_priority = this.form.nzbget_priority || null;
+        body.nzbget_post_processing = this.form.nzbget_post_processing || null;
+      } else if (this.form.client_type === 'qbittorrent') {
+        body.username = this.form.username || null;
+        if (this.form.password) body.password = this.form.password;
+        body.qbt_content_layout = this.form.qbt_content_layout || null;
+        body.qbt_ratio_limit = this.form.qbt_ratio_limit || null;
+        body.qbt_seeding_time_limit = this.form.qbt_seeding_time_limit || null;
+      } else if (this.form.client_type === 'transmission') {
+        body.username = this.form.username || null;
+        if (this.form.password) body.password = this.form.password;
+        body.transmission_bandwidth_priority = this.form.transmission_bandwidth_priority !== '' ? Number(this.form.transmission_bandwidth_priority) : null;
+        body.transmission_seed_ratio_limit = this.form.transmission_seed_ratio_limit || null;
+        body.transmission_seed_idle_limit = this.form.transmission_seed_idle_limit || null;
+      } else if (this.form.client_type === 'deluge') {
+        if (this.form.password) body.password = this.form.password;
+        body.deluge_label = this.form.deluge_label || null;
+        body.deluge_max_ratio = this.form.deluge_max_ratio || null;
+        body.deluge_move_completed_path = this.form.deluge_move_completed_path || null;
+      }
+
+      const isAdd = this.modalMode === 'add';
+      if (isAdd) body.client_type = this.form.client_type;
+
+      fetch(isAdd ? '/api/v1/clients' : `/api/v1/clients/${this.editingId}`, {
+        method: isAdd ? 'POST' : 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify(body),
+      })
+        .then(r => {
+          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Failed to save.'); });
+          return r.json();
+        })
+        .then(() => {
+          this.closeModal();
+          if (typeof showToast === 'function')
+            showToast({ message: isAdd ? 'Client added.' : 'Client updated.', level: 'success' });
+          window.location.reload();
+        })
+        .catch(err => {
+          this.modalError = err.message;
+          this.saving = false;
+        });
+    },
+
+    async deleteClient() {
+      const ok = await pbConfirm({
+        title: 'Delete Client',
+        message: `Delete "${this.form.name}"? This cannot be undone.`,
+        confirmText: 'Delete',
+      });
+      if (!ok) return;
+      fetch(`/api/v1/clients/${this.editingId}`, {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => {
+          if (!r.ok && r.status !== 204) throw new Error('Failed to delete.');
+          this.closeModal();
+          if (typeof showToast === 'function') showToast({ message: 'Client deleted.', level: 'success' });
+          window.location.reload();
+        })
+        .catch(err => { this.modalError = err.message; });
+    },
+
+    async quickDelete(clientId, clientName) {
+      const ok = await pbConfirm({
+        title: 'Delete Client',
+        message: `Delete "${clientName}"? This cannot be undone.`,
+        confirmText: 'Delete',
+      });
+      if (!ok) return;
+      fetch(`/api/v1/clients/${clientId}`, {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => {
+          if (!r.ok && r.status !== 204) throw new Error('Failed to delete.');
+          if (typeof showToast === 'function') showToast({ message: 'Client deleted.', level: 'success' });
+          window.location.reload();
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    testModal() {
+      this.testMessage = '';
+      this.testSuccess = false;
+
+      if (!this.form.client_type || !this.form.url) {
+        this.testMessage = 'Enter a URL and select a client type first.';
+        return;
+      }
+
+      this.testing = true;
+
+      // Track which test run this is so stale results are discarded
+      // if the user switches to a different client while testing.
+      const testGeneration = ++this._testGeneration;
+
+      const body = {
+        client_type: this.form.client_type,
+        name: this.form.name || 'Test',
+        url: this.form.url,
+      };
+      if (this.form.api_key) body.api_key = this.form.api_key;
+      if (this.form.username) body.username = this.form.username;
+      if (this.form.password) body.password = this.form.password;
+
+      let testUrl = '/api/v1/clients/test';
+      if (this.modalMode === 'edit' && this.editingId) {
+        testUrl += `?existing_id=${this.editingId}`;
+      }
+
+      fetch(testUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify(body),
+      })
+        .then(r => r.json())
+        .then(data => {
+          // Discard if user switched to a different modal context
+          if (testGeneration !== this._testGeneration) return;
+          this.testSuccess = data.healthy;
+          const ms = data.response_time_ms ? ` (${pbFormatDurationMs(data.response_time_ms)})` : '';
+          this.testMessage = data.healthy
+            ? `Connected successfully${ms}.`
+            : (data.message || 'Connection failed.');
+          if (this.editingId) this.setClientResult(this.editingId, { healthy: data.healthy, message: data.message || '' });
+        })
+        .catch(() => {
+          if (testGeneration !== this._testGeneration) return;
+          this.testSuccess = false;
+          this.testMessage = 'Test request failed — check Pullbox logs.';
+        })
+        .finally(() => {
+          if (testGeneration !== this._testGeneration) return;
+          this.testing = false;
+          this.$nextTick(() => {
+            if (this.$refs.testResultBanner) {
+              this.$refs.testResultBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          });
+        });
+    },
+
+    testAll() {
+      this.testingAll = true;
+      fetch('/api/v1/clients', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => r.json())
+        .then(clients => Promise.all(
+          clients.map(c =>
+            fetch(`/api/v1/clients/${c.id}/test`, {
+              method: 'POST',
+              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+            })
+              .then(r => r.json())
+              .then(data => { this.setClientResult(c.id, { healthy: data.healthy, message: data.message || '' }); })
+              .catch(() => { this.setClientResult(c.id, { healthy: false, message: 'Test failed' }); })
+          )
+        ))
+        .finally(() => { this.testingAll = false; });
+    },
+
+    _silentTestAll() {
+      fetch('/api/v1/clients', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => r.json())
+        .then(clients => Promise.all(
+          clients.map(c =>
+            fetch(`/api/v1/clients/${c.id}/test`, {
+              method: 'POST',
+              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+            })
+              .then(r => r.json())
+              .then(data => { this.setClientResult(c.id, { healthy: data.healthy, message: data.message || '' }); })
+              .catch(() => { this.setClientResult(c.id, { healthy: false, message: 'Test failed' }); })
+          )
+        ));
+    },
+
+    saveConfig(formEl) {
+      const values = {};
+      formEl.querySelectorAll('[name]').forEach(el => {
+        if (el.type === 'checkbox') values[el.name] = el.checked ? 'true' : 'false';
+      });
+      new FormData(formEl).forEach((val, key) => {
+        if (formEl.querySelector(`[name="${key}"]`)?.type !== 'checkbox') values[key] = val;
+      });
+      return fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed to save.'); })
+        .then(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Settings saved.', level: 'success' });
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+  };
+}
+</script>

@@ -1,0 +1,51 @@
+{% from "components/page_dock.html" import page_dock, status_dock %}
+
+{% set _running = initial_stats.running|default(0) %}
+{% set _queued = initial_stats.queued|default(0) %}
+{% set _paused = initial_stats.paused|default(0) %}
+{% set _done = initial_stats.total_completed|default(0) %}
+{% if tab == "queue" %}
+  {% set _items = [
+    {"label": "running", "value": _running|string},
+    {"label": "queued", "value": _queued|string},
+    {"label": "done", "value": _done|string},
+    {"label": "paused", "value": _paused|string},
+  ] %}
+{% elif tab == "history" %}
+  {% set _items = [
+    {"label": "visible", "value": total_history_jobs|default(0)|string},
+    {"label": "history", "value": clearable_jobs_total|default(0)|string},
+    {"label": "running", "value": _running|string},
+    {"label": "queued", "value": _queued|string},
+  ] %}
+{% else %}
+  {% set _queue_state = "idle" if (_running + _queued + _paused) == 0 else "active" %}
+  {% set _items = [
+    {"label": "sys", "value": _running|string ~ " running"},
+    {"label": "queue", "value": _queued|string ~ " queued"},
+    {"label": "tools", "value": utilities_tool_count|default(6)|string ~ " available"},
+    {"label": "", "value": _queue_state},
+  ] %}
+{% endif %}
+
+<div data-testid="utilities-footer-dock">
+  {% if tab == "history" %}
+    {% set _base_params = ["tab=history"] %}
+    {% if utility_history_status %}{% set _ = _base_params.append("utility_history_status=" ~ (utility_history_status|urlencode)) %}{% endif %}
+    {% if history_sort and history_sort != "-completed_at" %}{% set _ = _base_params.append("sort=" ~ history_sort) %}{% endif %}
+    {% set _base_url = "/utilities?" ~ (_base_params|join("&")) %}
+    {{ page_dock(
+      page=page|default(1),
+      total_pages=total_pages|default(1),
+      base_url=_base_url,
+      status_items=_items,
+      hx_target="#utilities-history-section",
+      hx_swap="outerHTML",
+      hx_select="",
+      hx_base_url=_base_url,
+      hx_sync="#utilities-history-section:replace"
+    ) }}
+  {% else %}
+    {{ status_dock(status_items=_items) }}
+  {% endif %}
+</div>

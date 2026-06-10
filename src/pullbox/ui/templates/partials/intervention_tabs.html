@@ -1,0 +1,32 @@
+{% set _oob = oob|default(false) %}
+<div
+  id="intervention-tabs"
+  data-testid="intervention-tabs"
+  class="downloads-tab-rail"
+  {% if _oob %}hx-swap-oob="outerHTML"{% endif %}
+>
+  <a
+    href="/intervention?tab=queue"
+    data-testid="intervention-tab-queue"
+    hx-get="/intervention?tab=queue"
+    hx-target="#intervention-page"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'queue' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'queue' %} is-active{% endif %}"
+  >
+    Queue
+  </a>
+  <a
+    href="/intervention?tab=history"
+    data-testid="intervention-tab-history"
+    hx-get="/intervention?tab=history"
+    hx-target="#intervention-page"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'history' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'history' %} is-active{% endif %}"
+  >
+    History
+  </a>
+</div>

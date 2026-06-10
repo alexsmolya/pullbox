@@ -1,0 +1,58 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+
+{% if upcoming_week_options %}
+  <div data-testid="whats-new-week-nav" class="whats-new-week-nav">
+    {% if upcoming_week_nav.previous %}
+      <a
+        data-testid="whats-new-week-prev"
+        href="{{ upcoming_week_nav.previous.url }}"
+        hx-get="{{ upcoming_week_nav.previous.url }}"
+        hx-target="#whats-new-results-body"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        class="whats-new-week-nav-button"
+        aria-label="Previous release week"
+      >
+        &laquo;
+      </a>
+    {% else %}
+      <span data-testid="whats-new-week-prev-disabled" class="whats-new-week-nav-button is-disabled" aria-disabled="true">&laquo;</span>
+    {% endif %}
+
+    {{ dropdown_select(
+      name="release_week",
+      value=selected_upcoming_week,
+      options=upcoming_week_options,
+      size="sm",
+      class_name="whats-new-week-dropdown",
+      root_testid="whats-new-week-select",
+      input_testid="whats-new-week-input",
+      trigger_testid="whats-new-week-trigger",
+      panel_testid="whats-new-week-panel",
+      extra_input_attrs="form=whats-new-toolbar-form",
+      on_change="const form = document.getElementById('whats-new-toolbar-form'); const publisherInput = form?.querySelector('[name=publisher]'); if (publisherInput) publisherInput.value = ''; form?.requestSubmit();",
+      fit_width=true
+    ) }}
+
+    {% if upcoming_week_nav.next %}
+      <a
+        data-testid="whats-new-week-next"
+        href="{{ upcoming_week_nav.next.url }}"
+        hx-get="{{ upcoming_week_nav.next.url }}"
+        hx-target="#whats-new-results-body"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        class="whats-new-week-nav-button"
+        aria-label="Next release week"
+      >
+        &raquo;
+      </a>
+    {% else %}
+      <span data-testid="whats-new-week-next-disabled" class="whats-new-week-nav-button is-disabled" aria-disabled="true">&raquo;</span>
+    {% endif %}
+
+    <span data-testid="whats-new-week-position" class="whats-new-week-position">
+      Week {{ upcoming_week_nav.position }} of {{ upcoming_week_nav.total }}
+    </span>
+  </div>
+{% endif %}

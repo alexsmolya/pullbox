@@ -1,0 +1,116 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Pullbox
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the fields below
+        so we can reproduce and fix the issue.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Pullbox is affected?
+      options:
+        - Series Management
+        - Downloads / Acquisition
+        - Library / File Management
+        - Import / Collection Import
+        - Settings / Configuration
+        - Health / Monitoring
+        - Security / Authentication
+        - Utilities
+        - UI / Frontend
+        - API
+        - Docker / Deployment
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Detailed steps to reproduce the behavior.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. Scroll down to '...'
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Pullbox Version
+      description: "Check Settings > System or the /ping endpoint"
+      placeholder: "e.g. 1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment Method
+      options:
+        - Docker
+        - Docker Compose
+        - Bare metal (pip install)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: "e.g. Ubuntu 22.04, macOS 14, Unraid 6.12"
+
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Diagnostic Package
+      description: |
+        Attach the diagnostic ZIP from **System > Support > Download Package**.
+        It includes logs, sanitized config, database state, and system info — all with
+        sensitive data automatically stripped.
+
+        Drag and drop the ZIP file into this box, or click to browse.
+      placeholder: Drag and drop your pullbox-diagnostic-*.zip file here
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: |
+        If the issue is visual or involves unexpected UI behavior, attach screenshots
+        or screen recordings here. Drag and drop images into this box.
+      placeholder: Drag and drop screenshots here

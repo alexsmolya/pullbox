@@ -1,0 +1,21 @@
+{% from "components/page_dock.html" import page_dock %}
+
+<div data-testid="add-series-footer-dock">
+  {{ page_dock(
+    page=search_page,
+    total_pages=search_total_pages,
+    base_url=search_pagination_base_url,
+    status_items=[
+      {"label": "quick matches" if is_preview_search else "results", "value": search_total_results|string},
+      {"label": "shown", "value": search_shown_count|string},
+      {"label": "in library", "value": search_in_library_count|string},
+      {"label": "mode", "value": "Preview" if is_preview_search else "Full search"},
+    ],
+    hx_target="#add-series-results",
+    hx_swap="outerHTML show:#content:top",
+    hx_select="",
+    hx_base_url=search_pagination_base_url,
+    hx_sync="#add-series-search-form:replace",
+    hx_indicator="#add-series-results-loading"
+  ) }}
+</div>

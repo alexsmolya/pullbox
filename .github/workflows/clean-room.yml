@@ -1,0 +1,70 @@
+---
+# Pullbox Clean-Room Verification
+# Fresh install sanity lane to catch cache-masked dependency or environment
+# drift without slowing normal PR CI.
+
+name: Clean Room
+
+on:
+  schedule:
+    - cron: "30 6 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-room-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  fresh-install:
+    name: Fresh Install Verification
+    runs-on: ${{ vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted' }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh python node
+
+      - name: Create clean-room venv
+        run: |
+          VENV_PATH="/tmp/pullbox-clean-room-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python -m venv "${VENV_PATH}"
+          echo "VENV_PATH=${VENV_PATH}" >> "$GITHUB_ENV"
+          echo "${VENV_PATH}/bin" >> "$GITHUB_PATH"
+
+      - name: Install clean-room dependencies
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install -e ".[dev]"
+          npm ci
+
+      - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Format
+        run: ruff format --check src/ tests/
+
+      - name: Type check
+        run: mypy src/pullbox/
+
+      - name: Unit tests
+        env:
+          PULLBOX_SECRET_KEY: test-ci-key
+        run: pytest tests/unit/ -n 4 -q
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf "${VENV_PATH:-}"

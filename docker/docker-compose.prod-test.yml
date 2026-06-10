@@ -1,0 +1,50 @@
+# Pullbox — local production-image test
+#
+# Runs a pulled/built image with no source bind mount so local verification
+# behaves like a real install. Runtime state lives in a Docker volume while
+# host-visible media stays under ./media-docker-prodtest.
+#
+# This mirrors the recommended production path layout:
+# - /data for Pullbox state
+# - /comics for the library
+# - /downloads for shared completed downloads
+# - /imports for manual import/drop-folder scans
+
+services:
+  pullbox:
+    image: ${PULLBOX_IMAGE:-ghcr.io/pullboxapp/pullbox:latest}
+    container_name: pullbox-prod-test
+    restart: unless-stopped
+    ports:
+      - "18585:8585"
+    volumes:
+      - pullbox-prodtest-state:/data
+      - ../media-docker-prodtest/comics:/comics
+      - ../media-docker-prodtest/downloads:/downloads
+      - ../media-docker-prodtest/imports:/imports
+      # Optional native HTTPS certificate mount for production-image smoke testing.
+      # Files must be readable by UID 65532.
+      # - ../media-docker-prodtest/certs:/config/certs:ro
+    environment:
+      PULLBOX_DB_URL: sqlite+aiosqlite:////data/pullbox.db
+      PULLBOX_SQLITE_JOURNAL_MODE: WAL
+      PULLBOX_DATA_DIR: /data
+      PULLBOX_LIBRARY_ROOT: /comics
+      PULLBOX_COVERS_DIR: /comics/.covers
+      PULLBOX_LOGS_DIR: /data/logs
+      PULLBOX_TEMP_DIR: /data/tmp
+      PULLBOX_BACKUP_DIR: /data/backups
+      PULLBOX_BIND_ADDRESS: 0.0.0.0
+      PULLBOX_PORT: 8585
+      # Native HTTPS uses the normal Pullbox port; remap the host port above if needed.
+      # PULLBOX_HTTPS_ENABLED: "true"
+      # PULLBOX_HTTPS_CERT_PATH: /config/certs/pullbox.crt
+      # PULLBOX_HTTPS_KEY_PATH: /config/certs/pullbox.key
+      # PULLBOX_HTTPS_CERT_ROOT: /config/certs
+      PULLBOX_DEBUG: "false"
+      PULLBOX_RATE_LIMIT_ENABLED: "true"
+      TZ: America/Los_Angeles
+
+volumes:
+  pullbox-prodtest-state:
+    name: pullbox-prodtest-state

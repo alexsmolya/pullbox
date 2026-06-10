@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Export Library — {{ instance_name() }}{% endblock %}
+{% block page_title %}Utilities{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div
+  data-testid="utilities-export-page"
+  class="utilities-tool-page space-y-6"
+  x-data='utilitiesExportPage({
+    csrfToken: "{{ csrf_token }}",
+    format: "json",
+    pretty: true,
+    exportFolder: {{ utility_export_folder|tojson }},
+    exportFolderBrowsePath: {{ utility_export_folder_browse_path|tojson }},
+    fieldGroups: {{ export_field_groups|tojson }},
+    defaultFields: {{ export_default_fields|tojson }},
+    exportRecordCounts: {{ export_record_counts|tojson }},
+  })'
+>
+  {% include "partials/utilities_export_header.html" %}
+  {% include "partials/utilities_export_workspace.html" %}
+
+  {% include "components/file_browser.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/utilities_export_footer_dock.html" %}
+{% endblock %}

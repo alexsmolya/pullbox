@@ -1,0 +1,19 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+
+<div
+  id="whats-new-publisher-field"
+  class="series-toolbar-field"
+  {% if publisher_field_oob|default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>
+  <span class="series-toolbar-label">Publisher</span>
+  {{ dropdown_select(
+    name="publisher",
+    value=publisher_filter,
+    size="sm",
+    options=publisher_options,
+    root_testid="whats-new-publisher-select",
+    class_name="series-registry-dropdown",
+    fit_width=true,
+    on_change="const form = $el.closest('form'); if (form) form.requestSubmit();"
+  ) }}
+</div>

@@ -1,0 +1,27 @@
+<section
+  id="dashboard-exceptions-region"
+  data-testid="dashboard-exceptions"
+  class="section-card"
+  hx-get="/htmx/dashboard/exceptions"
+  hx-trigger="every 15m [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <div class="section-body">
+    <p class="mb-4 section-eyebrow">Exceptions</p>
+    <div class="space-y-0">
+      {% for item in dashboard.exceptions %}
+        {% set exception_pill_tone = dashboard_state_pill_tone(item.state) %}
+        <article class="dashboard-exception-row dashboard-exception-row-{{ item.state }} {% if not loop.first %}mt-3 border-t border-pb-border-subtle pt-3{% endif %}">
+          <div class="min-w-0 space-y-1.5">
+            <span class="dashboard-watch-tag pill {{ exception_pill_tone }}">{{ item.badge_label }}</span>
+            <h3 class="text-[0.88rem] font-semibold text-pb-text">{{ item.title }}</h3>
+            <p class="text-[0.82rem] leading-[1.5] text-pb-text-sec">{{ item.detail }}</p>
+            <a href="{{ item.cta_href }}" class="dashboard-inline-link">
+              {{ item.cta_label }} →
+            </a>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>

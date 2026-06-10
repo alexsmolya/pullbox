@@ -1,0 +1,155 @@
+{% from "components/settings_shell.html" import inline_alert, section_card %}
+
+<div data-testid="utilities-export-workspace" class="space-y-6">
+  <section>
+    {% call section_card(
+      class_name="utility-workspace-shell",
+      body_class="utility-workspace-body utility-tool-body"
+    ) %}
+      <div x-show="validationError" x-cloak data-testid="utilities-export-error">
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <p x-text="validationError"></p>
+        {% endcall %}
+      </div>
+
+      <p class="utility-tool-section-label">Output Format</p>
+      <div class="utility-export-chip-row">
+        <button
+          type="button"
+          @click="setFormat('json')"
+          data-testid="utilities-export-format-json"
+          :class="format === 'json' ? 'utility-export-chip-active' : ''"
+          :aria-pressed="format === 'json' ? 'true' : 'false'"
+          class="utility-export-chip"
+        >
+          JSON
+        </button>
+        <button
+          type="button"
+          @click="setFormat('csv')"
+          data-testid="utilities-export-format-csv"
+          :class="format === 'csv' ? 'utility-export-chip-active' : ''"
+          :aria-pressed="format === 'csv' ? 'true' : 'false'"
+          class="utility-export-chip"
+        >
+          CSV
+        </button>
+      </div>
+
+      <div class="utility-tool-section-row !mt-2">
+        <p class="utility-tool-section-label !mb-0" x-text="`Fields (${selectedFields.length} selected)`">Fields</p>
+        <div class="flex items-center gap-2">
+          <button type="button" @click="selectAllFields()" data-testid="utilities-export-select-all" class="btn-ghost btn-sm">Select all</button>
+          <button type="button" @click="clearAllFields()" data-testid="utilities-export-clear-all" class="btn-ghost btn-sm">Deselect all</button>
+        </div>
+      </div>
+
+      <div data-testid="utilities-export-field-grid" class="utility-export-group-grid">
+          {% for group in export_field_groups %}
+          <section class="utility-export-group-card">
+            <p class="utility-export-group-title">{{ group.label }} fields</p>
+            <div class="utility-export-group-fields">
+              {% for field in group.fields %}
+              <label class="utility-step-card cursor-pointer transition-colors hover:border-pb-border-strong" :class="isFieldSelected('{{ field.key }}') ? 'utility-step-card-active' : ''">
+                <div class="flex items-center gap-3 min-w-0">
+                  <input type="checkbox" :checked="isFieldSelected('{{ field.key }}')" @change="toggleField('{{ field.key }}')" class="checkbox-pb shrink-0" />
+                  <div class="utility-export-field-meta">
+                    <div class="utility-export-field-label">{{ field.label }}</div>
+                    <div class="utility-export-field-sub">{{ field.source }}</div>
+                  </div>
+                </div>
+              </label>
+              {% endfor %}
+            </div>
+          </section>
+          {% endfor %}
+      </div>
+
+      <div x-show="format === 'json'" x-cloak data-testid="utilities-export-json-options" class="utility-export-options-card">
+        <p class="utility-tool-section-label">JSON Options</p>
+        <div class="space-y-4">
+          <label data-testid="utilities-export-json-pretty-option"
+                 class="inline-flex cursor-pointer items-center gap-2 text-sm text-pb-text-sec">
+            <input x-model="pretty" type="checkbox" class="checkbox-pb" />
+            <span>Pretty print output</span>
+          </label>
+
+          <div class="space-y-3">
+            <div class="utility-tool-section-row">
+              <p class="utility-export-inline-label">Multi-value fields → split into JSON arrays</p>
+              <div class="flex items-center gap-2">
+                <button type="button"
+                        @click="selectAllMultiValueFields()"
+                        data-testid="utilities-export-multi-value-select-all"
+                        class="btn-ghost btn-sm">
+                  All
+                </button>
+                <button type="button"
+                        @click="clearAllMultiValueFields()"
+                        data-testid="utilities-export-multi-value-clear-all"
+                        class="btn-ghost btn-sm">
+                  None
+                </button>
+              </div>
+            </div>
+
+            <div x-show="selectedFieldOptions().length > 0"
+                 data-testid="utilities-export-multi-value-grid"
+                 class="utility-export-multi-grid">
+              <template x-for="field in selectedFieldOptions()" :key="field.key">
+                <label class="utility-step-card cursor-pointer transition-colors hover:border-pb-border-strong" :class="multiValueFields.indexOf(field.key) >= 0 ? 'utility-step-card-active' : ''">
+                  <div class="flex items-center gap-3">
+                    <input type="checkbox" :checked="multiValueFields.indexOf(field.key) >= 0" @change="toggleMultiValueField(field.key)" class="checkbox-pb" />
+                    <div class="min-w-0">
+                      <div class="truncate utility-export-field-label" x-text="field.label"></div>
+                      <div class="truncate utility-export-field-sub" x-text="field.key"></div>
+                    </div>
+                  </div>
+                </label>
+              </template>
+            </div>
+
+            <p x-show="selectedFieldOptions().length === 0" class="text-xs text-pb-text-dim">Select one or more export fields first.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+        <label class="utility-tool-field-label">Export Folder</label>
+        <p class="text-[0.78rem] text-pb-text-sec">Exports are written on the server as <span class="font-mono text-[0.72rem] text-pb-text">pullbox_export_YYYYMMDD_HHMMSS.json</span> in the chosen folder.</p>
+        <div class="flex flex-col gap-3 sm:flex-row">
+          <input x-model="exportFolder" data-testid="utilities-export-folder" type="text" class="input-pb flex-1 font-mono text-[0.78rem]" placeholder="/path/to/exports" />
+          <button type="button"
+                  @click="browseExportFolder()"
+                  data-testid="utilities-export-browse-folder"
+                  class="btn-ghost btn-sm !min-h-10 !w-10 !px-0 !py-0 sm:shrink-0"
+                  data-tip="Browse"
+                  data-tip-size="narrow">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="utility-export-summary-grid">
+        <div data-testid="utilities-export-summary-records" class="utility-export-summary-card">
+          <p class="utility-export-summary-label">Estimated Records</p>
+          <p class="utility-export-summary-value" x-text="estimatedRecordCountLabel()">0</p>
+        </div>
+        <div data-testid="utilities-export-summary-fields" class="utility-export-summary-card">
+          <p class="utility-export-summary-label">Fields Selected</p>
+          <p class="utility-export-summary-value" x-text="selectedFieldSummaryLabel()">0 of 0</p>
+        </div>
+      </div>
+
+      <div class="utility-tool-action-footer utility-tool-action-footer-card">
+        <a href="/utilities" class="btn-ghost">Cancel</a>
+        <button type="button" @click="startExport()" data-testid="utilities-export-start" :disabled="selectedFields.length === 0 || submitting" class="btn-primary">
+          <span x-show="!submitting">Start export</span>
+          <span x-show="submitting">Submitting...</span>
+        </button>
+      </div>
+    {% endcall %}
+  </section>
+</div>

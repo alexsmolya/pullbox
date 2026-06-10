@@ -1,0 +1,14 @@
+<div
+  id="import-content"
+  data-testid="import-content"
+  {% if oob|default(false) %}hx-swap-oob="outerHTML"{% endif %}
+  class="pt-1"
+>
+  {% if tab == "history" %}
+    {% include "partials/import_history_panel.html" %}
+  {% elif tab == "unmatched" %}
+    {% include "partials/import_orphaned_panel.html" %}
+  {% else %}
+    {% include "partials/import_collection_panel.html" %}
+  {% endif %}
+</div>

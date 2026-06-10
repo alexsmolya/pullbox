@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ instance_name() }}{% endblock %}</title>
+
+  {#- Theme: apply saved preference before first paint to prevent flash -#}
+  <script>
+    (function() {
+      var saved = localStorage.getItem('pullbox-theme');
+      var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+
+  <script>
+    (function() {
+      document.documentElement.classList.add('boot-no-transitions');
+
+      var alpineReady = false;
+      var revealScheduled = false;
+      var bootTransitionsReleased = false;
+
+      function releaseBootTransitions() {
+        if (bootTransitionsReleased) {
+          return;
+        }
+
+        bootTransitionsReleased = true;
+        document.documentElement.classList.remove('boot-no-transitions');
+
+        window.removeEventListener('pointerdown', releaseBootTransitions, true);
+        window.removeEventListener('keydown', releaseBootTransitions, true);
+        window.removeEventListener('focusin', releaseBootTransitions, true);
+        window.removeEventListener('touchstart', releaseBootTransitions, true);
+        window.removeEventListener('mousemove', releaseBootTransitions, true);
+      }
+
+      function armBootTransitionRelease() {
+        window.addEventListener('pointerdown', releaseBootTransitions, true);
+        window.addEventListener('keydown', releaseBootTransitions, true);
+        window.addEventListener('focusin', releaseBootTransitions, true);
+        window.addEventListener('touchstart', releaseBootTransitions, true);
+        window.addEventListener('mousemove', releaseBootTransitions, true);
+        window.setTimeout(releaseBootTransitions, 1800);
+      }
+
+      function afterHydration(callback) {
+        function run() {
+          requestAnimationFrame(function() {
+            requestAnimationFrame(callback);
+          });
+        }
+
+        if (window.Alpine && typeof window.Alpine.nextTick === 'function') {
+          window.Alpine.nextTick(run);
+          return;
+        }
+
+        run();
+      }
+
+      function revealShell() {
+        if (revealScheduled || !alpineReady) {
+          return;
+        }
+
+        revealScheduled = true;
+
+        var fontsReady = (document.fonts && document.fonts.ready)
+          ? document.fonts.ready.catch(function() {})
+          : Promise.resolve();
+
+        fontsReady.then(function() {
+          afterHydration(function() {
+            if (document.body) {
+              document.body.removeAttribute('data-shell-pending');
+            }
+            armBootTransitionRelease();
+          });
+        });
+      }
+
+      document.addEventListener('alpine:initialized', function() {
+        alpineReady = true;
+        revealShell();
+      }, { once: true });
+
+      window.addEventListener('load', revealShell, { once: true });
+    })();
+  </script>
+
+  {#- Compiled Tailwind CSS (replaces CDN Play runtime) -#}
+  <link rel="preload" href="/static/fonts/dm-sans-variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/bricolage-grotesque-800.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/syne-700.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="/static/fonts/syne-800.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="/static/fonts/jetbrains-mono-600.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="/static/fonts/jetbrains-mono-700.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/static/css/tailwind.css?v={{ app_shell_asset_version|default('') }}">
+  <link rel="icon" href="/static/img/logo.svg?v={{ app_shell_asset_version|default('') }}" type="image/svg+xml">
+
+  {#- Alpine.js cloak — hide elements until Alpine initializes -#}
+  <style>
+    [x-cloak] { display: none !important; }
+    body[data-shell-pending] { visibility: hidden; }
+    @media (min-width: 1024px) {
+      #main-area {
+        margin-left: var(--sidebar-w, 15rem);
+      }
+      .shell-layout-transition #main-area {
+        transition: margin-left 200ms ease-in-out;
+      }
+    }
+    main { min-height: 0; }
+    #content { min-height: 0; }
+  </style>
+  <script>
+    if (localStorage.getItem('sidebarOpen') === 'false' && window.innerWidth >= 1024) {
+      document.documentElement.style.setProperty('--sidebar-w', '4.5rem');
+      var s = document.createElement('style');
+      s.id = 'sidebar-preload';
+      s.textContent = '[data-testid="app-sidebar"]{width:4.5rem!important}[data-sidebar-label],[data-sidebar-logo-label],[data-sidebar-section-label]{display:none!important}[data-testid="app-sidebar"] .app-sidebar-section{width:3rem!important;margin:.75rem auto .375rem!important}[data-testid="app-sidebar"] [data-sidebar-section-rule]{display:block!important;width:1.5rem!important;margin:.5rem auto 0!important}[data-testid="app-sidebar"] [data-nav-link]{width:2.75rem!important;justify-content:center!important;gap:0!important;margin-inline:auto!important;padding:.5rem!important;transform:none!important}[data-testid="sidebar-logo-link"]{display:flex!important;justify-content:center!important;padding:1rem 0 .75rem!important;background:transparent!important}[data-testid="sidebar-logo-link"] .app-sidebar-brand-card{width:auto!important;min-width:0!important;min-height:auto!important;justify-content:center!important;padding:0!important}[data-testid="sidebar-nav"]{padding:0.25rem 0 1rem!important;overflow:visible!important}[data-testid="sidebar-logo-link"]:hover .app-sidebar-brand-card{transform:none!important}[data-testid="app-sidebar"] [data-sidebar-badge-slot=\"true\"]{position:absolute!important;top:2px!important;right:2px!important;min-width:0!important;justify-content:center!important}[data-testid="app-sidebar"] [data-sidebar-badge=\"true\"] .count-badge{min-width:14px!important;padding:0 4px!important;font-size:.52rem!important;border-radius:4px!important}';
+      document.head.appendChild(s);
+    }
+  </script>
+
+  {% block head %}{% endblock %}
+</head>
+
+<body class="h-full bg-pb-base text-pb-text font-sans" data-shell-pending hx-ext="morph"
+      x-data="appShell()"
+      x-init="init()"
+      hx-headers='{"X-CSRF-Token": "{{ csrf_token|default("", true) }}"}'>
+
+  {#- Skip to main content (WCAG) -#}
+  <a class="skip-link" href="#content">Skip to content</a>
+
+  {#- ── Sidebar ───────────────────────────────────────────────── -#}
+  {% block sidebar %}
+  {% include "partials/app_sidebar.html" %}
+  {% endblock %}
+
+  {#- ── Main content area ─────────────────────────────────────── -#}
+  <div id="main-area" class="relative flex h-[100dvh] flex-col"
+       :style="mainAreaStyle()"
+       hx-boost="true">
+
+    {#- Top bar — pinned above the scrollable content region -#}
+    <header data-testid="app-header" class="z-30 flex h-12 shrink-0 items-center gap-3 border-b border-pb-border bg-pb-surface px-4 sm:px-6">
+      {#- Mobile hamburger -#}
+      <button @click="openMobileSidebar()" aria-label="Open navigation menu"
+              class="lg:hidden p-2.5 -ml-2 rounded-lg text-pb-text-sec hover:bg-pb-card-hover hover:text-pb-text transition-colors">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/>
+        </svg>
+      </button>
+
+      {#- Global primary action -#}
+      <a data-testid="header-add-series"
+         href="/series/add"
+         class="btn-primary btn-sm inline-flex items-center gap-2 whitespace-nowrap">
+        <svg class="shrink-0" style="width:var(--pb-control-icon-size);height:var(--pb-control-icon-size);" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+        </svg>
+        <span class="hidden sm:inline">Add Series</span>
+      </a>
+
+      {#- Page-specific header actions -#}
+      {% block header_actions %}{% endblock %}
+
+      <div class="flex-1"></div>
+
+      {#- Theme quick toggle (sun/moon) -#}
+      <div x-data="{ theme: getTheme() }" class="flex items-center">
+        <button @click="theme = theme === 'dark' ? 'light' : 'dark'; applyTheme(theme)"
+                data-testid="header-theme-toggle"
+                x-bind:data-tip="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
+                data-tip-pos="bottom"
+                data-tip-size="narrow"
+                x-bind:aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
+                class="app-header-icon-tip p-2 rounded-lg text-pb-text-sec hover:bg-pb-card-hover hover:text-pb-text transition-colors">
+          {#- Sun icon (visible in dark mode — click to go light) -#}
+          <svg x-show="theme === 'dark'" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/>
+          </svg>
+          {#- Moon icon (visible in light mode — click to go dark) -#}
+          <svg x-show="theme === 'light'" x-cloak class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/>
+          </svg>
+        </button>
+      </div>
+
+      <button
+        type="button"
+        data-testid="header-donations-button"
+        aria-label="Support Pullbox"
+        data-tip="Support Pullbox"
+        data-tip-pos="bottom"
+        data-tip-size="narrow"
+        class="app-header-icon-tip p-2 rounded-lg text-pb-text-sec hover:bg-pb-card-hover hover:text-pb-text transition-colors"
+        @click="openDonationsModal()"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z"/>
+        </svg>
+      </button>
+
+      {#- User dropdown -#}
+      {% if user %}
+      <div x-data="{ open: false }" class="relative">
+        <button @click="open = !open" @click.outside="open = false" aria-label="User menu"
+                class="flex items-center gap-2 px-3 py-2 rounded-lg font-sans font-medium text-sm text-pb-text-sec hover:bg-pb-card-hover hover:text-pb-text transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+          </svg>
+          <span class="hidden sm:inline">{{ user.username }}</span>
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
+          </svg>
+        </button>
+        <div x-show="open" x-cloak
+             x-transition:enter="transition ease-out duration-100"
+             x-transition:enter-start="opacity-0 scale-95"
+             x-transition:enter-end="opacity-100 scale-100"
+             x-transition:leave="transition ease-in duration-75"
+             x-transition:leave-start="opacity-100 scale-100"
+             x-transition:leave-end="opacity-0 scale-95"
+             class="absolute right-0 mt-2 w-48 rounded-lg bg-pb-card border border-pb-border-hover shadow-xl py-1 z-10">
+          <form method="POST" action="/logout" style="display:contents">
+            <button type="submit"
+                    class="block w-full px-4 py-2 text-left font-sans font-medium text-sm text-pb-text-sec hover:bg-pb-card-hover hover:text-pb-text transition-colors">
+              Sign out
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <a
+        data-testid="header-support-link"
+        href="/system?tab=support"
+        aria-label="Support"
+        data-tip="Support"
+        data-tip-pos="bottom"
+        data-tip-size="narrow"
+        class="app-header-icon-tip inline-flex h-9 w-9 items-center justify-center rounded-lg p-0 text-pb-text-sec hover:bg-pb-card-hover hover:text-pb-text transition-colors"
+      >
+        <svg class="w-5 h-5" style="width:1.75rem;height:1.75rem;" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9.25 8.75c0-1.519 1.231-2.75 2.75-2.75s2.75 1.231 2.75 2.75c0 1.184-.642 2.073-1.63 2.679-.973.597-1.62 1.203-1.62 2.446v.375"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 17.25h.01"/>
+        </svg>
+      </a>
+      {% endif %}
+
+      {#- HTMX loading spinner -#}
+      <div class="htmx-indicator" aria-hidden="true">
+        <svg class="w-5 h-5 animate-spin text-pb-interactive" fill="none" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+        </svg>
+      </div>
+    </header>
+
+    {#- Page content -#}
+    <main class="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div id="content" class="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col scrollbar-hidden {% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-6{% endblock %}">
+        {% block content %}{% endblock %}
+        <div data-testid="page-footer-clearance" class="page-footer-clearance" aria-hidden="true"></div>
+        {% block scripts %}{% endblock %}
+      </div>
+    </main>
+
+    <div id="page-footer-dock" data-testid="page-footer-dock" class="shrink-0 border-t border-pb-border bg-pb-surface">
+      {%- block footer_dock -%}{%- endblock -%}
+    </div>
+
+  </div>
+
+  <div
+    x-cloak
+    x-show="donationsOpen"
+    x-transition.opacity
+    class="modal-shell donation-modal-shell"
+    data-testid="donations-modal"
+    @keydown.escape.window="closeDonationsModal()"
+  >
+    <div class="modal-backdrop" aria-hidden="true" @click="closeDonationsModal()"></div>
+    <section
+      class="modal-panel donation-modal-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="donations-modal-title"
+      aria-describedby="donations-modal-copy"
+      @click.outside="closeDonationsModal()"
+    >
+      <header class="modal-header donation-modal-header">
+        <div>
+          <p class="donation-modal-kicker">Support Pullbox</p>
+          <h2 id="donations-modal-title" class="donation-modal-title">Keep the spinner spinning</h2>
+          <p id="donations-modal-copy" class="donation-modal-copy">
+            Pullbox is built with a lot of care. If it saves you time, these are the official donation options.
+          </p>
+        </div>
+        <button
+          type="button"
+          x-ref="donationsCloseButton"
+          class="issue-search-modal-close"
+          data-testid="donations-modal-close"
+          aria-label="Close donation options"
+          @click="closeDonationsModal()"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="modal-body donation-modal-body">
+        <article class="donation-option-card donation-option-card--coffee">
+          <div class="donation-option-main">
+            <div>
+              <p class="donation-option-eyebrow">One-time support</p>
+              <h3 class="donation-option-title">Buy Me a Coffee</h3>
+              <p class="donation-option-copy">
+                Open the donation page or scan the QR code with your phone.
+              </p>
+            </div>
+            <a
+              href="https://buymeacoffee.com/rcogrr50fg"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="donation-option-button donation-option-button--coffee"
+              data-testid="donations-buymeacoffee-link"
+            >
+              Buy me a coffee
+            </a>
+          </div>
+          <div class="donation-qr-frame">
+            <img
+              src="/static/img/donations/buy-me-a-coffee-qr.png"
+              alt="QR code for Buy Me a Coffee donations"
+              class="donation-qr"
+              loading="lazy"
+            >
+          </div>
+        </article>
+
+        <article class="donation-option-card donation-option-card--liberapay">
+          <div class="donation-option-main">
+            <div>
+              <p class="donation-option-eyebrow">Recurring support</p>
+              <h3 class="donation-option-title">Liberapay</h3>
+              <p class="donation-option-copy">
+                Support Pullbox through Liberapay or scan the QR code.
+              </p>
+            </div>
+            <a
+              href="https://liberapay.com/Pullbox/"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="donation-option-button donation-option-button--liberapay"
+              data-testid="donations-liberapay-link"
+            >
+              Donate with Liberapay
+            </a>
+          </div>
+          <div class="donation-qr-frame">
+            <img
+              src="/static/img/donations/liberapay-qr.png"
+              alt="QR code for Liberapay donations"
+              class="donation-qr"
+              loading="lazy"
+            >
+          </div>
+        </article>
+      </div>
+    </section>
+  </div>
+
+  {#- ── Global confirm dialog ─────────────────────────────────── -#}
+  {% include "components/confirm_modal.html" %}
+
+  <div
+    x-cloak
+    x-show="usageStatsPromptOpen"
+    data-testid="usage-stats-modal"
+    class="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-xs"
+  >
+    <div
+      class="w-full max-w-xl rounded-3xl border border-pb-border bg-pb-surface shadow-2xl"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="usage-stats-modal-title"
+      aria-describedby="usage-stats-modal-copy"
+    >
+      <div class="space-y-5 p-6 sm:p-7">
+        <div class="space-y-2">
+          <p class="text-xs font-semibold uppercase tracking-[0.22em] text-pb-text-soft">Help improve Pullbox</p>
+          <h2 id="usage-stats-modal-title" class="text-2xl font-display font-black tracking-tight text-pb-text">
+            Share anonymous usage stats?
+          </h2>
+          <p id="usage-stats-modal-copy" class="max-w-2xl text-sm leading-6 text-pb-text-sec">
+            Share anonymous install and version information so Pullbox can be maintained against real-world usage. This preference only controls future install-level reporting. It does not include your library contents, credentials, or download activity.
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3 text-sm text-pb-text-sec">
+          <strong class="font-semibold text-pb-text">What this helps with:</strong>
+          version adoption, active installs, and release planning.
+        </div>
+
+        <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            data-testid="usage-stats-modal-disable"
+            class="btn-ghost"
+            :disabled="usageStatsSaving"
+            @click="submitUsageStatsConsent(false)"
+          >
+            No thanks
+          </button>
+          <button
+            type="button"
+            data-testid="usage-stats-modal-enable"
+            class="btn-primary"
+            :disabled="usageStatsSaving"
+            @click="submitUsageStatsConsent(true)"
+          >
+            Share anonymous usage stats
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {#- ── Toast container ───────────────────────────────────────── -#}
+  <div id="toast-container" role="status" aria-live="polite" class="fixed top-4 right-4 z-[100] flex flex-col gap-2 w-80">
+    {% block toasts %}{% endblock %}
+  </div>
+
+  <div id="global-tooltip-host" class="app-tooltip-host" aria-hidden="true">
+    <div class="app-tooltip-overlay" hidden></div>
+  </div>
+
+  {#- ── Scripts ───────────────────────────────────────────────── -#}
+  <script src="/static/js/htmx.min.js?v={{ app_shell_asset_version|default('') }}"></script>
+  <script>
+    /**
+     * Global datetime utilities for Pullbox.
+     *
+     * Reads display settings from _pb.config (injected by the template).
+     * All timestamps are stored/emitted as UTC; these helpers convert
+     * to the user's configured timezone and format for display.
+     */
+    window._pb = window._pb || {};
+
+    // Display config — overridden by template injection below
+    _pb.config = _pb.config || {
+      timezone: 'browser',     // IANA name, 'UTC', or 'browser'
+      dateFormat: 'MMM DD, YYYY',
+      timeFormat: '24h',       // '24h' or '12h'
+      showSeconds: false,
+      showTimezone: true,
+      showAmPm: true,
+    };
+
+    // Date format mapping: display token → Intl options + manual format
+    var _dateFormats = {
+      'MMM DD, YYYY': function(d, o) { return d.toLocaleString('en-US', Object.assign({month:'short',day:'2-digit',year:'numeric'}, o)); },
+      'DD/MM/YYYY':   function(d)    { return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); },
+      'YYYY-MM-DD':   function(d)    { return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); },
+      'MM/DD/YYYY':   function(d)    { return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear(); },
+    };
+
+    function _getIntlOptions() {
+      var tz = _pb.config.timezone;
+      return (tz && tz !== 'browser') ? { timeZone: tz } : {};
+    }
+
+    function _toDisplayDate(d) {
+      var opts = _getIntlOptions();
+      if (opts.timeZone) {
+        // Create a new date in the target timezone for manual formatters
+        var parts = new Intl.DateTimeFormat('en-US', Object.assign({
+          year:'numeric', month:'2-digit', day:'2-digit',
+          hour:'2-digit', minute:'2-digit', second:'2-digit',
+          hour12: false
+        }, opts)).formatToParts(d);
+        var p = {};
+        parts.forEach(function(x) { p[x.type] = x.value; });
+        return {
+          year: parseInt(p.year), month: parseInt(p.month) - 1, day: parseInt(p.day),
+          hours: parseInt(p.hour), minutes: parseInt(p.minute), seconds: parseInt(p.second),
+          getFullYear: function() { return this.year; },
+          getMonth: function() { return this.month; },
+          getDate: function() { return this.day; },
+          getHours: function() { return this.hours; },
+          getMinutes: function() { return this.minutes; },
+          getSeconds: function() { return this.seconds; },
+          toLocaleString: function(loc, o) { return d.toLocaleString(loc, Object.assign({}, opts, o)); },
+        };
+      }
+      return d;
+    }
+
+    /** Parse an ISO timestamp, treating naive strings as UTC. */
+    _pb.parseDate = function(iso) {
+      if (!iso || typeof iso !== 'string') return null;
+      if (!/Z$|[+-]\d{2}:\d{2}$/.test(iso)) iso += 'Z';
+      var d = new Date(iso);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    /** Format datetime using display settings. */
+    _pb.format = function(iso, overrides) {
+      var d = _pb.parseDate(iso);
+      if (!d) return '\u2014';
+      var cfg = Object.assign({}, _pb.config, overrides || {});
+      var dd = _toDisplayDate(d);
+      var dateFn = _dateFormats[cfg.dateFormat] || _dateFormats['MMM DD, YYYY'];
+      var datePart = dateFn(dd, _getIntlOptions());
+      // Remove the year from "Mar 22, 2026" style if the Intl function added extra
+      if (cfg.dateFormat === 'MMM DD, YYYY' && typeof datePart === 'string') {
+        // Intl may format as "Mar 22, 2026" — already correct
+      }
+      var hh, mm, ss, timePart;
+      if (cfg.timeFormat === '12h') {
+        var h = dd.getHours ? dd.getHours() : 0;
+        var ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        hh = String(h).padStart(2, '0');
+        mm = String(dd.getMinutes ? dd.getMinutes() : 0).padStart(2, '0');
+        ss = String(dd.getSeconds ? dd.getSeconds() : 0).padStart(2, '0');
+        var ampmSuffix = (cfg.showAmPm !== false) ? ' ' + ampm : '';
+        timePart = cfg.showSeconds ? hh+':'+mm+':'+ss+ampmSuffix : hh+':'+mm+ampmSuffix;
+      } else {
+        hh = String(dd.getHours ? dd.getHours() : 0).padStart(2, '0');
+        mm = String(dd.getMinutes ? dd.getMinutes() : 0).padStart(2, '0');
+        ss = String(dd.getSeconds ? dd.getSeconds() : 0).padStart(2, '0');
+        timePart = cfg.showSeconds ? hh+':'+mm+':'+ss : hh+':'+mm;
+      }
+      var result = datePart + ', ' + timePart;
+      if (cfg.showTimezone !== false) {
+        var tz = d.toLocaleString('en-US', Object.assign({ timeZoneName: 'short' }, _getIntlOptions())).split(' ').pop();
+        result += ' ' + tz;
+      }
+      return result;
+    };
+
+    /** Convenience: format using display settings (respects showSeconds from config) */
+    _pb.formatFull = function(iso) { return _pb.format(iso); };
+
+    /** Alias for formatFull — both respect user's display settings */
+    _pb.formatShort = function(iso) { return _pb.format(iso); };
+
+    /** Format: "YYYY-MM-DD HH:MM:SS UTC" for log lines — always 24hr UTC, ignores display settings */
+    _pb.formatLogTime = function(iso) {
+      var d = _pb.parseDate(iso);
+      if (!d) return typeof iso === 'string' ? iso : '';
+      var yyyy = d.getUTCFullYear();
+      var mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+      var dd = String(d.getUTCDate()).padStart(2, '0');
+      var hh = String(d.getUTCHours()).padStart(2, '0');
+      var mm = String(d.getUTCMinutes()).padStart(2, '0');
+      var ss = String(d.getUTCSeconds()).padStart(2, '0');
+      return yyyy + '-' + mo + '-' + dd + ' ' + hh + ':' + mm + ':' + ss + ' UTC';
+    };
+
+    /** Format: time only with TZ, using display settings */
+    /** Format: time only with TZ, using display settings */
+    _pb.formatTime = function(iso) {
+      var d = _pb.parseDate(iso);
+      if (!d) return '\u2014';
+      var dd = _toDisplayDate(d);
+      var cfg = _pb.config;
+      var hh, mm, ss, timePart;
+      ss = String(dd.getSeconds ? dd.getSeconds() : 0).padStart(2, '0');
+      if (cfg.timeFormat === '12h') {
+        var h = dd.getHours ? dd.getHours() : 0;
+        var ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        hh = String(h).padStart(2, '0');
+        mm = String(dd.getMinutes ? dd.getMinutes() : 0).padStart(2, '0');
+        var ampmSuffix = (cfg.showAmPm !== false) ? ' ' + ampm : '';
+        timePart = cfg.showSeconds ? hh+':'+mm+':'+ss+ampmSuffix : hh+':'+mm+ampmSuffix;
+      } else {
+        hh = String(dd.getHours ? dd.getHours() : 0).padStart(2, '0');
+        mm = String(dd.getMinutes ? dd.getMinutes() : 0).padStart(2, '0');
+        timePart = cfg.showSeconds ? hh+':'+mm+':'+ss : hh+':'+mm;
+      }
+      var result = timePart;
+      if (cfg.showTimezone !== false) {
+        var tz = d.toLocaleString('en-US', Object.assign({ timeZoneName: 'short' }, _getIntlOptions())).split(' ').pop();
+        result += ' ' + tz;
+      }
+      return result;
+    };
+
+    /** Relative time: "5 min ago", "in 2 hours" */
+    _pb.timeAgo = function(iso) {
+      var d = _pb.parseDate(iso);
+      if (!d) return '\u2014';
+      var now = new Date();
+      var diffMs = now - d;
+      var diffS = Math.floor(Math.abs(diffMs) / 1000);
+      var future = diffMs < 0;
+      if (diffS < 10) return future ? 'in a few seconds' : 'a few seconds ago';
+      if (diffS < 60) return future ? 'in ' + diffS + 's' : diffS + 's ago';
+      var diffM = Math.floor(diffS / 60);
+      if (diffM < 60) return future ? 'in ' + diffM + ' min' : diffM + ' min ago';
+      var diffH = Math.floor(diffM / 60);
+      if (diffH < 24) return future ? 'in ' + diffH + ' hr' : diffH + ' hr ago';
+      var diffD = Math.floor(diffH / 24);
+      return future ? 'in ' + diffD + ' day' + (diffD > 1 ? 's' : '') : diffD + ' day' + (diffD > 1 ? 's' : '') + ' ago';
+    };
+
+    /** Format bytes to human-readable size (B, KB, MB, GB). */
+    _pb.formatBytes = function(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      var units = ['B', 'KB', 'MB', 'GB'];
+      var i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+    };
+
+    {#- Inject display config from server — overrides defaults above -#}
+    {% if display_config is defined and display_config is mapping %}
+    _pb.config = {
+      timezone: {{ display_config.get('timezone', 'browser') | tojson }},
+      dateFormat: {{ display_config.get('dateFormat', 'MMM DD, YYYY') | tojson }},
+      timeFormat: {{ display_config.get('timeFormat', '24h') | tojson }},
+      showSeconds: {{ 'true' if display_config.get('showSeconds') else 'false' }},
+      showTimezone: {{ 'true' if display_config.get('showTimezone', True) else 'false' }},
+      showAmPm: {{ 'true' if display_config.get('showAmPm', True) else 'false' }},
+    };
+    {% endif %}
+    _pb.instanceName = {{ instance_name() | tojson }};
+  </script>
+  <script src="/static/js/idiomorph-ext.min.js?v={{ app_shell_asset_version|default('') }}"></script>
+  <script>
+    // Preserve Alpine.js runtime state during idiomorph DOM morphs.
+    // Alpine adds style="display:none" for x-show and dynamic classes for :class
+    // at runtime — idiomorph must not strip these when morphing server responses.
+    Idiomorph.defaults.callbacks.beforeAttributeUpdated = function (name, node, mutationType) {
+      if (!node || !node.hasAttribute) return true;
+      // Never re-add x-cloak — Alpine already removed it
+      if (name === "x-cloak" && mutationType === "added") return false;
+      // Preserve Alpine runtime style (x-show display:none) and classes (:class bindings)
+      if (name === "style" && node.hasAttribute("x-show")) return false;
+      if (name === "class" && (node.hasAttribute(":class") || node.hasAttribute("x-bind:class"))) return false;
+      return true;
+    };
+    Idiomorph.defaults.ignoreActiveValue = true;
+  </script>
+  <script src="/static/js/alpine.min.js?v={{ app_shell_asset_version|default('') }}" defer></script>
+  <script src="/static/js/pullbox.js?v={{ app_shell_asset_version|default('') }}"></script>
+
+</body>
+</html>

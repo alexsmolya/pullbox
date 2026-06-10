@@ -1,0 +1,44 @@
+{% set _oob = oob|default(false) %}
+<div
+  id="utilities-tabs"
+  data-testid="utilities-tabs"
+  {% if _oob %}hx-swap-oob="outerHTML"{% endif %}
+  class="utilities-tabs"
+>
+  <a
+    href="/utilities?tab=utilities"
+    data-testid="utilities-tab-utilities"
+    hx-get="/htmx/utilities/utilities"
+    hx-target="#utilities-content"
+    hx-swap="outerHTML"
+    hx-push-url="/utilities?tab=utilities"
+    aria-current="{{ 'page' if tab == 'utilities' else 'false' }}"
+    class="utilities-tab{% if tab == 'utilities' %} is-active{% endif %}"
+  >
+    Tools
+  </a>
+  <a
+    href="/utilities?tab=queue"
+    data-testid="utilities-tab-queue"
+    hx-get="/htmx/utilities/queue"
+    hx-target="#utilities-content"
+    hx-swap="outerHTML"
+    hx-push-url="/utilities?tab=queue"
+    aria-current="{{ 'page' if tab == 'queue' else 'false' }}"
+    class="utilities-tab{% if tab == 'queue' %} is-active{% endif %}"
+  >
+    Queue
+  </a>
+  <a
+    href="/utilities?tab=history"
+    data-testid="utilities-tab-history"
+    hx-get="/htmx/utilities/history"
+    hx-target="#utilities-content"
+    hx-swap="outerHTML"
+    hx-push-url="/utilities?tab=history"
+    aria-current="{{ 'page' if tab == 'history' else 'false' }}"
+    class="utilities-tab{% if tab == 'history' %} is-active{% endif %}"
+  >
+    History
+  </a>
+</div>

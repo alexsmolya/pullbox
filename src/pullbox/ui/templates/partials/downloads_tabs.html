@@ -1,0 +1,26 @@
+<div data-testid="downloads-tabs" class="downloads-tab-rail">
+  <a
+    href="/downloads?tab=queue"
+    data-testid="downloads-tab-queue"
+    hx-get="/downloads?tab=queue"
+    hx-target="#downloads-content"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'queue' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'queue' %} is-active{% endif %}"
+  >
+    Queue
+  </a>
+  <a
+    href="/downloads?tab=history"
+    data-testid="downloads-tab-history"
+    hx-get="/downloads?tab=history"
+    hx-target="#downloads-content"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'history' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'history' %} is-active{% endif %}"
+  >
+    History
+  </a>
+</div>

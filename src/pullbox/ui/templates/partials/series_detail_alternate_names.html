@@ -1,0 +1,23 @@
+<div data-testid="series-detail-alternate-names" class="series-domain-alt-panel">
+  <p class="series-domain-alt-title">Alternate Names</p>
+  <div class="series-domain-alt-strip">
+    {% include "partials/series_detail_alternate_names_list.html" %}
+    <form
+      hx-post="/htmx/series/{{ series.id }}/alternate-names"
+      hx-target="#series-detail-alternate-names-list"
+      hx-swap="outerHTML"
+      hx-on::after-request="if (event.detail.successful) this.reset()"
+      class="series-domain-alt-form"
+    >
+      <input
+        type="text"
+        name="name"
+        placeholder="Add name..."
+        class="series-domain-alt-input"
+      >
+      <button type="submit" class="btn-ghost series-domain-alt-add">
+        Add
+      </button>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,11 @@
+{% from "components/page_dock.html" import status_dock %}
+
+<div data-testid="health-footer-dock">
+  {{ status_dock(status_items=[
+    {"led": "green", "label": "", "value": health_view.footer.healthy_count|string ~ " healthy"},
+    {"led": "amber", "label": "", "value": health_view.footer.degraded_count|string ~ " degraded"},
+    {"led": "red", "label": "", "value": health_view.footer.unhealthy_count|string ~ " unhealthy"},
+    {"label": "monitors", "value": health_view.footer.total_monitors|string},
+    {"label": "checks", "value": health_view.footer.total_checks|string},
+  ]) }}
+</div>

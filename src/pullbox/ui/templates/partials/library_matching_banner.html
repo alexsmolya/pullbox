@@ -1,0 +1,23 @@
+{% from "components/settings_shell.html" import ui_icon %}
+
+{% if unmatched_files > 0 %}
+<a
+  href="/library/matching"
+  data-testid="library-matching-banner"
+  class="action-card"
+>
+  <div class="action-card-icon bg-pb-warning-dim text-pb-warning">
+    {{ ui_icon("warning", "h-5 w-5") }}
+  </div>
+  <div class="min-w-0 flex-1">
+    <p class="action-card-title">{{ unmatched_files }} unmatched file{{ "s" if unmatched_files != 1 else "" }} need a manual match</p>
+    <p class="action-card-copy">Review the queue and connect each file to the right issue before it ends up linked incorrectly.</p>
+  </div>
+  <span class="count-badge count-badge-warning">{{ unmatched_files }}</span>
+  <div class="shrink-0 text-pb-text-dim">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+    </svg>
+  </div>
+</a>
+{% endif %}

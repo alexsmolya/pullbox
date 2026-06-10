@@ -1,0 +1,119 @@
+"""Shared import progress runtime contract tests."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from pullbox.services.import_progress_runtime import (
+    ImportProgressFileProfile,
+    ImportProgressSettings,
+    current_item_payload,
+    default_phase_message,
+    elapsed_seconds_since,
+    import_group_file_progress_pct,
+    import_group_metadata_progress_pct,
+    import_group_progress_plan,
+    phase_label,
+    phase_range,
+    stage_label,
+    weighted_import_progress_pct,
+)
+
+
+def test_shared_progress_spec_owns_phase_ranges_labels_and_defaults() -> None:
+    assert phase_range("inventory") == (0, 10)
+    assert phase_range("scanning") == (10, 35)
+    assert phase_range("matching") == (45, 80)
+    assert phase_range("file_matching") == (80, 99)
+    assert phase_range("importing") == (0, 100)
+
+    assert phase_label("matching") == "Matching series against ComicVine..."
+    assert phase_label("importing") == "Importing series into Pullbox..."
+    assert default_phase_message("scan", "inventory") == "Inventorying collection..."
+    assert default_phase_message("import", "importing") == "Importing selected files..."
+    assert stage_label("comicinfo_metadata") == "Preparing ComicInfo metadata"
+
+
+def test_current_item_payload_is_explicit_and_clamped() -> None:
+    payload = current_item_payload(
+        kind="series",
+        stage="metadata_fetch_wait",
+        name="2000AD",
+        progress_pct=125,
+        detail="Large series can take a few minutes.",
+    )
+
+    assert payload == {
+        "current_item_kind": "series",
+        "current_item_stage": "metadata_fetch_wait",
+        "current_item_stage_label": "Fetching ComicVine metadata",
+        "current_item_progress_pct": 100,
+        "current_item_detail": "Large series can take a few minutes.",
+    }
+
+
+def test_elapsed_seconds_since_uses_wall_clock_runtime() -> None:
+    started_at = datetime.now(UTC) - timedelta(seconds=42)
+
+    elapsed = elapsed_seconds_since(started_at)
+
+    assert elapsed is not None
+    assert 40 <= elapsed <= 45
+    assert elapsed_seconds_since(None) is None
+
+
+def test_weighted_import_progress_prioritizes_large_conversion_work() -> None:
+    settings = ImportProgressSettings(
+        move_to_library=True,
+        convert_to_preferred_format=True,
+        update_embedded_comicinfo_from_match=True,
+    )
+    tiny_cbz = ImportProgressFileProfile(
+        file_id=1,
+        file_path="/imports/Tiny 001.cbz",
+        file_size=1 * 1024 * 1024,
+    )
+    large_pdf = ImportProgressFileProfile(
+        file_id=2,
+        file_path="/imports/Giant Collection.pdf",
+        file_size=900 * 1024 * 1024,
+    )
+    tiny_plan = import_group_progress_plan(settings, [tiny_cbz])
+    large_plan = import_group_progress_plan(settings, [large_pdf])
+
+    assert large_plan.total_weight > tiny_plan.total_weight * 5
+    assert (
+        weighted_import_progress_pct(
+            [tiny_plan.total_weight, large_plan.total_weight],
+            current_group_index=0,
+            current_group_progress_pct=100,
+        )
+        < 20
+    )
+
+
+def test_import_group_progress_accounts_for_metadata_and_file_work() -> None:
+    settings = ImportProgressSettings(
+        move_to_library=True,
+        convert_to_preferred_format=True,
+        update_embedded_comicinfo_from_match=True,
+    )
+    files = [
+        ImportProgressFileProfile(
+            file_id=1,
+            file_path="/imports/Alpha 001.cbz",
+            file_size=10 * 1024 * 1024,
+        ),
+        ImportProgressFileProfile(
+            file_id=2,
+            file_path="/imports/Alpha 002.cbr",
+            file_size=80 * 1024 * 1024,
+        ),
+    ]
+    plan = import_group_progress_plan(settings, files)
+
+    metadata_half = import_group_metadata_progress_pct(plan, metadata_progress_pct=50)
+    first_file_started = import_group_file_progress_pct(plan, file_index=1, current_file_pct=0)
+    first_file_done = import_group_file_progress_pct(plan, file_index=1, current_file_pct=100)
+
+    assert 0 < metadata_half < first_file_started < first_file_done < 100

@@ -1,0 +1,63 @@
+{#- Compact series card — horizontal row with small cover. Expects: s, owned_count, wanted_count -#}
+{% from "components/status_badge.html" import status_badge %}
+{% set cover_src = series_cover_url(s) %}
+
+<a
+  href="/series/{{ s.id }}"
+  hx-boost="false"
+  data-testid="series-item-link"
+  class="group flex gap-4 rounded-lg bg-pb-card border border-pb-border p-3 hover:border-pb-border-hover transition-colors"
+>
+  {#- Small cover -#}
+  <div class="w-12 sm:w-14 shrink-0">
+    <div class="aspect-[2/3] rounded bg-pb-card-hover/50 overflow-hidden">
+      {% if cover_src %}
+      <img src="{{ cover_src }}" alt="{{ s.title }}" class="w-full h-full object-cover" loading="lazy">
+      {% elif s.cover_url %}
+      <img src="{{ s.cover_url }}" alt="{{ s.title }}" class="w-full h-full object-cover" loading="lazy">
+      {% else %}
+      <div class="w-full h-full flex items-center justify-center text-pb-text-dim">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+        </svg>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {#- Info -#}
+  <div class="flex-1 min-w-0 flex flex-col justify-center gap-1">
+    <div class="flex items-center gap-2">
+      <h3 class="text-sm font-medium text-pb-text truncate group-hover:text-pb-interactive transition-colors">{{ s.title }}</h3>
+      {% if s.monitored %}
+      <svg class="w-3.5 h-3.5 shrink-0 text-pb-interactive" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z"/>
+      </svg>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-2 text-xs text-pb-text-sec min-w-0">
+      {% if s.publisher %}<span class="truncate min-w-0 max-w-[150px]">{{ s.publisher.name }}</span>{% endif %}
+      {% if s.year_start %}<span class="shrink-0">{{ format_series_year_label(s.year_start, s.year_end, s.status) }}</span>{% endif %}
+      <span class="text-pb-text-dim shrink-0">&middot;</span>
+      {{ status_badge(s.status) }}
+      {% if s.series_type.value != 'standard' %}
+      <span class="pill pill-purple">
+        {{ s.series_type.ui_display_name }}
+      </span>
+      {% endif %}
+    </div>
+  </div>
+
+  {#- Progress -#}
+  {% set total = s.issues|length %}
+  <div class="hidden sm:flex items-center gap-3 shrink-0">
+    {% if total > 0 %}
+    <div class="w-24 flex items-center gap-2">
+      <div class="flex-1 h-1.5 bg-pb-card-hover rounded-full overflow-hidden">
+        <div class="h-full bg-pb-success rounded-full" style="width: {{ (owned_count / total * 100)|round|int }}%"></div>
+      </div>
+      <span class="text-xs text-pb-text-sec tabular-nums whitespace-nowrap">{{ owned_count }}/{{ total }}</span>
+    </div>
+    {% endif %}
+  </div>
+</a>

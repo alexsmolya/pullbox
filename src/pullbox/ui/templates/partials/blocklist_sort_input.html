@@ -1,0 +1,7 @@
+<input
+  id="blocklist-sort-input"
+  type="hidden"
+  name="sort"
+  value="{{ sort }}"
+  {% if sort_oob|default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>

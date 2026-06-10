@@ -1,0 +1,66 @@
+{#- Cover image lightbox modal — click-to-expand for cover art.
+
+    Usage: Include in a page that has Alpine.js x-data with coverModalOpen and coverModalUrl:
+      x-data="{ coverModalOpen: false, coverModalUrl: '' }"
+
+    Then on the cover image:
+      @click="coverModalUrl = '{{ url }}'; coverModalOpen = true"
+      class="cursor-pointer"
+
+    The modal closes on: click outside, X button, Escape key.
+-#}
+
+<div>
+  <div x-show="typeof coverModalOpen !== 'undefined' && coverModalOpen"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       @keydown.escape.window="if (typeof coverModalOpen !== 'undefined') coverModalOpen = false"
+       class="fixed inset-0 z-50 flex items-center justify-center p-4"
+       x-cloak>
+
+    <div
+      class="fixed inset-0 bg-black/80 backdrop-blur-xs"
+      style="-webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);"
+      @click="if (typeof coverModalOpen !== 'undefined') coverModalOpen = false"
+    ></div>
+    {#- Image container -#}
+    <div class="relative z-10 max-h-[90vh] max-w-2xl"
+         x-transition:enter="transition ease-out duration-200 delay-75"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 scale-100"
+         x-transition:leave-end="opacity-0 scale-95">
+
+      {#- Close button -#}
+      <button @click="if (typeof coverModalOpen !== 'undefined') coverModalOpen = false"
+              class="absolute -top-3 -right-3 z-20 flex h-8 w-8 items-center justify-center rounded-full border border-pb-border-hover bg-pb-card text-pb-text-sec shadow-lg transition-colors hover:bg-pb-card-hover hover:text-pb-text">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+
+      {#- Cover image -#}
+      <img :src="typeof coverModalUrl !== 'undefined' ? coverModalUrl : ''"
+           alt="Cover art"
+           class="max-h-[85vh] w-auto rounded-lg border border-pb-border shadow-2xl"
+           @error="$el.style.display='none'; $el.nextElementSibling.style.display='flex'"
+           @load="$el.style.display=''; $el.nextElementSibling.style.display='none'">
+
+      {#- Fallback for broken images -#}
+      <div class="flex h-96 w-64 items-center justify-center rounded-lg border border-pb-border bg-pb-card"
+           style="display: none">
+        <div class="space-y-2 text-center text-pb-text-dim">
+          <svg class="w-12 h-12 mx-auto" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M6.75 7.5a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18 4.5a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 0018 19.5h.75a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0018.75 4.5H18z"/>
+          </svg>
+          <p class="text-sm">Image unavailable</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

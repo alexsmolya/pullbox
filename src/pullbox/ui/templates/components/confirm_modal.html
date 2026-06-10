@@ -1,0 +1,154 @@
+{#- Global confirmation dialog — replaces browser-native confirm().
+
+    Include once in base.html. Call from anywhere via:
+
+        pbConfirm({
+            title: 'Delete Item',
+            message: 'This action cannot be undone.',
+            confirmText: 'Delete',
+            destructive: true,          // red button (default true)
+        }).then(ok => { if (ok) doThing(); });
+
+    Or with async/await inside Alpine methods:
+
+        const ok = await pbConfirm({ title: '...', message: '...' });
+        if (!ok) return;
+-#}
+
+<div id="pb-confirm-dialog"
+     x-data="pbConfirmDialog()"
+     @pb-confirm.window="open($event.detail)"
+     @keydown.escape.window="visible && cancel()"
+     x-cloak
+     role="dialog" aria-modal="true" :aria-labelledby="visible ? 'pb-confirm-title' : null">
+
+  {#- Backdrop -#}
+  <div x-show="visible"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+       @click.self="cancel()">
+
+    <div class="modal-backdrop"></div>
+
+    {#- Dialog card -#}
+    <div x-show="visible"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 scale-95 translate-y-2"
+         x-transition:enter-end="opacity-100 scale-100 translate-y-0"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 scale-100 translate-y-0"
+         x-transition:leave-end="opacity-0 scale-95 translate-y-2"
+         class="relative bg-pb-card rounded-t-xl sm:rounded-xl shadow-2xl border border-pb-border
+                w-full max-w-sm overflow-hidden safe-area-pb"
+         @click.stop>
+
+      {#- Body -#}
+      <div class="px-6 pt-6 pb-2">
+        <div class="flex items-start gap-4">
+          {#- Icon — red warning triangle for destructive, blue question for neutral -#}
+          <div class="shrink-0 mt-0.5">
+            <div x-show="destructive" class="w-10 h-10 rounded-lg bg-pb-error-dim flex items-center justify-center">
+              <svg class="w-5 h-5 text-pb-error" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+              </svg>
+            </div>
+            <div x-show="!destructive" class="w-10 h-10 rounded-lg bg-pb-interactive-dim flex items-center justify-center">
+              <svg class="w-5 h-5 text-pb-interactive" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/>
+              </svg>
+            </div>
+          </div>
+
+          {#- Text -#}
+          <div class="flex-1 min-w-0">
+            <h3 id="pb-confirm-title" class="text-sm font-semibold text-pb-text" x-text="title"></h3>
+            <p class="mt-1.5 text-sm text-pb-text-sec leading-relaxed" x-text="message"></p>
+          </div>
+        </div>
+      </div>
+
+      {#- Actions -#}
+      <div class="flex items-center justify-end gap-2.5 px-6 py-4">
+        <button @click="cancel()"
+                class="px-3.5 py-2 text-sm font-medium rounded-lg text-pb-text-sec
+                       bg-pb-card-hover border border-pb-border-hover
+                       hover:bg-pb-card-hover hover:text-pb-text
+                       focus:outline-hidden focus:ring-2 focus:ring-pb-border-hover
+                       transition-colors"
+                x-ref="cancelBtn">
+          Cancel
+        </button>
+        <button @click="accept()"
+                class="px-3.5 py-2 text-sm font-medium rounded-lg text-pb-text-inverse
+                       focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-pb-card
+                       transition-colors"
+                :class="destructive
+                  ? 'bg-pb-error hover:brightness-90 focus:ring-pb-error'
+                  : 'bg-pb-interactive hover:bg-pb-interactive-hover focus:ring-pb-interactive'"
+                x-text="confirmText">
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function pbConfirmDialog() {
+  return {
+    visible: false,
+    title: '',
+    message: '',
+    confirmText: 'Confirm',
+    destructive: true,
+    _resolve: null,
+
+    open(detail) {
+      this.title = detail.title || 'Confirm Action';
+      this.message = detail.message || 'Are you sure?';
+      this.confirmText = detail.confirmText || 'Confirm';
+      this.destructive = detail.destructive !== false;
+      this._resolve = detail.resolve;
+      this.visible = true;
+      // Focus cancel button for keyboard safety (prevents accidental Enter confirm)
+      this.$nextTick(() => { if (this.$refs.cancelBtn) this.$refs.cancelBtn.focus(); });
+    },
+
+    accept() {
+      this.visible = false;
+      if (this._resolve) this._resolve(true);
+      this._resolve = null;
+    },
+
+    cancel() {
+      this.visible = false;
+      if (this._resolve) this._resolve(false);
+      this._resolve = null;
+    }
+  };
+}
+
+/**
+ * Global confirmation dialog — drop-in replacement for confirm().
+ *
+ * @param {Object} opts
+ * @param {string} opts.title        - Dialog title (default: "Confirm Action")
+ * @param {string} opts.message      - Body text (default: "Are you sure?")
+ * @param {string} opts.confirmText  - Confirm button label (default: "Confirm")
+ * @param {boolean} opts.destructive - Red button if true (default: true)
+ * @returns {Promise<boolean>} Resolves true on confirm, false on cancel/escape
+ */
+window.pbConfirm = function(opts) {
+  return new Promise(function(resolve) {
+    window.dispatchEvent(new CustomEvent('pb-confirm', {
+      detail: Object.assign({}, opts, { resolve: resolve })
+    }));
+  });
+};
+</script>

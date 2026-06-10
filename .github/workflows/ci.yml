@@ -1,0 +1,376 @@
+---
+# Pullbox CI Pipeline
+# Quality gate — lint, typecheck, test, migration check, accessibility, E2E.
+# Docker builds trigger via workflow_run after CI passes on main.
+#
+# Security: All actions pinned to full SHA. No pull_request_target.
+# See: docs/development/INFRASTRUCTURE.md
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, develop]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_DEFAULT: "3.14"
+  PYTEST_WORKERS: "4"
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Quality Gate (~45s)
+  # ──────────────────────────────────────────────
+  quality-gate:
+    name: Quality Gate
+    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup runner-local venv
+        run: .github/scripts/setup-runner-venv.sh "dev"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh python node
+
+      - name: Ruff lint
+        run: ruff check src/ tests/
+
+      - name: Ruff format check
+        run: ruff format --check src/ tests/
+
+      - name: Install Tailwind
+        run: npm ci
+
+      - name: Rebuild Tailwind CSS
+        run: npx @tailwindcss/cli -i src/pullbox/ui/static/css/input.css -o src/pullbox/ui/static/css/tailwind.css --minify
+
+      - name: Check for uncommitted CSS changes
+        run: |
+          git diff --exit-code src/pullbox/ui/static/css/tailwind.css || {
+            echo "::error::Tailwind CSS output is stale. Run 'make css-build' and commit the result."
+            exit 1
+          }
+          echo "✅ Tailwind CSS is up to date"
+
+  # ──────────────────────────────────────────────
+  # Job 2: Type Check (~1-2 min)
+  # ──────────────────────────────────────────────
+  typecheck:
+    name: Type Check
+    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - name: Setup runner-local venv
+        run: .github/scripts/setup-runner-venv.sh "dev"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh python
+
+      - name: Mypy
+        run: mypy src/pullbox/
+
+  # ──────────────────────────────────────────────
+  # Job 3: Tests + Coverage (matrix: 3.12, 3.13, 3.14)
+  # ──────────────────────────────────────────────
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    needs: [quality-gate, typecheck, alembic-check]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Setup runner-local venv
+        run: .github/scripts/setup-runner-venv.sh "dev"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh python
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --ignore=tests/e2e \
+            -n "${PYTEST_WORKERS}" \
+            --cov=pullbox \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=60 \
+            --junitxml=test-results.xml \
+            -v
+        env:
+          PULLBOX_SECRET_KEY: test-ci-key
+          PYTEST_WORKERS: ${{ env.PYTEST_WORKERS }}
+
+      - name: Upload coverage report
+        if: always() && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-py${{ matrix.python-version }}
+          path: test-results.xml
+          retention-days: 30
+
+  # ──────────────────────────────────────────────
+  # Job 4: Alembic Migration Sanity Check
+  # ──────────────────────────────────────────────
+  alembic-check:
+    name: Migration Check
+    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - name: Setup runner-local venv
+        run: .github/scripts/setup-runner-venv.sh "dev"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh python
+
+      - name: Verify migrations apply from empty DB
+        run: |
+          alembic -c alembic/alembic.ini upgrade head
+          echo "✅ Migrations applied successfully"
+          alembic -c alembic/alembic.ini downgrade base
+          echo "✅ Downgrade to base successful"
+        env:
+          PULLBOX_SECRET_KEY: test-ci-key
+          PULLBOX_DB_URL: "sqlite+aiosqlite:///test_migration.db"
+
+      - name: Verify app boots after migration
+        run: |
+          alembic -c alembic/alembic.ini upgrade head
+          timeout 10 python -c "
+          import asyncio
+          from pullbox.app import create_app
+          app = create_app()
+          print('✅ App factory created successfully')
+          "
+        env:
+          PULLBOX_SECRET_KEY: test-ci-key
+          PULLBOX_DB_URL: "sqlite+aiosqlite:///test_boot.db"
+
+  # ──────────────────────────────────────────────
+  # Job 5: Accessibility Checks (contrast + WCAG scans in Chromium)
+  # ──────────────────────────────────────────────
+  accessibility:
+    name: Accessibility Checks
+    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    needs: [quality-gate, typecheck, alembic-check]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PULLBOX_SECRET_KEY: test-ci-key
+      PULLBOX_DB_URL: "sqlite+aiosqlite:///test_a11y_${{ github.run_id }}_${{ github.run_attempt }}.db"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Setup runner-local venv
+        run: .github/scripts/setup-runner-venv.sh "dev,e2e"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh python node playwright
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium
+
+      - name: Run contrast audit
+        run: python scripts/check_ui_contrast.py
+
+      - name: Run accessibility browser tests
+        run: |
+          mkdir -p test-results/accessibility test-results/e2e
+          pytest tests/e2e/ \
+            -v \
+            -m accessibility \
+            --browser chromium \
+            --video retain-on-failure \
+            --screenshot only-on-failure \
+            --full-page-screenshot \
+            --output=test-results/e2e \
+            --junitxml=test-results/accessibility-junit.xml
+
+      - name: Upload accessibility JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: accessibility-results
+          path: test-results/accessibility-junit.xml
+          retention-days: 14
+
+      - name: Upload accessibility artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: accessibility-artifacts
+          path: test-results/
+          retention-days: 14
+
+  # ──────────────────────────────────────────────
+  # Job 6: E2E Tests (per-browser isolated pytest sessions, after tests pass)
+  # ──────────────────────────────────────────────
+  e2e:
+    name: E2E Tests (${{ matrix.browser }})
+    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    needs: [test]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            pytest_extra_args: ""
+          - browser: firefox
+            pytest_extra_args: "--durations=25 --durations-min=1.0"
+    env:
+      PULLBOX_SECRET_KEY: test-ci-key
+      PULLBOX_RATE_LIMIT_ENABLED: "false"
+      PULLBOX_DB_URL: "sqlite+aiosqlite:///test_e2e_${{ github.run_id }}_${{ github.run_attempt }}_${{ matrix.browser }}.db"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - name: Setup runner-local venv
+        run: .github/scripts/setup-runner-venv.sh "dev,e2e"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh python playwright
+
+      - name: Install Playwright browsers
+        run: playwright install ${{ matrix.browser }}
+
+      - name: Run E2E tests
+        run: |
+          mkdir -p test-results/e2e test-results/playwright
+          pytest tests/e2e/ \
+            -v \
+            -m "not accessibility" \
+            --browser ${{ matrix.browser }} \
+            ${{ matrix.pytest_extra_args }} \
+            --video retain-on-failure \
+            --screenshot only-on-failure \
+            --full-page-screenshot \
+            --output=test-results/e2e \
+            --junitxml=test-results/e2e-junit.xml
+
+      - name: Upload E2E JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-results-${{ matrix.browser }}
+          path: test-results/e2e-junit.xml
+          retention-days: 14
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-artifacts-${{ matrix.browser }}
+          path: test-results/
+          retention-days: 14
+
+  # Stable aggregate required check for branch rulesets.
+  ci-required:
+    name: CI Required
+    runs-on: ubuntu-latest
+    needs:
+      - quality-gate
+      - typecheck
+      - alembic-check
+      - test
+      - accessibility
+      - e2e
+    if: always()
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify required CI jobs
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          failed = {
+              name: info.get("result")
+              for name, info in needs.items()
+              if info.get("result") != "success"
+          }
+          if failed:
+              print(f"Required CI jobs did not all pass: {failed}", file=sys.stderr)
+              sys.exit(1)
+          print("All required CI jobs passed.")
+          PY

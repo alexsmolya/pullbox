@@ -1,0 +1,128 @@
+{% from "components/settings_shell.html" import inline_alert %}
+
+{#- ComicVine search results for import series override.
+
+    Template context:
+      - job_id: int
+      - series_id: int (ImportedSeries.id)
+      - query: str
+      - results: shared ComicVine series result card payloads
+      - results_limit: int
+      - search_error: str (empty if no error)
+-#}
+
+<div class="modal-shell"
+     data-testid="import-collection-cv-search-modal"
+     x-data="importCvSearchModalData({
+       jobId: {{ job_id }},
+       seriesId: {{ series_id }},
+       query: {{ query|tojson|forceescape }}
+     })"
+     x-show="open"
+     @keydown.escape.window="close()">
+
+  {#- Backdrop -#}
+  <div class="modal-backdrop"
+       @click="close()"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"></div>
+
+  {#- Modal -#}
+  <div class="modal-panel max-w-4xl max-h-[90vh] min-h-0"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+       x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+       @click.outside="close()">
+
+    {#- Header -#}
+    <div class="modal-header">
+      <div class="space-y-1">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-brand">Series override</p>
+        <h3 class="text-base font-semibold text-pb-text">Search ComicVine</h3>
+        <p class="text-xs leading-5 text-pb-text-dim">Search for the correct series, then apply the match to this import entry.</p>
+      </div>
+      <button @click="close()"
+              class="icon-btn icon-btn-sm"
+              :disabled="selecting"
+              aria-label="Close search dialog"
+              type="button">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body min-h-0">
+      <div x-show="selecting" x-cloak class="px-5 py-5">
+        <div class="flex min-h-56 flex-col items-center justify-center rounded-xl border border-pb-border bg-pb-card-hover/45 px-6 py-10 text-center">
+          <svg class="h-8 w-8 animate-spin text-pb-interactive" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+          <p class="mt-3 text-sm font-medium text-pb-text">Applying ComicVine match...</p>
+          <p class="mt-1 text-xs leading-5 text-pb-text-dim">Updating this review group and preparing the refreshed results.</p>
+        </div>
+      </div>
+      <div x-show="!selecting" x-cloak class="space-y-4 px-5 py-5">
+        <div class="space-y-2">
+          <label for="import-cv-search-input" class="block text-[11px] font-semibold uppercase tracking-[0.14em] text-pb-text-dim">Series search</label>
+          <div class="flex gap-2">
+            <input type="text"
+                   id="import-cv-search-input"
+                   data-testid="import-collection-cv-search-input"
+                   x-model="query"
+                   @keydown.enter.prevent="search()"
+                   placeholder="Search series name..."
+                   class="input-pb flex-1">
+            <button type="button"
+                    data-testid="import-collection-cv-search-submit"
+                    @click="search()"
+                    :disabled="selecting"
+                    class="btn-primary btn-sm">
+              Search
+            </button>
+          </div>
+          <p class="text-xs text-pb-text-dim">Try the exact series title first, then add a publisher or start year if you need to narrow the results.</p>
+        </div>
+
+        {#- Error -#}
+        {% if search_error %}
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <p>{{ search_error }}</p>
+        {% endcall %}
+        {% endif %}
+
+        {#- Results -#}
+        {% if results %}
+        <div class="table-shell overflow-hidden">
+          <div class="table-toolbar">
+            <div class="table-toolbar-title-block">
+              <h4 class="table-toolbar-title">Search results</h4>
+              <p class="table-toolbar-copy">
+                Showing {{ results|length }} candidate{% if results|length != 1 %}s{% endif %}
+                {% if results|length == results_limit %} from the first {{ results_limit }} matches{% endif %}
+              </p>
+            </div>
+          </div>
+          <div class="max-h-[62vh] space-y-3 overflow-y-auto p-3">
+            {% set result_card_mode = "import_override" %}
+            {% for r in results %}
+              {% include "partials/search_result_card.html" %}
+            {% endfor %}
+          </div>
+        </div>
+        {% elif not search_error %}
+        <div class="utility-empty-state">
+          {% if query %}
+          <p class="text-sm text-pb-text-sec">No results found for "{{ query }}".</p>
+          <p class="mt-1 text-xs text-pb-text-dim">Try a shorter title, remove punctuation, or add the publisher or year.</p>
+          {% else %}
+          <p class="text-sm text-pb-text-sec">Enter a series name to start searching.</p>
+          <p class="mt-1 text-xs text-pb-text-dim">ComicVine results will appear here once the search runs.</p>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

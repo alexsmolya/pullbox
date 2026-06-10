@@ -1,0 +1,221 @@
+{#- Settings: Library tab -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import field_note, inline_alert, section_card, settings_footer, settings_row, ui_icon %}
+
+<div class="space-y-6" x-data="{ saving: false, saveError: '' }">
+  <div class="grid gap-6 2xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
+    <div class="section-card">
+      <div class="section-body space-y-6">
+        <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div class="max-w-2xl space-y-3">
+            <p class="section-eyebrow">Library destination</p>
+            <h2 class="text-2xl font-semibold tracking-tight text-pb-text">
+              Keep the storage path, import handoff method, and preferred reading format aligned with how your library actually lives on disk.
+            </h2>
+            <p class="text-sm leading-7 text-pb-text-sec">
+              These settings shape where files land, whether downloads are moved or linked, and which format wins when more than one version is available for the same issue.
+            </p>
+          </div>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div class="stat-card">
+            <p class="stat-card-kicker">Library path</p>
+            <p class="stat-card-value text-base sm:text-2xl">{{ configs.get('comics_directory', 'Not set') }}</p>
+            <p class="stat-card-copy">This directory is the main destination for organized comic files.</p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-card-kicker">Transfer method</p>
+            <p class="stat-card-value">{{ configs.get('post_processing_method', 'move')|title }}</p>
+            <p class="stat-card-copy">Completed downloads are handed off using this file operation.</p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-card-kicker">Preferred format</p>
+            <p class="stat-card-value">{{ configs.get('preferred_format', 'cbz')|upper }}</p>
+            <p class="stat-card-copy">When multiple versions exist, this format gets first preference.</p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-card-kicker">Import posture</p>
+            <p class="stat-card-value">Managed</p>
+            <p class="stat-card-copy">Path, format, and handoff choices stay together so the library remains predictable.</p>
+          </div>
+        </div>
+
+        <div class="grid gap-3 lg:grid-cols-2">
+          <div class="info-panel info-panel-muted">
+            <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">When this page matters most</p>
+            <div class="mt-3 space-y-2">
+              <div class="checklist-item">
+                <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                <span>Move the library root here before imports or client automation start writing to the wrong place.</span>
+              </div>
+              <div class="checklist-item">
+                <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                <span>Choose the transfer method that matches your filesystem layout and how much duplicate disk use you can tolerate.</span>
+              </div>
+              <div class="checklist-item">
+                <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                <span>Keep a preferred format set so release scoring and duplicate decisions stay consistent.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="info-panel info-panel-muted">
+            <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Transfer method tradeoffs</p>
+            <div class="mt-3 space-y-2 text-xs leading-6 text-pb-text-sec">
+              <p><span class="font-semibold text-pb-text">Move:</span> frees download space immediately but removes the original source copy.</p>
+              <p><span class="font-semibold text-pb-text">Copy:</span> keeps the original download intact but doubles storage use.</p>
+              <p><span class="font-semibold text-pb-text">Hardlink:</span> uses no extra data space but requires source and destination on the same filesystem.</p>
+              <p><span class="font-semibold text-pb-text">Symlink:</span> is flexible, but the original file must remain available for the link to keep working.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <div class="info-panel">
+        <p class="section-eyebrow">Current posture</p>
+        <h3 class="mt-2 text-base font-semibold text-pb-text">The library destination and import handoff are both active control points.</h3>
+        <p class="mt-2 text-sm leading-6 text-pb-text-sec">
+          A path mistake here affects every import and post-processing job. Review it carefully any time storage is moved, a container mount changes, or download clients are reconfigured.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  {% call section_card(
+    title="Comics directory",
+    description="Set the primary destination for organized comic files.",
+    eyebrow="Storage path",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form
+      x-data="dirtyForm()"
+      @input="checkDirty()"
+      @change="checkDirty()"
+      @submit.prevent="
+        saving = true; saveError = '';
+        const path = $refs.comicsDir.value.trim();
+        fetch('/api/v1/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' },
+          body: JSON.stringify({ values: { comics_directory: path } }),
+        })
+          .then(r => { if (!r.ok) throw new Error('Failed to save.'); if (typeof showToast === 'function') showToast({ message: 'Comics directory saved.', level: 'success' }); markClean(); })
+          .catch(e => { saveError = e.message; })
+          .finally(() => { saving = false; });
+      "
+    >
+      <div class="settings-rows">
+        {% call settings_row(label="Directory Path", help="Absolute path to the library root. The directory must exist and be writable by Pullbox.") %}
+          <input
+            type="text"
+            name="comics_directory"
+            x-ref="comicsDir"
+            value="{{ configs.get('comics_directory', '') }}"
+            placeholder="/media/comics"
+            class="input-pb max-w-lg font-mono placeholder:text-pb-text-sec"
+          >
+          {% call field_note(tone="info", icon="check") %}
+            Set this before you automate downloads or imports so new files land in the right place from the start.
+          {% endcall %}
+        {% endcall %}
+      </div>
+
+      <div class="px-6 py-3" x-show="saveError" x-cloak>
+        {% call inline_alert(attrs='x-show="saveError" x-cloak') %}
+          <span x-text="saveError"></span>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost btn-sm">
+          Reset
+        </button>
+        <button type="submit" :disabled="!isDirty || saving" :class="(!isDirty || saving) && 'opacity-50 cursor-not-allowed'" class="btn-primary btn-sm">
+          <span x-show="!saving">Save library path</span>
+          <span x-show="saving">Saving...</span>
+        </button>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Post-processing",
+    description="Choose how completed downloads are transferred into the library.",
+    eyebrow="Import handoff",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% call settings_row(label="File Transfer Method", help="Controls whether downloads are moved, copied, or linked into the comics directory.") %}
+          {% set pp_method = configs.get('post_processing_method', 'move') %}
+          {{ dropdown_select(
+            name="post_processing_method",
+            value=pp_method,
+            options=[
+              ("move", "Move"),
+              ("copy", "Copy"),
+              ("hardlink", "Hardlink"),
+              ("symlink", "Symlink"),
+            ],
+            root_testid="settings-library-post-processing-select",
+            class_name="w-40"
+          ) }}
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost btn-sm">
+          Reset
+        </button>
+        <button type="submit" :disabled="!isDirty" :class="!isDirty && 'opacity-50 cursor-not-allowed'" class="btn-primary btn-sm">
+          Save handoff settings
+        </button>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Preferred format",
+    description="Pick the file format Pullbox should prefer when more than one release format is available.",
+    eyebrow="Format policy",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% call settings_row(label="Preferred Format", help="Affects release preference when two viable formats are available for the same issue.") %}
+          {{ dropdown_select(
+            name="preferred_format",
+            value=configs.get("preferred_format", "cbz"),
+            options=[
+              ("cbz", "CBZ"),
+              ("cbr", "CBR"),
+              ("cb7", "CB7"),
+              ("pdf", "PDF"),
+              ("epub", "EPUB"),
+            ],
+            root_testid="settings-library-preferred-format-select",
+            class_name="w-32"
+          ) }}
+          {% call field_note(tone="info", icon="check") %}
+            Keep this aligned with your conversion and reader preferences so ranking decisions stay predictable.
+          {% endcall %}
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost btn-sm">
+          Reset
+        </button>
+        <button type="submit" :disabled="!isDirty" :class="!isDirty && 'opacity-50 cursor-not-allowed'" class="btn-primary btn-sm">
+          Save format preference
+        </button>
+      {% endcall %}
+    </form>
+  {% endcall %}
+</div>

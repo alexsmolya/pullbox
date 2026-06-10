@@ -1,0 +1,50 @@
+{% from "components/settings_shell.html" import section_card %}
+
+{% if series.child_series %}
+{% call section_card(
+  title="Related series",
+  description="Other series in the same family that are worth checking before you add duplicates or miss companion titles.",
+  eyebrow="Series family",
+  title_style="plain"
+) %}
+  <div data-testid="series-detail-related-series-section" class="space-y-4">
+  <div data-testid="series-detail-related-series-grid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    {% for child in series.child_series %}
+    <a href="/series/{{ child.id }}"
+       hx-boost="false"
+       class="library-series-card group p-3">
+      <div class="flex items-center gap-3">
+        <div class="library-series-cover-frame library-series-cover-frame-compact h-14 w-10 shrink-0 overflow-hidden">
+          {% set child_cover_src = series_cover_url(child) %}
+          {% if child_cover_src %}
+          <img src="{{ child_cover_src }}" alt="{{ child.title }}" class="h-full w-full object-cover">
+          {% elif child.cover_url %}
+          <img src="{{ child.cover_url }}" alt="{{ child.title }}" class="h-full w-full object-cover">
+          {% else %}
+          <div class="library-series-placeholder">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+            </svg>
+          </div>
+          {% endif %}
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-sm font-semibold text-pb-text transition-colors group-hover:text-pb-interactive">{{ child.title }}</p>
+          <div class="mt-1 flex flex-wrap items-center gap-1.5">
+            {% if child.year_start %}
+            <span class="pill-neutral">{{ child.year_start }}</span>
+            {% endif %}
+            {% if child.series_type.value != 'standard' %}
+            <span class="pill pill-purple">
+              {{ child.series_type.ui_display_name }}
+            </span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  </div>
+{% endcall %}
+{% endif %}

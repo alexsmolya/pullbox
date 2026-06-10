@@ -1,0 +1,221 @@
+{#- Security: API Access tab -#}
+{% from "components/settings_shell.html" import section_header %}
+
+<div class="space-y-6" x-data="apiAccessTab()">
+  <div class="section-card" data-testid="security-api-access-registry-card">
+    {% call section_header(
+      title="API key registry",
+      eyebrow="Credentials",
+      title_style="plain"
+    ) %}
+      <button @click="openNewKeyForm()"
+              x-show="!showNewKeyForm"
+              class="btn-primary gap-2">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+        </svg>
+        Generate key
+      </button>
+    {% endcall %}
+
+    <div class="section-body space-y-4">
+      <div x-show="showNewKeyForm" x-transition class="rounded-xl border border-pb-border-hover bg-pb-card-hover/50 p-4 space-y-4">
+        <h4 class="text-sm font-medium text-pb-text">New API Key</h4>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label class="mb-1 block text-xs text-pb-text-sec">Key Name</label>
+            <input type="text" x-model="newKeyName" placeholder="e.g. Home Server" class="input-pb">
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-pb-text-sec">Expires (optional)</label>
+            <input type="date" x-model="newKeyExpiry" class="input-pb">
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button @click="generateKey()" :disabled="!newKeyName.trim() || keyGenerating" class="btn-primary btn-sm">
+            <span x-show="!keyGenerating">Generate</span>
+            <span x-show="keyGenerating">Generating...</span>
+          </button>
+          <button @click="cancelNewKey()" class="btn-ghost btn-sm">Cancel</button>
+        </div>
+      </div>
+
+      <template x-if="createdKey">
+        <div class="rounded-xl border border-pb-success/30 bg-pb-success-dim p-4">
+          <p class="mb-2 text-xs font-medium text-pb-success">API key generated. Copy it now because it won&apos;t be shown again.</p>
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <code class="flex-1 break-all rounded-md border border-pb-border bg-pb-surface px-3 py-2 text-xs font-mono text-pb-text"
+                  x-text="createdKey"></code>
+            <button @click="copyKey(createdKey)" class="btn-ghost btn-sm shrink-0">
+              <span x-show="!keyCopied">Copy</span>
+              <span x-show="keyCopied" class="text-pb-success">Copied!</span>
+            </button>
+          </div>
+          <button @click="createdKey = null" class="mt-2 text-[11px] text-pb-text-dim transition-colors hover:text-pb-text-sec">Dismiss</button>
+        </div>
+      </template>
+
+      <div class="downloads-table-wrap">
+        <template x-if="apiKeys.length > 0">
+          <div class="overflow-x-auto">
+            <table class="downloads-table" data-testid="security-api-access-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th class="w-[136px]">Created</th>
+                  <th class="w-[136px]">Last Used</th>
+                  <th class="w-[120px]">Expires</th>
+                  <th class="is-right w-[72px]"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="key in apiKeys" :key="key.id">
+                  <tr>
+                    <td class="font-medium text-pb-text" x-text="key.name"></td>
+                    <td class="downloads-mono-cell" x-text="formatDate(key.created_at)"></td>
+                    <td class="downloads-mono-cell" x-text="key.last_used_at ? formatDate(key.last_used_at) : '—'"></td>
+                    <td class="downloads-mono-cell" x-text="key.expires_at ? formatDate(key.expires_at) : 'Never'"></td>
+                    <td class="is-right">
+                      <div class="downloads-action-group">
+                        <button
+                          @click="revokeKey(key.id, key.name)"
+                          data-testid="security-api-access-revoke-btn"
+                          class="downloads-action-btn is-danger"
+                          data-tip="Revoke"
+                          data-tip-pos="left"
+                          aria-label="Revoke API key"
+                          type="button"
+                        >
+                          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+        <template x-if="apiKeys.length === 0 && !keysLoading">
+          <div class="table-empty">
+            <p class="table-empty-copy">No API keys. Generate one only when a trusted external integration actually needs API access.</p>
+          </div>
+        </template>
+        <template x-if="keysLoading">
+          <div class="table-empty">
+            <p class="table-empty-copy">Loading...</p>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function apiAccessTab() {
+  return {
+    apiKeys: [],
+    keysLoading: true,
+    showNewKeyForm: false,
+    newKeyName: "",
+    newKeyExpiry: "",
+    keyGenerating: false,
+    createdKey: null,
+    keyCopied: false,
+
+    init() {
+      this.loadKeys();
+    },
+
+    loadKeys() {
+      this.keysLoading = true;
+      fetch("/api/v1/auth/apikeys", {
+        headers: { "X-CSRF-Token": "{{ csrf_token }}" },
+      })
+        .then(r => r.json())
+        .then(data => { this.apiKeys = data; })
+        .catch(() => { this.apiKeys = []; })
+        .finally(() => { this.keysLoading = false; });
+    },
+
+    openNewKeyForm() {
+      this.showNewKeyForm = true;
+      this.newKeyName = "";
+      this.newKeyExpiry = "";
+      this.createdKey = null;
+    },
+
+    cancelNewKey() {
+      this.showNewKeyForm = false;
+      this.newKeyName = "";
+      this.newKeyExpiry = "";
+    },
+
+    generateKey() {
+      if (!this.newKeyName.trim()) return;
+      this.keyGenerating = true;
+      const body = { name: this.newKeyName.trim() };
+      if (this.newKeyExpiry) body.expires_at = new Date(this.newKeyExpiry).toISOString();
+
+      fetch("/api/v1/auth/apikeys", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "{{ csrf_token }}",
+        },
+        body: JSON.stringify(body),
+      })
+        .then(r => { if (!r.ok) throw new Error("Failed"); return r.json(); })
+        .then(data => {
+          this.createdKey = data.key;
+          this.showNewKeyForm = false;
+          this.newKeyName = "";
+          this.newKeyExpiry = "";
+          this.loadKeys();
+          if (typeof showToast === "function") showToast({ message: "API key generated.", level: "success" });
+        })
+        .catch(() => {
+          if (typeof showToast === "function") showToast({ message: "Failed to generate key.", level: "error" });
+        })
+        .finally(() => { this.keyGenerating = false; });
+    },
+
+    copyKey(key) {
+      navigator.clipboard.writeText(key).then(() => {
+        this.keyCopied = true;
+        setTimeout(() => { this.keyCopied = false; }, 2000);
+      });
+    },
+
+    async revokeKey(id, name) {
+      const ok = await pbConfirm({
+        title: 'Revoke API Key',
+        message: `Revoke "${name}"? Any integrations using this key will stop working.`,
+        confirmText: 'Revoke Key',
+      });
+      if (!ok) return;
+      fetch(`/api/v1/auth/apikeys/${id}`, {
+        method: "DELETE",
+        headers: { "X-CSRF-Token": "{{ csrf_token }}" },
+      })
+        .then(r => {
+          if (!r.ok && r.status !== 204) throw new Error("Failed");
+          this.loadKeys();
+          if (typeof showToast === "function") showToast({ message: "API key revoked.", level: "success" });
+        })
+        .catch(() => {
+          if (typeof showToast === "function") showToast({ message: "Failed to revoke key.", level: "error" });
+        });
+    },
+
+    formatDate(iso) {
+      if (!iso) return "—";
+      try {
+        return _pb.formatShort(iso);
+      } catch { return iso; }
+    },
+  };
+}
+</script>

@@ -1,0 +1,70 @@
+{% set delete_message %}
+Are you sure you want to delete {{ series.title }}? This removes the series and all {{ total_issue_count }} issue records from the database.
+{% endset %}
+<div
+  x-data="{
+    showDeleteModal: false,
+    deleteFiles: false,
+    deleteFolder: false,
+    deleting: false,
+    closeDeleteModal() {
+      this.showDeleteModal = false;
+      this.deleteFiles = false;
+      this.deleteFolder = false;
+      this.deleting = false;
+    },
+    syncDeleteOptions() {
+      this.deleteFiles = !!this.deleteFolder;
+    },
+    submitDelete() {
+      if (this.deleting) return;
+      this.deleting = true;
+      fetch('/htmx/series/{{ series.id }}/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({
+          delete_files: this.deleteFiles,
+          delete_folder: this.deleteFolder,
+        }),
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error('Failed to delete series');
+          window.location.assign('/series');
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') {
+            showToast({ message: 'Failed to delete series', level: 'error' });
+          }
+          this.deleting = false;
+        });
+    },
+  }"
+  @series-delete-open.window="showDeleteModal = true"
+>
+  {% set show_expr = "showDeleteModal" %}
+  {% set close_handler = "closeDeleteModal()" %}
+  {% set title_expr = "'Delete Series'" %}
+  {% set message_expr = delete_message|trim|tojson|forceescape %}
+  {% set delete_files_model = "deleteFiles" %}
+  {% set delete_folders_model = "deleteFolder" %}
+  {% set submit_handler = "submitDelete()" %}
+  {% set busy_expr = "deleting" %}
+  {% set cancel_disabled_expr = "deleting" %}
+  {% set submit_disabled_expr = "deleting" %}
+  {% set submit_label_expr = "'Delete Series'" %}
+  {% set submitting_label_expr = "'Deleting...'" %}
+  {% set show_files_option = delete_file_count > 0 %}
+  {% set show_folders_option = true %}
+  {% set delete_files_disabled_expr = "deleteFolder" %}
+  {% set folders_change_handler = "syncDeleteOptions()" %}
+  {% set files_option_label = "Delete " ~ delete_file_count ~ " file" ~ ("s" if delete_file_count != 1 else "") ~ " from disk" %}
+  {% set files_option_copy = "This permanently removes the tracked comic files from your library." %}
+  {% set folders_option_label = "Delete the series folder from disk" %}
+  {% set folders_option_copy = "This permanently deletes the folder and everything inside it." %}
+  {% set modal_testid = "series-detail-delete-modal" %}
+
+  {% include "components/series_delete_modal.html" %}
+</div>

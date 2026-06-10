@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+venv_bin="${VENV_BIN:-.venv/bin}"
+pip_bin="${venv_bin}/pip"
+pip_audit_bin="${venv_bin}/pip-audit"
+safety_bin="${venv_bin}/safety"
+bandit_bin="${venv_bin}/bandit"
+requirements_file="$(mktemp /tmp/pullbox-requirements-audit.XXXXXX.txt)"
+
+cleanup() {
+  rm -f "${requirements_file}"
+}
+
+trap cleanup EXIT
+
+status=0
+
+echo "═══ Pullbox Security Check ═══"
+echo ""
+echo "── pip-audit (blocking) ──"
+"${pip_bin}" freeze --exclude-editable | awk '!/^pullbox==/' > "${requirements_file}"
+if ! "${pip_audit_bin}" --strict --desc on -r "${requirements_file}" \
+  --ignore-vuln GHSA-rf74-v2fm-23pw \
+  --ignore-vuln CVE-2026-33230 \
+  --ignore-vuln CVE-2026-33231 \
+  --ignore-vuln CVE-2026-4539; then
+  status=1
+fi
+echo ""
+echo "── safety (advisory) ──"
+if ! "${safety_bin}" check --save-json safety-report.json; then
+  echo "⚠ safety reported findings or exited non-zero. Review safety-report.json"
+fi
+echo ""
+echo "── bandit (advisory) ──"
+if ! "${bandit_bin}" -r src/pullbox/ -ll -f json -o bandit-report.json; then
+  echo "⚠ bandit reported medium-or-higher findings. Review bandit-report.json"
+fi
+echo ""
+echo "═══ Done ═══"
+
+exit "${status}"

@@ -1,0 +1,68 @@
+{#- Series card — grid card for series list page. Expects: s, owned_count, wanted_count -#}
+{% from "components/status_badge.html" import status_badge %}
+{% set cover_src = series_cover_url(s) %}
+
+<a
+  href="/series/{{ s.id }}"
+  hx-boost="false"
+  data-testid="series-item-link"
+  class="library-series-card group block"
+>
+  {#- Cover image -#}
+  <div class="library-series-cover-frame aspect-[2/3]">
+    {% if cover_src %}
+    <img src="{{ cover_src }}" alt="{{ s.title }}" class="h-full w-full object-cover" loading="lazy">
+    {% elif s.cover_url %}
+    <img src="{{ s.cover_url }}" alt="{{ s.title }}" class="h-full w-full object-cover" loading="lazy">
+    {% else %}
+    <div class="library-series-placeholder">
+      <svg class="w-12 h-12" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+      </svg>
+    </div>
+    {% endif %}
+
+    {#- Monitored badge overlay -#}
+    {% if s.monitored %}
+    <div class="absolute top-2 right-2">
+      <span class="pill-info">Monitored</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {#- Card info -#}
+  <div class="space-y-3 p-4">
+    <h3 class="line-clamp-2 text-sm font-semibold text-pb-text transition-colors group-hover:text-pb-interactive">{{ s.title }}</h3>
+
+    <div class="library-series-meta flex flex-wrap items-center gap-2">
+      {% if s.publisher %}<span>{{ s.publisher.name }}</span>{% endif %}
+      {% if s.year_start %}
+        <span class="text-pb-text-dim">&middot;</span>
+        <span>{{ format_series_year_label(s.year_start, s.year_end, s.status) }}</span>
+      {% endif %}
+    </div>
+
+    {#- Progress bar -#}
+    {% set total = s.issues|length %}
+    {% if total > 0 %}
+    <div class="rounded-xl border border-pb-border bg-pb-card-hover/20 p-3">
+      <div class="flex items-center justify-between gap-2 text-xs">
+        <span class="text-pb-text-sec">Owned issues</span>
+        <span class="tabular-nums font-semibold text-pb-text">{{ owned_count }}/{{ total }}</span>
+      </div>
+      <div class="library-series-progress-track mt-2 h-1.5 overflow-hidden rounded-full">
+        <div class="h-full bg-pb-success rounded-full transition-all" style="width: {{ (owned_count / total * 100)|round|int }}%"></div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="flex flex-wrap items-center gap-1.5">
+      {{ status_badge(s.status) }}
+      {% if s.series_type.value != 'standard' %}
+      <span class="pill pill-purple">
+        {{ s.series_type.ui_display_name }}
+      </span>
+      {% endif %}
+    </div>
+  </div>
+</a>

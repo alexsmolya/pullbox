@@ -1,0 +1,11 @@
+<span data-series-total="{{ total }}">
+  {% if total == 0 %}
+    {% if q %}
+      No results for "{{ q }}"
+    {% else %}
+      No series found
+    {% endif %}
+  {% else %}
+    {{ total }} series found{% if q %} for "{{ q }}"{% endif %}
+  {% endif %}
+</span>

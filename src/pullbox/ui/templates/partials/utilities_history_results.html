@@ -1,0 +1,196 @@
+{% from "components/log_viewer.html" import log_viewer %}
+{%- macro history_sort_header(field, label, extra_classes="", width="") -%}
+  {%- set current_sort = history_sort|default("-completed_at") -%}
+  {%- set current_field = current_sort.lstrip("-") -%}
+  {%- set current_desc = current_sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  {%- set sort_qs = "tab=history&sort=" ~ next_sort ~ "&page=1" -%}
+  {%- if utility_history_status %}{% set sort_qs = sort_qs ~ "&utility_history_status=" ~ (utility_history_status|urlencode) %}{% endif -%}
+  <th class="table-head-cell table-head-cell-tight {{ width }} {{ extra_classes }}">
+    <button
+      type="button"
+      data-testid="utilities-history-sort-{{ field }}"
+      hx-get="/utilities?{{ sort_qs }}"
+      hx-target="#utilities-history-section"
+      hx-swap="outerHTML"
+      hx-sync="#utilities-history-section:replace"
+      hx-push-url="true"
+      class="group inline-flex items-center gap-1 transition-colors hover:text-pb-text{% if current_field == field %} text-pb-interactive{% endif %}"
+    >
+      {{ label }}
+      <svg class="h-3 w-3 transition-all{% if current_field == field %} opacity-100{% if not current_desc %} rotate-180{% endif %}{% else %} opacity-0 group-hover:opacity-40{% endif %}"
+           fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </th>
+{%- endmacro -%}
+
+<div class="table-shell overflow-visible">
+  {% if history_jobs %}
+    <div class="overflow-hidden rounded-b-xl">
+      <div class="table-scroll">
+        <table data-testid="utilities-history-table" class="table-base table-fixed min-w-[640px] sm:min-w-[760px] lg:min-w-[920px]">
+          <thead class="table-head">
+            <tr class="table-head-row">
+              {{ history_sort_header("job", "Job") }}
+              {{ history_sort_header("status", "Status", width="w-32") }}
+              {{ history_sort_header("items", "Items", extra_classes="table-head-cell-right hidden sm:table-cell", width="w-28") }}
+              {{ history_sort_header("completed_at", "Completed", extra_classes="table-head-cell-right hidden lg:table-cell", width="w-44 xl:w-48") }}
+              <th class="table-head-cell table-head-cell-tight table-head-cell-right w-28 xl:w-32">Actions</th>
+            </tr>
+          </thead>
+          {% for job in history_jobs %}
+            {% set job_id_expr = job.id|tojson|forceescape %}
+            <tbody
+              class="table-body table-row-hover border-b border-pb-border last:border-b-0"
+              {% if loop.index0 % 2 == 1 %}style="background-color: var(--pb-table-row-stripe)"{% endif %}
+            >
+              <tr class="table-row">
+                <td class="table-cell table-cell-tight max-w-[300px]">
+                  <div class="min-w-0">
+                    <span class="block truncate text-pb-text">{{ job.display_name }}</span>
+                    <span class="mt-0.5 block text-xs text-pb-text-dim">{{ job.job_type }}</span>
+                  </div>
+                </td>
+                <td class="table-cell table-cell-tight">
+                  <span class="pill {{ job.history_status_pill_class }}">
+                    {% if job.history_status_key == "partial" %}
+                      <span class="inline-flex h-3 w-3 items-center justify-center text-[11px] font-semibold leading-none" aria-hidden="true">!</span>
+                    {% elif job.history_status_key == "completed" %}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                      </svg>
+                    {% elif job.history_status_key == "failed" %}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                      </svg>
+                    {% elif job.history_status_key == "cancelled" %}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                      </svg>
+                    {% elif job.history_status_key == "rolled_back" %}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 14L4 9m0 0l5-5M4 9h11a5 5 0 010 10h-1"/>
+                      </svg>
+                    {% endif %}
+                    <span>{{ job.history_status_label }}</span>
+                  </span>
+                </td>
+                <td class="table-cell table-cell-tight table-cell-right table-cell-muted table-cell-nowrap hidden sm:table-cell">
+                  <span>{{ job.completed_items|default(0, true) }} / {{ job.total_items|default(0, true) }}</span>
+                </td>
+                <td class="table-cell table-cell-tight table-cell-right table-cell-muted hidden w-44 xl:w-48 lg:table-cell">
+                  <span class="block truncate text-right">{{ job.completed_at_label or "" }}</span>
+                </td>
+                <td class="table-cell table-cell-tight table-cell-right">
+                  <div class="flex items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      @click="toggleJob({{ job_id_expr }})"
+                      hx-get="/htmx/utilities/jobs/{{ job.id }}/detail"
+                      hx-target="#utilities-history-job-detail-{{ job.id }}"
+                      hx-swap="innerHTML"
+                      hx-trigger="click once"
+                      class="utilities-queue-act-btn"
+                      data-tip="Job details"
+                      data-tip-pos="left"
+                      aria-label="Toggle job details"
+                    >
+                      <svg class="h-3.5 w-3.5 transition-transform" :class="expandedJob === {{ job_id_expr }} && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                      </svg>
+                    </button>
+                    {% if job.can_rollback %}
+                      <button
+                        x-show="!isRollbackPending({{ job_id_expr }})"
+                        x-cloak
+                        type="button"
+                        data-testid="utilities-history-rollback"
+                        @click="rollbackJob({{ job_id_expr }})"
+                        class="utilities-queue-act-btn"
+                        data-tip="Rollback job"
+                        data-tip-pos="left"
+                        aria-label="Rollback job"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M9 14L4 9m0 0l5-5M4 9h11a5 5 0 010 10h-1"/>
+                        </svg>
+                      </button>
+                    {% endif %}
+                    <button
+                      type="button"
+                      @click="deleteJob({{ job_id_expr }})"
+                      class="utilities-queue-act-btn utilities-queue-act-btn-danger"
+                      data-tip="Delete job"
+                      data-tip-pos="left"
+                      aria-label="Delete job"
+                    >
+                      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              <tr class="table-row" x-show="expandedJob === {{ job_id_expr }}">
+                <td colspan="5" class="table-cell table-cell-tight max-w-0 overflow-hidden border-l-2 border-pb-interactive/30 bg-pb-surface/40">
+                  <div class="min-w-0 max-w-full overflow-hidden">
+                    <div class="grid grid-cols-4 gap-4 py-2 mb-2">
+                      <div class="text-center">
+                        <div class="text-sm font-medium text-pb-text">{{ job.completed_items|default(0, true) }}</div>
+                        <div class="text-[10px] text-pb-text-dim">Completed</div>
+                      </div>
+                      <div class="text-center">
+                        <div class="text-sm font-medium {% if job.failed_items|default(0, true) > 0 %}text-pb-error{% else %}text-pb-text{% endif %}">{{ job.failed_items|default(0, true) }}</div>
+                        <div class="text-[10px] text-pb-text-dim">Failed</div>
+                      </div>
+                      <div class="text-center">
+                        <div class="text-sm font-medium text-pb-text">{{ job.skipped_items|default(0, true) }}</div>
+                        <div class="text-[10px] text-pb-text-dim">Skipped</div>
+                      </div>
+                      <div class="text-center">
+                        <div class="text-sm font-medium {% if job.warning_count|default(0, true) > 0 %}text-pb-warning{% else %}text-pb-text{% endif %}">{{ job.warning_count|default(0, true) }}</div>
+                        <div class="text-[10px] text-pb-text-dim">Warnings</div>
+                      </div>
+                    </div>
+                    {% if job.error_message %}
+                      <div class="mb-2">
+                        <p class="text-xs text-pb-error">{{ job.error_message }}</p>
+                      </div>
+                    {% endif %}
+                    <div
+                      id="utilities-history-job-detail-{{ job.id }}"
+                      data-testid="utilities-history-job-detail-placeholder"
+                      class="rounded-xl border border-dashed border-pb-border bg-pb-card/40 px-4 py-3 text-xs text-pb-text-dim"
+                    >
+                      Expand this job to load logs and detailed output.
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
+  {% else %}
+    <div class="overflow-hidden rounded-b-xl">
+      <div data-testid="utilities-history-empty" class="table-empty space-y-2">
+        <svg class="mx-auto h-10 w-10 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        {% if utility_history_status %}
+          <p class="table-empty-copy">No history entries match the current filters.</p>
+        {% else %}
+          <p class="table-empty-copy">No utility job history yet.</p>
+          <p class="text-xs text-pb-text-dim">Completed and failed utility jobs will appear here.</p>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+</div>

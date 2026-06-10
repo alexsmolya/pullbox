@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — {{ instance_name() }}{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div
+  class="admin-workspace-page"
+  data-testid="settings-page"
+  data-admin-workspace-contract="v1"
+  hx-boost="false"
+  x-data="settingsPage({ csrfToken: '{{ csrf_token }}' })"
+>
+  {% include "partials/settings_header.html" %}
+  {% include "partials/settings_body.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/settings_footer_dock.html" %}
+{% endblock %}

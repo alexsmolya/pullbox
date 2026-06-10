@@ -1,0 +1,26 @@
+{% from "components/page_dock.html" import page_dock %}
+
+{% set _base_params = [] %}
+{% if issue_status %}{% set _ = _base_params.append("issue_status=" ~ issue_status) %}{% endif %}
+{% if issue_sort and issue_sort != "-issue_number" %}{% set _ = _base_params.append("issue_sort=" ~ issue_sort) %}{% endif %}
+{% set _full_base = "/series/" ~ series.id ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+{% set _hx_base = "/htmx/series/" ~ series.id ~ "/issues" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+{% set _owned_label = owned_count|string ~ "/" ~ total_issue_count|string %}
+{% set _status_items = [
+  {"led": "green" if series.monitored else "off", "label": "status", "value": "Monitored" if series.monitored else "Paused"},
+  {"label": "acquisition", "value": (((owned_count / total_issue_count * 100)|round|int) if total_issue_count > 0 else 0)|string ~ "%"},
+  {"label": "owned", "value": _owned_label},
+  {"label": "wanted", "value": wanted_count|string},
+  {"label": "cvid", "value": (series.comicvine_id|string) if series.comicvine_id else "Unlinked"},
+] %}
+
+{{ page_dock(
+  page=page,
+  total_pages=total_pages,
+  base_url=_full_base,
+  status_items=_status_items,
+  hx_target="#series-issues-panel",
+  hx_swap="outerHTML",
+  hx_select="",
+  hx_base_url=_hx_base
+) }}

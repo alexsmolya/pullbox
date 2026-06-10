@@ -1,0 +1,82 @@
+{% set primary_action_classes = "btn-primary" %}
+{% set secondary_action_classes = "btn-ghost" %}
+{% set danger_action_classes = "btn-danger" %}
+
+<div data-testid="series-detail-actions" class="series-domain-actions-buttons">
+  <div
+    data-testid="series-action-monitor-control"
+    class="series-domain-inline-toggle"
+    x-bind:class="saving ? 'pointer-events-none opacity-50' : ''"
+  >
+    <span
+      data-testid="series-action-monitor-label"
+      class="series-domain-inline-toggle-label"
+      x-text="monitored ? 'Monitored' : 'Paused'"
+    >
+      {% if series.monitored %}Monitored{% else %}Paused{% endif %}
+    </span>
+    <label class="relative inline-flex shrink-0 items-center" data-testid="series-action-monitor-toggle">
+      <input
+        type="checkbox"
+        role="switch"
+        class="peer toggle-input"
+        aria-label="Monitor this series for missing issues"
+        :checked="monitored"
+        :aria-checked="monitored ? 'true' : 'false'"
+        :disabled="saving"
+        @change="toggleMonitoring($event.target.checked)"
+      >
+      <span class="toggle-switch"></span>
+    </label>
+  </div>
+
+  <button
+    data-testid="series-action-search"
+    @click="searchMissing()"
+    :disabled="searching"
+    class="{{ primary_action_classes }}"
+  >
+    <span x-show="!searching" class="flex items-center gap-1.5">
+      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+      </svg>
+      Search missing
+    </span>
+    <span x-show="searching" x-cloak class="flex items-center gap-1.5">
+      <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
+      Searching...
+    </span>
+  </button>
+
+  <button
+    data-testid="series-action-refresh"
+    @click="refreshMetadata()"
+    :disabled="refreshing"
+    class="{{ secondary_action_classes }}"
+  >
+    <span x-show="!refreshing" class="flex items-center gap-1.5">
+      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992V4.356m-1.636 12.728a9 9 0 11-2.287-9.051L21 8.25" />
+      </svg>
+      Refresh metadata
+    </span>
+    <span x-show="refreshing" x-cloak class="flex items-center gap-1.5">
+      <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
+      Refreshing...
+    </span>
+  </button>
+
+  <button
+    data-testid="series-action-delete"
+    @click="window.dispatchEvent(new CustomEvent('series-delete-open'))"
+    class="{{ danger_action_classes }}"
+  >
+    Delete series
+  </button>
+</div>

@@ -1,0 +1,371 @@
+{#- Import Step 2/4: Progress — SSE-driven progress display.
+
+    Template context (from UI route):
+      - job: ImportJob instance
+      - next_step: int (3 = review after scan/rollback, 5 = results after import; default 3)
+      - progress_mode: "scan" | "import" | "rollback"
+      - completion_target_step: int
+    Shared controller: importProgressData() from pullbox.js.
+-#}
+{% from "components/settings_shell.html" import ui_icon %}
+{% from "components/import_log_viewer.html" import import_log_viewer %}
+
+<div
+  x-data="importProgressData({{ job.id }}, {{ completion_target_step | default(next_step | default(3)) }}, '{{ job.source_type.value }}', {{ progress_snapshot|tojson|forceescape }}, '{{ progress_mode|default('scan') }}')"
+  x-init="init()"
+  data-testid="import-collection-progress"
+  class="space-y-6"
+>
+  <div
+    x-show="showActionBar()"
+    x-cloak
+    data-testid="import-progress-action-bar"
+    class="rounded-xl border border-pb-border bg-pb-card/60 px-4 py-3"
+  >
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div class="flex flex-wrap items-center gap-2">
+        <a
+          x-show="failed && (isImportMode() || isRollbackMode())"
+          href="/import?tab=history"
+          hx-boost="false"
+          class="btn-ghost btn-sm inline-flex items-center"
+        >
+          View import history
+        </a>
+        <button
+          x-show="failed && (isImportMode() || isRollbackMode())"
+          x-cloak
+          type="button"
+          @click="startNewImport()"
+          class="btn-ghost btn-sm inline-flex items-center justify-center"
+        >
+          Start new import
+        </button>
+        <button
+          x-show="failed && !isImportMode() && !isRollbackMode()"
+          x-cloak
+          type="button"
+          @click="startNewImport()"
+          class="btn-ghost btn-sm inline-flex items-center justify-center"
+        >
+          Start over
+        </button>
+        <button
+          x-show="!isImportMode() && !isRollbackMode() && completed"
+          x-cloak
+          type="button"
+          @click="cancelAndRestart()"
+          data-testid="import-progress-cancel"
+          class="btn-ghost btn-sm inline-flex items-center justify-center"
+        >
+          Cancel
+        </button>
+        <button
+          x-show="showPauseAction()"
+          x-cloak
+          type="button"
+          @click="pauseRun()"
+          :disabled="pausing"
+          data-testid="import-progress-pause"
+          class="btn-ghost btn-sm inline-flex items-center justify-center"
+        >
+          <span x-show="!pausing" x-text="pauseActionLabel()">Pause import</span>
+          <span x-show="pausing" x-cloak>Pausing...</span>
+        </button>
+        <button
+          x-show="showResumeAction()"
+          x-cloak
+          type="button"
+          @click="resumeRun()"
+          :disabled="isResumeActionDisabled()"
+          data-testid="import-progress-resume"
+          class="btn-ghost btn-sm inline-flex items-center justify-center"
+        >
+          <span x-show="!resuming" x-text="resumeActionLabel()">Resume import</span>
+          <span x-show="resuming" x-cloak>Resuming...</span>
+        </button>
+        <button
+          x-show="showCancelAction()"
+          x-cloak
+          type="button"
+          @click="cancelRun()"
+          :disabled="cancelling"
+          data-testid="import-progress-cancel-run"
+          class="btn-ghost btn-sm inline-flex items-center justify-center"
+        >
+          <span x-show="!cancelling" x-text="cancelActionLabel()">Cancel import</span>
+          <span x-show="cancelling" x-cloak>Cancelling...</span>
+        </button>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <button
+          x-show="completed && isImportMode()"
+          x-cloak
+          type="button"
+          data-testid="import-progress-continue-results"
+          @click="continueToResults()"
+          class="btn-primary btn-sm flex items-center gap-2"
+        >
+          Continue to results
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+          </svg>
+        </button>
+        <button
+          x-show="completed && isRollbackMode()"
+          x-cloak
+          type="button"
+          data-testid="import-progress-view-history"
+          @click="viewImportHistory()"
+          class="btn-primary btn-sm flex items-center gap-2"
+        >
+          View import history
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+          </svg>
+        </button>
+        <button
+          x-show="completed && !isImportMode() && !isRollbackMode()"
+          x-cloak
+          type="button"
+          data-testid="import-progress-continue"
+          @click="advanceToReview()"
+          class="btn-primary btn-sm flex items-center gap-2"
+        >
+          Continue to review
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <div class="section-body space-y-5">
+      <div
+        class="space-y-4"
+        :class="nextStep === 3 ? 'space-y-2' : 'space-y-4'"
+      >
+        <div class="space-y-1">
+          <h2
+            data-testid="import-progress-title"
+            class="text-xl font-semibold tracking-tight text-pb-text"
+            x-text="titleText()"
+          ></h2>
+          <p
+            x-show="summaryText()"
+            x-cloak
+            data-testid="import-progress-summary"
+            class="text-sm leading-6 text-pb-text-sec"
+            x-text="summaryText()"
+          ></p>
+        </div>
+
+        <div class="rounded-xl border border-pb-border bg-pb-card-hover/40 p-4">
+          <div class="flex flex-col gap-4">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div class="flex min-w-0 items-start gap-3">
+                <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-pb-border bg-pb-card">
+                  <div x-show="!failed && !completed" class="h-5 w-5 rounded-full border-[3px] border-pb-border border-t-pb-interactive animate-spin"></div>
+                  <div x-show="completed" x-cloak class="flex h-7 w-7 items-center justify-center rounded-full bg-pb-success-dim text-pb-success">
+                    <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+                    </svg>
+                  </div>
+                  <div x-show="failed" x-cloak class="text-pb-error">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+                    </svg>
+                  </div>
+                </div>
+
+                <div class="min-w-0">
+                  <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Current phase</p>
+                  <p data-testid="import-progress-phase-label" class="truncate text-sm font-medium text-pb-text" x-text="failed ? 'Run stopped' : phaseLabel"></p>
+                  <p
+                    x-show="!failed && message"
+                    x-cloak
+                    data-testid="import-progress-phase-detail"
+                    class="mt-1 text-sm leading-6 text-pb-text-sec"
+                    x-text="message"
+                  ></p>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="app-progress">
+                <div class="app-progress-track">
+                  <div
+                    class="app-progress-fill transition-all duration-500"
+                    :class="failed ? 'app-progress-fill--error' : completed ? '' : 'app-progress-fill--interactive'"
+                    :style="'width: ' + progress + '%'"
+                  ></div>
+                </div>
+                <span
+                  class="app-progress-value"
+                  :class="failed ? 'app-progress-value--error' : completed ? '' : 'app-progress-value--interactive'"
+                  x-text="progress + '%'"
+                ></span>
+              </div>
+              <div
+                x-show="elapsedLabel || etaLabel"
+                x-cloak
+                class="flex flex-wrap justify-end gap-3"
+              >
+                <span
+                  x-show="elapsedLabel"
+                  x-cloak
+                  data-testid="import-progress-elapsed"
+                  class="app-progress-value-secondary"
+                  x-text="elapsedLabel"
+                ></span>
+                <span
+                  x-show="etaLabel"
+                  x-cloak
+                  data-testid="import-progress-eta"
+                  class="app-progress-value-secondary"
+                  x-text="'ETA: ' + etaLabel"
+                ></span>
+              </div>
+            </div>
+
+            <div
+              x-show="showCurrentItemProgress()"
+              x-cloak
+              class="space-y-2 rounded-xl border border-pb-border bg-pb-card px-3 py-3"
+            >
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div class="min-w-0">
+                  <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Current item</p>
+                  <p
+                    data-testid="import-progress-current-file-name"
+                    class="truncate text-sm font-medium text-pb-text"
+                    x-text="currentItemName()"
+                  ></p>
+                  <p
+                    data-testid="import-progress-current-file-stage"
+                    class="mt-1 text-sm leading-6 text-pb-text-sec"
+                    x-text="currentItemStageLabel()"
+                  ></p>
+                </div>
+                <p
+                  data-testid="import-progress-current-file-detail"
+                  class="shrink-0 text-xs font-medium text-pb-text-dim"
+                  x-text="currentItemDetailText()"
+                ></p>
+              </div>
+
+              <div class="app-progress" data-testid="import-progress-current-file">
+                <div class="app-progress-track">
+                  <div
+                    class="app-progress-fill app-progress-fill--interactive"
+                    :class="currentItemProgressBarTransitionClass()"
+                    :style="'width: ' + currentItemProgress() + '%'"
+                  ></div>
+                </div>
+                <span
+                  class="app-progress-value app-progress-value--interactive"
+                  x-text="currentItemProgress() + '%'"
+                ></span>
+              </div>
+            </div>
+
+            <div x-show="failed" x-cloak class="inline-alert inline-alert-danger">
+              <span class="inline-alert-icon">{{ ui_icon("warning", "h-4 w-4") }}</span>
+              <div class="min-w-0">
+                <span x-text="message"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        x-show="!failed"
+        x-cloak
+        class="space-y-2 pt-1"
+      >
+        <p class="section-eyebrow !mb-0">
+          <span x-text="isImportMode() || isRollbackMode() ? 'Import counters' : 'Discovery counters'"></span>
+        </p>
+        <div class="border-t border-pb-border"></div>
+      </div>
+
+      <div x-show="!isImportMode() && !isRollbackMode() && !failed" x-cloak class="space-y-3">
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Files</p>
+            <p class="mt-1 text-lg font-semibold text-pb-text" x-text="reviewSummary.filesTotal || 0"></p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Series</p>
+            <p class="mt-1 text-lg font-semibold text-pb-text" x-text="reviewSummary.seriesTotal || 0"></p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">In Library</p>
+            <p class="mt-1 text-lg font-semibold text-pb-text" x-text="reviewSummary.inLibrary || 0"></p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Matched</p>
+            <p class="mt-1 text-lg font-semibold text-pb-success" x-text="reviewSummary.matched || 0"></p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Extra Files</p>
+            <p class="mt-1 text-lg font-semibold text-pb-text" x-text="reviewSummary.duplicateCopies || 0"></p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">No Match</p>
+            <p class="mt-1 text-lg font-semibold text-pb-warning" x-text="reviewSummary.noMatch || 0"></p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Conflicts</p>
+            <p class="mt-1 text-lg font-semibold text-pb-warning" x-text="reviewSummary.conflicts || 0"></p>
+          </div>
+        </div>
+      </div>
+
+      <div x-show="(isImportMode() || isRollbackMode()) && !failed" x-cloak class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Imported</p>
+          <p class="mt-1 text-lg font-semibold text-pb-success" x-text="stats.series_imported || 0"></p>
+        </div>
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Remaining</p>
+          <p class="mt-1 text-lg font-semibold text-pb-text" x-text="remaining"></p>
+        </div>
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Failed</p>
+          <p class="mt-1 text-lg font-semibold" :class="(stats.series_failed || 0) > 0 ? 'text-pb-error' : 'text-pb-text'" x-text="stats.series_failed || 0"></p>
+        </div>
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Selected</p>
+          <p class="mt-1 text-lg font-semibold text-pb-text" x-text="totalSelected"></p>
+        </div>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-eyebrow !mb-0">Recent log output</p>
+        <div class="border-t border-pb-border"></div>
+        {{ import_log_viewer(
+          job.id,
+          title=(
+            "Rollback log"
+            if progress_mode|default("scan") == "rollback"
+            else ("Import log" if progress_mode|default("scan") == "import" else "Scan log")
+          ),
+          root_testid="import-progress-recent-log",
+          live=true,
+          max_height="280px",
+          class_name="rounded-xl"
+        ) }}
+      </div>
+
+    </div>
+  </div>
+</div>
+
+{% include "partials/import_collection_footer_oob.html" %}

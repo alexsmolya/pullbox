@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Download Clients Health — {{ instance_name() }}{% endblock %}
+{% block page_title %}Health{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div
+  class="w-full"
+  data-testid="health-download-clients-page"
+  x-data="healthPage({ csrfToken: '{{ csrf_token }}', componentKey: 'download_clients' })"
+>
+  {% include "partials/health_download_clients_status_region.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/health_download_clients_footer_dock.html" %}
+{% endblock %}

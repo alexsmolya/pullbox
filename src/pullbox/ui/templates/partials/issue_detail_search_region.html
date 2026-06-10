@@ -1,0 +1,32 @@
+<section data-testid="issue-search-region" class="overflow-hidden rounded-xl border border-pb-border bg-pb-card">
+  <div class="border-b border-pb-border px-5 py-4">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div class="space-y-1">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Issue Search</p>
+        <h3 data-testid="issue-search-region-title" class="text-base font-semibold text-pb-text">Search Results</h3>
+        <p class="text-sm leading-6 text-pb-text-sec">
+          Use Search for an automatic indexer pass, or Manual Search when you want to inspect and choose a specific release.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="issue-search-panel-shell" class="px-5 py-5">
+    <div id="issue-search-panel" class="space-y-4">
+      <div
+        data-testid="issue-search-empty-state"
+        class="rounded-xl border border-dashed border-pb-border-hover bg-pb-surface/40 px-6 py-10 text-center"
+      >
+        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-pb-card-hover/60 text-pb-interactive">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+          </svg>
+        </div>
+        <h4 class="mt-4 text-sm font-semibold text-pb-text">No search has been run yet</h4>
+        <p class="mt-1 text-sm text-pb-text-sec">
+          Search results will appear here without disturbing the rest of the issue page.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>

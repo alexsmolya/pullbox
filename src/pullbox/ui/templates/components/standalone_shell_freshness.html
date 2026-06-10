@@ -1,0 +1,101 @@
+<script>
+  (function() {
+    var shellVersion = document.documentElement.getAttribute("data-standalone-shell-version");
+    var reloadKey = "pb-standalone-shell-reload:" + window.location.pathname;
+
+    function isChromiumBrowser() {
+      var ua = navigator.userAgent || "";
+      return /Chrome|Chromium|Edg\/|OPR\//.test(ua) && !/Firefox\//.test(ua);
+    }
+
+    function shouldValidateStandaloneShell() {
+      return !!shellVersion && !!window.fetch && !!window.sessionStorage && isChromiumBrowser();
+    }
+
+    function preventStandaloneDocumentRestore() {
+      if (!isChromiumBrowser()) {
+        return;
+      }
+
+      // Chromium can restore standalone documents from BFCache/session history
+      // even when the route is served with no-store headers. A no-op unload
+      // listener keeps setup/login out of that restore path.
+      window.addEventListener("unload", function() {});
+    }
+
+    function extractShellVersion(markup) {
+      if (typeof markup !== "string") {
+        return "";
+      }
+      var match = markup.match(/data-standalone-shell-version="([^"]+)"/);
+      return match ? match[1] : "";
+    }
+
+    function waitForTimeout(ms) {
+      return new Promise(function(resolve) {
+        window.setTimeout(resolve, ms);
+      });
+    }
+
+    function validateStandaloneShellFreshness() {
+      if (!shouldValidateStandaloneShell()) {
+        return Promise.resolve();
+      }
+
+      var validationUrl = window.location.pathname + window.location.search;
+      var validationRequest = fetch(validationUrl, {
+        cache: "no-store",
+        headers: { "X-Pullbox-Shell-Validate": "true" },
+      })
+        .then(function(response) {
+          if (!response.ok) {
+            return "";
+          }
+          return response.text();
+        })
+        .then(function(markup) {
+          var latestShellVersion = extractShellVersion(markup);
+          if (!latestShellVersion || latestShellVersion === shellVersion) {
+            sessionStorage.removeItem(reloadKey);
+            return;
+          }
+
+          if (sessionStorage.getItem(reloadKey) === latestShellVersion) {
+            sessionStorage.removeItem(reloadKey);
+            return;
+          }
+
+          sessionStorage.setItem(reloadKey, latestShellVersion);
+          window.location.reload();
+          return new Promise(function() {});
+        })
+        .catch(function() {});
+
+      return Promise.race([validationRequest, waitForTimeout(900)]);
+    }
+
+    function shouldValidateOnPageShow(event) {
+      if (!shouldValidateStandaloneShell()) {
+        return false;
+      }
+      if (event && event.persisted) {
+        return true;
+      }
+      if (!window.performance || typeof window.performance.getEntriesByType !== "function") {
+        return false;
+      }
+      var navigationEntry = window.performance.getEntriesByType("navigation")[0];
+      return !!navigationEntry && navigationEntry.type === "back_forward";
+    }
+
+    window.__pbValidateStandaloneShellFreshness = validateStandaloneShellFreshness;
+    preventStandaloneDocumentRestore();
+    window.__pbStandaloneShellFreshnessPromise = validateStandaloneShellFreshness();
+    window.addEventListener("pageshow", function(event) {
+      if (!shouldValidateOnPageShow(event)) {
+        return;
+      }
+      window.__pbStandaloneShellFreshnessPromise = validateStandaloneShellFreshness();
+    });
+  })();
+</script>

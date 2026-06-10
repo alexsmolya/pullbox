@@ -1,0 +1,220 @@
+{% from "components/mission_control_table.html" import mission_control_table %}
+
+{% set _queue_qs_parts = ["tab=queue"] %}
+{% if reason_filter %}{% set _ = _queue_qs_parts.append("reason=" ~ reason_filter) %}{% endif %}
+{% if confidence_filter %}{% set _ = _queue_qs_parts.append("confidence=" ~ confidence_filter) %}{% endif %}
+{% if protocol_filter %}{% set _ = _queue_qs_parts.append("protocol=" ~ protocol_filter) %}{% endif %}
+{% if search_query %}{% set _ = _queue_qs_parts.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+{% if page > 1 %}{% set _ = _queue_qs_parts.append("page=" ~ page) %}{% endif %}
+
+<div
+  id="intervention-queue-results"
+  data-testid="intervention-queue-results"
+  data-intervention-total="{{ filtered_count }}"
+  x-init="selectedIds = (window._interventionSelectedIds || []).slice(); $nextTick(() => syncSelectionUi())"
+  hx-get="/intervention{{ '?' ~ _queue_qs_parts|join('&') if _queue_qs_parts else '' }}"
+  hx-trigger="every 30s [window.interventionQueueRefreshEnabled()], intervention:refresh from:body"
+  hx-target="#intervention-queue-results"
+  hx-swap="outerHTML"
+>
+  {% if pending_matches %}
+    <div id="intervention-list" data-testid="intervention-list">
+      {% call mission_control_table("intervention-queue-table", table_class="min-w-[760px] lg:min-w-[1060px]") %}
+          <thead>
+            <tr>
+              <th class="c w-[32px]">SEL</th>
+              <th>Release</th>
+              <th>Issue</th>
+              <th class="w-[96px]">Confidence</th>
+              <th class="w-[88px]">Protocol</th>
+              <th class="r w-[88px]">Size</th>
+              <th class="r w-[72px]">Age</th>
+              <th class="r w-[108px]">Actions</th>
+            </tr>
+          </thead>
+          {% for pm in pending_matches %}
+            {% set details = pm.match_details or {} %}
+            {% set meta = intervention_item_meta.get(pm.id, {}) %}
+            {% set confidence_pill = "pill-error" %}
+            {% if pm.confidence == "high" %}
+              {% set confidence_pill = "pill-success" %}
+            {% elif pm.confidence == "medium" %}
+              {% set confidence_pill = "pill-warning" %}
+            {% endif %}
+            <tbody
+              x-data="{ expanded: false }"
+              x-bind:data-intervention-queue-expanded="expanded ? 'true' : 'false'"
+            >
+              <tr data-testid="intervention-item-{{ pm.id }}">
+                <td class="c">
+                  <input
+                    type="checkbox"
+                    value="{{ pm.id }}"
+                    data-intervention-id="{{ pm.id }}"
+                    data-testid="intervention-item-checkbox-{{ pm.id }}"
+                    class="checkbox-pb"
+                    @change="toggleSelection({{ pm.id }}, $event.target.checked)"
+                    :checked="isSelected({{ pm.id }})"
+                  >
+                </td>
+                <td>
+                  <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                    <span class="block truncate" data-tooltip-measure>{{ pm.release_title }}</span>
+                  </span>
+                  <div class="downloads-release-meta">{{ meta.review_reason_summary }}</div>
+                </td>
+                <td>
+                  {% if pm.issue and pm.issue.series %}
+                    <a href="/issues/{{ pm.issue.id }}" class="downloads-issue-link">{{ pm.issue.series.title }} #{{ pm.issue.issue_number|issue_num }}</a>
+                  {% else %}
+                    <span class="downloads-muted-text">No linked issue</span>
+                  {% endif %}
+                </td>
+                <td><span class="pill {{ confidence_pill }}">{{ pm.confidence|title }}</span></td>
+                <td class="downloads-mono-cell">{{ meta.protocol_label }}</td>
+                <td class="downloads-mono-cell r">{{ pm.file_size|filesize if pm.file_size else "—" }}</td>
+                <td class="downloads-mono-cell r">{{ details.get("age_days") ~ "d" if details.get("age_days") is not none else "—" }}</td>
+                <td class="r">
+                  <span class="downloads-action-group">
+                    <button
+                      type="button"
+                      data-testid="intervention-item-details-toggle-{{ pm.id }}"
+                      @click="expanded = !expanded"
+                      class="downloads-action-btn"
+                      data-tip="Details"
+                      data-tip-pos="left"
+                      aria-label="Toggle details"
+                      :aria-expanded="expanded ? 'true' : 'false'"
+                    >
+                      <svg class="transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                      </svg>
+                    </button>
+
+                    <form
+                      hx-post="/htmx/intervention/{{ pm.id }}/approve"
+                      hx-target="#intervention-queue-results"
+                      hx-swap="outerHTML"
+                      hx-sync="#intervention-queue-results:replace"
+                      hx-on::after-request="if ($event.detail.successful) { pruneSelection() }"
+                    >
+                      <input type="hidden" name="reason" value="{{ reason_filter }}">
+                      <input type="hidden" name="confidence" value="{{ confidence_filter }}">
+                      <input type="hidden" name="protocol" value="{{ protocol_filter }}">
+                      <input type="hidden" name="search" value="{{ search_query }}">
+                      <input type="hidden" name="page" value="{{ page }}">
+                      <button
+                        type="submit"
+                        data-testid="intervention-approve-{{ pm.id }}"
+                        class="downloads-action-btn"
+                        data-tip="Approve"
+                        data-tip-pos="left"
+                        aria-label="Approve"
+                      >
+                        <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                        </svg>
+                      </button>
+                    </form>
+
+                    <form
+                      hx-post="/htmx/intervention/{{ pm.id }}/reject"
+                      hx-target="#intervention-queue-results"
+                      hx-swap="outerHTML"
+                      hx-sync="#intervention-queue-results:replace"
+                      hx-on::after-request="if ($event.detail.successful) { pruneSelection() }"
+                    >
+                      <input type="hidden" name="reason" value="{{ reason_filter }}">
+                      <input type="hidden" name="confidence" value="{{ confidence_filter }}">
+                      <input type="hidden" name="protocol" value="{{ protocol_filter }}">
+                      <input type="hidden" name="search" value="{{ search_query }}">
+                      <input type="hidden" name="page" value="{{ page }}">
+                      <button
+                        type="submit"
+                        data-testid="intervention-reject-{{ pm.id }}"
+                        class="downloads-action-btn is-danger"
+                        data-tip="Reject"
+                        data-tip-pos="left"
+                        aria-label="Reject"
+                      >
+                        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </form>
+                  </span>
+                </td>
+              </tr>
+              <tr x-show="expanded" x-cloak class="table-detail-row">
+                <td colspan="8" class="!p-0">
+                  <div class="border-t border-pb-border bg-pb-surface px-4 py-4 sm:px-5">
+                    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Why it needs review</div>
+                        <div class="mt-2 text-sm text-pb-text-sec">{{ meta.review_reason_summary }}</div>
+                        {% if meta.similarity_pct is not none %}
+                          <div class="mt-1 text-xs text-pb-text-dim">Similarity {{ meta.similarity_pct }}%</div>
+                        {% endif %}
+                      </div>
+                      <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Source</div>
+                        <div class="mt-2 text-sm text-pb-text-sec">{{ meta.source_label }} · {{ meta.protocol_label }}</div>
+                      </div>
+                      <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Match type</div>
+                        <div class="mt-2 text-sm text-pb-text-sec">{{ meta.match_type_label }}</div>
+                      </div>
+                      <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Parsed series</div>
+                        <div class="mt-2 text-sm text-pb-text-sec">{{ details.get('parsed_series') or "—" }}</div>
+                      </div>
+                      <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Parsed issue / year</div>
+                        <div class="mt-2 text-sm text-pb-text-sec">
+                          {% if details.get('parsed_issue') is not none %}#{{ details.parsed_issue }}{% else %}—{% endif %}
+                          {% if details.get('parsed_year') %} · {{ details.parsed_year }}{% endif %}
+                        </div>
+                      </div>
+                      <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Updated</div>
+                        <div class="mt-2 text-sm text-pb-text-sec tabular-nums">{{ pm.updated_at|localtime }}</div>
+                      </div>
+                      {% if details.get('info_url') %}
+                      <div class="sm:col-span-2 xl:col-span-3 rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Source URL</div>
+                        <a
+                          href="{{ details.info_url }}"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="mt-2 block break-all text-sm text-pb-interactive transition-colors hover:text-pb-interactive-hover"
+                        >
+                          {{ details.info_url }}
+                        </a>
+                      </div>
+                      {% endif %}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          {% endfor %}
+      {% endcall %}
+    </div>
+  {% else %}
+    <div id="intervention-list" data-testid="intervention-list">
+      <div class="downloads-table-wrap">
+        <div data-testid="intervention-empty" class="downloads-empty-state is-compact">
+          <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/>
+          </svg>
+          <p class="downloads-empty-title">No pending matches</p>
+          {% if has_filters %}
+            <p class="downloads-empty-copy">No pending matches match the current filters.</p>
+          {% else %}
+            <p class="downloads-empty-copy">Ambiguous search results will appear here for manual review.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+</div>

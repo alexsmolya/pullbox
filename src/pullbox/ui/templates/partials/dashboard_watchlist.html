@@ -1,0 +1,25 @@
+<section
+  id="dashboard-watchlist-region"
+  data-testid="dashboard-watchlist"
+  class="section-card"
+  hx-get="/htmx/dashboard/watchlist"
+  hx-trigger="every 15m [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <div class="section-body">
+    <p class="mb-4 section-eyebrow">7-day watchlist</p>
+    <div class="space-y-0">
+      {% for item in dashboard.watch_items %}
+        {% set watch_pill_tone = dashboard_state_pill_tone(item.state) %}
+        <article class="dashboard-watch-item dashboard-watch-item-{{ item.state }} {% if not loop.first %}mt-3 border-t border-pb-border-subtle pt-3{% endif %}">
+          <span class="dashboard-watch-tag pill {{ watch_pill_tone }}">{{ item.trend_label }}</span>
+          <h3 class="mt-1.5 text-[0.88rem] font-semibold text-pb-text">{{ item.title }}</h3>
+          <p class="mt-1 text-[0.82rem] leading-[1.5] text-pb-text-sec">{{ item.detail }}</p>
+          <a href="{{ item.cta_href }}" class="dashboard-inline-link mt-1.5">
+            {{ item.cta_label }} →
+          </a>
+        </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>

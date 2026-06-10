@@ -1,0 +1,326 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import section_header %}
+{#- Security: Audit Log tab -#}
+
+<div class="space-y-6" x-data="auditLogTab()">
+  <div class="section-card overflow-visible" data-testid="security-audit-log-events-card">
+    {% call section_header(
+      title="Audit events",
+      eyebrow="Event history",
+      title_style="plain"
+    ) %}
+      <button @click="loadEvents()" :disabled="loading" class="btn-ghost btn-sm gap-2">
+        <svg class="h-4 w-4" :class="loading && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.992 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+        </svg>
+        Refresh
+      </button>
+    {% endcall %}
+
+    <div class="section-body space-y-4">
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="w-full sm:w-56">
+          {{ dropdown_select(
+            name="audit_event_type",
+            value="",
+            options=[
+              ("", "All Events"),
+              ("login_success", "Login Success"),
+              ("login_failure", "Login Failure"),
+              ("login_rate_limited", "Rate Limited"),
+              ("password_changed", "Password Changed"),
+              ("username_changed", "Username Changed"),
+              ("api_key_created", "API Key Created"),
+              ("api_key_revoked", "API Key Revoked"),
+              ("config_changed", "Config Changed"),
+              ("security_config_changed", "Config Changed"),
+            ],
+            root_testid="security-audit-type-select",
+            class_name="w-full",
+            local_model="selectedType",
+            local_on_change="applyFilter()"
+          ) }}
+        </div>
+
+        <div class="flex flex-wrap items-center gap-1.5">
+          <template x-for="range in dateRanges" :key="range.value">
+            <button
+              @click="selectedRange = range.value; applyFilter()"
+              :class="selectedRange === range.value ? 'chip-btn-info' : 'chip-btn-neutral'"
+              class="chip-btn chip-btn-sm"
+              x-text="range.label">
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <template x-if="loading">
+        <div class="info-panel info-panel-muted py-10 text-center text-sm text-pb-text-dim">Loading security events...</div>
+      </template>
+
+      <template x-if="!loading && events.length === 0">
+        <div class="info-panel info-panel-muted py-10 text-center">
+          <svg class="mx-auto mb-3 h-10 w-10 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m5.231 13.481L15 17.25m-4.5-15H5.625c-.621 0-1.125.504-1.125 1.125v16.5c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9zm3.75 11.625a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/>
+          </svg>
+          <p class="text-sm text-pb-text-sec">No security events match the current filters.</p>
+          <p class="mt-1 text-xs text-pb-text-dim">Try widening the time range or clearing the event-type filter.</p>
+        </div>
+      </template>
+
+      <template x-if="!loading && events.length > 0">
+        <div class="downloads-table-wrap">
+          <div class="overflow-x-auto">
+            <table class="downloads-table min-w-[760px]" data-testid="security-audit-table">
+              <thead>
+                <tr>
+                  <th class="w-[168px]">Timestamp</th>
+                  <th class="w-[148px]">Event</th>
+                  <th>User</th>
+                  <th class="w-[148px]">IP Address</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="event in events" :key="event.id">
+                  <tr>
+                    <td class="downloads-mono-cell whitespace-nowrap" x-text="formatTimestamp(event.timestamp)"></td>
+                    <td>
+                      <span class="pill" :class="eventBadgeClass(event.event_type) || 'pill-neutral'" x-text="eventLabel(event.event_type)"></span>
+                    </td>
+                    <td class="text-pb-text-sec" x-text="event.username || '—'"></td>
+                    <td class="downloads-mono-cell" x-text="event.source_ip || '—'"></td>
+                    <td class="max-w-xs truncate text-pb-text-sec" :title="event.detail || ''" x-text="event.detail || '—'"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<script>
+function auditLogTab() {
+
+  const EVENT_LABELS = {
+    login_success: "Login Success",
+    login_failure: "Login Failure",
+    login_rate_limited: "Rate Limited",
+    password_changed: "Password Changed",
+    username_changed: "Username Changed",
+    session_invalidated: "Session Invalidated",
+    session_invalidated_version_mismatch: "Session Invalidated",
+    session_invalidated_user_inactive: "Session Invalidated",
+    api_key_created: "API Key Created",
+    api_key_revoked: "API Key Revoked",
+    api_rate_limited: "API Rate Limited",
+    config_changed: "Config Changed",
+    security_config_changed: "Config Changed",
+    local_bypass_toggled: "Bypass Toggled",
+  };
+
+  const EVENT_BADGE_CLASSES = {
+    login_success: "pill-success",
+    login_failure: "pill-error",
+    login_rate_limited: "pill-warning",
+    password_changed: "pill-info",
+    username_changed: "pill-info",
+    session_invalidated: "pill-neutral",
+    session_invalidated_version_mismatch: "pill-neutral",
+    session_invalidated_user_inactive: "pill-neutral",
+    api_key_created: "pill-info",
+    api_key_revoked: "pill-warning",
+    api_rate_limited: "pill-warning",
+    config_changed: "pill-info",
+    security_config_changed: "pill-info",
+    local_bypass_toggled: "pill-neutral",
+  };
+
+  return {
+    events: [],
+    loading: true,
+    total: 0,
+    page: 1,
+    perPage: 50,
+    totalPages: 1,
+    selectedType: "",
+    selectedRange: "7d",
+
+    dateRanges: [
+      { label: "24h", value: "24h" },
+      { label: "7 days", value: "7d" },
+      { label: "30 days", value: "30d" },
+      { label: "All", value: "" },
+    ],
+
+    init() {
+      this.loadEvents();
+    },
+
+    buildPaginationTokens() {
+      const tokens = [];
+      if (this.totalPages <= 5) {
+        for (let p = 1; p <= this.totalPages; p += 1) tokens.push({ type: 'page', value: p });
+      } else if (this.page <= 2 || this.page >= this.totalPages - 1) {
+        tokens.push({ type: 'page', value: 1 });
+        tokens.push({ type: 'page', value: 2 });
+        tokens.push({ type: 'gap', value: 'middle' });
+        tokens.push({ type: 'page', value: this.totalPages - 1 });
+        tokens.push({ type: 'page', value: this.totalPages });
+      } else {
+        const midpoint = Math.floor((this.totalPages + 1) / 2);
+        if (this.page <= midpoint) {
+          tokens.push({ type: 'page', value: this.page - 1 });
+          tokens.push({ type: 'page', value: this.page });
+          tokens.push({ type: 'gap', value: 'middle' });
+          tokens.push({ type: 'page', value: this.totalPages - 1 });
+          tokens.push({ type: 'page', value: this.totalPages });
+        } else {
+          tokens.push({ type: 'page', value: 1 });
+          tokens.push({ type: 'page', value: 2 });
+          tokens.push({ type: 'gap', value: 'middle' });
+          tokens.push({ type: 'page', value: this.page });
+          tokens.push({ type: 'page', value: this.page + 1 });
+        }
+      }
+      return tokens;
+    },
+
+    isActiveAuditTab() {
+      const activeTab = document.querySelector(
+        "[data-testid='security-tab-audit_log'][aria-current='page']"
+      );
+      const activePanel = document.querySelector(
+        "[data-testid='security-panel-audit_log']"
+      );
+      return !!(activeTab && activePanel);
+    },
+
+    syncFooterDock() {
+      if (!this.isActiveAuditTab()) return;
+
+      const dock = document.querySelector("[data-testid='security-footer-dock']");
+      if (!dock) return;
+
+      const statusItems = [
+        { label: 'section', value: 'Audit Log' },
+        { label: 'events', value: `${this.total} records` },
+        { label: 'filter', value: this.selectedType ? this.eventLabel(this.selectedType) : 'All events' },
+        { label: 'range', value: this.selectedRangeLabel() },
+      ];
+
+      const statusHtml = statusItems.map((item) => (
+        `<span class="page-dock-status-item">${item.label ? `<span class="page-dock-status-label">${item.label}</span>` : ''}<strong class="page-dock-status-value">${item.value}</strong></span>`
+      )).join('');
+
+      let paginationHtml = '';
+      if (this.totalPages > 1) {
+        const tokenHtml = this.buildPaginationTokens().map((token) => {
+          if (token.type === 'gap') {
+            return `<span id="pagination-gap-${token.value}" class="px-3 py-2 text-sm text-pb-text-dim">&hellip;</span>`;
+          }
+          if (token.value === this.page) {
+            return `<span id="pagination-page-${token.value}" class="px-3 py-2 rounded-md text-sm font-medium bg-pb-interactive text-white">${token.value}</span>`;
+          }
+          return `<button type="button" data-security-audit-page="${token.value}" id="pagination-page-${token.value}" class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-sec hover:bg-pb-card-hover transition-colors">${token.value}</button>`;
+        }).join('');
+
+        const prevHtml = this.page > 1
+          ? `<button type="button" id="pagination-prev" data-security-audit-page="${this.page - 1}" class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-sec hover:bg-pb-card-hover transition-colors">&laquo; Prev</button>`
+          : `<span id="pagination-prev" class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-dim cursor-not-allowed">&laquo; Prev</span>`;
+        const nextHtml = this.page < this.totalPages
+          ? `<button type="button" id="pagination-next" data-security-audit-page="${this.page + 1}" class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-sec hover:bg-pb-card-hover transition-colors">Next &raquo;</button>`
+          : `<span id="pagination-next" class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-dim cursor-not-allowed">Next &raquo;</span>`;
+
+        paginationHtml = `<div class="page-dock-pagination" data-testid="page-dock-pagination"><nav class="flex items-center justify-center gap-1" aria-label="Pagination" hx-boost="false">${prevHtml}${tokenHtml}${nextHtml}</nav></div>`;
+      }
+
+      dock.innerHTML = `<div class="page-dock-inner${this.totalPages <= 1 ? ' page-dock-inner-status-only' : ''}" data-testid="page-dock-inner">${paginationHtml}<div class="page-dock-status" data-testid="page-dock-status">${statusHtml}</div></div>`;
+
+      dock.querySelectorAll("[data-security-audit-page]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const nextPage = Number(button.getAttribute("data-security-audit-page") || "0");
+          if (nextPage > 0 && nextPage !== this.page) {
+            this.page = nextPage;
+            this.loadEvents();
+          }
+        });
+      });
+    },
+
+    loadEvents() {
+      this.loading = true;
+      const params = new URLSearchParams();
+      params.set("page", this.page);
+      params.set("per_page", this.perPage);
+
+      if (this.selectedType) {
+        params.set("event_type", this.selectedType);
+      }
+
+      if (this.selectedRange) {
+        const now = new Date();
+        let since;
+        if (this.selectedRange === "24h") {
+          since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        } else if (this.selectedRange === "7d") {
+          since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        } else if (this.selectedRange === "30d") {
+          since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        }
+        if (since) {
+          params.set("since", since.toISOString());
+        }
+      }
+
+      fetch(`/api/v1/audit/events?${params.toString()}`, {
+        headers: { "X-CSRF-Token": "{{ csrf_token }}" },
+      })
+        .then((r) => {
+          if (!r.ok) throw new Error("Failed to load events");
+          return r.json();
+        })
+        .then((data) => {
+          this.events = data.events || [];
+          this.total = data.total || 0;
+          this.totalPages = data.total_pages || 1;
+          this.syncFooterDock();
+        })
+        .catch(() => {
+          this.events = [];
+          this.total = 0;
+          this.totalPages = 1;
+          this.syncFooterDock();
+        })
+        .finally(() => { this.loading = false; });
+    },
+
+    applyFilter() {
+      this.page = 1;
+      this.loadEvents();
+    },
+
+    eventLabel(type) {
+      return EVENT_LABELS[type] || type;
+    },
+
+    eventBadgeClass(type) {
+      return EVENT_BADGE_CLASSES[type] || "pill-neutral";
+    },
+
+    selectedRangeLabel() {
+      if (this.selectedRange === "24h") return "Last 24 hours";
+      if (this.selectedRange === "7d") return "Last 7 days";
+      if (this.selectedRange === "30d") return "Last 30 days";
+      return "Full history";
+    },
+
+    formatTimestamp(iso) {
+      return _pb.formatFull(iso);
+    },
+  };
+}
+</script>

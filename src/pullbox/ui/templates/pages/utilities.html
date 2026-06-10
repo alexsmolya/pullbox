@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Utilities — {{ instance_name() }}{% endblock %}
+{% block page_title %}Utilities{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div data-testid="utilities-page" class="utilities-page space-y-6">
+  {% include "partials/utilities_header.html" %}
+
+  <div data-testid="utilities-shell" class="utilities-shell">
+    {% include "partials/utilities_body.html" %}
+  </div>
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/utilities_footer_dock.html" %}
+{% endblock %}

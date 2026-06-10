@@ -1,0 +1,58 @@
+<section data-testid="intervention-header" class="review-hero-card">
+  <div class="review-hero-grid">
+    <div class="space-y-4">
+      <div class="space-y-3">
+        <p class="review-hero-eyebrow">Manual review</p>
+        <h2 class="review-hero-title">Intervention Queue</h2>
+        <p class="review-hero-copy">
+          Review ambiguous matches before they turn into bad grabs. Approve only when the title,
+          issue, and file facts line up clearly enough to trust the handoff.
+        </p>
+      </div>
+
+      <div class="flex flex-wrap gap-2">
+        <a href="/settings?tab=search" class="btn-ghost btn-sm">Queue rules</a>
+        <a href="/search-history" class="btn-ghost btn-sm">Search history</a>
+      </div>
+    </div>
+
+    <div class="review-hero-notes">
+      <div class="review-hero-note review-hero-note-emphasis">
+        <p class="review-hero-note-kicker">Pending now</p>
+        <div class="mt-2 flex items-center gap-2">
+          <span
+            id="intervention-count-badge"
+            data-testid="intervention-count-badge"
+            hx-get="/htmx/intervention/count"
+            hx-trigger="load, every 30s"
+            hx-swap="innerHTML"
+          >
+            <span class="count-badge {{ 'count-badge-warning' if pending_count > 0 else 'count-badge-neutral' }}">
+              {{ pending_count }}
+            </span>
+          </span>
+          <span class="text-sm font-semibold text-pb-text">matches waiting for a decision</span>
+        </div>
+        <p class="review-hero-note-copy">
+          The queue shows up to {{ display_limit }} unresolved matches at a time so review stays manageable.
+        </p>
+      </div>
+
+      <div class="review-hero-note">
+        <p class="review-hero-note-kicker">Approval standard</p>
+        <p class="review-hero-note-copy">
+          Confidence is only a starting point. Use the issue link, source details, and file facts
+          before you approve.
+        </p>
+      </div>
+
+      <div class="review-hero-note">
+        <p class="review-hero-note-kicker">History helps</p>
+        <p class="review-hero-note-copy">
+          Rejected and expired items stay useful when you need to spot repeat false positives or
+          adjust queue rules later.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>

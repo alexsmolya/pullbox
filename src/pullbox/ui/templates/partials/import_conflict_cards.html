@@ -1,0 +1,436 @@
+{#- Import Conflict Resolution Workspace.
+
+    Template context (from UI route):
+      - job: ImportJob instance
+      - conflict_groups: list of enriched conflict group dicts
+      - auto_resolved: int
+      - needs_decision: int
+      - total_groups: int
+      - page, page_size, total_pages: pagination state
+-#}
+{% from "components/settings_shell.html" import inline_alert %}
+{%- macro sort_header(field, label, extra_classes="", width="") -%}
+  {%- set current_field = sort.lstrip("-") -%}
+  {%- set current_desc = sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  {%- set conflict_sort_base_url = conflict_table_hx_base_url|default("/import/" ~ job.id ~ "/conflicts-partial") -%}
+  {%- set conflict_sort_separator = "&" if "?" in conflict_sort_base_url else "?" -%}
+  {%- set conflict_sort_target = conflict_table_hx_target|default("#conflicts-content") -%}
+  {%- set conflict_sort_swap = conflict_table_hx_swap|default("morph:innerHTML") -%}
+  {%- set conflict_sort_sync = conflict_table_hx_sync|default("#conflicts-content:replace") -%}
+  <th class="{{ extra_classes }} {{ width }}">
+    <button
+      type="button"
+      data-testid="import-conflicts-sort-{{ field }}"
+      hx-get="{{ conflict_sort_base_url }}{{ conflict_sort_separator }}sort={{ next_sort }}"
+      hx-target="{{ conflict_sort_target }}"
+      hx-swap="{{ conflict_sort_swap }}"
+      hx-sync="{{ conflict_sort_sync }}"
+      class="downloads-sort-btn{% if current_field == field %} is-active{% endif %}"
+    >
+      <span>{{ label }}</span>
+      <svg class="downloads-sort-chevron{% if current_field == field and not current_desc %} is-desc{% endif %}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </th>
+{%- endmacro -%}
+
+<div
+  x-data="conflictResolutionData({
+    jobId: {{ job.id }},
+    totalGroups: {{ total_groups }},
+    refreshMode: {{ (conflict_refresh_mode|default('partial'))|tojson|forceescape }},
+    refreshTarget: {{ (conflict_refresh_target|default('#conflicts-content'))|tojson|forceescape }},
+    refreshSwap: {{ (conflict_refresh_swap|default('morph:innerHTML'))|tojson|forceescape }}
+  })"
+  x-init="init()"
+  data-testid="import-collection-conflicts"
+  class="space-y-4"
+>
+  <input type="hidden" name="conflicts_page" value="{{ page }}">
+  <input type="hidden" name="conflicts_sort" value="{{ sort }}">
+
+  {% if not conflict_groups %}
+  <div class="rounded-xl border border-pb-border bg-pb-card/50 px-4 py-8 text-center">
+    <svg class="mx-auto mb-4 h-10 w-10 text-pb-success" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <p class="text-sm font-medium text-pb-text">No conflicts to resolve.</p>
+    <p class="mt-1 text-xs text-pb-text-dim">All files currently map cleanly to unique issues.</p>
+  </div>
+  {% else %}
+  <div class="overflow-x-auto" data-testid="import-conflicts-table-shell">
+      <table data-testid="import-conflicts-table" class="downloads-table min-w-[980px] text-sm">
+        <thead>
+          <tr>
+            {{ sort_header("series", "Series / File Group", width="w-[26%]") }}
+            {{ sort_header("conflict", "Conflict", width="w-[14%]") }}
+            {{ sort_header("files", "Files", extra_classes="is-right", width="w-[10%]") }}
+            {{ sort_header("signal", "Current Signal", width="w-[24%]") }}
+            {{ sort_header("status", "Status", width="w-[14%]") }}
+            <th class="w-[12%] is-right">Action</th>
+          </tr>
+        </thead>
+        {% for group in conflict_groups %}
+        {% set row_number = ((page - 1) * page_size) + loop.index %}
+        {% set conflict_diagnostics = group.diagnostics or {} %}
+        {% set is_series_conflict = group.kind == 'series_conflict' %}
+        {% set is_metadata_signal_conflict = conflict_diagnostics.get('reason') == 'metadata_signal_conflict' %}
+        {% set selected_candidate = conflict_diagnostics.get('selected_candidate', {}) %}
+        {% set competing_candidate = conflict_diagnostics.get('competing_candidate', {}) %}
+        {% set top_candidates = conflict_diagnostics.get('top_candidates') or [] %}
+        <tbody
+          x-data="{ detailsOpen: true }"
+          data-import-conflict-kind="{{ group.kind }}"
+          data-import-conflict-group-id="{{ group.conflict_group_id }}"
+          {% if not is_series_conflict %}data-import-conflict-series-id="{{ group.files[0].import_series_id }}"{% endif %}
+        >
+          <tr data-testid="import-conflict-row">
+            <td>
+              <div class="font-medium text-pb-text">{{ group.series_name or "Unknown series" }}</div>
+              {% if group.source_folder %}
+              <div class="mt-0.5 break-all font-mono text-[11px] text-pb-text-dim">{{ group.source_folder }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <div class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">
+                {% if is_series_conflict %}Series conflict{% else %}Conflict {{ row_number }}{% endif %}
+              </div>
+              <div class="mt-1 text-sm text-pb-text">
+                {% if is_series_conflict %}
+                Series match
+                {% elif group.display_issue_number is not none %}
+                Issue #{{ group.display_issue_number | issue_num }}
+                {% else %}
+                Issue unknown
+                {% endif %}
+              </div>
+              {% if group.issue and group.issue.title %}
+              <div class="mt-0.5 truncate text-[11px] text-pb-text-sec">{{ group.issue.title }}</div>
+              {% endif %}
+            </td>
+            <td class="is-right">
+              <span class="font-mono text-pb-text">{{ group.file_count }}</span>
+            </td>
+            <td>
+              {% if is_series_conflict %}
+              <div class="text-sm font-medium text-pb-text">
+                {{ selected_candidate.get('title') or 'Candidate needs review' }}{% if selected_candidate.get('year') %} ({{ selected_candidate.get('year') }}){% endif %}
+              </div>
+              <div class="mt-0.5 text-[11px] text-pb-text-sec">
+                {% if selected_candidate.get('score_pct') %}{{ selected_candidate.get('score_pct') }}%{% else %}Manual review{% endif %}
+                {% if competing_candidate.get('title') %} versus {{ competing_candidate.get('title') }}{% endif %}
+              </div>
+              {% else %}
+              <div class="text-sm text-pb-text-sec">
+                {% if group.has_preferred %}
+                Auto-selected keep choice is ready for review.
+                {% else %}
+                Pick one file before saving.
+                {% endif %}
+              </div>
+              {% if group.mixed_series_bucket %}
+              <div class="mt-1.5"><span class="pill pill-warning">Mixed series bucket</span></div>
+              {% endif %}
+              {% endif %}
+            </td>
+            <td>
+              {% if is_series_conflict %}
+              <span class="pill pill-warning">Series match conflict</span>
+              {% else %}
+              <span class="pill {% if group.has_preferred %}pill-info{% else %}pill-warning{% endif %}">
+                {{ "Auto-selected" if group.has_preferred else "Needs choice" }}
+              </span>
+              {% endif %}
+            </td>
+            <td class="is-right">
+              <div class="downloads-action-group justify-end">
+                {% if is_series_conflict %}
+                <button
+                  type="button"
+                  class="downloads-action-btn"
+                  onclick='return openImportCvSearchModal({ jobId: {{ job.id }}, seriesId: {{ group.series_id }}, query: {{ group.raw_series_name|tojson|forceescape }} })'
+                  data-tip="Review ComicVine match"
+                  data-tip-pos="left"
+                  aria-label="Review ComicVine match"
+                >
+                  <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H18m0 0v4.5M18 6l-7.5 7.5M6 8.25v9.75h9.75"/>
+                  </svg>
+                </button>
+                {% endif %}
+                <button
+                  type="button"
+                  class="downloads-action-btn"
+                  data-testid="import-conflict-why-action"
+                  @click="detailsOpen = !detailsOpen"
+                  :aria-expanded="detailsOpen ? 'true' : 'false'"
+                  data-tip="View details"
+                  data-tip-pos="left"
+                  aria-label="View conflict details"
+                >
+                  <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12s-3.75 6.75-9.75 6.75S2.25 12 2.25 12z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+          <tr x-show="detailsOpen" class="table-detail-row" data-testid="import-conflict-detail-row">
+            <td colspan="6" class="bg-pb-card/60 px-4 py-4">
+              {% if is_series_conflict %}
+              <div class="space-y-4">
+                {% if is_metadata_signal_conflict and group.source_files %}
+                {% set primary_source_file = group.source_files[0] %}
+                <section>
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Metadata mismatch</p>
+                  <p class="mt-2 text-sm leading-6 text-pb-text-sec">
+                    The file name and embedded ComicInfo.xml point to different series, so import blocked the auto-match and needs a manual provenance review.
+                    Review this file manually to verify its provenance before assigning a series.
+                  </p>
+                  <div data-testid="import-conflict-metadata-grid" class="mt-3 grid gap-4 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                    <div class="min-w-0">
+                      <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-pb-text-dim">Parsed From File Name</p>
+                      <dl class="mt-2 grid gap-x-4 gap-y-1 text-[12px] text-pb-text-sec sm:grid-cols-2">
+                        <div><dt class="text-pb-text-dim">Series</dt><dd class="text-pb-text">{{ primary_source_file.filename_series or '—' }}</dd></div>
+                        <div><dt class="text-pb-text-dim">Number</dt><dd class="text-pb-text">{% if primary_source_file.filename_issue_number is not none %}{{ primary_source_file.filename_issue_number | issue_num }}{% else %}—{% endif %}</dd></div>
+                        <div><dt class="text-pb-text-dim">Year</dt><dd class="text-pb-text">{{ primary_source_file.filename_year or '—' }}</dd></div>
+                        <div><dt class="text-pb-text-dim">File</dt><dd class="break-all text-pb-text">{{ primary_source_file.file_name or '—' }}</dd></div>
+                      </dl>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-pb-text-dim">Embedded ComicInfo.xml</p>
+                      <dl class="mt-2 grid gap-x-4 gap-y-1 text-[12px] text-pb-text-sec sm:grid-cols-2">
+                        <div><dt class="text-pb-text-dim">Series</dt><dd class="text-pb-text">{{ primary_source_file.comicinfo.get('series') if primary_source_file.comicinfo else '—' }}</dd></div>
+                        <div><dt class="text-pb-text-dim">Number</dt><dd class="text-pb-text">{{ primary_source_file.comicinfo.get('number') if primary_source_file.comicinfo else '—' }}</dd></div>
+                        <div><dt class="text-pb-text-dim">Year</dt><dd class="text-pb-text">{{ (primary_source_file.comicinfo.get('year') or primary_source_file.comicinfo.get('volume')) if primary_source_file.comicinfo else '—' }}</dd></div>
+                        <div><dt class="text-pb-text-dim">Title</dt><dd class="text-pb-text">{{ primary_source_file.comicinfo.get('title') if primary_source_file.comicinfo else '—' }}</dd></div>
+                        <div class="sm:col-span-2"><dt class="text-pb-text-dim">Web</dt><dd class="break-all text-pb-text">{% if primary_source_file.comicinfo and primary_source_file.comicinfo.get('web') %}<a href="{{ primary_source_file.comicinfo.get('web') }}" target="_blank" rel="noreferrer" class="text-pb-interactive hover:underline">{{ primary_source_file.comicinfo.get('web') }}</a>{% else %}—{% endif %}</dd></div>
+                      </dl>
+                    </div>
+                  </div>
+                </section>
+                {% endif %}
+
+                <section>
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Conflicting candidates</p>
+                    <span class="text-[11px] text-pb-text-dim">{{ top_candidates|length }} candidate{{ "s" if top_candidates|length != 1 else "" }}</span>
+                  </div>
+                  {% if top_candidates %}
+                  <div class="mt-2 overflow-hidden rounded-lg border border-pb-border">
+                    <table class="w-full text-left text-xs">
+                      <thead class="bg-pb-surface text-[10px] uppercase tracking-[0.14em] text-pb-text-dim">
+                        <tr>
+                          <th class="px-3 py-2">Candidate</th>
+                          <th class="px-3 py-2">Publisher</th>
+                          <th class="px-3 py-2 text-right">Score</th>
+                          <th class="px-3 py-2">Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-pb-border-subtle">
+                        {% for candidate in top_candidates %}
+                        <tr>
+                          <td class="px-3 py-2 text-pb-text">{{ candidate.title }}{% if candidate.year %} ({{ candidate.year }}){% endif %}</td>
+                          <td class="px-3 py-2 text-pb-text-sec">{{ candidate.publisher or '—' }}</td>
+                          <td class="px-3 py-2 text-right font-mono text-pb-text">{{ candidate.score_pct }}%</td>
+                          <td class="px-3 py-2 text-pb-text-sec">{{ candidate.rejection_reasons|join(' · ') }}</td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% else %}
+                  <p class="mt-2 text-sm text-pb-text-dim">ComicVine did not return any candidate series for this search.</p>
+                  {% endif %}
+                </section>
+
+                {% if group.source_files %}
+                <section>
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Source files in this conflict candidate</p>
+                  <div class="mt-2 overflow-hidden rounded-lg border border-pb-border">
+                    <table class="w-full text-left text-xs">
+                      <thead class="bg-pb-surface text-[10px] uppercase tracking-[0.14em] text-pb-text-dim">
+                        <tr>
+                          <th class="px-3 py-2">File</th>
+                          <th class="px-3 py-2">Parsed</th>
+                          <th class="px-3 py-2">Metadata</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-pb-border-subtle">
+                        {% for source_file in group.source_files %}
+                        <tr>
+                          <td class="break-all px-3 py-2 text-pb-text">{{ source_file.file_name }}</td>
+                          <td class="px-3 py-2 text-pb-text-sec">
+                            {{ source_file.filename_series or source_file.parsed_series or '—' }}
+                            {% if source_file.filename_issue_number is not none or source_file.parsed_issue_number is not none %}
+                            #{{ (source_file.filename_issue_number if source_file.filename_issue_number is not none else source_file.parsed_issue_number) | issue_num }}
+                            {% endif %}
+                          </td>
+                          <td class="px-3 py-2 text-pb-text-sec">{% if source_file.has_comicinfo %}ComicInfo.xml{% else %}Filename only{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+                {% endif %}
+              </div>
+              {% else %}
+              <div class="space-y-4">
+                {% if group.mixed_series_bucket %}
+                <div>
+                  {% call inline_alert(tone="warning", icon="warning") %}
+                    This group contains files that parsed to different series names. That usually means a mixed-content folder was scanned as one series candidate.
+                  {% endcall %}
+                </div>
+                {% endif %}
+
+                <section>
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Choose one file to keep</p>
+                  </div>
+                  <div class="mt-2 overflow-hidden rounded-lg border border-pb-border">
+                    <table class="w-full text-left text-xs">
+                      <thead class="bg-pb-surface text-[10px] uppercase tracking-[0.14em] text-pb-text-dim">
+                        <tr>
+                          <th class="w-10 px-3 py-2">Keep</th>
+                          <th class="px-3 py-2">File</th>
+                          <th class="px-3 py-2">Parsed</th>
+                          <th class="px-3 py-2">Size</th>
+                          <th class="px-3 py-2">Signal</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-pb-border-subtle">
+                        {% for f in group.files %}
+                        {% set filename_parse = ((f.diagnostics or {}).get('source_metadata', {}).get('filename_parse', {})) %}
+                        <tr>
+                          <td class="px-3 py-2">
+                            <input
+                              type="radio"
+                              name="conflict_{{ group.conflict_group_id }}"
+                              value="{{ f.id }}"
+                              aria-label="Keep {{ f.file_name }} for {{ group.series_name or 'this conflict group' }}"
+                              :disabled="saving || committed"
+                              {% if f.is_preferred %}checked{% endif %}
+                              @change="setResolution({{ group.conflict_group_id }}, {{ f.id }})"
+                              class="h-4 w-4 border-pb-border-hover bg-pb-input text-pb-warning focus:ring-2 focus:ring-pb-warning focus:ring-offset-0"
+                            >
+                          </td>
+                          <td class="break-all px-3 py-2 text-pb-text">
+                            {{ f.file_name }}
+                            {% if f.is_preferred %}
+                            <span class="ml-2 pill pill-success">Current keep choice</span>
+                            {% endif %}
+                          </td>
+                          <td class="px-3 py-2 text-pb-text-sec">
+                            {{ filename_parse.get('series_name') or f.parsed_series or '—' }}
+                            {% if filename_parse.get('issue_number') is not none or f.parsed_issue_number is not none %}
+                            #{{ (filename_parse.get('issue_number') if filename_parse.get('issue_number') is not none else f.parsed_issue_number) | issue_num }}
+                            {% endif %}
+                          </td>
+                          <td class="px-3 py-2 font-mono text-pb-text-dim">{{ f.file_size | filesize }}</td>
+                          <td class="px-3 py-2 text-pb-text-sec">
+                            {{ (f.match_confidence or 'unknown')|capitalize }}
+                            {% if f.match_method %} via {{ f.match_method }}{% endif %}
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                {% if conflict_diagnostics %}
+                {% set preferred_files = group.files | selectattr('is_preferred') | list %}
+                {% set preferred_file = preferred_files[0] if preferred_files else none %}
+                {% set comicinfo_files = group.files | selectattr('has_comicinfo') | list %}
+                {% set preferred_reasons = conflict_diagnostics.get('preferred_reasons', []) %}
+                {% set non_comicinfo_reasons = preferred_reasons | reject('equalto', 'ComicInfo metadata present') | list %}
+                {% set comicinfo_preferred_reason = 'ComicInfo metadata present' in preferred_reasons %}
+                {% set preferred_has_comicinfo = (preferred_file and preferred_file.has_comicinfo) or comicinfo_preferred_reason %}
+                <section>
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Auto-resolution details</p>
+                  </div>
+                  <div data-testid="import-conflict-auto-resolution-grid" class="mt-2 grid gap-4 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                    <div class="min-w-0">
+                      <p class="text-sm font-medium text-pb-text">Why this file was preferred</p>
+                      {% if preferred_has_comicinfo %}
+                      <p class="mt-2 text-[12px] leading-5 text-pb-text-sec">
+                        {% if comicinfo_files|length > 1 %}
+                        Selected file includes embedded ComicInfo.xml metadata. {{ comicinfo_files|length }} files in this conflict do, so confidence and file size still help decide the keep choice.
+                        {% else %}
+                        Selected file includes embedded ComicInfo.xml metadata.
+                        {% endif %}
+                      </p>
+                      {% endif %}
+                      {% if non_comicinfo_reasons %}
+                      <ul class="mt-2 space-y-1 text-[12px] leading-5 text-pb-text-sec">
+                        {% for reason in non_comicinfo_reasons %}
+                        <li>{{ reason }}</li>
+                        {% endfor %}
+                      </ul>
+                      {% else %}
+                      <p class="mt-2 text-[12px] text-pb-text-dim">No auto-selection reasons were recorded.</p>
+                      {% endif %}
+                    </div>
+                    <div class="min-w-0">
+                      <p class="text-sm font-medium text-pb-text">Why the others were not selected</p>
+                      {% set rejected_files = group.files | rejectattr('is_preferred') | list %}
+                      {% if rejected_files %}
+                      <div class="mt-2 space-y-2 text-[12px] leading-5 text-pb-text-sec">
+                        {% for f in rejected_files %}
+                        {% set rejection_reasons = (f.diagnostics or {}).get('why_not_selected', []) %}
+                        <div>
+                          <span class="font-medium text-pb-text">{{ f.file_name }}</span>
+                          {% if rejection_reasons %}
+                          <span class="text-pb-text-sec">: {{ rejection_reasons|join(' · ') }}</span>
+                          {% else %}
+                          <span class="text-pb-text-dim">: No rejection reasons were recorded.</span>
+                          {% endif %}
+                        </div>
+                        {% endfor %}
+                      </div>
+                      {% else %}
+                      <p class="mt-2 text-[12px] text-pb-text-dim">There were no competing files in this group.</p>
+                      {% endif %}
+                    </div>
+                  </div>
+                </section>
+                {% endif %}
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+        </tbody>
+        {% endfor %}
+      </table>
+  </div>
+
+    <div x-show="saveError || saveSuccess" x-cloak class="border-t border-pb-border px-4 py-4">
+      <div x-show="saveError" x-cloak class="mb-3">
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <span x-text="saveError"></span>
+        {% endcall %}
+      </div>
+
+      <div x-show="saveSuccess" x-cloak class="mb-3">
+        {% call inline_alert(tone="success", icon="check") %}
+          Conflict choices saved successfully.
+        {% endcall %}
+      </div>
+
+    </div>
+  {% endif %}
+</div>
+{% set import_review_footer_mode = "conflicts" %}
+<div id="page-footer-dock" data-testid="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/import_review_footer_dock.html" %}
+</div>

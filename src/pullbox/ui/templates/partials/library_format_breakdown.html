@@ -1,0 +1,38 @@
+{% from "components/settings_shell.html" import section_card %}
+
+{% if format_counts %}
+{% call section_card(
+  title="Library file mix",
+  description="See which archive types dominate the library so cleanup, conversion, and troubleshooting stay predictable.",
+  eyebrow="Storage makeup",
+  title_style="plain"
+) %}
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)]">
+    <div class="flex flex-wrap items-center gap-2">
+      {% for fmt, count in format_counts.items() %}
+        {% if fmt == 'cbz' %}
+          {% set fmt_class = "pill-info" %}
+        {% elif fmt == 'cbr' %}
+          {% set fmt_class = "pill-purple" %}
+        {% elif fmt == 'pdf' %}
+          {% set fmt_class = "pill-warning" %}
+        {% else %}
+          {% set fmt_class = "pill-neutral" %}
+        {% endif %}
+        <span data-testid="library-format-pill-{{ fmt }}" class="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium {{ fmt_class }}">
+          <span>.{{ fmt }}</span>
+          <span class="count-badge count-badge-neutral">{{ count }}</span>
+        </span>
+      {% endfor %}
+    </div>
+
+    <div class="info-panel info-panel-muted">
+      <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Format guidance</p>
+      <div class="mt-3 space-y-2 text-xs leading-6 text-pb-text-sec">
+        <p><span class="font-semibold text-pb-text">CBZ:</span> the most predictable default for ongoing library maintenance.</p>
+        <p><span class="font-semibold text-pb-text">CBR and PDF:</span> keep an eye on these when you are troubleshooting readers, conversion, or post-processing behavior.</p>
+      </div>
+    </div>
+  </div>
+{% endcall %}
+{% endif %}

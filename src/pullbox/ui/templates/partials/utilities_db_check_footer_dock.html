@@ -1,0 +1,25 @@
+<div
+  data-testid="utilities-db-check-footer-dock"
+  x-data="{ checks: '2 of 4', root: '—' }"
+  x-on:utilities:db-check-footer.window="
+    checks = $event.detail.checks;
+    root = $event.detail.root;
+  "
+>
+  <div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+    <div class="page-dock-status" data-testid="page-dock-status">
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">tool</span>
+        <strong class="page-dock-status-value">DB Check</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">checks</span>
+        <strong class="page-dock-status-value" x-text="checks">2 of 4</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">root</span>
+        <strong class="page-dock-status-value" x-text="root">—</strong>
+      </span>
+    </div>
+  </div>
+</div>

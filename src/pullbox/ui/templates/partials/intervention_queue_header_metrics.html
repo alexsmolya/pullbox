@@ -1,0 +1,66 @@
+{% set queue_gauge_total = pending_count if pending_count > 0 else 1 %}
+{% set queue_gauge_circumference = 138.2 %}
+{% set high_offset = (queue_gauge_circumference * (1 - (high_count / queue_gauge_total)))|round(1) %}
+{% set medium_offset = (queue_gauge_circumference * (1 - (medium_count / queue_gauge_total)))|round(1) %}
+{% set low_offset = (queue_gauge_circumference * (1 - (low_count / queue_gauge_total)))|round(1) %}
+
+<div class="series-registry-title-block">
+  <h1 class="series-registry-title">INTERVENTION <span>QUEUE</span></h1>
+  <p class="series-registry-subtitle">{{ pending_count }} pending · {{ high_count }} high · {{ medium_count }} medium · {{ low_count }} low</p>
+</div>
+
+<div data-testid="intervention-summary-cards" class="series-registry-gauges">
+  <div class="series-registry-gauge">
+    <div class="series-registry-gauge-ring">
+      <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+        <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+        <circle
+          class="series-registry-gauge-fill series-registry-gauge-fill-success"
+          cx="28"
+          cy="28"
+          r="22"
+          stroke-dasharray="{{ queue_gauge_circumference }}"
+          stroke-dashoffset="{{ high_offset }}"
+        ></circle>
+      </svg>
+      <span class="series-registry-gauge-value text-pb-success">{{ high_count }}</span>
+    </div>
+    <div class="series-registry-gauge-label">High</div>
+  </div>
+
+  <div class="series-registry-gauge">
+    <div class="series-registry-gauge-ring">
+      <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+        <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+        <circle
+          class="series-registry-gauge-fill series-registry-gauge-fill-warning"
+          cx="28"
+          cy="28"
+          r="22"
+          stroke-dasharray="{{ queue_gauge_circumference }}"
+          stroke-dashoffset="{{ medium_offset }}"
+        ></circle>
+      </svg>
+      <span class="series-registry-gauge-value text-pb-warning">{{ medium_count }}</span>
+    </div>
+    <div class="series-registry-gauge-label">Med</div>
+  </div>
+
+  <div class="series-registry-gauge">
+    <div class="series-registry-gauge-ring">
+      <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+        <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+        <circle
+          class="series-registry-gauge-fill series-registry-gauge-fill-info"
+          cx="28"
+          cy="28"
+          r="22"
+          stroke-dasharray="{{ queue_gauge_circumference }}"
+          stroke-dashoffset="{{ low_offset }}"
+        ></circle>
+      </svg>
+      <span class="series-registry-gauge-value text-pb-interactive">{{ low_count }}</span>
+    </div>
+    <div class="series-registry-gauge-label">Low</div>
+  </div>
+</div>

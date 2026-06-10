@@ -1,0 +1,39 @@
+{% from "components/page_dock.html" import page_dock, status_dock %}
+
+<div data-testid="pp-footer-dock">
+  {% if tab == "history" %}
+    {% set _base_params = ["tab=history", "result=" ~ result_filter] %}
+    {% if client_filter %}{% set _ = _base_params.append("client=" ~ client_filter) %}{% endif %}
+    {% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+    {% if sort and sort != "-completed_at" %}{% set _ = _base_params.append("sort=" ~ sort) %}{% endif %}
+    {% set _full_base = "/post-processing" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+    {% set _hx_params = ["result=" ~ result_filter] %}
+    {% if client_filter %}{% set _ = _hx_params.append("client=" ~ client_filter) %}{% endif %}
+    {% if search_query %}{% set _ = _hx_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+    {% if sort and sort != "-completed_at" %}{% set _ = _hx_params.append("sort=" ~ sort) %}{% endif %}
+    {% set _hx_base = "/htmx/post-processing/history" ~ ("?" ~ _hx_params|join("&") if _hx_params else "") %}
+    {{ page_dock(
+      page=page,
+      total_pages=total_pages,
+      base_url=_full_base,
+      status_items=[
+        {"label": "total", "value": history_total|string ~ " records"},
+        {"label": "imported", "value": history_imported_count|string},
+        {"label": "processing failed", "value": history_failed_count|string},
+      ],
+      hx_target="#pp-history-results",
+      hx_swap="outerHTML",
+      hx_select="",
+      hx_base_url=_hx_base,
+      hx_sync="#pp-history-results:replace"
+    ) }}
+  {% else %}
+    {% set _history_total = imported_count + failed_count %}
+    {{ status_dock(status_items=[
+      {"led": "amber" if active_count > 0 else "off", "label": "active", "value": active_count|string},
+      {"led": "green" if recent_imported_count > 0 else "off", "label": "imported", "value": recent_imported_count|string},
+      {"led": "amber" if failed_count > 0 else "off", "label": "processing failed", "value": failed_count|string},
+      {"label": "history", "value": _history_total|string ~ " records"},
+    ]) }}
+  {% endif %}
+</div>

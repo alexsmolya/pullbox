@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/mission_control_workspace.html" import mission_control_workspace %}
+{% from "components/search_field.html" import search_field %}
+
+{% block title %}What's New — {{ instance_name() }}{% endblock %}
+{% block page_title %}What's New{% endblock %}
+
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+{% set current_payload = current_week.payload if current_week else none %}
+{% set upcoming_payload = upcoming.payload if upcoming else none %}
+{% set active_cache = current_week.cache if active_window == "current" and current_week else upcoming.cache if active_window == "upcoming" and upcoming else none %}
+<div
+  data-testid="whats-new-page"
+  class="series-page-shell"
+  x-data="{
+    view: localStorage.getItem('pullbox:whats-new-view') || 'list',
+    activeWindow: '{{ active_window }}',
+    setView(next) {
+      this.view = next === 'compact' ? 'compact' : 'list';
+      localStorage.setItem('pullbox:whats-new-view', this.view);
+      document.documentElement.dataset.whatsNewView = this.view;
+    },
+    setWindow(next) {
+      this.activeWindow = next === 'upcoming' ? 'upcoming' : 'current';
+      const input = this.$root.querySelector('[data-whats-new-window-input]');
+      if (input) {
+        input.value = this.activeWindow;
+      }
+      const form = this.$root.querySelector('#whats-new-toolbar-form');
+      const publisherInput = form?.querySelector('[name=publisher]');
+      if (publisherInput) {
+        publisherInput.value = '';
+      }
+      if (form && typeof form.requestSubmit === 'function') {
+        form.requestSubmit();
+      } else if (form) {
+        form.submit();
+      }
+    }
+  }"
+  x-init="setView(view)"
+>
+  {% set whats_new_header_left_html %}
+    <div class="series-registry-title-block whats-new-title-block">
+      <h2 data-testid="whats-new-title" class="series-registry-title">
+        WHAT'S <span>NEW</span>
+      </h2>
+      <p data-testid="whats-new-subtitle" class="series-registry-subtitle">
+        Keep an eye on this week's books and what is coming next. Filter the release list, jump between weeks, and spot the issues worth adding.
+      </p>
+    </div>
+  {% endset %}
+
+  {% set whats_new_header_actions_html %}{% endset %}
+
+  {% set whats_new_browse_toolbar_html %}
+    <div data-testid="whats-new-browse-toolbar" data-browse-toolbar class="series-toolbar-browse">
+      <div class="series-toolbar-primary">
+        {{ search_field(
+          name="q",
+          value=q,
+          placeholder="Search releases...",
+          input_testid="whats-new-search-input",
+          clear_testid="whats-new-search-clear",
+          panel_testid="whats-new-search-history-panel",
+          root_testid="whats-new-search-field",
+          mode="remote",
+          history_key="pullbox.searchHistory.whatsNew",
+          debounce_ms=250,
+          size="sm",
+          class_name="series-registry-search"
+        ) }}
+
+        <div class="series-toolbar-field">
+          <span class="series-toolbar-label">Release Window</span>
+          <div class="series-view-toggle whats-new-pane-toggle" role="tablist" aria-label="What's New release windows">
+            <button
+              data-testid="whats-new-this-week-tab"
+              class="whats-new-pane-toggle-item"
+              x-bind:class="{ 'is-active': activeWindow === 'current' }"
+              type="button"
+              role="tab"
+              aria-selected="{{ 'true' if active_window == 'current' else 'false' }}"
+              aria-current="{{ 'page' if active_window == 'current' else 'false' }}"
+              x-bind:aria-current="activeWindow === 'current' ? 'page' : 'false'"
+              x-bind:aria-selected="activeWindow === 'current'"
+              @click="setWindow('current')"
+            >
+              This Week
+            </button>
+            <button
+              data-testid="whats-new-coming-soon-tab"
+              class="whats-new-pane-toggle-item"
+              x-bind:class="{ 'is-active': activeWindow === 'upcoming' }"
+              type="button"
+              role="tab"
+              aria-selected="{{ 'true' if active_window == 'upcoming' else 'false' }}"
+              aria-current="{{ 'page' if active_window == 'upcoming' else 'false' }}"
+              x-bind:aria-current="activeWindow === 'upcoming' ? 'page' : 'false'"
+              x-bind:aria-selected="activeWindow === 'upcoming'"
+              @click="setWindow('upcoming')"
+            >
+              Coming Soon
+            </button>
+          </div>
+        </div>
+
+        {% include "partials/whats_new_publisher_field.html" %}
+
+        <div class="series-toolbar-field">
+          <span class="series-toolbar-label">Per Page</span>
+          {{ dropdown_select(
+            name="per_page",
+            value=per_page|string,
+            size="sm",
+            options=[
+              ("25", "25"),
+              ("50", "50"),
+              ("100", "100"),
+            ],
+            root_testid="whats-new-per-page-select",
+            class_name="series-registry-dropdown",
+            fit_width=true,
+            on_change="const form = $el.closest('form'); if (form) form.requestSubmit();"
+          ) }}
+        </div>
+      </div>
+
+      <div class="series-toolbar-actions">
+        <div class="series-toolbar-view-block">
+          <span class="series-toolbar-label">View</span>
+          <div data-testid="whats-new-view-toggle" class="series-view-toggle">
+            <button
+              type="button"
+              data-testid="whats-new-view-list"
+              data-whats-new-view-option="list"
+              data-tip="List view"
+              data-tip-pos="top"
+              data-tip-size="narrow"
+              class="series-view-toggle-item whats-new-view-toggle-item"
+              aria-label="List view"
+              x-bind:aria-pressed="view === 'list'"
+              @click="setView('list')"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 6.75h12M8 12h12M8 17.25h12M4.75 6.75h.5M4.75 12h.5M4.75 17.25h.5" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              data-testid="whats-new-view-compact"
+              data-whats-new-view-option="compact"
+              data-tip="Compact view"
+              data-tip-pos="top"
+              data-tip-size="narrow"
+              class="series-view-toggle-item whats-new-view-toggle-item"
+              aria-label="Compact view"
+              x-bind:aria-pressed="view === 'compact'"
+              @click="setView('compact')"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 7h14M5 12h14M5 17h14" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        {% if active_cache %}
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Cache</span>
+            <span data-testid="whats-new-cache-status" class="pill {{ 'pill-error whats-new-cache-badge-error' if active_cache.stale else 'pill-success whats-new-cache-badge-success' }} whats-new-cache-badge">
+              {{ active_cache.status | title }}
+            </span>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  {% endset %}
+
+  {% set whats_new_results_html %}
+    {% include "partials/whats_new_results_inner.html" %}
+  {% endset %}
+
+  {{ mission_control_workspace(
+    header_testid="whats-new-header",
+    header_left_html=whats_new_header_left_html,
+    header_actions_html=whats_new_header_actions_html,
+    header_actions_testid="whats-new-actions",
+    toolbar_id="whats-new-toolbar-form",
+    toolbar_testid="whats-new-toolbar",
+    toolbar_frame_testid="whats-new-toolbar-frame",
+    toolbar_attrs='autocomplete="off" action="/whats-new" method="get" hx-get="/whats-new" hx-target="#whats-new-results-body" hx-swap="outerHTML" hx-sync="#whats-new-results-body:replace" hx-push-url="true" hx-trigger="submit"',
+    hidden_inputs_html='<input type="hidden" name="window" value="' ~ active_window ~ '" data-whats-new-window-input><input id="whats-new-sort-input" type="hidden" name="sort" value="' ~ sort ~ '" data-whats-new-sort-input>',
+    browse_toolbar_html=whats_new_browse_toolbar_html,
+    results_id="whats-new-results",
+    results_testid="whats-new-results",
+    results_body_id="whats-new-results-body",
+    results_body_testid="whats-new-results-body",
+    results_html=whats_new_results_html
+  ) }}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/whats_new_footer_dock.html" %}
+{% endblock %}

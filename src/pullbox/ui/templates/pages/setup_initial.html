@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full" data-theme="dark" data-standalone-shell-version="{{ standalone_shell_version|default('') }}">
+{% from "components/setup_brand_lockup.html" import setup_brand_lockup %}
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Setup - {{ instance_name() }}</title>
+  <link rel="icon" href="/static/img/logo.svg?v={{ standalone_shell_version|default('') }}" type="image/svg+xml">
+  <style id="setup-critical-shell">
+    :root,
+    [data-theme="dark"] {
+      --setup-app-bg: #101824;
+      --setup-side-bg: linear-gradient(160deg, #132031 0%, #101824 42%, #1d2a3d 100%);
+      --setup-card-bg: #172231;
+      --setup-card-hover: #1d2a3d;
+      --setup-input-bg: #132030;
+      --setup-text-primary: #f7f1e8;
+      --setup-text-secondary: #cbd5e1;
+      --setup-text-tertiary: #9aaaba;
+      --setup-text-inverse: #101824;
+      --setup-border: rgba(203, 213, 225, 0.22);
+      --setup-border-strong: rgba(203, 213, 225, 0.34);
+      --setup-brand: #c6a17b;
+      --setup-interactive: #8fb9ee;
+      --setup-interactive-hover: #7da9df;
+      --setup-success: #68b88b;
+      --setup-success-dim: rgba(104, 184, 139, 0.14);
+      --setup-warning: #d7a15b;
+      --setup-error: #e38473;
+      --setup-error-dim: rgba(227, 132, 115, 0.12);
+      --setup-shadow: 0 28px 64px rgba(0, 0, 0, 0.34);
+      --setup-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --setup-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    [data-theme="light"] {
+      --setup-app-bg: #f4f7fb;
+      --setup-side-bg: linear-gradient(160deg, #f6f1eb 0%, #f4f7fb 42%, #eef4fb 100%);
+      --setup-card-bg: rgba(255, 255, 255, 0.96);
+      --setup-card-hover: #f5f8fc;
+      --setup-input-bg: #ffffff;
+      --setup-text-primary: #101923;
+      --setup-text-secondary: #4f6277;
+      --setup-text-tertiary: #72859a;
+      --setup-text-inverse: #f5f8fc;
+      --setup-border: rgba(114, 133, 154, 0.22);
+      --setup-border-strong: rgba(114, 133, 154, 0.34);
+      --setup-brand: #9b6a3e;
+      --setup-interactive: #35699f;
+      --setup-interactive-hover: #2a5a89;
+      --setup-success: #2f7a57;
+      --setup-success-dim: rgba(47, 122, 87, 0.12);
+      --setup-warning: #9e6a24;
+      --setup-error: #c15347;
+      --setup-error-dim: rgba(193, 83, 71, 0.12);
+      --setup-shadow: 0 28px 64px rgba(15, 23, 35, 0.14);
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+    body {
+      background: var(--setup-app-bg);
+      color: var(--setup-text-primary);
+      font-family: var(--setup-sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    [hidden] {
+      display: none !important;
+    }
+    [data-theme-icon] {
+      display: none;
+    }
+    html[data-theme="dark"] [data-theme-icon="dark"] {
+      display: block;
+    }
+    html[data-theme="light"] [data-theme-icon="light"] {
+      display: block;
+    }
+    .setup-page {
+      min-height: 100vh;
+    }
+    .setup-shell-grid {
+      display: grid;
+      min-height: 100vh;
+    }
+    @media (min-width: 1024px) {
+      .setup-shell-grid {
+        grid-template-columns: minmax(0, 1fr) 40rem;
+      }
+    }
+    @media (min-width: 1280px) {
+      .setup-shell-grid {
+        grid-template-columns: minmax(0, 1fr) 42rem;
+      }
+    }
+    .setup-side-panel {
+      position: relative;
+      display: none;
+      overflow: hidden;
+      border-right: 1px solid var(--setup-border);
+      background: var(--setup-side-bg);
+    }
+    .setup-side-panel::before,
+    .setup-side-panel::after {
+      content: "";
+      position: absolute;
+      pointer-events: none;
+      filter: blur(12px);
+    }
+    .setup-side-panel::before {
+      top: -10%;
+      left: -8%;
+      width: 24rem;
+      height: 24rem;
+      background: radial-gradient(circle, rgba(198, 161, 123, 0.22) 0%, transparent 64%);
+    }
+    .setup-side-panel::after {
+      right: -12%;
+      bottom: -14%;
+      width: 26rem;
+      height: 26rem;
+      background: radial-gradient(circle, rgba(143, 185, 238, 0.18) 0%, transparent 66%);
+    }
+    @media (min-width: 1024px) {
+      .setup-side-panel {
+        display: flex;
+      }
+    }
+    .setup-side-inner {
+      position: relative;
+      display: flex;
+      width: 100%;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 3rem;
+      padding: 1rem;
+    }
+    @media (min-width: 1280px) {
+      .setup-side-inner {
+        padding: 2.5rem 2rem;
+      }
+    }
+    .setup-side-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .setup-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .setup-brand-mark {
+      display: inline-flex;
+      width: 2.25rem;
+      height: 2.25rem;
+      align-items: center;
+      justify-content: center;
+      color: var(--setup-text-secondary);
+      flex-shrink: 0;
+    }
+    .setup-brand-mark svg {
+      width: 2rem;
+      height: 2rem;
+    }
+    .setup-brand-copy {
+      display: inline-flex;
+      flex-direction: column;
+      min-width: 0;
+      white-space: nowrap;
+    }
+    .setup-brand-wordmark {
+      display: block;
+      width: auto;
+      height: 1rem;
+      color: var(--setup-text-primary);
+    }
+    .setup-brand-version {
+      margin-top: 2px;
+      color: var(--setup-text-tertiary);
+      font-family: var(--setup-mono);
+      font-size: 0.58rem;
+      line-height: 1;
+    }
+    .setup-theme-toggle {
+      display: inline-flex;
+      width: 2.5rem;
+      min-width: 2.5rem;
+      min-height: 2.5rem;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--setup-border-strong);
+      border-radius: 0.5rem;
+      background: var(--setup-card-hover);
+      color: var(--setup-text-secondary);
+      cursor: pointer;
+      transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease;
+    }
+    .setup-theme-toggle:hover {
+      border-color: var(--setup-interactive);
+      color: var(--setup-text-primary);
+    }
+    .setup-theme-toggle svg {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+    .setup-hero {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      max-width: 40rem;
+    }
+    .setup-kicker {
+      margin: 0;
+      color: var(--setup-brand);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+    }
+    .setup-hero-headline {
+      margin: 0;
+      color: var(--setup-text-primary);
+      font-family: var(--setup-sans);
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.08;
+    }
+    @media (min-width: 1024px) {
+      .setup-hero-headline {
+        white-space: nowrap;
+      }
+    }
+    .setup-hero-copy {
+      margin: 0;
+      max-width: 25rem;
+      color: var(--setup-text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.72;
+    }
+    .setup-footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 1.25rem;
+      color: var(--setup-text-tertiary);
+      font-family: var(--setup-mono);
+      font-size: 0.68rem;
+    }
+    .setup-footer-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .setup-footer-dot {
+      width: 0.375rem;
+      height: 0.375rem;
+      border-radius: 999px;
+      background: var(--setup-success);
+      box-shadow: 0 0 4px rgba(104, 184, 139, 0.32);
+    }
+    .setup-main {
+      position: relative;
+      display: flex;
+      min-height: 100%;
+      align-items: center;
+      justify-content: center;
+      padding: 2.5rem 1.5rem;
+    }
+    @media (min-width: 640px) {
+      .setup-main {
+        padding: 2.5rem 2rem;
+      }
+    }
+    @media (min-width: 1024px) {
+      .setup-main {
+        padding: 2.5rem;
+      }
+    }
+    .setup-mobile-theme {
+      position: absolute;
+      top: 1.5rem;
+      right: 1.5rem;
+    }
+    @media (min-width: 1024px) {
+      .setup-mobile-theme {
+        display: none;
+      }
+    }
+    .setup-shell {
+      display: flex;
+      width: 100%;
+      max-width: 36rem;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .setup-mobile-brand {
+      display: flex;
+      justify-content: center;
+    }
+    @media (min-width: 1024px) {
+      .setup-mobile-brand {
+        display: none;
+      }
+    }
+    .setup-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--setup-border);
+      border-radius: 1.75rem;
+      background: var(--setup-card-bg);
+      box-shadow: var(--setup-shadow);
+    }
+    .setup-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(198, 161, 123, 0.4), transparent);
+    }
+    .setup-card-body {
+      padding: 1.5rem;
+    }
+    @media (min-width: 640px) {
+      .setup-card-body {
+        padding: 2rem;
+      }
+    }
+    .setup-form {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .setup-form-header {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .setup-card-title {
+      margin: 0;
+      color: var(--setup-text-primary);
+      font-family: var(--setup-sans);
+      font-size: 1.24rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.14;
+    }
+    .setup-card-subtitle {
+      margin: 0;
+      color: var(--setup-text-secondary);
+      font-size: 0.85rem;
+      line-height: 1.55;
+    }
+    .setup-form-fields {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .setup-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.375rem;
+    }
+    .setup-field-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .setup-field-label {
+      color: var(--setup-text-secondary);
+      font-size: 0.875rem;
+      font-weight: 500;
+      line-height: 1.4;
+    }
+    .setup-inline-button {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: var(--setup-text-tertiary);
+      font-size: 0.75rem;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      transition: color 160ms ease;
+    }
+    .setup-inline-button:hover {
+      color: var(--setup-text-secondary);
+    }
+    .setup-input {
+      width: 100%;
+      min-height: 2.5rem;
+      border: 1px solid var(--setup-border-strong);
+      border-radius: 0.5rem;
+      background: var(--setup-input-bg);
+      color: var(--setup-text-primary);
+      padding: 0.5rem 0.75rem;
+      font: inherit;
+      font-size: 0.875rem;
+      line-height: 1.25rem;
+      outline: none;
+    }
+    .setup-input::placeholder {
+      color: var(--setup-text-tertiary);
+    }
+    .setup-input:focus {
+      border-color: var(--setup-interactive);
+      box-shadow: 0 0 0 2px rgba(143, 185, 238, 0.16);
+    }
+    .setup-input.is-invalid {
+      border-color: rgba(227, 132, 115, 0.52);
+    }
+    .setup-password-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      border: 1px solid var(--setup-border);
+      border-radius: 1rem;
+      background: var(--setup-card-hover);
+      padding: 1rem;
+    }
+    .setup-strength-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .setup-strength-bars {
+      display: grid;
+      flex: 1;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.25rem;
+    }
+    .setup-strength-bar {
+      height: 0.375rem;
+      border-radius: 999px;
+      background: var(--setup-border);
+      transition: background-color 180ms ease;
+    }
+    .setup-strength-bar.is-weak {
+      background: var(--setup-error);
+    }
+    .setup-strength-bar.is-moderate {
+      background: var(--setup-warning);
+    }
+    .setup-strength-bar.is-strong {
+      background: var(--setup-success);
+    }
+    .setup-strength-label {
+      min-width: 4.25rem;
+      color: var(--setup-text-tertiary);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-align: right;
+    }
+    .setup-strength-label.is-weak {
+      color: var(--setup-error);
+    }
+    .setup-strength-label.is-moderate {
+      color: var(--setup-warning);
+    }
+    .setup-strength-label.is-strong {
+      color: var(--setup-success);
+    }
+    .setup-check-grid {
+      display: grid;
+      gap: 0.5rem;
+    }
+    @media (min-width: 640px) {
+      .setup-check-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    .setup-check {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--setup-text-tertiary);
+      font-size: 0.75rem;
+      line-height: 1.45;
+      transition: color 160ms ease;
+    }
+    .setup-check.is-met {
+      color: var(--setup-success);
+    }
+    .setup-check-icon {
+      display: inline-flex;
+      width: 1rem;
+      height: 1rem;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .setup-check-icon svg {
+      width: 1rem;
+      height: 1rem;
+    }
+    .setup-alert {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-radius: 0.875rem;
+      padding: 0.75rem 0.875rem;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    .setup-alert--danger {
+      border: 1px solid rgba(227, 132, 115, 0.24);
+      background: var(--setup-error-dim);
+      color: var(--setup-error);
+    }
+    .setup-alert-icon {
+      flex-shrink: 0;
+      width: 1rem;
+      height: 1rem;
+    }
+    .setup-field-note {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--setup-error);
+      font-size: 0.75rem;
+      line-height: 1.4;
+    }
+    .setup-field-note svg {
+      width: 1rem;
+      height: 1rem;
+      flex-shrink: 0;
+    }
+    .setup-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .setup-submit {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 2.5rem;
+      border: 0;
+      border-radius: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--setup-interactive);
+      color: var(--setup-text-inverse);
+      font: inherit;
+      font-size: 0.875rem;
+      font-weight: 600;
+      line-height: 1.25rem;
+      cursor: pointer;
+      transition: background-color 160ms ease, opacity 160ms ease;
+    }
+    .setup-submit:hover {
+      background: var(--setup-interactive-hover);
+    }
+    .setup-submit:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .setup-version {
+      margin: 0;
+      color: var(--setup-text-secondary);
+      font-size: 11px;
+      text-align: center;
+    }
+  </style>
+  <script>
+    (function() {
+      var saved = localStorage.getItem("pullbox-theme");
+      var theme = saved || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      document.documentElement.setAttribute("data-theme", theme);
+      if (window.location.pathname === "/") {
+        try {
+          window.history.replaceState({}, "", "/setup");
+        } catch (error) {
+          // Ignore history replacement failures in unusual embedded browsers.
+        }
+      }
+      window.setSetupTheme = function(nextTheme) {
+        document.documentElement.setAttribute("data-theme", nextTheme);
+        localStorage.setItem("pullbox-theme", nextTheme);
+      };
+      window.toggleSetupTheme = function() {
+        var currentTheme = document.documentElement.getAttribute("data-theme") || "dark";
+        window.setSetupTheme(currentTheme === "dark" ? "light" : "dark");
+      };
+    })();
+  </script>
+</head>
+<body class="setup-shell-body" data-testid="setup-page">
+  <div class="setup-page">
+    <div class="setup-shell-grid">
+      <aside class="setup-side-panel" data-testid="setup-side-panel">
+        <div class="setup-side-inner">
+          <div class="setup-side-topbar">
+            {{ setup_brand_lockup(show_version=true, version_text='v' ~ version) }}
+
+            <button type="button" class="setup-theme-toggle" onclick="toggleSetupTheme()" title="Toggle theme">
+              <svg data-theme-icon="dark" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/>
+              </svg>
+              <svg data-theme-icon="light" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="setup-hero" data-testid="setup-hero-block">
+            <p class="setup-kicker">Account setup</p>
+            <h1 class="setup-hero-headline">Create your first account.</h1>
+            <p class="setup-hero-copy">
+              Once your account is saved, you'll head straight to the sign-in page.
+            </p>
+          </div>
+
+          <div class="setup-footer">
+            <span class="setup-footer-item">
+              <span class="setup-footer-dot" aria-hidden="true"></span>
+              Instance online
+            </span>
+            <span class="setup-footer-item">Self-hosted</span>
+            <span class="setup-footer-item">Private access</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="setup-main">
+        <div class="setup-mobile-theme">
+          <button type="button" class="setup-theme-toggle" onclick="toggleSetupTheme()" title="Toggle theme">
+            <svg data-theme-icon="dark" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/>
+            </svg>
+            <svg data-theme-icon="light" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="setup-shell" data-testid="setup-shell">
+          <div class="setup-mobile-brand">
+            {{ setup_brand_lockup(show_version=true, version_text='v' ~ version) }}
+          </div>
+
+          <section class="setup-card" data-testid="setup-card">
+            <div class="setup-card-body">
+              <form id="setup-account-form" data-testid="setup-account-form" class="setup-form" novalidate>
+                <div id="setup-account-error" class="setup-alert setup-alert--danger" hidden>
+                  <svg class="setup-alert-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                  </svg>
+                  <span id="setup-account-error-message"></span>
+                </div>
+
+                <div class="setup-form-header">
+                  <p class="setup-kicker">ACCOUNT SETUP</p>
+                  <h1 class="setup-card-title">Create your account</h1>
+                  <p class="setup-card-subtitle">Create the credentials you'll use to sign in to Pullbox.</p>
+                </div>
+
+                <div class="setup-form-fields">
+                  <div class="setup-field">
+                    <label class="setup-field-label" for="setup-account-username">Username</label>
+                    <input id="setup-account-username" class="setup-input" name="username" type="text" required autofocus placeholder="admin">
+                  </div>
+
+                  <div class="setup-field">
+                    <div class="setup-field-header">
+                      <label class="setup-field-label" for="setup-account-password">Password</label>
+                      <button type="button" class="setup-inline-button" data-toggle-password data-target="setup-account-password">Show</button>
+                    </div>
+                    <input id="setup-account-password" class="setup-input" name="password" type="password" autocomplete="new-password" placeholder="Choose a strong password">
+                  </div>
+
+                  <div id="setup-password-panel" class="setup-password-panel" hidden>
+                    <div class="setup-strength-row">
+                      <div class="setup-strength-bars" aria-hidden="true">
+                        <span class="setup-strength-bar" data-strength-bar="0"></span>
+                        <span class="setup-strength-bar" data-strength-bar="1"></span>
+                        <span class="setup-strength-bar" data-strength-bar="2"></span>
+                      </div>
+                      <span id="setup-strength-label" class="setup-strength-label"></span>
+                    </div>
+
+                    <div class="setup-check-grid">
+                      <div class="setup-check" data-password-check="min_length">
+                        <span class="setup-check-icon" aria-hidden="true">
+                          <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
+                        </span>
+                        <span>At least 8 characters</span>
+                      </div>
+                      <div class="setup-check" data-password-check="max_length">
+                        <span class="setup-check-icon" aria-hidden="true">
+                          <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
+                        </span>
+                        <span>At most 128 characters</span>
+                      </div>
+                      <div class="setup-check" data-password-check="uppercase">
+                        <span class="setup-check-icon" aria-hidden="true">
+                          <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
+                        </span>
+                        <span>One uppercase letter (A–Z)</span>
+                      </div>
+                      <div class="setup-check" data-password-check="lowercase">
+                        <span class="setup-check-icon" aria-hidden="true">
+                          <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
+                        </span>
+                        <span>One lowercase letter (a–z)</span>
+                      </div>
+                      <div class="setup-check" data-password-check="digit">
+                        <span class="setup-check-icon" aria-hidden="true">
+                          <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
+                        </span>
+                        <span>One digit (0–9)</span>
+                      </div>
+                      <div class="setup-check" data-password-check="special">
+                        <span class="setup-check-icon" aria-hidden="true">
+                          <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
+                        </span>
+                        <span>One special character (!@#$%...)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="setup-field">
+                    <div class="setup-field-header">
+                      <label class="setup-field-label" for="setup-account-password-confirm">Confirm password</label>
+                      <button type="button" class="setup-inline-button" data-toggle-password data-target="setup-account-password-confirm">Show</button>
+                    </div>
+                    <input id="setup-account-password-confirm" class="setup-input" name="passwordConfirm" type="password" autocomplete="new-password" placeholder="Re-enter password">
+                    <p id="setup-password-mismatch" class="setup-field-note" hidden>
+                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                      </svg>
+                      Passwords do not match.
+                    </p>
+                  </div>
+                </div>
+
+                <div class="setup-actions">
+                  <button id="setup-account-submit" type="submit" class="setup-submit">Create Account</button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <p class="setup-version">Pullbox v{{ version }}</p>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const form = document.getElementById("setup-account-form");
+      if (!form) return;
+
+      const usernameInput = document.getElementById("setup-account-username");
+      const passwordInput = document.getElementById("setup-account-password");
+      const confirmInput = document.getElementById("setup-account-password-confirm");
+      const submitButton = document.getElementById("setup-account-submit");
+      const errorRoot = document.getElementById("setup-account-error");
+      const errorMessage = document.getElementById("setup-account-error-message");
+      const mismatchNote = document.getElementById("setup-password-mismatch");
+      const passwordPanel = document.getElementById("setup-password-panel");
+      const strengthLabel = document.getElementById("setup-strength-label");
+      const strengthBars = Array.from(document.querySelectorAll("[data-strength-bar]"));
+      const passwordChecks = Array.from(document.querySelectorAll("[data-password-check]"));
+
+      function setError(message) {
+        errorMessage.textContent = message;
+        errorRoot.hidden = !message;
+      }
+
+      function getChecks(password) {
+        return {
+          min_length: password.length >= 8,
+          max_length: password.length > 0 && password.length <= 128,
+          uppercase: /[A-Z]/.test(password),
+          lowercase: /[a-z]/.test(password),
+          digit: /\d/.test(password),
+          special: /[!@#$%^&*()_+\-=\[\]{}|;:'",.<>?\/`~]/.test(password),
+        };
+      }
+
+      function getStrength(password) {
+        if (!password) return "none";
+        const checks = getChecks(password);
+        if (!Object.values(checks).every(Boolean)) return "weak";
+        const diversity = [/[A-Z]/, /[a-z]/, /\d/, /[!@#$%^&*()_+\-=\[\]{}|;:'",.<>?\/`~]/]
+          .filter((re) => re.test(password)).length;
+        if (password.length >= 16 && diversity === 4) return "strong";
+        if (password.length >= 12 || diversity >= 3) return "moderate";
+        return "weak";
+      }
+
+      function updatePasswordState() {
+        const password = passwordInput.value || "";
+        const confirm = confirmInput.value || "";
+        const checks = getChecks(password);
+        const strength = getStrength(password);
+        const hasPassword = password.length > 0;
+
+        passwordPanel.hidden = !hasPassword;
+        mismatchNote.hidden = !(confirm && password !== confirm);
+        passwordInput.classList.toggle("is-invalid", hasPassword && !Object.values(checks).every(Boolean));
+        confirmInput.classList.toggle("is-invalid", Boolean(confirm) && password !== confirm);
+
+        passwordChecks.forEach((item) => {
+          item.classList.toggle("is-met", Boolean(checks[item.dataset.passwordCheck || ""]));
+        });
+
+        strengthBars.forEach((bar, index) => {
+          bar.classList.remove("is-weak", "is-moderate", "is-strong");
+          if (strength === "weak" && index === 0) bar.classList.add("is-weak");
+          if (strength === "moderate" && index <= 1) bar.classList.add("is-moderate");
+          if (strength === "strong") bar.classList.add("is-strong");
+        });
+
+        strengthLabel.textContent =
+          strength === "weak" ? "Weak" :
+          strength === "moderate" ? "Moderate" :
+          strength === "strong" ? "Strong" : "";
+        strengthLabel.classList.remove("is-weak", "is-moderate", "is-strong");
+        if (strength !== "none") {
+          strengthLabel.classList.add("is-" + strength);
+        }
+
+        submitButton.disabled = !(
+          usernameInput.value.trim().length >= 3 &&
+          Object.values(checks).every(Boolean) &&
+          password === confirm
+        );
+      }
+
+      Array.from(document.querySelectorAll("[data-toggle-password]")).forEach((button) => {
+        const target = document.getElementById(button.dataset.target || "");
+        if (!target) return;
+        button.addEventListener("click", () => {
+          const showing = target.getAttribute("type") === "text";
+          target.setAttribute("type", showing ? "password" : "text");
+          button.textContent = showing ? "Show" : "Hide";
+        });
+      });
+
+      usernameInput.addEventListener("input", updatePasswordState);
+      passwordInput.addEventListener("input", updatePasswordState);
+      confirmInput.addEventListener("input", updatePasswordState);
+      updatePasswordState();
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
+        const passwordConfirm = confirmInput.value;
+        const checks = getChecks(password);
+
+        setError("");
+        if (username.length < 3) {
+          setError("Username must be at least 3 characters.");
+          return;
+        }
+        if (!Object.values(checks).every(Boolean)) {
+          setError("Password does not meet all requirements.");
+          return;
+        }
+        if (password !== passwordConfirm) {
+          setError("Passwords do not match.");
+          return;
+        }
+
+        submitButton.disabled = true;
+        submitButton.textContent = "Creating...";
+        try {
+          const response = await fetch("/api/v1/system/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            setError((data.error && data.error.message) || "Failed to create account.");
+            return;
+          }
+
+          window.location.replace("/login");
+        } catch (error) {
+          setError("Network error. Please try again.");
+        } finally {
+          submitButton.textContent = "Create Account";
+          updatePasswordState();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,194 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/mission_control_workspace.html" import mission_control_workspace %}
+{% from "components/search_field.html" import search_field %}
+{% from "components/select_mode_toolbar.html" import select_mode_toolbar %}
+
+{% set intervention_header_left_html %}
+  {% include "partials/intervention_queue_header_metrics.html" %}
+{% endset %}
+
+{% set intervention_header_actions_html %}
+  {% include "partials/intervention_tabs.html" %}
+{% endset %}
+
+{% set intervention_hidden_inputs_html %}
+  <input type="hidden" name="tab" value="queue">
+  <input type="hidden" name="page" value="{{ page }}">
+{% endset %}
+
+{% set intervention_browse_toolbar_html %}
+      <div
+        data-testid="intervention-browse-toolbar"
+        data-browse-toolbar
+        class="series-toolbar-browse"
+      >
+        <div class="series-toolbar-primary">
+          {{ search_field(
+            name="search",
+            value=search_query,
+            placeholder="Search pending matches...",
+            root_testid="intervention-search-field",
+            input_testid="intervention-search-input",
+            clear_testid="intervention-search-clear",
+            panel_testid="intervention-search-history-panel",
+            mode="remote",
+            history_key="pullbox.searchHistory.intervention",
+            debounce_ms=250,
+            size="sm",
+            class_name="series-registry-search"
+          ) }}
+
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Reason</span>
+            {{ dropdown_select(
+              name="reason",
+              value=reason_filter,
+              options=review_reason_options,
+              root_testid="intervention-filter-reason",
+              size="sm",
+              hx_get="/intervention",
+              hx_target="#intervention-queue-results",
+              hx_swap="outerHTML",
+              hx_sync="#intervention-queue-results:replace",
+              hx_push_url="true",
+              hx_include="#intervention-filter-form",
+              class_name="series-registry-dropdown",
+              fit_width=true
+            ) }}
+          </div>
+
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Confidence</span>
+            {{ dropdown_select(
+              name="confidence",
+              value=confidence_filter,
+              options=[
+                ("", "All Confidence"),
+                ("high", "High"),
+                ("medium", "Medium"),
+                ("low", "Low"),
+              ],
+              root_testid="intervention-filter-confidence",
+              size="sm",
+              hx_get="/intervention",
+              hx_target="#intervention-queue-results",
+              hx_swap="outerHTML",
+              hx_sync="#intervention-queue-results:replace",
+              hx_push_url="true",
+              hx_include="#intervention-filter-form",
+              class_name="series-registry-dropdown",
+              fit_width=true
+            ) }}
+          </div>
+
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Protocol</span>
+            {{ dropdown_select(
+              name="protocol",
+              value=protocol_filter,
+              options=protocol_options,
+              root_testid="intervention-filter-protocol",
+              size="sm",
+              hx_get="/intervention",
+              hx_target="#intervention-queue-results",
+              hx_swap="outerHTML",
+              hx_sync="#intervention-queue-results:replace",
+              hx_push_url="true",
+              hx_include="#intervention-filter-form",
+              class_name="series-registry-dropdown",
+              fit_width=true
+            ) }}
+          </div>
+        </div>
+
+        <div class="series-toolbar-actions">
+          <button
+            type="button"
+            data-testid="intervention-select-mode-toggle"
+            @click="enterSelectMode()"
+            class="select-btn whitespace-nowrap"
+            x-bind:disabled="!canEnterSelectMode()"
+            aria-label="Select intervention items"
+            {% if filtered_count == 0 %}disabled{% endif %}
+            x-text="selectModeButtonLabel()"
+          >
+            Select
+          </button>
+        </div>
+      </div>
+{% endset %}
+
+{% set intervention_select_toolbar_html %}
+      <input type="hidden" name="ids" :value="selectedIds.join(',')">
+      {% call select_mode_toolbar(
+        prefix="intervention",
+        count_testid="intervention-selection-count",
+        count_expr="`${selectedIds.length} selected`",
+        select_visible_click="selectAllVisible()",
+        select_visible_disabled_expr="visibleIds().length === 0 || allVisibleSelected()",
+        deselect_all_click="deselectAll()",
+        deselect_all_disabled_expr="selectedIds.length === 0",
+        done_click="doneSelectMode()",
+        done_testid="intervention-select-mode-done",
+        show_select_all_expr="hasMoreMatchingThanVisible()",
+        select_all_click="selectAllMatching()",
+        select_all_disabled_expr="selectAllMatchingBusy || allMatchingSelected()",
+        select_all_busy_expr="selectAllMatchingBusy",
+        select_all_testid="intervention-select-all-results"
+      ) %}
+        <button
+          type="button"
+          hx-post="/htmx/intervention/bulk-approve"
+          hx-target="#intervention-queue-results"
+          hx-swap="outerHTML"
+          hx-sync="#intervention-queue-results:replace"
+          hx-include="#intervention-filter-form"
+          hx-on::after-request="if ($event.detail.successful) { doneSelectMode() }"
+          data-testid="intervention-bulk-approve"
+          class="select-btn select-btn-success whitespace-nowrap"
+          :disabled="selectedIds.length === 0"
+        >
+          Approve selected
+        </button>
+
+        <button
+          type="button"
+          hx-post="/htmx/intervention/bulk-reject"
+          hx-target="#intervention-queue-results"
+          hx-swap="outerHTML"
+          hx-sync="#intervention-queue-results:replace"
+          hx-include="#intervention-filter-form"
+          hx-on::after-request="if ($event.detail.successful) { doneSelectMode() }"
+          data-testid="intervention-bulk-reject"
+          class="select-btn select-btn-danger whitespace-nowrap"
+          :disabled="selectedIds.length === 0"
+        >
+          Reject selected
+        </button>
+      {% endcall %}
+{% endset %}
+
+{% set intervention_results_html %}
+  {% include "partials/intervention_list.html" %}
+{% endset %}
+
+{{ mission_control_workspace(
+  header_testid="intervention-header",
+  header_left_html=intervention_header_left_html,
+  header_left_id="intervention-queue-header-metrics",
+  header_left_testid="intervention-queue-header-metrics",
+  header_actions_html=intervention_header_actions_html,
+  header_actions_testid="intervention-header-actions",
+  toolbar_id="intervention-filter-form",
+  toolbar_testid="intervention-filters",
+  toolbar_frame_testid="intervention-toolbar-frame",
+  toolbar_attrs='autocomplete="off" action="/intervention" method="get" hx-get="/intervention" hx-target="#intervention-queue-results" hx-swap="outerHTML" hx-sync="#intervention-queue-results:replace" hx-push-url="true" hx-trigger="submit"',
+  hidden_inputs_html=intervention_hidden_inputs_html,
+  browse_toolbar_html=intervention_browse_toolbar_html,
+  select_toolbar_html=intervention_select_toolbar_html,
+  results_id="intervention-results",
+  results_testid="intervention-results",
+  results_body_id="intervention-results-body",
+  results_body_testid="intervention-results-body",
+  results_html=intervention_results_html
+) }}

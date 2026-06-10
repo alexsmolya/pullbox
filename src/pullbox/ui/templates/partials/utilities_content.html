@@ -1,0 +1,13 @@
+<div
+  data-testid="utilities-content"
+  id="utilities-content"
+  class="utilities-content"
+>
+  {% if tab == "queue" %}
+    {% include "partials/utilities_queue.html" %}
+  {% elif tab == "history" %}
+    {% include "partials/utilities_history.html" %}
+  {% else %}
+    {% include "partials/utilities_overview.html" %}
+  {% endif %}
+</div>

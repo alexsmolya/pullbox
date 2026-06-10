@@ -1,0 +1,67 @@
+{% set _history_gauge_total = history_total if history_total > 0 else 1 %}
+{% set _history_imported_offset = (113.1 * (1 - (history_imported_count / _history_gauge_total)))|round(1) %}
+{% set _history_failed_offset = (113.1 * (1 - (history_failed_count / _history_gauge_total)))|round(1) %}
+{% set _history_records_offset = "0" if history_total > 0 else "113.1" %}
+
+<div class="downloads-header-copy">
+  <h1 class="downloads-title">IMPORT <span>HISTORY</span></h1>
+  <p class="downloads-subtitle">
+    {{ history_total }} records · {{ history_imported_count }} imported · {{ history_failed_count }} processing failed
+  </p>
+</div>
+
+<div data-testid="pp-gauges" class="downloads-gauges">
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-success"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _history_imported_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-success">{{ history_imported_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Imported</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-error"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _history_failed_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-error">{{ history_failed_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Processing Failed</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-muted"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _history_records_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-muted">{{ history_total }}</span>
+    </div>
+    <div class="downloads-gauge-label">Records</div>
+  </div>
+</div>

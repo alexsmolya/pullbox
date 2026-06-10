@@ -1,0 +1,49 @@
+# Grype vulnerability ignore list for the Pullbox release image.
+#
+# Scope:
+# - Debian/CPython CVEs reported from the python:3.13-slim base image
+# - only vulnerabilities with no stable fix currently available
+# - Python package vulnerabilities are not suppressed here; pip-audit covers
+#   those separately in the security workflow
+#
+# Reviewed against pullbox:grype-debug-313 on 2026-05-12.
+# Re-audit after each base-image refresh and remove entries when fixed builds
+# become available upstream.
+
+ignore:
+  # CPython 3.13.13 binary CVEs reported from the upstream python:3.13-slim
+  # base image. No stable fixed runtime is available in the current image line.
+  - vulnerability: CVE-2026-6100
+  - vulnerability: CVE-2026-3298
+  - vulnerability: CVE-2026-4786
+
+  # Debian trixie libraries with no published fixed package in the current
+  # python:3.13-slim image lineage.
+  - vulnerability: CVE-2026-42010
+  - vulnerability: CVE-2026-3833
+  - vulnerability: CVE-2026-33846
+  - vulnerability: CVE-2026-33845
+  - vulnerability: CVE-2026-6732
+  - vulnerability: CVE-2026-6772
+  - vulnerability: CVE-2026-6766
+  - vulnerability: CVE-2026-27135
+
+  # Debian trixie packages marked won't-fix / not-fixable in current security
+  # metadata as of the review date above.
+  - vulnerability: CVE-2025-69720
+  - vulnerability: CVE-2025-13151
+  - vulnerability: CVE-2026-5121
+  - vulnerability: CVE-2026-4424
+  - vulnerability: CVE-2026-4111
+  - vulnerability: CVE-2026-4046
+  - vulnerability: CVE-2026-5450
+  - vulnerability: CVE-2026-4437
+  - vulnerability: CVE-2025-59375
+  - vulnerability: CVE-2026-5928
+  - vulnerability: CVE-2026-5435
+  - vulnerability: CVE-2026-41080
+  - vulnerability: CVE-2026-42011
+  - vulnerability: CVE-2026-4878
+  - vulnerability: CVE-2026-24882
+  - vulnerability: CVE-2026-25210
+  - vulnerability: CVE-2026-3805

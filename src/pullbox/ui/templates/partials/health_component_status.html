@@ -1,0 +1,235 @@
+{% from "components/search_field.html" import search_field %}
+{%- macro health_led_class(tone, extra_classes="") -%}
+  {%- set tone_class = "health-led--off" -%}
+  {%- if tone == "green" -%}
+    {%- set tone_class = "health-led--green" -%}
+  {%- elif tone == "amber" -%}
+    {%- set tone_class = "health-led--amber" -%}
+  {%- elif tone == "red" -%}
+    {%- set tone_class = "health-led--red" -%}
+  {%- endif -%}
+  health-led {{ tone_class }}{% if extra_classes %} {{ extra_classes }}{% endif %}
+{%- endmacro -%}
+{%- macro sort_header(field, label, extra_classes="", width="") -%}
+  {%- set current_field = health_component.history_sort.lstrip("-") -%}
+  {%- set current_desc = health_component.history_sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  {%- set sort_qs = "sort=" ~ next_sort -%}
+  {%- if health_component.history_search_query %}{% set sort_qs = sort_qs ~ "&search=" ~ (health_component.history_search_query|urlencode) %}{% endif -%}
+  <th class="{{ extra_classes }} {{ width }}">
+    <button
+      type="button"
+      data-testid="health-history-sort-{{ field }}"
+      hx-get="{{ health_component.history_base_path }}/status?{{ sort_qs }}"
+      hx-target="#health-component-status-region"
+      hx-swap="outerHTML"
+      class="downloads-sort-btn{% if current_field == field %} is-active{% endif %}"
+    >
+      <span>{{ label }}</span>
+      <svg class="downloads-sort-chevron{% if current_field == field and not current_desc %} is-desc{% endif %}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </th>
+{%- endmacro -%}
+
+<section
+  class="health-detail-shell pt-6"
+  data-testid="health-component-detail-page"
+  data-health-component-detail="{{ health_component.component_key }}"
+>
+  <a href="{{ health_component.back_href }}" class="health-detail-back" data-testid="health-detail-back-link">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
+    </svg>
+    {{ health_component.back_label }}
+  </a>
+
+  <div class="health-detail-card" data-testid="health-component-detail-{{ health_component.key }}">
+    <div class="health-detail-card__header">
+      <div class="health-detail-card__title-row">
+        <span class="{{ health_led_class(health_component.led_tone, 'health-led--header') }}"></span>
+        <h2 class="health-detail-card__title">{{ health_component.detail_title }}</h2>
+        <span class="pill {{ health_component.pill_tone }}">{{ health_component.status_label }}</span>
+      </div>
+
+      <button
+        @click="refreshNow()"
+        :disabled="refreshing"
+        class="btn-primary gap-2 shrink-0"
+        data-testid="health-detail-refresh-button"
+        type="button"
+      >
+        <svg class="h-4 w-4" :class="refreshing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+        </svg>
+        <span x-text="refreshing ? 'Checking...' : 'Recheck'"></span>
+      </button>
+    </div>
+
+    <div class="health-detail-card__stats">
+      {% for stat in health_component.detail_stats %}
+        <div class="health-detail-card__stat">
+          <span class="health-detail-card__stat-label">{{ stat.label }}</span>
+          <span class="health-detail-card__stat-value{% if stat.tone != 'default' %} health-detail-card__stat-value--{{ stat.tone }}{% endif %}">
+            {{ stat.value_label }}
+          </span>
+        </div>
+      {% endfor %}
+    </div>
+
+    <p class="health-section__label">Individual Checks ({{ health_component.checks | length }})</p>
+    {% if health_component.detail_variant == 'table' %}
+      <div class="health-table-wrap">
+        <table class="health-table">
+          <thead>
+            <tr>
+              <th class="c health-table__status-col">SYS</th>
+              <th>Check</th>
+              <th>Status</th>
+              <th class="r">Response</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for check in health_component.checks %}
+              <tr>
+                <td class="c"><span class="{{ health_led_class(check.led_tone) }}"></span></td>
+                <td>
+                  <div class="health-table__name">{{ check.name }}</div>
+                  <div class="health-table__detail">{{ check.message }}</div>
+                </td>
+                <td><span class="pill {{ check.pill_tone }}">{{ check.status_label }}</span></td>
+                <td class="r health-table__mono">{{ check.response_label }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="health-check-list{% if health_component.key == 'database' %} health-check-list--database-metrics{% endif %}">
+        {% for check in health_component.checks %}
+          <div class="health-check-row{% if health_component.key == 'database' %} health-check-row--database-metric{% endif %}">
+            <span class="{{ health_led_class(check.led_tone) }}"></span>
+            <span class="health-check-row__name">{{ check.name }}</span>
+            <span class="health-check-row__message">{{ check.message }}</span>
+            <span class="pill {{ check.pill_tone }}">{{ check.status_label }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <p class="health-section__label">Recent History ({{ health_component.history_total_count }})</p>
+    <div class="downloads-table-wrap health-history-wrap">
+      <form
+        id="health-history-filter-form"
+        data-testid="health-history-toolbar"
+        class="series-toolbar-frame downloads-history-toolbar"
+        autocomplete="off"
+        action="{{ health_component.history_base_path }}"
+        method="get"
+        hx-get="{{ health_component.history_base_path }}/status"
+        hx-target="#health-history-results"
+        hx-swap="outerHTML"
+        hx-select="#health-history-results"
+        hx-trigger="submit"
+      >
+        <input id="health-history-sort-input" type="hidden" name="sort" value="{{ health_component.history_sort }}">
+        <div class="series-toolbar-body">
+          <div class="series-toolbar-browse">
+            <div class="series-toolbar-primary">
+              {{ search_field(
+                name="search",
+                value=health_component.history_search_query,
+                placeholder="Search checks...",
+                input_testid="health-history-search-input",
+                clear_testid="health-history-search-clear",
+                panel_testid="health-history-search-history-panel",
+                root_testid="health-history-search-field",
+                mode="remote",
+                history_key="pullbox.searchHistory.health." ~ health_component.key,
+                debounce_ms=250,
+                size="sm",
+                class_name="series-registry-search"
+              ) }}
+            </div>
+
+            {% if health_component.history_total_count > 0 %}
+              <div class="series-toolbar-actions">
+                <button
+                  type="button"
+                  @click="clearHistory($el)"
+                  data-testid="health-history-clear"
+                  class="btn-danger control-size-sm"
+                >
+                  <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                  </svg>
+                  Clear History
+                </button>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </form>
+
+      <div id="health-history-results" data-testid="health-history-results">
+      <table class="downloads-table health-history-table">
+        <thead>
+          <tr>
+            {{ sort_header("checked_at", "Time") }}
+            {{ sort_header("check_name", "Check") }}
+            {{ sort_header("status", "Status") }}
+            {{ sort_header("response_time_ms", "Response", extra_classes="is-right") }}
+          </tr>
+        </thead>
+        <tbody>
+          {% if health_component.history %}
+            {% for row in health_component.history %}
+              <tr>
+                <td>
+                  <span class="block max-w-[160px] truncate tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                    {{ row.time_label }}
+                  </span>
+                </td>
+                <td>
+                  <span class="block max-w-[240px] truncate tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                    {{ row.check_name }}
+                  </span>
+                </td>
+                <td><span class="pill {{ row.pill_tone }}">{{ row.status_label }}</span></td>
+                <td class="is-right">
+                  <span class="block max-w-[140px] truncate tooltip-wrap ml-auto" data-tooltip-auto data-tip-size="wide">
+                    {{ row.response_label }}
+                  </span>
+                </td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="4">
+                <div class="downloads-empty-state is-history border-0 bg-transparent px-0 py-8 shadow-none">
+                  <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                  {% if health_component.history_search_query %}
+                    <p class="downloads-empty-title">No matching history</p>
+                    <p class="downloads-empty-copy">Try widening the search or clearing it to see more check records.</p>
+                  {% else %}
+                    <p class="downloads-empty-title">No history yet</p>
+                    <p class="downloads-empty-copy">Recent check results for this component will appear here.</p>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+</section>

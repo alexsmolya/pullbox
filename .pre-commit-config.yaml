@@ -1,0 +1,41 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+
+  # Type checking — catches type errors per-commit before they cascade.
+  # Added during utilities sprint to prevent technical debt accumulation
+  # before the CI/CD sprint (Sprint 6) formalizes the full pipeline.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy type check
+        entry: mypy src/pullbox/
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: pytest-fast
+        name: fast unit tests
+        entry: pytest tests/unit/ -x -q -m "not slow" --no-header
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]

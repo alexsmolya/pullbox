@@ -1,0 +1,21 @@
+<div
+  id="search-history-header-metrics"
+  data-testid="search-history-header-metrics"
+  class="downloads-header-summary"
+  hx-swap-oob="outerHTML"
+>
+  {% include "partials/search_history_header_metrics.html" %}
+</div>
+<input
+  id="search-history-sort-input"
+  type="hidden"
+  name="sort"
+  value="{{ sort }}"
+  hx-swap-oob="outerHTML"
+>
+{% set clear_slot_oob = true %}
+{% include "partials/search_history_clear_slot.html" %}
+<div id="page-footer-dock" data-testid="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/search_history_footer_dock.html" %}
+</div>
+{% include "partials/search_history_results_body.html" %}

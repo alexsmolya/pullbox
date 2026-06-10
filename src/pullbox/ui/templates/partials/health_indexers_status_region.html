@@ -1,0 +1,10 @@
+<div
+  data-testid="health-indexers-status-region"
+  id="health-indexers-status-region"
+  x-data="healthPage({ csrfToken: '{{ csrf_token }}', componentKey: 'indexers' })"
+  hx-get="/health/indexers/status"
+  hx-trigger="every 30s [window.healthComponentRefreshEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  {% include "partials/health_indexers_status.html" %}
+</div>

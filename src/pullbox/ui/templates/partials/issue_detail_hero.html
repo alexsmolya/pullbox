@@ -1,0 +1,112 @@
+{% from "components/status_badge.html" import status_badge %}
+
+{% set issue_comicvine_link = issue.comicvine_url or ("https://comicvine.gamespot.com/issue/4000-" ~ issue.comicvine_id ~ "/" if issue.comicvine_id else None) %}
+{% set issue_title_parts = issue.series.title.split(" ", 1) %}
+
+<section data-testid="issue-detail-hero" class="detail-hero-shell">
+  <div class="series-domain-hero-inner issue-domain-hero-inner">
+    <div class="series-domain-cover-column issue-domain-cover-column">
+      <div data-testid="issue-detail-cover-frame" class="series-domain-cover-frame issue-domain-cover-frame">
+        {% if issue.cover_path %}
+        <img
+          src="{{ issue.cover_path }}"
+          alt="#{{ issue.issue_number|issue_num }}"
+          data-testid="issue-detail-cover-link"
+          class="series-domain-cover-image"
+          @click="coverModalUrl = {{ issue.cover_path|tojson|forceescape }}; coverModalOpen = true"
+        >
+        {% elif issue.cover_url %}
+        <img
+          src="{{ issue.cover_url }}"
+          alt="#{{ issue.issue_number|issue_num }}"
+          data-testid="issue-detail-cover-link"
+          class="series-domain-cover-image"
+          @click="coverModalUrl = {{ issue.cover_url|tojson|forceescape }}; coverModalOpen = true"
+        >
+        {% else %}
+        <div data-testid="issue-detail-cover-placeholder" class="series-domain-cover-placeholder">
+          <svg class="h-8 w-8" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+          </svg>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div data-testid="issue-detail-hero-summary-panel" class="detail-summary-panel">
+      <div data-testid="issue-detail-header">
+        <h2 data-testid="issue-detail-title" class="series-domain-hero-title series-domain-hero-title-sm">
+          {% if issue_comicvine_link %}
+            <a
+              href="{{ issue_comicvine_link }}"
+              target="_blank"
+              rel="noopener"
+              data-testid="issue-detail-title-link"
+              class="series-domain-hero-title-link"
+              aria-label="Open {{ issue.series.title }} #{{ issue.issue_number|issue_num }} on ComicVine"
+            >
+              {{ issue_title_parts[0]|upper }}{% if issue_title_parts|length > 1 %} <span>{{ issue_title_parts[1]|upper }} #{{ issue.issue_number|issue_num }}</span>{% else %} <span>#{{ issue.issue_number|issue_num }}</span>{% endif %}
+            </a>
+          {% else %}
+            {{ issue_title_parts[0]|upper }}{% if issue_title_parts|length > 1 %} <span>{{ issue_title_parts[1]|upper }} #{{ issue.issue_number|issue_num }}</span>{% else %} <span>#{{ issue.issue_number|issue_num }}</span>{% endif %}
+          {% endif %}
+        </h2>
+        {% if issue.title %}
+        <p data-testid="issue-detail-subtitle" class="series-domain-hero-subtitle">{{ issue.title }}</p>
+        {% endif %}
+        <div data-testid="issue-detail-status-row" class="series-domain-status-row">
+          {{ status_badge(issue.status.value) }}
+          {% if issue.library_file %}
+          <span class="pill pill-success">File in library</span>
+          {% endif %}
+          {% if issue.series.publisher %}
+          <span class="pill pill-neutral">{{ issue.series.publisher.name }}</span>
+          {% endif %}
+          {% if issue.series.year_start %}
+          <span class="pill pill-neutral">{{ issue.series.year_start }}</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <aside
+      data-testid="issue-detail-hero-actions-panel"
+      class="series-domain-actions-panel"
+      aria-labelledby="issue-detail-actions-title"
+    >
+      <p id="issue-detail-actions-title" data-testid="issue-detail-actions-title" class="series-domain-actions-title">
+        Manage <span>issue</span>
+      </p>
+      {% include "partials/issue_detail_actions.html" %}
+    </aside>
+  </div>
+
+  <div data-testid="issue-detail-meta-grid">
+    <div data-testid="issue-detail-stat-strip" class="issue-domain-stat-strip">
+      <div class="issue-domain-stat-box">
+        <p class="issue-domain-stat-label">Release Date</p>
+        <p class="issue-domain-stat-value">{{ issue.release_date or "Unknown" }}</p>
+      </div>
+      <div class="issue-domain-stat-box">
+        <p class="issue-domain-stat-label">Store Date</p>
+        <p class="issue-domain-stat-value">{{ issue.store_date or "Unknown" }}</p>
+      </div>
+      <div class="issue-domain-stat-box">
+        <p class="issue-domain-stat-label">Pages</p>
+        <p class="issue-domain-stat-value">{{ issue.page_count or "Unknown" }}</p>
+      </div>
+      <div class="issue-domain-stat-box">
+        <p class="issue-domain-stat-label">ComicVine</p>
+        <p class="issue-domain-stat-value">
+          {% if issue.comicvine_url %}
+          <a href="{{ issue.comicvine_url }}" target="_blank" rel="noopener">{{ issue.comicvine_id }}</a>
+          {% elif issue.comicvine_id %}
+          {{ issue.comicvine_id }}
+          {% else %}
+          Unlinked
+          {% endif %}
+        </p>
+      </div>
+    </div>
+  </div>
+</section>

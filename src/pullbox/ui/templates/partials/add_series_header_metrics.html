@@ -1,0 +1,50 @@
+{% set gauge_circumference = 138.2 %}
+{% set shown_ratio = ((search_shown_count / search_total_results) * 100)|round(0)|int if search_total_results > 0 else 0 %}
+{% set in_library_ratio = ((search_in_library_count / search_shown_count) * 100)|round(0)|int if search_shown_count > 0 else 0 %}
+
+<div class="series-registry-title-block">
+  <h2 data-testid="add-series-title" class="series-registry-title">
+    ADD <span>SERIES</span>
+  </h2>
+  <p data-testid="add-series-subtitle" class="series-registry-subtitle">
+    Search ComicVine · review · add to library
+  </p>
+</div>
+
+<div data-testid="add-series-gauges" class="series-registry-gauges">
+  <div data-testid="add-series-gauge-results" class="series-registry-gauge">
+    <div class="series-registry-gauge-ring">
+      <svg viewBox="0 0 56 56" aria-hidden="true">
+        <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+        <circle
+          class="series-registry-gauge-fill series-registry-gauge-fill-info"
+          cx="28"
+          cy="28"
+          r="22"
+          stroke-dasharray="{{ gauge_circumference }}"
+          stroke-dashoffset="{{ (gauge_circumference * (100 - shown_ratio) / 100)|round(1) }}"
+        ></circle>
+      </svg>
+      <span class="series-registry-gauge-value text-pb-interactive">{{ search_total_results }}</span>
+    </div>
+    <div class="series-registry-gauge-label">{% if is_preview_search %}Quick Matches{% else %}Results{% endif %}</div>
+  </div>
+
+  <div data-testid="add-series-gauge-in-library" class="series-registry-gauge">
+    <div class="series-registry-gauge-ring">
+      <svg viewBox="0 0 56 56" aria-hidden="true">
+        <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+        <circle
+          class="series-registry-gauge-fill series-registry-gauge-fill-success"
+          cx="28"
+          cy="28"
+          r="22"
+          stroke-dasharray="{{ gauge_circumference }}"
+          stroke-dashoffset="{{ (gauge_circumference * (100 - in_library_ratio) / 100)|round(1) }}"
+        ></circle>
+      </svg>
+      <span class="series-registry-gauge-value text-pb-success">{{ search_in_library_count }}</span>
+    </div>
+    <div class="series-registry-gauge-label">In Library</div>
+  </div>
+</div>

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}System — {{ instance_name() }}{% endblock %}
+{% block page_title %}System{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div class="admin-workspace-page" data-testid="system-page" data-admin-workspace-contract="v1">
+  {% include "partials/system_header.html" %}
+  {% include "partials/system_body.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/system_footer_dock.html" %}
+{% endblock %}

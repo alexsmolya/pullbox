@@ -1,0 +1,49 @@
+{% from "partials/whats_new_release_tables.html" import empty_results, release_tables with context %}
+
+{% set current_payload = current_week.payload if current_week else none %}
+{% set upcoming_payload = upcoming.payload if upcoming else none %}
+
+{% if current_week or upcoming %}
+  {% if (current_week and current_week.cache.stale) or (upcoming and upcoming.cache.stale) %}
+    <div data-testid="whats-new-stale-banner" class="whats-new-stale-banner">
+      <p class="font-semibold text-pb-warning">Cached release data</p>
+      <p class="mt-1 text-pb-text-sec">
+        Showing cached release data while Pullbox waits for the next refresh.
+      </p>
+    </div>
+  {% endif %}
+  <div class="whats-new-results-stack">
+    {% if current_week and active_window == "current" %}
+      <section data-testid="whats-new-this-week-panel" class="whats-new-panel">
+        {% if current_payload.issues %}
+          <div data-testid="whats-new-current-releases" class="whats-new-release-table-slot">
+            {{ release_tables(current_payload.issues, "whats-new-current") }}
+          </div>
+        {% else %}
+          {{ empty_results("No releases match the current filters.", "Try a different search term or publisher filter.") }}
+        {% endif %}
+      </section>
+    {% endif %}
+
+    {% if upcoming and active_window == "upcoming" %}
+      <section data-testid="whats-new-coming-soon-panel" class="whats-new-panel">
+        {% include "partials/whats_new_week_nav.html" %}
+        {% if upcoming_payload.issues %}
+          <div data-testid="whats-new-upcoming-releases" class="whats-new-release-table-slot">
+            {{ release_tables(upcoming_payload.issues, "whats-new-upcoming") }}
+          </div>
+        {% else %}
+          {{ empty_results("No upcoming releases match the current filters.", "Try a different search term or publisher filter.") }}
+        {% endif %}
+      </section>
+    {% endif %}
+  </div>
+{% else %}
+  <div data-testid="whats-new-empty-state" class="downloads-empty-state is-history">
+    <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.5h16.5M4.5 8.25h15m-13.5 3.75h12m-10.5 3.75h9M9 19.5h6"/>
+    </svg>
+    <p class="downloads-empty-title">No release data has been cached yet.</p>
+    <p class="downloads-empty-copy">Use refresh or wait for startup/scheduled refresh to pull the latest release data from api.pullbox.app.</p>
+  </div>
+{% endif %}

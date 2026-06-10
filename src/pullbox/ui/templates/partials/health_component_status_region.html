@@ -1,0 +1,14 @@
+<div
+  data-testid="health-component-status-region"
+  id="health-component-status-region"
+  x-data="healthPage({ csrfToken: '{{ csrf_token }}', componentKey: '{{ health_component.component_key }}', subjectKey: '{{ health_component.subject_key or '' }}' })"
+  {% set _history_refresh_qs = [] %}
+  {% if health_component.history_search_query %}{% set _ = _history_refresh_qs.append("search=" ~ (health_component.history_search_query|urlencode)) %}{% endif %}
+  {% if health_component.history_sort and health_component.history_sort != "-checked_at" %}{% set _ = _history_refresh_qs.append("sort=" ~ (health_component.history_sort|urlencode)) %}{% endif %}
+  {% if health_component.history_page > 1 %}{% set _ = _history_refresh_qs.append("history_page=" ~ health_component.history_page) %}{% endif %}
+  hx-get="{{ health_component.history_base_path }}/status{{ '?' ~ _history_refresh_qs|join('&') if _history_refresh_qs else '' }}"
+  hx-trigger="every 30s [window.healthComponentRefreshEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  {% include "partials/health_component_status.html" %}
+</div>

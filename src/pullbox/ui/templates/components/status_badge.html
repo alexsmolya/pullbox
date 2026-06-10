@@ -1,0 +1,26 @@
+{#- Status badge component — color-coded pill for status enums. -#}
+{% macro status_badge(status) %}
+{%- set colors = {
+  "wanted": "pill-info",
+  "owned": "pill-success",
+  "downloading": "pill-warning",
+  "skipped": "pill-neutral",
+
+  "continuing": "pill-success",
+  "ended": "pill-neutral",
+
+  "queued": "pill-info",
+  "completed": "pill-success",
+  "failed": "pill-error",
+  "retry_pending": "pill-warning",
+
+  "healthy": "pill-success",
+  "degraded": "pill-warning",
+  "unhealthy": "pill-error",
+  "disabled": "pill-neutral",
+} -%}
+{%- set badge_class = colors.get(status|lower, "pill-neutral") -%}
+<span class="pill {{ badge_class }}">
+  {{ status|replace("_", " ")|title }}
+</span>
+{% endmacro %}

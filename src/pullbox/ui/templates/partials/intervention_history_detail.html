@@ -1,0 +1,38 @@
+<tr
+  id="intervention-history-detail-row-{{ pm.id }}"
+  data-testid="intervention-history-detail-content"
+  class="table-detail-row"
+>
+  <td colspan="7" class="!p-0">
+    <div class="border-t border-pb-border bg-pb-surface px-4 py-4 sm:px-5">
+      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Review</div>
+          <div class="mt-2 text-sm text-pb-text-sec">{{ meta.review_reason_summary }}</div>
+          {% if meta.similarity_pct is not none %}
+            <div class="mt-1 text-xs text-pb-text-dim">{{ meta.similarity_pct }}% similarity</div>
+          {% endif %}
+        </div>
+        <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Source</div>
+          <div class="mt-2 text-sm text-pb-text-sec">{{ meta.source_label }} · {{ meta.protocol_label }}</div>
+          {% if pm.file_size %}
+            <div class="mt-1 text-xs text-pb-text-dim">{{ pm.file_size|filesize }}</div>
+          {% endif %}
+        </div>
+        <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Notes</div>
+          <div class="mt-2 text-sm text-pb-text-sec">
+            {% if meta.rejection_reason %}
+              {{ meta.rejection_reason }}
+            {% elif pm.status == "expired" %}
+              Expired — no decision was made before the review window closed.
+            {% else %}
+              No additional notes.
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </td>
+</tr>

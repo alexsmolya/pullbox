@@ -1,0 +1,134 @@
+{#- Collector's Wall card for the series registry. Expects: item, s, owned_count. -#}
+{% set cover_src = item.cover_src %}
+{% set cover_loading = item.cover_loading %}
+{% set cover_fetchpriority = item.cover_fetchpriority %}
+{% set cover_decoding = item.cover_decoding %}
+<article
+  id="series-grid-card-{{ s.id }}"
+  data-testid="series-grid-card"
+  data-series-id="{{ s.id }}"
+  x-bind:class="isSelected({{ s.id }}) ? 'series-wall-card-selected' : ''"
+  class="series-wall-card"
+>
+  <div data-testid="series-grid-cover-frame" class="series-wall-cover-wrap">
+    <span
+      data-testid="series-monitored-indicator"
+      class="series-wall-monitor-dot {{ 'on' if s.monitored else 'off' }}"
+    ></span>
+    <label data-series-selection-control="grid" class="series-wall-selection-control">
+      <input
+        type="checkbox"
+        value="{{ s.id }}"
+        data-testid="series-row-checkbox"
+        data-series-row-checkbox
+        class="checkbox-pb"
+        x-bind:checked="isSelected({{ s.id }})"
+        x-on:change="toggleSelection({{ s.id }}, $event.target.checked)"
+        aria-label="Select {{ s.title }}"
+      >
+    </label>
+
+    <a
+      id="series-grid-cover-link-{{ s.id }}"
+      href="/series/{{ s.id }}"
+      hx-boost="false"
+      data-testid="series-grid-cover-link"
+      aria-label="Open {{ s.title }}"
+      class="absolute inset-0 z-[1] block"
+    >
+      {% if cover_src %}
+        <img
+          src="{{ cover_src }}"
+          alt="{{ s.title }} cover"
+          data-testid="series-grid-cover"
+          loading="{{ cover_loading }}"
+          fetchpriority="{{ cover_fetchpriority }}"
+          decoding="{{ cover_decoding }}"
+          onerror="this.style.display='none'"
+          class="h-full w-full object-cover object-top"
+        >
+      {% else %}
+        <div data-testid="series-grid-cover-placeholder" class="series-wall-cover-placeholder">
+          <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+          </svg>
+        </div>
+      {% endif %}
+    </a>
+
+    <div class="series-wall-ring">
+      <svg viewBox="0 0 44 44" aria-hidden="true">
+        <circle class="series-wall-ring-bg" cx="22" cy="22" r="18"></circle>
+        <circle
+          class="series-wall-ring-fill series-wall-ring-fill-{{ item.acquisition_tone }}"
+          cx="22"
+          cy="22"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ (113.1 * (100 - item.completion_pct) / 100)|round(1) }}"
+        ></circle>
+      </svg>
+      <span class="series-wall-ring-center">{{ item.completion_pct }}</span>
+    </div>
+
+    <div class="series-wall-overlay">
+      <div class="series-wall-overlay-title">{{ s.title }}</div>
+      <div class="series-wall-overlay-meta" data-testid="series-grid-hover-meta">
+        <div class="series-wall-overlay-meta-line" data-testid="series-grid-hover-publisher">
+          <span class="series-wall-overlay-meta-label">Publisher</span>
+          <span class="series-wall-overlay-meta-value">{% if s.publisher %}{{ s.publisher.name }}{% else %}Unknown publisher{% endif %}</span>
+        </div>
+        {% if s.year_start %}
+          <div class="series-wall-overlay-meta-line" data-testid="series-grid-hover-years">
+            <span class="series-wall-overlay-meta-label">Published</span>
+            <span class="series-wall-overlay-meta-value">{{ format_series_year_label(s.year_start, s.year_end, s.status) }}</span>
+          </div>
+        {% endif %}
+        {% if s.series_type.value != 'standard' %}
+          <div class="series-wall-overlay-meta-line" data-testid="series-grid-hover-type">
+            <span class="series-wall-overlay-meta-label">Type</span>
+            <span class="series-wall-overlay-meta-value">{{ s.series_type.ui_display_name }}</span>
+          </div>
+        {% endif %}
+        {% if s.status.value != 'continuing' %}
+          <div class="series-wall-overlay-meta-line" data-testid="series-grid-hover-status">
+            <span class="series-wall-overlay-meta-label">Status</span>
+            <span class="series-wall-overlay-meta-value">{{ s.status.value|replace('_', ' ')|title }}</span>
+          </div>
+        {% endif %}
+      </div>
+      <div class="series-wall-overlay-stats">
+        <span class="series-wall-overlay-stat" data-testid="series-grid-hover-owned">
+          <span class="series-wall-overlay-meta-label">Owned</span>
+          <span class="series-wall-overlay-meta-value"><strong>{{ owned_count }}</strong>/{{ item.total_issues }}</span>
+        </span>
+        {% if item.wanted_count > 0 %}
+          <span class="series-wall-overlay-stat" data-testid="series-grid-hover-wanted">
+            <span class="series-wall-overlay-meta-label">Wanted</span>
+            <span class="series-wall-overlay-meta-value"><strong>{{ item.wanted_count }}</strong></span>
+          </span>
+        {% endif %}
+      </div>
+      <div class="series-wall-overlay-actions">
+        {% if item.wanted_count > 0 and s.monitored %}
+          <button
+            type="button"
+            class="series-wall-overlay-btn"
+            @click.prevent="runRowSearch({ id: {{ s.id }}, title: {{ s.title|tojson|forceescape }}, disabled: false })"
+          >
+            Search
+          </button>
+        {% endif %}
+        <a href="/series/{{ s.id }}" hx-boost="false" class="series-wall-overlay-btn">Open</a>
+      </div>
+    </div>
+  </div>
+
+  <a
+    id="series-item-link-{{ s.id }}"
+    href="/series/{{ s.id }}"
+    hx-boost="false"
+    data-testid="series-item-link"
+    class="series-wall-card-title"
+  >{{ s.title }}</a>
+</article>

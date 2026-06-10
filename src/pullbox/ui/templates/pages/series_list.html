@@ -1,0 +1,961 @@
+{% extends "base.html" %}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/mission_control_workspace.html" import mission_control_workspace %}
+{% from "components/search_field.html" import search_field %}
+{% from "components/select_mode_toolbar.html" import select_mode_toolbar %}
+
+{% block title %}Series — {{ instance_name() }}{% endblock %}
+{% block page_title %}Series{% endblock %}
+
+{% block head %}
+<script>
+  (function() {
+    function readCookie(name) {
+      var prefix = name + "=";
+      var parts = document.cookie ? document.cookie.split("; ") : [];
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].indexOf(prefix) === 0) {
+          return decodeURIComponent(parts[i].slice(prefix.length));
+        }
+      }
+      return "";
+    }
+
+    var view = readCookie("series_view") || localStorage.getItem("series_view") || "list";
+    if (view !== "grid") {
+      view = "list";
+    }
+
+    document.documentElement.setAttribute("data-series-view", view);
+    localStorage.setItem("series_view", view);
+    document.cookie = "series_view=" + encodeURIComponent(view) + "; path=/; max-age=31536000; SameSite=Lax";
+  })();
+</script>
+{% endblock %}
+
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+{% set view_label = "Grid" if active_view == "grid" else "List" %}
+{% set status_label = status_filter|title if status_filter else "All statuses" %}
+{% set monitored_label = "Monitored only" if monitored_filter == "true" else "Unmonitored only" if monitored_filter == "false" else "All monitoring states" %}
+{% set registry = registry_metrics %}
+{% set gauge_circumference = 138.2 %}
+{% set wanted_pct = ((registry.wanted_issue_count / registry.total_issue_count) * 100)|round(0)|int if registry.total_issue_count > 0 else 0 %}
+{% set download_pct = ((registry.downloading_issue_count / registry.total_issue_count) * 100)|round(0)|int if registry.total_issue_count > 0 else 0 %}
+{% set sort_labels = {
+  "title": "Title A-Z",
+  "-title": "Title Z-A",
+  "-date_added": "Recently added",
+  "date_added": "Oldest added",
+  "year": "Year (oldest)",
+  "-year": "Year (newest)",
+  "publisher": "Publisher A-Z",
+  "-publisher": "Publisher Z-A",
+  "-issues": "Most owned",
+  "issues": "Least owned",
+  "series_type": "Type A-Z",
+  "-series_type": "Type Z-A",
+  "status": "Status",
+} %}
+{% set sort_label = sort_labels.get(sort, "Title A-Z") %}
+{% set per_page_label = per_page|string ~ " per page" %}
+
+<div
+  class="series-page-shell"
+  data-select-toolbar-page="true"
+  data-series-page="true"
+  data-series-active-view="{{ active_view }}"
+  data-series-toolbar-mode="browse"
+  :data-toolbar-mode="toolbarMode"
+  data-testid="series-page"
+  :data-series-bulk-busy="bulkBusy ? 'true' : 'false'"
+  @keydown.escape.window="showDeleteConfirm && cancelDeleteConfirm()"
+  x-data="{
+    selectedIds: [],
+    visibleSelectionIds: [],
+    bulkBusy: false,
+    selectAllMatchingBusy: false,
+    totalMatchingCount: {{ total }},
+    toolbarMode: 'browse',
+    showDeleteConfirm: false,
+    deleteFiles: false,
+    deleteFolder: false,
+    deleteLinkedFileCount: 0,
+    deleteContextLoading: false,
+    deleteMode: null,
+    deleteTargetIds: [],
+    deleteTargetTitle: '',
+    preferredView() {
+      const cookiePrefix = 'series_view=';
+      const cookie = document.cookie
+        .split('; ')
+        .find((entry) => entry.indexOf(cookiePrefix) === 0);
+      const cookieValue = cookie ? decodeURIComponent(cookie.slice(cookiePrefix.length)) : '';
+      const savedView = cookieValue || localStorage.getItem('series_view') || 'list';
+      return savedView === 'grid' ? savedView : 'list';
+    },
+    currentView() {
+      const view = document.documentElement.getAttribute('data-series-view');
+      return view === 'grid' ? view : 'list';
+    },
+    syncViewPreference(nextView) {
+      const safeView = nextView === 'grid' ? nextView : 'list';
+      localStorage.setItem('series_view', safeView);
+      document.documentElement.setAttribute('data-series-view', safeView);
+      document.cookie = `series_view=${encodeURIComponent(safeView)}; path=/; max-age=31536000; SameSite=Lax`;
+    },
+    async setView(nextView) {
+      if (this.bulkBusy) {
+        return;
+      }
+      const previousView = this.currentView();
+      const safeView = nextView === 'grid' ? nextView : 'list';
+      if (safeView === previousView) {
+        return;
+      }
+      this.syncViewPreference(safeView);
+      try {
+        await this.refreshResults(safeView);
+      } catch (_) {
+        this.syncViewPreference(previousView);
+        this.dispatchToast('Unable to switch the series view right now', 'error');
+      }
+    },
+    csrfToken() {
+      try {
+        const raw = document.body.getAttribute('hx-headers');
+        return raw ? JSON.parse(raw)['X-CSRF-Token'] || '' : '';
+      } catch (_) {
+        return '';
+      }
+    },
+    syncVisibleSelectionIds() {
+      this.visibleSelectionIds = Array.from(this.$root.querySelectorAll('[data-series-row-checkbox]'))
+        .map((el) => String(el.value))
+        .filter(Boolean);
+    },
+    visibleIds() {
+      return this.visibleSelectionIds;
+    },
+    isSelected(seriesId) {
+      return this.selectedIds.includes(String(seriesId));
+    },
+    toggleSelection(seriesId, checked) {
+      const nextId = String(seriesId);
+      const remaining = this.selectedIds.filter((id) => id !== nextId);
+      this.selectedIds = checked ? [...remaining, nextId] : remaining;
+      if (this.selectedIds.length === 0) {
+        this.resetDeleteConfirm();
+      }
+    },
+    selectModeButtonLabel() {
+      return this.selectedIds.length > 0 ? `Select (${this.selectedIds.length})` : 'Select';
+    },
+    syncToolbarMode() {
+      const safeMode = this.toolbarMode === 'select' ? 'select' : 'browse';
+      this.toolbarMode = safeMode;
+      this.$root.setAttribute('data-series-toolbar-mode', safeMode);
+    },
+    syncTotalMatchingCount() {
+      const summary = document.querySelector('#series-summary [data-series-total]');
+      this.syncVisibleSelectionIds();
+      if (!summary) {
+        return;
+      }
+      const nextTotal = Number(summary.getAttribute('data-series-total'));
+      if (Number.isFinite(nextTotal)) {
+        this.totalMatchingCount = nextTotal;
+      }
+    },
+    enterSelectMode() {
+      this.toolbarMode = 'select';
+      this.syncToolbarMode();
+      this.$nextTick(() => this.syncVisibleSelectionIds());
+    },
+    exitSelectMode() {
+      this.toolbarMode = 'browse';
+      this.syncToolbarMode();
+    },
+    doneSelectMode() {
+      this.selectedIds = [];
+      this.resetDeleteConfirm();
+      this.exitSelectMode();
+    },
+    clearSelection() {
+      this.doneSelectMode();
+    },
+    allVisibleSelected() {
+      const visible = this.visibleIds();
+      return visible.length > 0 && visible.every((id) => this.isSelected(id));
+    },
+    allMatchingSelected() {
+      return this.totalMatchingCount > 0 && this.selectedIds.length >= this.totalMatchingCount;
+    },
+    hasMoreMatchingThanVisible() {
+      const visibleCount = this.visibleIds().length;
+      return this.totalMatchingCount > 0 && this.totalMatchingCount > visibleCount;
+    },
+    hasVisibleSelection() {
+      return this.visibleIds().some((id) => this.isSelected(id));
+    },
+    setVisibleSelection(checked) {
+      const visible = this.visibleIds();
+      const hiddenSelections = this.selectedIds.filter((id) => !visible.includes(id));
+      if (!checked) {
+        this.selectedIds = hiddenSelections;
+        if (this.selectedIds.length === 0) {
+          this.resetDeleteConfirm();
+          this.exitSelectMode();
+        }
+        return;
+      }
+      const uniqueVisible = Array.from(new Set(visible));
+      this.selectedIds = [...hiddenSelections, ...uniqueVisible];
+    },
+    selectAllVisible() {
+      if (this.bulkBusy) {
+        return;
+      }
+      this.setVisibleSelection(true);
+    },
+    async selectAllMatching() {
+      if (this.bulkBusy || this.selectAllMatchingBusy) {
+        return;
+      }
+
+      this.selectAllMatchingBusy = true;
+      try {
+        const url = new URL('/series/selection-ids', window.location.origin);
+        const params = new URLSearchParams(window.location.search);
+        const q = params.get('q');
+        const status = params.get('status');
+        const monitored = params.get('monitored');
+        if (q) {
+          url.searchParams.set('q', q);
+        }
+        if (status) {
+          url.searchParams.set('status', status);
+        }
+        if (monitored !== null && monitored !== '') {
+          url.searchParams.set('monitored', monitored);
+        }
+
+        const response = await fetch(url.toString(), {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        if (!response.ok) {
+          throw new Error('Selection fetch failed');
+        }
+
+        const payload = await response.json();
+        const ids = Array.isArray(payload.ids) ? payload.ids.map((id) => String(id)) : [];
+        this.selectedIds = ids;
+        if (Number.isFinite(payload.total)) {
+          this.totalMatchingCount = payload.total;
+        }
+      } catch (_) {
+        this.dispatchToast('Unable to select all matching series right now', 'error');
+      } finally {
+        this.selectAllMatchingBusy = false;
+      }
+    },
+    deselectAll() {
+      if (this.bulkBusy || this.selectAllMatchingBusy) {
+        return;
+      }
+      this.selectedIds = [];
+      this.resetDeleteConfirm();
+    },
+    async loadDeleteContext(seriesIds) {
+      this.deleteContextLoading = true;
+      try {
+        const response = await fetch('/api/v1/series/delete-context', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': this.csrfToken(),
+          },
+          body: JSON.stringify({
+            series_ids: seriesIds.map((id) => Number(id)),
+          }),
+        });
+        if (!response.ok) {
+          throw new Error('Delete context fetch failed');
+        }
+
+        const payload = await response.json();
+        this.deleteLinkedFileCount = Number(payload.linked_file_count) || 0;
+        return true;
+      } catch (_) {
+        this.deleteLinkedFileCount = 0;
+        this.dispatchToast('Unable to load delete options right now', 'error');
+        return false;
+      } finally {
+        this.deleteContextLoading = false;
+      }
+    },
+    deleteFileOptionLabel() {
+      if (this.deleteLinkedFileCount === 1) {
+        return 'Delete 1 file from disk';
+      }
+      return `Delete ${this.deleteLinkedFileCount} files from disk`;
+    },
+    async openDeleteConfirm() {
+      if (this.bulkBusy || this.deleteContextLoading || this.selectedIds.length === 0) {
+        return;
+      }
+      const deleteTargetIds = this.selectedIds.map((id) => Number(id));
+      const ready = await this.loadDeleteContext(deleteTargetIds);
+      if (!ready) {
+        return;
+      }
+      this.deleteMode = 'bulk';
+      this.deleteTargetIds = deleteTargetIds;
+      this.deleteTargetTitle = '';
+      this.deleteFiles = false;
+      this.deleteFolder = false;
+      this.showDeleteConfirm = true;
+      this.$nextTick(() => {
+        if (this.$refs.deleteCancelButton) {
+          this.$refs.deleteCancelButton.focus();
+        }
+      });
+    },
+    async openRowDeleteConfirm(seriesId, seriesTitle) {
+      if (this.bulkBusy || this.deleteContextLoading) {
+        return;
+      }
+      const deleteTargetIds = [Number(seriesId)];
+      const ready = await this.loadDeleteContext(deleteTargetIds);
+      if (!ready) {
+        return;
+      }
+      this.deleteMode = 'single';
+      this.deleteTargetIds = deleteTargetIds;
+      this.deleteTargetTitle = seriesTitle || '';
+      this.deleteFiles = false;
+      this.deleteFolder = false;
+      this.showDeleteConfirm = true;
+      this.$nextTick(() => {
+        if (this.$refs.deleteCancelButton) {
+          this.$refs.deleteCancelButton.focus();
+        }
+      });
+    },
+    deleteModalTitle() {
+      if (this.deleteMode === 'single') {
+        return this.deleteTargetTitle
+          ? `Delete ${this.deleteTargetTitle}?`
+          : 'Delete this series?';
+      }
+      return `Delete ${this.deleteTargetIds.length} selected series?`;
+    },
+    deleteModalMessage() {
+      if (this.deleteMode === 'single') {
+        return 'This removes the series and its issue records from the database. Review the disk deletion options below before continuing.';
+      }
+      return 'This removes the selected series and their issue records from the database. Disk deletion is optional and cannot be undone.';
+    },
+    deleteSubmitLabel() {
+      if (this.bulkBusy) {
+        return 'Deleting...';
+      }
+      return this.deleteMode === 'single' ? 'Delete Series' : 'Delete Selected';
+    },
+    async applyDelete() {
+      if (this.bulkBusy) {
+        return;
+      }
+      if (this.deleteTargetIds.length === 0) {
+        return;
+      }
+      this.bulkBusy = true;
+      const seriesIds = this.deleteTargetIds.map((id) => Number(id));
+      const hasDeletedRowVisible = () =>
+        Array.from(this.$root.querySelectorAll('[data-series-id]'))
+          .some((el) => seriesIds.includes(Number(el.getAttribute('data-series-id'))));
+      const successMessage =
+        seriesIds.length === 1 ? 'Deleted 1 series' : `Deleted ${seriesIds.length} series`;
+      const errorMessage =
+        this.deleteMode === 'single'
+          ? 'Unable to delete this series right now'
+          : 'Unable to delete the selected series right now';
+
+      try {
+        const response = await fetch('/api/v1/series/bulk', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': this.csrfToken(),
+          },
+          body: JSON.stringify({
+            series_ids: seriesIds,
+            delete_files: this.deleteFiles || this.deleteFolder,
+            delete_folder: this.deleteFolder,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Delete failed');
+        }
+      } catch (_) {
+        this.dispatchToast(errorMessage, 'error');
+        this.bulkBusy = false;
+        return;
+      }
+
+      this.selectedIds = [];
+      this.resetDeleteConfirm();
+      this.exitSelectMode();
+
+      try {
+        await this.refreshResults();
+      } catch (_) {
+        // The delete already succeeded; keep the success path even if the
+        // follow-up refresh is flaky in the browser.
+      }
+
+      if (hasDeletedRowVisible()) {
+        try {
+          await new Promise((resolve) => window.setTimeout(resolve, 75));
+          await this.refreshResults();
+        } catch (_) {
+          // Avoid surfacing a false error toast after a successful delete.
+        }
+      }
+
+      this.dispatchToast(successMessage);
+      this.bulkBusy = false;
+    },
+    syncDeleteOptions() {
+      if (this.deleteFolder) {
+        this.deleteFiles = true;
+        return;
+      }
+      this.deleteFiles = false;
+    },
+    cancelDeleteConfirm() {
+      this.resetDeleteConfirm();
+    },
+    resetDeleteConfirm() {
+      this.showDeleteConfirm = false;
+      this.deleteFiles = false;
+      this.deleteFolder = false;
+      this.deleteLinkedFileCount = 0;
+      this.deleteMode = null;
+      this.deleteTargetIds = [];
+      this.deleteTargetTitle = '';
+    },
+    dispatchToast(message, level = 'success') {
+      document.dispatchEvent(new CustomEvent('toast', { detail: { message, level } }));
+    },
+    refreshResults(preferredViewOverride) {
+      const refreshUrl = new URL(window.location.pathname + window.location.search, window.location.origin);
+      refreshUrl.searchParams.set('_pb_refresh', String(Date.now()));
+      if (preferredViewOverride) {
+        refreshUrl.searchParams.set(
+          'view_mode',
+          preferredViewOverride === 'grid' ? preferredViewOverride : 'list'
+        );
+      }
+
+      const stagedRefresh = window._pbRunSeriesResultsRequest;
+      if (typeof stagedRefresh === 'function') {
+        return stagedRefresh(refreshUrl.pathname + refreshUrl.search, {
+          historyUrl: '',
+          scrollToTop: false,
+        });
+      }
+
+      return new Promise((resolve, reject) => {
+        if (!window.htmx) {
+          resolve();
+          return;
+        }
+        const target = document.querySelector('#series-results-body');
+        if (!target) {
+          resolve();
+          return;
+        }
+
+        const handleSettle = (event) => {
+          if (event.detail && event.detail.target === target) {
+            cleanup();
+            resolve();
+          }
+        };
+
+        const handleError = (event) => {
+          if (event.detail && event.detail.target === target) {
+            cleanup();
+            reject(new Error('Failed to refresh series results'));
+          }
+        };
+
+        const cleanup = () => {
+          document.removeEventListener('htmx:afterSettle', handleSettle);
+          document.removeEventListener('htmx:responseError', handleError);
+        };
+
+        document.addEventListener('htmx:afterSettle', handleSettle);
+        document.addEventListener('htmx:responseError', handleError);
+        htmx.ajax('GET', refreshUrl.pathname + refreshUrl.search, {
+          target,
+          swapOverride: 'outerHTML',
+        });
+      });
+    },
+    async runRowSearch(payload) {
+      if (!payload || payload.disabled || this.bulkBusy) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/v1/series/${payload.id}/search`, {
+          method: 'POST',
+          headers: {
+            'X-CSRF-Token': this.csrfToken(),
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Series search failed');
+        }
+
+        const result = await response.json();
+        const issueCount = Number(result.issues_to_search || 0);
+        if (issueCount > 0) {
+          this.dispatchToast(`Queued search for ${issueCount} missing issue${issueCount === 1 ? '' : 's'}`);
+        } else {
+          this.dispatchToast(`Nothing missing for ${payload.title}`);
+        }
+      } catch (_) {
+        this.dispatchToast(`Unable to search ${payload.title} right now`, 'error');
+      }
+    },
+    async applyBulkMonitored(monitored) {
+      if (this.bulkBusy || this.selectedIds.length === 0) {
+        return;
+      }
+
+      this.bulkBusy = true;
+      const seriesIds = this.selectedIds.map((id) => Number(id));
+
+      try {
+        const response = await fetch('/api/v1/series/bulk', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': this.csrfToken(),
+          },
+          body: JSON.stringify({ series_ids: seriesIds, monitored }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Bulk update failed');
+        }
+
+        this.selectedIds = [];
+        this.resetDeleteConfirm();
+        this.exitSelectMode();
+        await this.refreshResults();
+        this.dispatchToast(
+          monitored
+            ? `Monitoring enabled for ${seriesIds.length} series`
+            : `Monitoring disabled for ${seriesIds.length} series`
+        );
+      } catch (_) {
+        this.dispatchToast('Unable to update the selected series right now', 'error');
+      } finally {
+        this.bulkBusy = false;
+      }
+    },
+  }"
+  x-init="
+      const preferredSeriesView = preferredView();
+      const handleAfterSettle = (event) => {
+        if (!event || !event.detail) {
+          return;
+        }
+        const target = event.detail.target;
+        if (!target) {
+          return;
+        }
+        if (
+          target.id === 'series-results-body'
+          || target.id === 'series-summary'
+          || target.id === 'series-pagination'
+          || target.id === 'page-footer-dock'
+        ) {
+          syncTotalMatchingCount();
+        }
+      };
+      document.addEventListener('htmx:afterSettle', handleAfterSettle);
+      syncViewPreference(preferredSeriesView);
+      syncToolbarMode();
+      syncTotalMatchingCount();
+      if (($el.dataset.seriesActiveView || 'list') !== preferredSeriesView) {
+        refreshResults(preferredSeriesView).catch(() => {});
+      }
+  "
+>
+  <div id="series-summary" data-testid="series-summary" class="hidden" aria-hidden="true">
+    {% include "partials/series_results_summary.html" %}
+  </div>
+
+  {% set series_header_left_html %}
+    <div class="series-registry-title-block">
+      <h2 data-testid="series-registry-title" class="series-registry-title">
+        SERIES <span>REGISTRY</span>
+      </h2>
+      <p data-testid="series-registry-subtitle" class="series-registry-subtitle">
+        {{ registry.monitored_count }} active targets{% if registry.wanted_issue_count > 0 %} · {{ registry.wanted_issue_count }} issues still wanted{% endif %}
+      </p>
+    </div>
+
+    <div data-testid="series-registry-gauges" class="series-registry-gauges">
+      <div data-testid="series-registry-gauge-overall" class="series-registry-gauge">
+        <div class="series-registry-gauge-ring">
+          <svg viewBox="0 0 56 56" aria-hidden="true">
+            <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+            <circle
+              class="series-registry-gauge-fill series-registry-gauge-fill-success"
+              cx="28"
+              cy="28"
+              r="22"
+              stroke-dasharray="{{ gauge_circumference }}"
+              stroke-dashoffset="{{ (gauge_circumference * (100 - registry.completion_pct) / 100)|round(1) }}"
+            ></circle>
+          </svg>
+          <span class="series-registry-gauge-value text-pb-success">{{ registry.completion_pct }}%</span>
+        </div>
+        <div class="series-registry-gauge-label">Overall</div>
+      </div>
+
+      <div data-testid="series-registry-gauge-wanted" class="series-registry-gauge">
+        <div class="series-registry-gauge-ring">
+          <svg viewBox="0 0 56 56" aria-hidden="true">
+            <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+            <circle
+              class="series-registry-gauge-fill series-registry-gauge-fill-info"
+              cx="28"
+              cy="28"
+              r="22"
+              stroke-dasharray="{{ gauge_circumference }}"
+              stroke-dashoffset="{{ (gauge_circumference * (100 - wanted_pct) / 100)|round(1) }}"
+            ></circle>
+          </svg>
+          <span class="series-registry-gauge-value text-pb-interactive">{{ registry.wanted_issue_count }}</span>
+        </div>
+        <div class="series-registry-gauge-label">Wanted</div>
+      </div>
+
+      <div data-testid="series-registry-gauge-active-downloads" class="series-registry-gauge">
+        <div class="series-registry-gauge-ring">
+          <svg viewBox="0 0 56 56" aria-hidden="true">
+            <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+            <circle
+              class="series-registry-gauge-fill series-registry-gauge-fill-warning"
+              cx="28"
+              cy="28"
+              r="22"
+              stroke-dasharray="{{ gauge_circumference }}"
+              stroke-dashoffset="{{ (gauge_circumference * (100 - download_pct) / 100)|round(1) }}"
+            ></circle>
+          </svg>
+          <span class="series-registry-gauge-value text-pb-warning">{{ registry.downloading_issue_count }}</span>
+        </div>
+        <div class="series-registry-gauge-label">Active DL</div>
+      </div>
+    </div>
+  {% endset %}
+
+  {% set series_header_actions_html %}
+    <a
+      href="/series/add"
+      data-testid="series-add-series-link"
+      class="btn-primary btn-sm series-registry-primary"
+    >
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path>
+      </svg>
+      Add series
+    </a>
+  {% endset %}
+
+  {% set series_browse_toolbar_html %}
+    <div
+      data-testid="series-browse-toolbar"
+      data-browse-toolbar
+      class="series-toolbar-browse"
+    >
+        <div class="series-toolbar-primary">
+          {{ search_field(
+            name="q",
+            value=q,
+            placeholder="Search series...",
+            input_testid="series-search-input",
+            clear_testid="series-search-clear",
+            panel_testid="series-search-history-panel",
+            root_testid="series-search-field",
+            mode="remote",
+            history_key="pullbox.searchHistory.series",
+            debounce_ms=250,
+            size="sm",
+            class_name="series-registry-search"
+          ) }}
+
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Status</span>
+          {{ dropdown_select(
+            name="status",
+            value=status_filter,
+            size="sm",
+            options=[
+              ("", "All Status"),
+              ("continuing", "Continuing"),
+              ("ended", "Ended"),
+            ],
+            root_testid="series-status-select",
+            hx_get="/series",
+            hx_target="#series-results-body",
+            hx_swap="outerHTML",
+            hx_push_url="true",
+            hx_include="#series-filter-form",
+            class_name="series-registry-dropdown",
+            fit_width=true
+          ) }}
+          </div>
+
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Monitored</span>
+          {{ dropdown_select(
+            name="monitored",
+            value=monitored_filter,
+            size="sm",
+            options=[
+              ("", "All"),
+              ("true", "Monitored"),
+              ("false", "Unmonitored"),
+            ],
+            root_testid="series-monitored-select",
+            hx_get="/series",
+            hx_target="#series-results-body",
+            hx_swap="outerHTML",
+            hx_push_url="true",
+            hx_include="#series-filter-form",
+            class_name="series-registry-dropdown",
+            fit_width=true
+          ) }}
+          </div>
+
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Sort</span>
+          {{ dropdown_select(
+            name="sort",
+            value=sort,
+            size="sm",
+            options=[
+              ("title", "Title A–Z"),
+              ("-title", "Title Z–A"),
+              ("-date_added", "Recently Added"),
+              ("date_added", "Oldest Added"),
+              ("year", "Year (Oldest)"),
+              ("-year", "Year (Newest)"),
+              ("publisher", "Publisher A–Z"),
+              ("-publisher", "Publisher Z–A"),
+              ("-issues", "Most Owned"),
+              ("issues", "Least Owned"),
+              ("series_type", "Type A–Z"),
+              ("-series_type", "Type Z–A"),
+              ("status", "Status"),
+            ],
+            root_testid="series-sort-select",
+            hx_get="/series",
+            hx_target="#series-results-body",
+            hx_swap="outerHTML",
+            hx_push_url="true",
+            hx_include="#series-filter-form",
+            class_name="series-registry-dropdown",
+            fit_width=true
+          ) }}
+          </div>
+
+          <div class="series-toolbar-field">
+            <span class="series-toolbar-label">Per Page</span>
+          {% set per_page_options = [
+            ("25", "25"),
+            ("50", "50"),
+            ("100", "100"),
+          ] %}
+          {% if per_page not in [25, 50, 100] %}
+            {% set per_page_options = [(per_page|string, per_page|string)] + per_page_options %}
+          {% endif %}
+          {{ dropdown_select(
+            name="per_page",
+            value=per_page|string,
+            size="sm",
+            options=per_page_options,
+            root_testid="series-per-page-select",
+            hx_get="/series",
+            hx_target="#series-results-body",
+            hx_swap="outerHTML",
+            hx_push_url="true",
+            hx_include="#series-filter-form",
+            class_name="series-registry-dropdown",
+            fit_width=true
+          ) }}
+          </div>
+        </div>
+
+        <div class="series-toolbar-actions">
+          <div class="series-toolbar-view-block">
+            <span class="series-toolbar-label">View</span>
+            <div
+              data-testid="series-view-toggle"
+              class="series-view-toggle"
+            >
+              <button
+                type="button"
+                data-testid="series-view-list"
+                data-series-view-option="list"
+                data-tip="List view"
+                data-tip-pos="top"
+                data-tip-size="narrow"
+                @click="setView('list')"
+                class="series-view-toggle-item"
+                aria-label="List view"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 6.75h12M8 12h12M8 17.25h12M4.75 6.75h.5M4.75 12h.5M4.75 17.25h.5" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-testid="series-view-grid"
+                data-series-view-option="grid"
+                data-tip="Grid view"
+                data-tip-pos="top"
+                data-tip-size="narrow"
+                @click="setView('grid')"
+                class="series-view-toggle-item"
+                aria-label="Grid view"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.75 4.75h5.5v5.5h-5.5zm9 0h5.5v5.5h-5.5zm-9 9h5.5v5.5h-5.5zm9 0h5.5v5.5h-5.5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            data-testid="series-select-mode-toggle"
+            x-on:click="enterSelectMode()"
+            class="select-btn whitespace-nowrap"
+            x-text="selectModeButtonLabel()"
+          >
+            Select
+          </button>
+        </div>
+    </div>
+  {% endset %}
+
+  {% set series_select_toolbar_html %}
+      {% call select_mode_toolbar(
+        prefix="series",
+        count_testid="series-bulk-count",
+        count_expr="`${selectedIds.length} selected`",
+        select_visible_click="selectAllVisible()",
+        select_visible_disabled_expr="bulkBusy || visibleIds().length === 0 || allVisibleSelected()",
+        deselect_all_click="deselectAll()",
+        deselect_all_disabled_expr="bulkBusy || selectedIds.length === 0",
+        done_click="doneSelectMode()",
+        done_testid="series-select-mode-done",
+        show_select_all_expr="hasMoreMatchingThanVisible()",
+        select_all_click="selectAllMatching()",
+        select_all_disabled_expr="bulkBusy || selectAllMatchingBusy || allMatchingSelected()",
+        select_all_busy_expr="selectAllMatchingBusy",
+        select_all_testid="series-select-all-results"
+      ) %}
+            <button
+              type="button"
+              data-testid="series-bulk-monitor"
+              @click="applyBulkMonitored(true)"
+              :disabled="bulkBusy || selectedIds.length === 0"
+              class="select-btn select-btn-success whitespace-nowrap"
+            >
+              Monitor
+            </button>
+            <button
+              type="button"
+              data-testid="series-bulk-unmonitor"
+              @click="applyBulkMonitored(false)"
+              :disabled="bulkBusy || selectedIds.length === 0"
+              class="select-btn select-btn-warning whitespace-nowrap"
+            >
+              Unmonitor
+            </button>
+            <button
+              type="button"
+              data-testid="series-bulk-delete"
+              @click="openDeleteConfirm()"
+              :disabled="bulkBusy || selectedIds.length === 0"
+              class="select-btn select-btn-danger whitespace-nowrap"
+            >
+              Delete
+            </button>
+      {% endcall %}
+  {% endset %}
+
+  {% set series_results_html %}
+    {% include "partials/series_results_body.html" %}
+  {% endset %}
+
+  {{ mission_control_workspace(
+    header_testid="series-registry-header",
+    header_left_html=series_header_left_html,
+    header_actions_html=series_header_actions_html,
+    header_actions_testid="series-registry-actions",
+    toolbar_id="series-filter-form",
+    toolbar_testid="series-toolbar",
+    toolbar_frame_testid="series-toolbar-frame",
+    toolbar_attrs='autocomplete="off" action="/series" method="get" hx-get="/series" hx-target="#series-results-body" hx-swap="outerHTML" hx-push-url="true" hx-trigger="submit"',
+    browse_toolbar_html=series_browse_toolbar_html,
+    select_toolbar_html=series_select_toolbar_html,
+    results_id="series-results",
+    results_testid="series-results",
+    results_body_id="series-results-body",
+    results_body_testid="series-results-body",
+    results_html=series_results_html
+  ) }}
+
+  {% set show_expr = "showDeleteConfirm" %}
+  {% set close_handler = "cancelDeleteConfirm()" %}
+  {% set title_expr = "deleteModalTitle()" %}
+  {% set message_expr = "deleteModalMessage()" %}
+  {% set delete_files_model = "deleteFiles" %}
+  {% set delete_folders_model = "deleteFolder" %}
+  {% set submit_handler = "applyDelete()" %}
+  {% set busy_expr = "bulkBusy" %}
+  {% set cancel_disabled_expr = "bulkBusy" %}
+  {% set submit_disabled_expr = "bulkBusy || deleteTargetIds.length === 0" %}
+  {% set submit_label_expr = "deleteMode === 'single' ? 'Delete Series' : 'Delete Selected'" %}
+  {% set submitting_label_expr = "'Deleting...'" %}
+  {% set show_folders_option = true %}
+  {% set show_files_option_expr = "deleteLinkedFileCount > 0" %}
+  {% set delete_files_disabled_expr = "deleteFolder" %}
+  {% set folders_change_handler = "syncDeleteOptions()" %}
+  {% set cancel_ref = "deleteCancelButton" %}
+  {% set files_option_label_expr = "deleteFileOptionLabel()" %}
+  {% set files_option_copy = "Also remove any tracked library files associated with the selected series." %}
+  {% set folders_option_label = "Delete series folders from disk" %}
+  {% set folders_option_copy = "Remove the series folders and any remaining contents from disk. This also requires deleting linked files." %}
+  {% include "components/series_delete_modal.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/series_pagination_mount.html" %}
+{% endblock %}

@@ -1,0 +1,51 @@
+{#- Combined pagination + status strip for the footer dock.
+
+    Parameters:
+      page, total_pages, base_url — standard pagination params (pass-through)
+      status_items — list of dicts with keys: label (str), value (str), led (str|none)
+                     led values: "green", "amber", "off", or none (no LED shown)
+      hx_target, hx_swap, hx_select, hx_select_oob, page_param, hx_base_url — pagination HTMX params
+-#}
+{% from "components/pagination.html" import pagination %}
+
+{% macro page_dock(page=1, total_pages=1, base_url="", status_items=[], hx_target="#content", hx_swap="outerHTML transition:true", hx_select=none, hx_select_oob=none, page_param="page", hx_base_url=none, hx_sync=none, hx_push_url="true", hx_indicator=none) %}
+<div class="page-dock-inner{% if total_pages <= 1 and status_items %} page-dock-inner-status-only{% endif %}" data-testid="page-dock-inner">
+  {% if total_pages > 1 %}
+  <div class="page-dock-pagination" data-testid="page-dock-pagination">
+    {{ pagination(page, total_pages, base_url, hx_target=hx_target, hx_swap=hx_swap, hx_select=hx_select, hx_select_oob=hx_select_oob, page_param=page_param, hx_base_url=hx_base_url, hx_sync=hx_sync, hx_push_url=hx_push_url, hx_indicator=hx_indicator) }}
+  </div>
+  {% endif %}
+
+  {% if status_items %}
+  <div class="page-dock-status" data-testid="page-dock-status">
+    {% for item in status_items %}
+      <span class="page-dock-status-item">
+        {% if item.led %}
+          <span class="page-dock-led page-dock-led-{{ item.led }}"></span>
+        {% endif %}
+        {% if item.label %}<span class="page-dock-status-label">{{ item.label }}</span>{% endif %}
+        <strong class="page-dock-status-value">{{ item.value }}</strong>
+      </span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro status_dock(status_items=[]) %}
+{% if status_items %}
+<div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+  <div class="page-dock-status" data-testid="page-dock-status">
+    {% for item in status_items %}
+      <span class="page-dock-status-item">
+        {% if item.led %}
+          <span class="page-dock-led page-dock-led-{{ item.led }}"></span>
+        {% endif %}
+        {% if item.label %}<span class="page-dock-status-label">{{ item.label }}</span>{% endif %}
+        <strong class="page-dock-status-value">{{ item.value }}</strong>
+      </span>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endmacro %}

@@ -1,0 +1,25 @@
+<div
+  data-testid="utilities-integrity-footer-dock"
+  x-data="{ mode: 'Quick', scope: 'All tracked files' }"
+  x-on:utilities:integrity-footer.window="
+    mode = $event.detail.mode;
+    scope = $event.detail.scope;
+  "
+>
+  <div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+    <div class="page-dock-status" data-testid="page-dock-status">
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">tool</span>
+        <strong class="page-dock-status-value">Integrity Check</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">mode</span>
+        <strong class="page-dock-status-value" x-text="mode">Quick</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">scope</span>
+        <strong class="page-dock-status-value" x-text="scope">All tracked files</strong>
+      </span>
+    </div>
+  </div>
+</div>

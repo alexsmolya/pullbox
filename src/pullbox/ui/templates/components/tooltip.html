@@ -1,0 +1,5 @@
+{% macro tooltip_panel(pos="top", classes="") -%}
+  <span class="tooltip-panel tooltip-panel-{{ pos }} {{ classes }}">
+    {{ caller() }}
+  </span>
+{%- endmacro %}

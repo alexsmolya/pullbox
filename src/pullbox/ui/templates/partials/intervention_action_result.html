@@ -1,0 +1,38 @@
+{% set tone = tone|default("neutral") %}
+{% if tone == "success" %}
+  {% set border_class = "border-pb-success/35" %}
+  {% set background_class = "bg-pb-success-dim/70" %}
+  {% set heading_class = "text-pb-success" %}
+  {% set icon_path = "M5 13l4 4L19 7" %}
+{% elif tone == "error" %}
+  {% set border_class = "border-pb-error/35" %}
+  {% set background_class = "bg-pb-error-dim/70" %}
+  {% set heading_class = "text-pb-error" %}
+  {% set icon_path = "M6 18L18 6M6 6l12 12" %}
+{% else %}
+  {% set border_class = "border-pb-border-hover" %}
+  {% set background_class = "bg-pb-surface/60" %}
+  {% set heading_class = "text-pb-text-sec" %}
+  {% set icon_path = "M6 18L18 6M6 6l12 12" %}
+{% endif %}
+
+<div
+  id="intervention-item-{{ pending_id }}"
+  data-testid="intervention-item-result-{{ pending_id }}"
+  class="rounded-xl border {{ border_class }} {{ background_class }}"
+>
+  <div class="flex items-start gap-3 px-4 py-4 sm:px-5">
+    <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-current/15 {{ heading_class }}">
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="{{ icon_path }}"/>
+      </svg>
+    </div>
+    <div class="min-w-0 flex-1">
+      <div class="text-sm font-semibold {{ heading_class }}">{{ heading }}</div>
+      <p class="mt-1 truncate text-sm text-pb-text">{{ title }}</p>
+      {% if message %}
+      <p class="mt-1 text-xs text-pb-text-dim">{{ message }}</p>
+      {% endif %}
+    </div>
+  </div>
+</div>

@@ -1,0 +1,17 @@
+[Unit]
+Description=Pullbox Comic Manager
+After=network.target
+
+[Service]
+Type=simple
+User=pullbox
+Group=pullbox
+WorkingDirectory=/opt/pullbox
+ExecStart=/opt/pullbox/.venv/bin/python -m pullbox
+Restart=on-failure
+# Exit code 42 = restart requested (treat as success so systemd relaunches)
+SuccessExitStatus=42
+Environment=PULLBOX_DATA_DIR=/opt/pullbox/data
+
+[Install]
+WantedBy=multi-user.target

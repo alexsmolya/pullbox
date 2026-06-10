@@ -1,0 +1,182 @@
+{#- Settings: Metadata tab -#}
+{% from "components/settings_shell.html" import field_note, inline_alert, section_card, settings_footer, settings_row, ui_icon %}
+
+<div class="space-y-6 pt-6" x-data="metadataSettings()">
+  {% call section_card(
+    title="ComicVine access",
+    eyebrow="API credentials",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form @submit.prevent="saveKey()">
+      <input type="text" name="comicvine_username" value="comicvine" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(
+          label="API Key",
+          help='Get one at <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noopener" class="text-pb-interactive underline underline-offset-4 transition-colors hover:text-pb-text">comicvine.gamespot.com/api</a>'
+        ) %}
+          <div class="w-full max-w-xl space-y-3">
+            <input
+              type="password"
+              x-model="apiKey"
+              autocomplete="new-password"
+              :placeholder="obfuscatedKey ? '(set — leave blank to keep)' : 'Enter your ComicVine API key'"
+              class="input-pb w-full font-mono"
+              @input="testResult = null; saved = false"
+            >
+
+            {% if has_comicvine_key %}
+              {% call field_note(tone="info", icon="check", attrs='x-show="!testResult && !saved" x-cloak') %}
+                Current stored key: <code class="font-mono text-[11px]">{{ obfuscated_key }}</code>
+              {% endcall %}
+            {% else %}
+              {% call inline_alert(tone="warning", attrs='x-show="!testResult && !saved" x-cloak') %}
+                <span>No API key is configured yet.</span>
+              {% endcall %}
+            {% endif %}
+
+            <div class="space-y-2">
+              {% call inline_alert(tone="success", attrs='x-show="testResult && testResult.healthy" x-cloak') %}
+                <span x-text="testResult ? testResult.message : ''"></span>
+                <span
+                  x-show="Boolean(testResult && testResult.response_time_ms)"
+                  class="text-pb-text-dim"
+                  x-text="testResult && testResult.response_time_ms ? '(' + pbFormatDurationMs(testResult.response_time_ms) + ')' : ''"
+                ></span>
+              {% endcall %}
+
+              {% call inline_alert(attrs='x-show="testResult && !testResult.healthy" x-cloak') %}
+                <span x-text="testResult ? testResult.message : ''"></span>
+              {% endcall %}
+
+              {% call inline_alert(tone="success", attrs='x-show="saved" x-cloak') %}
+                <span>API key saved and encrypted.</span>
+              {% endcall %}
+            </div>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" @click="testKey()" :disabled="testing || !apiKey.trim()" class="btn-ghost">
+            <span x-show="!testing">Test key</span>
+            <span x-show="testing" class="flex items-center gap-1.5">
+              <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+              Testing...
+            </span>
+          </button>
+
+          <button type="submit" :disabled="!testPassed || saving" class="btn-primary">
+            <span x-show="!saving">Save key</span>
+            <span x-show="saving">Saving...</span>
+          </button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Refresh policy",
+    eyebrow="Sync cadence",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(label="Refresh Interval") %}
+          <div class="flex items-center gap-2">
+            <input type="number" name="metadata_refresh_days" value="{{ configs.get('metadata_refresh_days', '7') }}" min="1" max="90" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">days</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Import Match Burst", help="How aggressively bulk import matching may burst ComicVine requests before pacing them out. Lower is safer.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" name="comicvine_rate_limit_per_second" value="{{ configs.get('comicvine_rate_limit_per_second', '1') }}" min="1" max="10" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">requests</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost">
+            Reset
+          </button>
+          <button type="submit" :disabled="!isDirty" :class="!isDirty && 'opacity-50 cursor-not-allowed'" class="btn-primary">
+            Save refresh settings
+          </button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+</div>
+
+<script>
+function metadataSettings() {
+  return {
+    apiKey: '',
+    testing: false,
+    saving: false,
+    testResult: null,
+    testPassed: false,
+    saved: false,
+    obfuscatedKey: '{{ obfuscated_key|default("", true) }}',
+
+    async testKey() {
+      this.testing = true;
+      this.testResult = null;
+      this.testPassed = false;
+      this.saved = false;
+      try {
+        const res = await fetch('/api/v1/config/comicvine/test', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token }}',
+          },
+          body: JSON.stringify({ api_key: this.apiKey.trim() }),
+        });
+        this.testResult = await res.json();
+        this.testPassed = !!this.testResult.healthy;
+      } catch (err) {
+        this.testResult = { healthy: false, message: 'Request failed: ' + err.message };
+      } finally {
+        this.testing = false;
+      }
+    },
+
+    async saveKey() {
+      this.saving = true;
+      try {
+        const res = await fetch('/api/v1/config/comicvine/save', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token }}',
+          },
+          body: JSON.stringify({ api_key: this.apiKey.trim() }),
+        });
+        const data = await res.json();
+        if (data.saved) {
+          this.saved = true;
+          this.testResult = null;
+          this.obfuscatedKey = data.obfuscated;
+          this.apiKey = '';
+          if (typeof showToast === 'function') showToast({ message: 'API key saved.', level: 'success' });
+        } else {
+          if (typeof showToast === 'function') showToast({ message: data.message || 'Save failed.', level: 'error' });
+        }
+      } catch (err) {
+        if (typeof showToast === 'function') showToast({ message: 'Save failed: ' + err.message, level: 'error' });
+      } finally {
+        this.saving = false;
+      }
+    },
+  };
+}
+</script>

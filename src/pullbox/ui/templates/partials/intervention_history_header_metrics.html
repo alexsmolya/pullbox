@@ -1,0 +1,65 @@
+{% set history_gauge_total = history_total if history_total > 0 else 1 %}
+{% set approved_offset = (113.1 * (1 - (history_approved_count / history_gauge_total)))|round(1) %}
+{% set rejected_offset = (113.1 * (1 - (history_rejected_count / history_gauge_total)))|round(1) %}
+{% set expired_offset = (113.1 * (1 - (history_expired_count / history_gauge_total)))|round(1) %}
+
+<div class="downloads-header-copy">
+  <h1 class="downloads-title">INTERVENTION <span>HISTORY</span></h1>
+  <p class="downloads-subtitle">{{ history_total }} resolved · {{ history_approved_count }} approved · {{ history_rejected_count }} rejected · {{ history_expired_count }} expired</p>
+</div>
+
+<div data-testid="intervention-summary-cards" class="downloads-gauges">
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-success"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ approved_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-success">{{ history_approved_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Approved</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-error"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ rejected_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-error">{{ history_rejected_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Rejected</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-muted"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ expired_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-muted">{{ history_expired_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Expired</div>
+  </div>
+</div>

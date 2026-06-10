@@ -1,0 +1,35 @@
+<section data-testid="library-stats-grid" class="section-card">
+  <div class="section-body space-y-4">
+    <div>
+      <p class="section-eyebrow">Quick scan</p>
+      <h2 class="mt-2 text-base font-semibold text-pb-text">See the current library picture at a glance.</h2>
+      <p class="mt-2 text-sm leading-6 text-pb-text-sec">These totals make it easy to spot whether the library is growing cleanly or if cleanup work is starting to pile up.</p>
+    </div>
+
+    <div class="grid gap-3 sm:grid-cols-2">
+      <div data-testid="library-stat-total-files" class="stat-card">
+        <p class="stat-card-kicker">Total Files</p>
+        <p class="stat-card-value tabular-nums">{{ total_files }}</p>
+        <p class="stat-card-copy">Everything currently stored in the library root.</p>
+      </div>
+
+      <div data-testid="library-stat-matched-files" class="stat-card">
+        <p class="stat-card-kicker">Matched</p>
+        <p class="stat-card-value tabular-nums text-pb-success">{{ matched_files }}</p>
+        <p class="stat-card-copy">Files that already belong to a known issue in the library.</p>
+      </div>
+
+      <a data-testid="library-stat-unmatched-files" href="/library/matching" class="stat-card transition-colors hover:border-pb-border-hover">
+        <p class="stat-card-kicker">Unmatched</p>
+        <p class="stat-card-value tabular-nums text-pb-warning">{{ unmatched_files }}</p>
+        <p class="stat-card-copy">Open the matching queue when files still need a manual issue decision.</p>
+      </a>
+
+      <div data-testid="library-stat-storage-used" class="stat-card">
+        <p class="stat-card-kicker">Storage Used</p>
+        <p class="stat-card-value text-pb-interactive">{{ total_size_bytes|filesize }}</p>
+        <p class="stat-card-copy">Current footprint of the files already stored in the library.</p>
+      </div>
+    </div>
+  </div>
+</section>

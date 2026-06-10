@@ -1,0 +1,9 @@
+<div
+  data-testid="import-orphaned-page"
+  class="space-y-4"
+  x-data="orphanedSeriesPage({ csrfToken: '{{ csrf_token }}' })"
+  x-on:import:orphaned-refresh-results.window="refreshResults()"
+>
+  {% include "partials/import_orphaned_body.html" %}
+  <div id="cv-search-modal" data-testid="import-orphaned-modal-host"></div>
+</div>

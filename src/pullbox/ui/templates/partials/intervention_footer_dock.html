@@ -1,0 +1,51 @@
+{% from "components/page_dock.html" import page_dock %}
+
+<div data-testid="intervention-footer-dock">
+  {% if tab == "history" %}
+    {% set _base_params = ["tab=history"] %}
+    {% if outcome_filter %}{% set _ = _base_params.append("outcome=" ~ outcome_filter) %}{% endif %}
+    {% if confidence_filter %}{% set _ = _base_params.append("confidence=" ~ confidence_filter) %}{% endif %}
+    {% if protocol_filter %}{% set _ = _base_params.append("protocol=" ~ protocol_filter) %}{% endif %}
+    {% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+    {% if sort and sort != "-resolved_at" %}{% set _ = _base_params.append("sort=" ~ sort) %}{% endif %}
+    {% set _full_base = "/intervention" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+    {{ page_dock(
+      page=page,
+      total_pages=total_pages,
+      base_url=_full_base,
+      status_items=[
+        {"label": "total", "value": history_total|string ~ " records"},
+        {"label": "approved", "value": history_approved_count|string},
+        {"label": "rejected", "value": history_rejected_count|string},
+        {"label": "expired", "value": history_expired_count|string},
+      ],
+      hx_target="#intervention-history-results",
+      hx_swap="morph:outerHTML",
+      hx_select="",
+      hx_base_url=_full_base
+    ) }}
+  {% else %}
+    {% set _base_params = ["tab=queue"] %}
+    {% if reason_filter %}{% set _ = _base_params.append("reason=" ~ reason_filter) %}{% endif %}
+    {% if confidence_filter %}{% set _ = _base_params.append("confidence=" ~ confidence_filter) %}{% endif %}
+    {% if protocol_filter %}{% set _ = _base_params.append("protocol=" ~ protocol_filter) %}{% endif %}
+    {% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+    {% set _full_base = "/intervention" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+    {{ page_dock(
+      page=page,
+      total_pages=total_pages,
+      base_url=_full_base,
+      status_items=[
+        {"label": "pending", "value": pending_count|string},
+        {"label": "high", "value": high_count|string},
+        {"label": "medium", "value": medium_count|string},
+        {"label": "low", "value": low_count|string},
+        {"label": "history", "value": history_total|string ~ " resolved"},
+      ],
+      hx_target="#intervention-queue-results",
+      hx_swap="outerHTML",
+      hx_select="",
+      hx_base_url=_full_base
+    ) }}
+  {% endif %}
+</div>

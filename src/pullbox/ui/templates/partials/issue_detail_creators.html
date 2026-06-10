@@ -1,0 +1,15 @@
+{% if issue.creators %}
+<section data-testid="issue-creators-section" class="series-domain-section-card">
+  <p data-testid="issue-creators-title" class="series-domain-section-title">Creators</p>
+  <div data-testid="issue-creators-grid" class="issue-domain-creators-grid">
+    {% for creator in issue.creators %}
+    <div class="issue-domain-creator-card">
+      <p class="issue-domain-creator-name">{{ creator.name }}</p>
+      {% if creator.role %}
+      <p class="issue-domain-creator-role">{{ creator.role }}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}

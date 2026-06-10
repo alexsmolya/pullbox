@@ -1,0 +1,45 @@
+FROM python:3.14-slim
+
+ARG UNRAR_SOURCE_URL="https://www.rarlab.com/rar/unrarsrc-7.2.6.tar.gz"
+ARG UNRAR_SOURCE_SHA256="d1afa67ef4121ebc5986815699e05db0ce8648499e5dca854f282a4c3f72c003"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/src \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        gzip \
+        poppler-utils \
+        p7zip-full \
+        tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    curl -fsSL "${UNRAR_SOURCE_URL}" -o /tmp/unrarsrc.tar.gz; \
+    echo "${UNRAR_SOURCE_SHA256}  /tmp/unrarsrc.tar.gz" | sha256sum -c -; \
+    mkdir -p /tmp/unrar-src; \
+    tar -xzf /tmp/unrarsrc.tar.gz -C /tmp/unrar-src --strip-components=1; \
+    make -C /tmp/unrar-src -j"$(nproc)" unrar; \
+    install -m 0755 /tmp/unrar-src/unrar /usr/bin/unrar; \
+    install -D -m 0644 /tmp/unrar-src/license.txt /usr/share/licenses/unrar/license.txt; \
+    rm -rf /tmp/unrarsrc.tar.gz /tmp/unrar-src
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src/ src/
+COPY alembic/ alembic/
+COPY scripts/ scripts/
+
+RUN python -m pip install --upgrade pip wheel \
+    && python -m pip install --no-cache-dir -e ".[dev]"
+
+EXPOSE 8585
+
+ENTRYPOINT ["python", "-m", "pullbox.docker_entrypoint"]
+CMD ["python", "-m", "pullbox.devserver", "--reload"]

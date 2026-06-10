@@ -1,0 +1,189 @@
+{%- macro sort_header(field, label, extra_classes="", width="") -%}
+  {%- set current_field = sort.lstrip("-") -%}
+  {%- set current_desc = sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  {%- set sort_qs = "sort=" ~ next_sort -%}
+  {%- if search_type_filter %}{% set sort_qs = sort_qs ~ "&search_type=" ~ search_type_filter %}{% endif -%}
+  {%- if confidence_filter %}{% set sort_qs = sort_qs ~ "&confidence=" ~ confidence_filter %}{% endif -%}
+  {%- if search_query %}{% set sort_qs = sort_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif -%}
+  <th class="{{ extra_classes }} {{ width }}">
+    <button
+      type="button"
+      data-testid="search-history-sort-{{ field }}"
+      hx-get="/search-history?{{ sort_qs }}"
+      hx-target="#search-history-results-body"
+      hx-swap="outerHTML"
+      hx-push-url="true"
+      class="downloads-sort-btn{% if current_field == field %} is-active{% endif %}"
+    >
+      <span>{{ label }}</span>
+      <svg class="downloads-sort-chevron{% if current_field == field and not current_desc %} is-desc{% endif %}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </th>
+{%- endmacro -%}
+
+<div
+  id="search-history-results-body"
+  data-testid="search-history-results-body"
+  {% if search_history_has_active_logs %}
+    hx-get="{{ search_history_refresh_url }}"
+    hx-trigger="every 2s"
+    hx-target="this"
+    hx-swap="outerHTML"
+    hx-sync="this:replace"
+  {% endif %}
+>
+  {% if search_logs %}
+    <table data-testid="search-history-table" class="downloads-table">
+      <thead>
+        <tr>
+          {{ sort_header("series_title", "Issue") }}
+          {{ sort_header("search_type", "Type", width="w-[88px]") }}
+          {{ sort_header("results_found", "Found", extra_classes="hidden sm:table-cell is-right", width="w-[64px]") }}
+          {{ sort_header("results_grabbed", "Grabbed", extra_classes="hidden sm:table-cell is-right", width="w-[76px]") }}
+          {{ sort_header("results_queued", "Queued", extra_classes="hidden md:table-cell is-right", width="w-[76px]") }}
+          {{ sort_header("results_rejected", "Rejected", extra_classes="hidden md:table-cell is-right", width="w-[82px]") }}
+          {{ sort_header("best_confidence", "Confidence", extra_classes="hidden lg:table-cell", width="w-[100px]") }}
+          {{ sort_header("created_at", "Time", extra_classes="hidden sm:table-cell is-right", width="w-[120px]") }}
+          <th class="is-right w-[92px]"></th>
+        </tr>
+      </thead>
+      {% for log in search_logs %}
+        {% set details = log.details or {} %}
+        {% set run_state = details.get("run_state") or "completed" %}
+        {% set search_time_ms = details.get("search_time_ms") %}
+        <tbody
+          x-data="{ expanded: (window._searchHistExpanded || new Set()).has({{ log.id }}),
+                    toggle() { this.expanded = !this.expanded; window._searchHistExpanded = window._searchHistExpanded || new Set(); this.expanded ? window._searchHistExpanded.add({{ log.id }}) : window._searchHistExpanded.delete({{ log.id }}) } }"
+        >
+          <tr id="search-history-row-{{ log.id }}">
+            <td>
+              <a
+                href="/issues/{{ log.issue_id }}"
+                hx-boost="false"
+                class="downloads-issue-link"
+              >
+                {{ log.series_title }} #{{ log.issue_number|issue_num }}
+              </a>
+            </td>
+            <td>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="pill{% if log.search_type.value == 'manual' %} pill-info{% elif log.search_type.value == 'automated' %} pill-success{% else %} pill-warning{% endif %}">
+                  {% if log.search_type.value == "automated" %}Auto{% else %}{{ log.search_type.value|title }}{% endif %}
+                </span>
+                {% if run_state == "running" %}
+                  <span class="pill pill-info">Searching</span>
+                {% elif run_state == "failed" %}
+                  <span class="pill pill-error">Failed</span>
+                {% endif %}
+              </div>
+              <span class="downloads-mono-cell mt-1 block sm:hidden">
+                {{ log.created_at|localtime }}{% if search_time_ms is not none %} · {{ search_time_ms|duration_ms }}{% endif %}
+              </span>
+            </td>
+            <td class="downloads-mono-cell is-right hidden sm:table-cell">{{ log.results_found }}</td>
+            <td class="downloads-mono-cell is-right hidden sm:table-cell{% if log.results_grabbed == 0 %} downloads-muted-text{% endif %}">
+              {{ log.results_grabbed }}
+            </td>
+            <td class="downloads-mono-cell is-right hidden md:table-cell{% if log.results_queued == 0 %} downloads-muted-text{% endif %}">
+              {{ log.results_queued }}
+            </td>
+            <td class="downloads-mono-cell is-right hidden md:table-cell{% if log.results_rejected == 0 %} downloads-muted-text{% endif %}">
+              {{ log.results_rejected }}
+            </td>
+            <td class="hidden lg:table-cell">
+              {% if run_state == "running" %}
+                <span class="downloads-muted-text">Searching…</span>
+              {% elif run_state == "failed" %}
+                <span class="downloads-muted-text">Failed</span>
+              {% elif log.best_confidence %}
+                <span class="pill{% if log.best_confidence == 'high' %} pill-success{% elif log.best_confidence == 'medium' %} pill-warning{% elif log.best_confidence == 'low' %} pill-error{% else %} pill-neutral{% endif %}">
+                  {{ log.best_confidence|title }}
+                </span>
+              {% else %}
+                <span class="downloads-muted-text">None</span>
+              {% endif %}
+            </td>
+            <td class="downloads-mono-cell is-right hidden sm:table-cell">
+              {{ log.created_at|localtime }}
+              {% if search_time_ms is not none %}
+                <span class="downloads-muted-text mt-0.5 block text-[11px]">{{ search_time_ms|duration_ms }}</span>
+              {% endif %}
+            </td>
+            <td class="is-right">
+              <div class="downloads-action-group">
+                <button
+                  type="button"
+                  @click="toggle()"
+                  hx-get="/htmx/search-history/logs/{{ log.id }}/detail"
+                  hx-target="#search-history-detail-content-{{ log.id }}"
+                  hx-swap="outerHTML"
+                  hx-trigger="click once"
+                  data-testid="search-history-detail-toggle-{{ log.id }}"
+                  class="downloads-action-btn"
+                  data-tip="Details"
+                  data-tip-pos="left"
+                  aria-label="Toggle search details"
+                >
+                  <svg class="transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  @click="removeHistory({{ log.id }}, $el)"
+                  data-testid="search-history-remove-{{ log.id }}"
+                  class="downloads-action-btn is-danger"
+                  data-tip="Remove"
+                  data-tip-pos="left"
+                  aria-label="Remove from history"
+                >
+                  <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+
+          <tr
+            class="search-history-detail-row table-detail-row"
+            x-show="expanded"
+            x-cloak
+            data-testid="search-history-detail-{{ log.id }}"
+            x-transition.opacity
+          >
+            <td colspan="9">
+              <div
+                id="search-history-detail-content-{{ log.id }}"
+                data-testid="search-history-detail-placeholder"
+                class="rounded-xl border border-dashed border-pb-border bg-pb-card/40 px-4 py-3 text-xs text-pb-text-dim"
+              >
+                Expand this search to load diagnostics and log export data.
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div data-testid="search-history-empty" class="downloads-empty-state is-history">
+      <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+      </svg>
+      {% if search_type_filter or confidence_filter or search_query %}
+        <p class="downloads-empty-title">No matching search history</p>
+        <p class="downloads-empty-copy">Try widening the search or clearing one of the active filters.</p>
+      {% else %}
+        <p class="downloads-empty-title">No search history</p>
+        <p class="downloads-empty-copy">Search operations will be logged here as they run.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

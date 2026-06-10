@@ -1,0 +1,40 @@
+{#- Shared expandable history-table error detail row.
+
+    Downloads history is the source-of-truth contract for spacing and typography.
+    Other history tables should call this macro rather than hand-rolling variants.
+-#}
+
+{% macro history_error_row(
+  colspan,
+  primary_text="",
+  secondary_text="",
+  meta_label="",
+  meta_value="",
+  testid="",
+  show_expr="expanded",
+  cloak=false
+) %}
+<tr
+  class="table-row"
+  x-show="{{ show_expr }}"
+  {% if cloak %}x-cloak{% endif %}
+  {% if testid %}data-testid="{{ testid }}"{% endif %}
+  x-transition.opacity
+>
+  <td colspan="{{ colspan }}" class="table-cell table-cell-tight border-l-2 border-pb-error/30 bg-pb-error-dim">
+    {% if primary_text %}
+    <p class="text-xs text-pb-error">{{ primary_text }}</p>
+    {% endif %}
+    {% if secondary_text %}
+    <p class="{{ 'mt-1.5 ' if primary_text else '' }}whitespace-pre-wrap break-all font-mono text-[10px] text-pb-text-dim">
+      {{ secondary_text }}
+    </p>
+    {% endif %}
+    {% if meta_value %}
+    <p class="mt-1.5 text-[10px] text-pb-text-dim">
+      {% if meta_label %}<span class="text-pb-text-dim">{{ meta_label }}:</span> {% endif %}{{ meta_value }}
+    </p>
+    {% endif %}
+  </td>
+</tr>
+{% endmacro %}

@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "css:build": "BROWSERSLIST_IGNORE_OLD_DATA=1 npx @tailwindcss/cli -i src/pullbox/ui/static/css/input.css -o src/pullbox/ui/static/css/tailwind.css --minify",
+    "css:watch": "BROWSERSLIST_IGNORE_OLD_DATA=1 npx @tailwindcss/cli -i src/pullbox/ui/static/css/input.css -o src/pullbox/ui/static/css/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.0",
+    "axe-core": "^4.12.0",
+    "tailwindcss": "^4.3.0"
+  }
+}

@@ -1,0 +1,499 @@
+{#- Security: Authentication tab -#}
+{% from "components/settings_shell.html" import field_note, inline_alert, section_card, settings_footer, settings_row, ui_icon %}
+
+<div class="space-y-6" x-data="authenticationTab()">
+  {% call inline_alert(tone="warning", attrs='x-show="localBypassEnabled" x-cloak') %}
+    <span>Local bypass is active. Matching source IPs get full operator access without login, so keep the ranges narrow and ensure proxy trust is configured correctly.</span>
+  {% endcall %}
+
+  {% call section_card(
+    title="Access model",
+    eyebrow="Authentication settings",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="security-authentication-access-model-card"'
+  ) %}
+    <div class="settings-rows">
+      {% call settings_row(label="Authentication", help="Remote requests still require login unless they arrive from a trusted local source.") %}
+        <span class="inline-flex items-center gap-1.5 pt-1 text-sm text-pb-success">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          Required
+        </span>
+      {% endcall %}
+
+      {% call settings_row(label="Disable Auth for Local Addresses", help="Treat trusted local addresses as already authenticated.") %}
+        <div class="flex items-center gap-3">
+          <label class="relative inline-flex cursor-pointer items-center">
+            <input type="checkbox"
+                   class="peer toggle-input"
+                   aria-label="Disable authentication for trusted local addresses"
+                   :checked="localBypassEnabled"
+                   @change="toggleLocalBypass($event.target.checked)">
+            <span class="toggle-switch"></span>
+          </label>
+          <span class="text-sm" :class="localBypassEnabled ? 'text-pb-interactive' : 'text-pb-text-sec'"
+                x-text="localBypassEnabled ? 'Enabled' : 'Disabled'"></span>
+        </div>
+        <div class="mt-2">
+          <label class="mb-1 block text-[11px] text-pb-text-dim">Trusted Addresses</label>
+          <input type="text"
+                 x-model="localAddresses"
+                 :disabled="!localBypassEnabled"
+                 aria-label="Trusted local addresses"
+                 placeholder="127.0.0.1, ::1, 192.168.1.0/24"
+                 class="input-pb max-w-md font-mono placeholder:text-pb-text-dim disabled:cursor-not-allowed disabled:opacity-50">
+          <p class="mt-1.5 text-[11px] leading-5 text-pb-text-dim">
+            Comma-separated IPs and CIDRs. Only use addresses that truly represent your local network or trusted proxy edge.
+          </p>
+        </div>
+        <div class="mt-3">
+          <label class="mb-1 block text-[11px] text-pb-text-dim">Bypass Account</label>
+          <input type="text"
+                 x-model.trim="localBypassUsername"
+                 :disabled="!localBypassEnabled"
+                 aria-label="Local bypass account username"
+                 placeholder="admin"
+                 class="input-pb max-w-sm font-mono placeholder:text-pb-text-dim disabled:cursor-not-allowed disabled:opacity-50">
+          <p class="mt-1.5 text-[11px] leading-5 text-pb-text-dim">
+            Active username to use for trusted-IP bypass. Leave blank only when exactly one active account exists.
+          </p>
+        </div>
+      {% endcall %}
+
+      {% call settings_row(label="Session Lifetime", help="How long before a login session expires.") %}
+        <div class="flex items-center gap-2">
+          <input type="number" x-model.number="sessionLifetimeHours" min="1" max="720" step="1" aria-label="Session lifetime in hours" class="input-pb w-20">
+          <span class="text-sm text-pb-text-sec">hours</span>
+        </div>
+        <p class="mt-1.5 text-[11px] leading-5 text-pb-text-dim">
+          Users must re-login after this period. Range: 1&ndash;720 hours.
+        </p>
+        {% call field_note(attrs='x-show="sessionLifetimeHours < 4" x-cloak') %}
+          Short session lifetime will require frequent re-logins.
+        {% endcall %}
+      {% endcall %}
+    </div>
+
+    {% call settings_footer() %}
+      <span class="settings-footer-copy"
+            x-text="securityMessage || 'Changes here affect trust boundaries, so review the local address list carefully before saving.'"
+            :class="securityMessage ? (securitySuccess ? 'text-pb-success' : 'text-pb-error') : ''"></span>
+      <div class="settings-footer-actions">
+        <button @click="saveSecuritySettings()" :disabled="securitySaving || !securityDirty" class="btn-primary">
+          <span x-show="!securitySaving">Save Security Settings</span>
+          <span x-show="securitySaving">Saving...</span>
+        </button>
+      </div>
+    {% endcall %}
+  {% endcall %}
+
+  {% call section_card(
+    title="Account identity",
+    eyebrow="Identity",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="security-authentication-account-identity-card"'
+  ) %}
+      <form data-testid="security-authentication-username-form" @submit.prevent="saveAccount('username')">
+        <input
+          type="text"
+          value="{{ user.username }}"
+          autocomplete="username"
+          tabindex="-1"
+          aria-hidden="true"
+          class="hidden"
+        >
+
+        <div class="settings-rows">
+          {% call settings_row(label="Current Password", help="Required to confirm your identity.") %}
+            <input type="password"
+                   x-model="account.usernameCurrentPassword"
+                   autocomplete="current-password"
+                   aria-label="Current password"
+                   class="input-pb max-w-sm"
+                   :class="usernameError && !account.usernameCurrentPassword ? 'field-invalid' : ''">
+          {% endcall %}
+
+          {% call settings_row(label="Username", help="Enter a new username if you want to change it.") %}
+            <input type="text"
+                   x-model="account.newUsername"
+                   autocomplete="username"
+                   aria-label="Username"
+                   placeholder="{{ user.username }}"
+                   class="input-pb max-w-sm">
+          {% endcall %}
+        </div>
+
+        <template x-if="usernameError">
+          <div class="px-6 py-3">
+            {% call inline_alert() %}
+              <span x-text="usernameError"></span>
+            {% endcall %}
+          </div>
+        </template>
+
+        {% call settings_footer() %}
+          <span class="settings-footer-copy">Changing the username does not affect the password, but it does redefine the login identity for this account.</span>
+          <div class="settings-footer-actions">
+            <button type="submit" :disabled="!canSaveUsername()" class="btn-primary">
+              <span x-show="!usernameSaving">Save Username</span>
+              <span x-show="usernameSaving">Saving...</span>
+            </button>
+          </div>
+        {% endcall %}
+      </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Password security",
+    eyebrow="Credentials",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="security-authentication-password-security-card"'
+  ) %}
+      <form data-testid="security-authentication-password-form" @submit.prevent="saveAccount('password')">
+        <input
+          type="text"
+          value="{{ user.username }}"
+          autocomplete="username"
+          tabindex="-1"
+          aria-hidden="true"
+          class="hidden"
+        >
+
+        <div class="settings-rows">
+          {% call settings_row(label="Current Password", help="Required to confirm your identity.") %}
+            <input type="password"
+                   x-model="account.passwordCurrentPassword"
+                   autocomplete="current-password"
+                   aria-label="Current password"
+                   class="input-pb max-w-sm"
+                   :class="passwordError && !account.passwordCurrentPassword ? 'field-invalid' : ''">
+          {% endcall %}
+
+          {% call settings_row(label="New Password", help="Leave blank to keep your current password.") %}
+            <input type="password"
+                   x-model="account.newPassword"
+                   autocomplete="new-password"
+                   aria-label="New password"
+                   @focus="passwordFocused = true"
+                   @blur="passwordFocused = false"
+                   class="input-pb max-w-sm"
+                   :class="passwordError && account.newPassword && !allPasswordChecksMet ? 'field-invalid' : ''">
+
+            <div x-show="passwordFocused || account.newPassword"
+                 x-transition:enter="transition ease-out duration-200"
+                 x-transition:enter-start="opacity-0 -translate-y-1"
+                 x-transition:enter-end="opacity-100 translate-y-0"
+                 x-transition:leave="transition ease-in duration-150"
+                 x-transition:leave-start="opacity-100 translate-y-0"
+                 x-transition:leave-end="opacity-0 -translate-y-1"
+                 class="mt-3 max-w-sm rounded-lg border border-pb-border bg-pb-card/80 p-3">
+              <p class="mb-2 text-[10px] font-semibold uppercase tracking-wider text-pb-text-sec">Password Requirements</p>
+              <ul class="space-y-1">
+                <template x-for="check in passwordChecks" :key="check.id">
+                  <li class="flex items-center gap-2 text-xs transition-colors duration-200"
+                      :class="check.met ? 'text-pb-success' : 'text-pb-text-dim'">
+                    <svg x-show="check.met" class="h-4 w-4 shrink-0 text-pb-success" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/>
+                    </svg>
+                    <svg x-show="!check.met" class="h-4 w-4 shrink-0 text-pb-error" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd"/>
+                    </svg>
+                    <span x-text="check.label"></span>
+                  </li>
+                </template>
+              </ul>
+
+              <div class="mt-3 border-t border-pb-border/50 pt-2" x-show="account.newPassword">
+                <div class="flex items-center gap-2">
+                  <div class="flex flex-1 gap-1">
+                    <div class="strength-segment"
+                         :class="passwordStrength === 'none' ? 'strength-segment-neutral' :
+                                 passwordStrength === 'weak' ? 'strength-segment-danger' :
+                                 passwordStrength === 'moderate' ? 'strength-segment-warning' : 'strength-segment-success'"></div>
+                    <div class="strength-segment"
+                         :class="passwordStrength === 'moderate' ? 'strength-segment-warning' :
+                                 passwordStrength === 'strong' ? 'strength-segment-success' : 'strength-segment-neutral'"></div>
+                    <div class="strength-segment"
+                         :class="passwordStrength === 'strong' ? 'strength-segment-success' : 'strength-segment-neutral'"></div>
+                  </div>
+                  <span class="min-w-[60px] text-right text-[11px] font-medium transition-colors duration-300"
+                        :class="passwordStrength === 'weak' ? 'text-pb-error' :
+                                passwordStrength === 'moderate' ? 'text-pb-warning' :
+                                passwordStrength === 'strong' ? 'text-pb-success' : 'text-pb-text-dim'"
+                        x-text="passwordStrength === 'weak' ? 'Weak' :
+                                passwordStrength === 'moderate' ? 'Moderate' :
+                                passwordStrength === 'strong' ? 'Strong' : ''"></span>
+                </div>
+              </div>
+            </div>
+          {% endcall %}
+
+          {% call settings_row(
+            label="Confirm New Password",
+            help="Re-enter your new password to confirm.",
+            attrs='x-show="account.newPassword" x-transition'
+          ) %}
+            <input type="password"
+                   x-model="account.confirmPassword"
+                   autocomplete="new-password"
+                   aria-label="Confirm new password"
+                   class="input-pb max-w-sm"
+                   :class="account.confirmPassword && account.newPassword !== account.confirmPassword ? 'field-invalid' : ''">
+            {% call field_note(tone="danger", attrs='x-show="account.confirmPassword && account.newPassword !== account.confirmPassword" x-cloak') %}
+              Passwords do not match.
+            {% endcall %}
+          {% endcall %}
+        </div>
+
+        <template x-if="passwordError">
+          <div class="px-6 py-3">
+            {% call inline_alert() %}
+              <span x-text="passwordError"></span>
+            {% endcall %}
+          </div>
+        </template>
+
+        {% call settings_footer() %}
+          <span class="settings-footer-copy">Saving a new password signs out the current session so the new credential becomes authoritative immediately.</span>
+          <div class="settings-footer-actions">
+            <button type="submit" :disabled="!canSavePassword()" class="btn-primary">
+              <span x-show="!passwordSaving">Save Password</span>
+              <span x-show="passwordSaving">Saving...</span>
+            </button>
+          </div>
+        {% endcall %}
+      </form>
+  {% endcall %}
+
+</div>
+
+<script>
+function authenticationTab() {
+  return {
+    // ── Local auth bypass ────────────────────────────────────────
+    localBypassEnabled: {{ 'true' if configs.get('local_auth_bypass_enabled') == 'true' else 'false' }},
+    localAddresses: {{ configs.get('local_auth_bypass_addresses', '127.0.0.1, ::1') | tojson }},
+    localBypassUsername: {{ configs.get('local_auth_bypass_username', '') | tojson }},
+    sessionLifetimeHours: parseInt({{ configs.get('session_lifetime_hours', '24') | tojson }}, 10) || 24,
+    // Track initial values for dirty detection
+    _initAddresses: {{ configs.get('local_auth_bypass_addresses', '127.0.0.1, ::1') | tojson }},
+    _initBypassUsername: {{ configs.get('local_auth_bypass_username', '') | tojson }},
+    _initLifetime: parseInt({{ configs.get('session_lifetime_hours', '24') | tojson }}, 10) || 24,
+    _initBypass: {{ 'true' if configs.get('local_auth_bypass_enabled') == 'true' else 'false' }},
+    securitySaving: false,
+    securityMessage: '',
+    securitySuccess: false,
+
+    get securityDirty() {
+      return this.localBypassEnabled !== this._initBypass
+          || this.localAddresses !== this._initAddresses
+          || this.localBypassUsername !== this._initBypassUsername
+          || this.sessionLifetimeHours !== this._initLifetime;
+    },
+
+    // ── Account management ───────────────────────────────────────
+    account: {
+      usernameCurrentPassword: '',
+      passwordCurrentPassword: '',
+      newUsername: '',
+      newPassword: '',
+      confirmPassword: '',
+    },
+    usernameSaving: false,
+    passwordSaving: false,
+    usernameError: null,
+    passwordError: null,
+    passwordFocused: false,
+
+    // ── Password policy (client-side validation) ─────────────────
+    passwordPolicy: {
+      minLength: 8,
+      maxLength: 128,
+    },
+
+    get passwordChecks() {
+      const pw = this.account.newPassword || '';
+      return [
+        { id: 'min_length', label: 'At least 8 characters', met: pw.length >= 8 },
+        { id: 'max_length', label: 'At most 128 characters', met: pw.length > 0 && pw.length <= 128 },
+        { id: 'uppercase', label: 'One uppercase letter (A\u2013Z)', met: /[A-Z]/.test(pw) },
+        { id: 'lowercase', label: 'One lowercase letter (a\u2013z)', met: /[a-z]/.test(pw) },
+        { id: 'digit', label: 'One digit (0\u20139)', met: /\d/.test(pw) },
+        { id: 'special', label: 'One special character (!@#$%...)', met: /[!@#$%^&*()_+\-=\[\]{}|;:'",.<>?\/`~]/.test(pw) },
+      ];
+    },
+
+    get passwordStrength() {
+      const pw = this.account.newPassword || '';
+      if (!pw) return 'none';
+      const checks = this.passwordChecks;
+      const allMet = checks.every(c => c.met);
+      if (!allMet) return 'weak';
+      const diversity = [/[A-Z]/, /[a-z]/, /\d/, /[!@#$%^&*()_+\-=\[\]{}|;:'",.<>?\/`~]/]
+        .filter(re => re.test(pw)).length;
+      if (pw.length >= 16 && diversity === 4) return 'strong';
+      if (pw.length >= 12 || diversity >= 3) return 'moderate';
+      return 'weak';
+    },
+
+    get allPasswordChecksMet() {
+      return this.passwordChecks.every(c => c.met);
+    },
+
+    // ── Local auth bypass toggle ─────────────────────────────────
+    toggleLocalBypass(enabled) {
+      this.localBypassEnabled = enabled;
+    },
+
+    // ── Save security settings (addresses + session lifetime) ──
+    saveSecuritySettings() {
+      this.securitySaving = true;
+      this.securityMessage = '';
+
+      // Only send values that actually changed
+      const values = {};
+      if (this.localBypassEnabled !== this._initBypass) {
+        values.local_auth_bypass_enabled = this.localBypassEnabled ? 'true' : 'false';
+      }
+      if (this.localAddresses !== this._initAddresses) {
+        values.local_auth_bypass_addresses = this.localAddresses;
+      }
+      if (this.localBypassUsername !== this._initBypassUsername) {
+        values.local_auth_bypass_username = this.localBypassUsername;
+      }
+      const hours = Math.min(720, Math.max(1, this.sessionLifetimeHours || 24));
+      if (hours !== this._initLifetime) {
+        values.session_lifetime_hours = String(hours);
+      }
+
+      if (Object.keys(values).length === 0) {
+        this.securitySaving = false;
+        return;
+      }
+
+      fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error('Failed to save.');
+          // Update initial values so dirty tracking resets
+          this._initBypass = this.localBypassEnabled;
+          this._initAddresses = this.localAddresses;
+          this._initBypassUsername = this.localBypassUsername;
+          this._initLifetime = hours;
+          this.securitySuccess = true;
+          this.securityMessage = 'Settings saved.';
+          if (typeof showToast === 'function') showToast({ message: 'Security settings saved.', level: 'success' });
+          setTimeout(() => { this.securityMessage = ''; }, 3000);
+        })
+        .catch(err => {
+          this.securitySuccess = false;
+          this.securityMessage = err.message || 'Failed to save.';
+        })
+        .finally(() => { this.securitySaving = false; });
+    },
+
+    // ── Account management ───────────────────────────────────────
+    canSaveUsername() {
+      if (this.usernameSaving) return false;
+      if (!this.account.usernameCurrentPassword) return false;
+      if (!this.account.newUsername) return false;
+      if (this.account.newUsername === '{{ user.username }}') return false;
+      return true;
+    },
+
+    canSavePassword() {
+      if (this.passwordSaving) return false;
+      if (!this.account.passwordCurrentPassword) return false;
+      if (!this.account.newPassword) return false;
+      if (!this.allPasswordChecksMet) return false;
+      if (this.account.newPassword !== this.account.confirmPassword) return false;
+      return true;
+    },
+
+    saveAccount(mode) {
+      const isUsernameMode = mode === 'username';
+      const errorKey = isUsernameMode ? 'usernameError' : 'passwordError';
+      const savingKey = isUsernameMode ? 'usernameSaving' : 'passwordSaving';
+
+      this[errorKey] = null;
+
+      if (isUsernameMode) {
+        if (!this.account.usernameCurrentPassword) {
+          this.usernameError = 'Current password is required.';
+          return;
+        }
+        if (!this.account.newUsername || this.account.newUsername === '{{ user.username }}') {
+          this.usernameError = 'Enter a different username to continue.';
+          return;
+        }
+      } else {
+        if (!this.account.passwordCurrentPassword) {
+          this.passwordError = 'Current password is required.';
+          return;
+        }
+        if (!this.account.newPassword) {
+          this.passwordError = 'Enter a new password to continue.';
+          return;
+        }
+        if (!this.allPasswordChecksMet) {
+          this.passwordError = 'New password does not meet all requirements.';
+          return;
+        }
+        if (this.account.newPassword !== this.account.confirmPassword) {
+          this.passwordError = 'New password and confirmation do not match.';
+          return;
+        }
+      }
+
+      this[savingKey] = true;
+      const body = {
+        current_password: isUsernameMode
+          ? this.account.usernameCurrentPassword
+          : this.account.passwordCurrentPassword,
+      };
+      if (isUsernameMode) {
+        body.new_username = this.account.newUsername;
+      } else {
+        body.new_password = this.account.newPassword;
+        body.confirm_password = this.account.confirmPassword;
+      }
+
+      fetch('/api/v1/auth/account', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify(body),
+      })
+        .then(async r => {
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.detail || data.error?.message || 'Failed to update account.');
+          // Credentials changed — session is invalidated.
+          // Stop all HTMX polling to prevent 401s from background requests,
+          // show success toast briefly, then redirect to login.
+          document.querySelectorAll('[hx-trigger*="every"]').forEach(el => {
+            el.removeAttribute('hx-trigger');
+            htmx.process(el);
+          });
+          if (typeof showToast === 'function') showToast({ message: data.message, level: 'success' });
+          setTimeout(() => { window.location.href = '/login'; }, 2000);
+        })
+        .catch(err => {
+          this[errorKey] = err.message;
+        })
+        .finally(() => { this[savingKey] = false; });
+    },
+  };
+}
+</script>

@@ -1,0 +1,14 @@
+<div id="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/whats_new_footer_dock.html" %}
+</div>
+{% set sort_input_oob = true %}
+{% include "partials/whats_new_sort_input.html" %}
+{% set publisher_field_oob = true %}
+{% include "partials/whats_new_publisher_field.html" %}
+<section
+  id="whats-new-results-body"
+  data-testid="whats-new-results-body"
+  class="series-results-body-shell"
+>
+  {% include "partials/whats_new_results_inner.html" %}
+</section>

@@ -1,0 +1,25 @@
+{% set catalog_state = series.issue_catalog_state.value if series.issue_catalog_state else 'complete' %}
+{% if catalog_state in ('hydrating', 'partial', 'failed') %}
+{% set is_failed_catalog = catalog_state == 'failed' %}
+{% set banner_title = 'Issue catalog sync needs attention' if is_failed_catalog else ('Issue catalog sync in progress' if catalog_state == 'hydrating' else 'Issue catalog is incomplete') %}
+{% set banner_body = 'Pullbox imported your selected files, but the ComicVine issue list and release metadata still need to finish syncing.' if catalog_state == 'hydrating' else ('Pullbox imported your selected files, but the ComicVine issue list and release metadata are incomplete. Refresh metadata to retry the sync.' if catalog_state == 'partial' else 'Pullbox imported your selected files, but the ComicVine issue list and release metadata could not finish syncing. Refresh metadata to retry.') %}
+<section
+  data-testid="series-detail-catalog-state-banner"
+  class="rounded-xl border px-4 py-3 {{ 'border-pb-error/30 bg-pb-error-dim' if is_failed_catalog else 'border-pb-warning/30 bg-pb-warning-dim' }}"
+>
+  <div class="flex items-start gap-3">
+    <div class="mt-0.5 {{ 'text-pb-error' if is_failed_catalog else 'text-pb-warning' }}">
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.25" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+      </svg>
+    </div>
+    <div class="min-w-0">
+      <p class="text-sm font-semibold text-pb-text">{{ banner_title }}</p>
+      <p class="mt-1 text-sm leading-6 text-pb-text-sec">{{ banner_body }}</p>
+      {% if is_failed_catalog and series.issue_catalog_error %}
+      <p class="mt-2 font-mono text-xs text-pb-error">{{ series.issue_catalog_error }}</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}

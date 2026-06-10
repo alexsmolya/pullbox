@@ -1,0 +1,14 @@
+{% from "components/page_dock.html" import status_dock %}
+
+{% set _status_led = "green" if issue.status.value == "owned" else "amber" if issue.status.value in ["wanted", "downloading"] else "off" %}
+{% set _status_value = issue.status.value|replace("_", " ")|title %}
+{% set _file_or_release = issue.library_file.file_size|filesize ~ " · " ~ issue.library_file.file_format.value|upper if issue.library_file else (issue.release_date|string if issue.release_date else "Unknown") %}
+{% set _file_or_release_label = "file" if issue.library_file else "release" %}
+{% set _status_items = [
+  {"led": _status_led, "label": "status", "value": _status_value},
+  {"label": "series", "value": issue.series.title},
+  {"label": _file_or_release_label, "value": _file_or_release},
+  {"label": "cvid", "value": (issue.comicvine_id|string) if issue.comicvine_id else "Unlinked"},
+] %}
+
+{{ status_dock(status_items=_status_items) }}

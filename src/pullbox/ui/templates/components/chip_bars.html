@@ -1,0 +1,86 @@
+{%- macro _count_badge_slot(item, is_active) -%}
+  {%- set count_value = item.count if item.count is defined else none -%}
+  {%- set show_zero_count = item.show_zero_count|default(true) -%}
+  {%- set should_render = count_value is not none and (show_zero_count or count_value|int > 0) -%}
+  {%- if item.count_id is defined -%}<span id="{{ item.count_id }}">{%- endif -%}
+  {%- if should_render -%}
+    <span class="count-badge {{ item.count_active_class|default('count-badge-info') if is_active else item.count_inactive_class|default('count-badge-neutral') }}">
+      {{ count_value }}
+    </span>
+  {%- endif -%}
+  {%- if item.count_id is defined -%}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro workspace_tabs(
+  id,
+  items,
+  testid="",
+  oob=false,
+  classes="flex flex-wrap items-center gap-2 border-b border-pb-border bg-pb-surface/40 px-4 py-3 sm:px-6"
+) -%}
+<div
+  id="{{ id }}"
+  {% if testid %}data-testid="{{ testid }}"{% endif %}
+  {% if oob %}hx-swap-oob="outerHTML"{% endif %}
+  class="{{ classes }}"
+>
+  {% for item in items %}
+    {% set is_active = item.active|default(false) %}
+    {% set state_class = item.active_class|default('chip-btn-selected shadow-xs font-semibold') if is_active else item.inactive_class|default('chip-btn-neutral text-pb-text-dim') %}
+    {% set state_style = item.active_style|default('background-color: color-mix(in srgb, var(--pb-info) 22%, var(--pb-bg-card)); border-color: color-mix(in srgb, var(--pb-info) 40%, transparent); box-shadow: var(--pb-shadow-1);') if is_active else item.inactive_style|default('') %}
+    <a
+      href="{{ item.href }}"
+      {% if item.testid is defined %}data-testid="{{ item.testid }}"{% endif %}
+      {% if not is_active and item.hx_get is defined %}hx-get="{{ item.hx_get }}"{% endif %}
+      {% if not is_active and item.hx_target is defined %}hx-target="{{ item.hx_target }}"{% endif %}
+      {% if not is_active and item.hx_swap is defined %}hx-swap="{{ item.hx_swap }}"{% endif %}
+      {% if not is_active and item.hx_push_url is defined %}hx-push-url="{{ item.hx_push_url }}"{% endif %}
+      aria-current="{{ 'page' if is_active else 'false' }}"
+      {% if state_style %}style="{{ state_style }}"{% endif %}
+      class="{{ item.base_class|default('chip-btn') }} {{ state_class }}"
+    >
+      <span>{{ item.label }}</span>
+      {% if item.count is defined or item.count_id is defined %}
+        {{ _count_badge_slot(item, is_active) }}
+      {% endif %}
+    </a>
+  {% endfor %}
+</div>
+{%- endmacro %}
+
+{% macro filter_chip_bar(
+  items,
+  testid="",
+  label="",
+  classes="flex flex-wrap items-center gap-2 rounded-xl border border-pb-border bg-pb-card/40 px-3 py-3 text-xs"
+) -%}
+<div
+  {% if testid %}data-testid="{{ testid }}"{% endif %}
+  class="{{ classes }}"
+>
+  {% if label %}
+    <span class="mr-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">
+      {{ label }}
+    </span>
+  {% endif %}
+  {% for item in items %}
+    {% set is_active = item.active|default(false) %}
+    {% set state_class = item.active_class|default('chip-btn-selected') if is_active else item.inactive_class|default('chip-btn-neutral') %}
+    <a
+      href="{{ item.href|default('#') }}"
+      {% if item.testid is defined %}data-testid="{{ item.testid }}"{% endif %}
+      {% if item.hx_get is defined %}hx-get="{{ item.hx_get }}"{% endif %}
+      {% if item.hx_target is defined %}hx-target="{{ item.hx_target }}"{% endif %}
+      {% if item.hx_swap is defined %}hx-swap="{{ item.hx_swap }}"{% endif %}
+      {% if item.hx_push_url is defined %}hx-push-url="{{ item.hx_push_url }}"{% endif %}
+      {% if item.hx_include is defined %}hx-include="{{ item.hx_include }}"{% endif %}
+      class="{{ item.base_class|default('chip-btn chip-btn-sm') }} {{ state_class }}"
+    >
+      <span>{{ item.label }}</span>
+      {% if item.count is defined %}
+        {{ _count_badge_slot(item, is_active) }}
+      {% endif %}
+    </a>
+  {% endfor %}
+</div>
+{%- endmacro %}

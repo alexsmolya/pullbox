@@ -1,0 +1,199 @@
+{%- macro sort_header(field, label, extra_classes="", width="") -%}
+  {%- set current_field = sort.lstrip("-") -%}
+  {%- set current_desc = sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  {%- set sort_qs = "tab=history&result=" ~ result_filter ~ "&sort=" ~ next_sort -%}
+  {%- if client_filter %}{% set sort_qs = sort_qs ~ "&client=" ~ client_filter %}{% endif -%}
+  {%- if search_query %}{% set sort_qs = sort_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif -%}
+  <th class="{{ extra_classes }} {{ width }}">
+    <button
+      type="button"
+      data-testid="pp-history-sort-{{ field }}"
+      hx-get="/post-processing?{{ sort_qs }}"
+      hx-target="#pp-history-results"
+      hx-swap="outerHTML"
+      hx-sync="#pp-history-results:replace"
+      hx-push-url="true"
+      class="downloads-sort-btn{% if current_field == field %} is-active{% endif %}"
+    >
+      <span>{{ label }}</span>
+      <svg class="downloads-sort-chevron{% if current_field == field and not current_desc %} is-desc{% endif %}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </th>
+{%- endmacro -%}
+
+{% set _hist_qs = "?page=" ~ page ~ "&result=" ~ result_filter %}
+{% if client_filter %}{% set _hist_qs = _hist_qs ~ "&client=" ~ client_filter %}{% endif %}
+{% if search_query %}{% set _hist_qs = _hist_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif %}
+{% if sort and sort != "-completed_at" %}{% set _hist_qs = _hist_qs ~ "&sort=" ~ sort %}{% endif %}
+
+<div
+  id="pp-history-results"
+  data-testid="pp-history-results"
+  class="downloads-history-results"
+  hx-get="/htmx/post-processing/history{{ _hist_qs }}"
+  hx-trigger="every 3s [window.postProcessingHistoryRefreshEnabled()], post-processing:refresh from:body"
+  hx-target="#pp-history-results"
+  hx-swap="outerHTML"
+>
+  {% if history_items %}
+    <table data-testid="pp-history-table" class="downloads-table">
+      <thead>
+        <tr>
+          <th class="is-center w-[28px]"></th>
+          {{ sort_header("title", "Release") }}
+          {{ sort_header("issue", "Issue") }}
+          {{ sort_header("result", "Result", width="w-[96px]") }}
+          {{ sort_header("client", "Client") }}
+          {{ sort_header("size", "Size", extra_classes="is-right", width="w-[80px]") }}
+          {{ sort_header("completed_at", "Completed", extra_classes="is-right", width="w-[120px]") }}
+          <th class="is-right w-[96px]"></th>
+        </tr>
+      </thead>
+      {% for dl in history_items %}
+        {% set effective_completed = dl.imported_at or dl.completed_at or dl.updated_at %}
+        {% set is_failed = dl.state.value == 'failed' %}
+        {% set row_tone = "downloads-led-green" if not is_failed else "downloads-led-amber" %}
+        <tbody
+          x-data="{ expanded: (window._ppHistExpanded || new Set()).has({{ dl.id }}), toggle() { this.expanded = !this.expanded; window._ppHistExpanded = window._ppHistExpanded || new Set(); this.expanded ? window._ppHistExpanded.add({{ dl.id }}) : window._ppHistExpanded.delete({{ dl.id }}) } }"
+          x-bind:data-post-processing-history-expanded="expanded ? 'true' : 'false'"
+        >
+          <tr id="pp-history-item-{{ dl.id }}">
+            <td class="is-center"><span class="downloads-led {{ row_tone }}"></span></td>
+            <td>
+              <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                <span class="block truncate" data-tooltip-measure>{{ dl.title }}</span>
+              </span>
+            </td>
+            <td>
+              {% if dl.issue and dl.issue.series %}
+                <a href="/issues/{{ dl.issue.id }}" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+              {% else %}
+                <span class="downloads-muted-text">—</span>
+              {% endif %}
+            </td>
+            <td>
+              <span class="pill{% if is_failed %} pill-error{% else %} pill-success{% endif %}">
+                {% if is_failed %}
+                  <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                  Processing Failed
+                {% else %}
+                  <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                  </svg>
+                  Imported
+                {% endif %}
+              </span>
+            </td>
+            <td class="downloads-mono-cell">{{ download_client_label(dl.download_client.value) }}</td>
+            <td class="downloads-mono-cell is-right">
+              {% if dl.file_size %}
+                {{ dl.file_size|filesize }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td class="downloads-mono-cell is-right">{{ effective_completed|localtime }}</td>
+            <td class="is-right">
+              <div class="downloads-action-group">
+                {% if is_failed %}
+                  <button
+                    @click="blockFailedDownload({{ dl.id }}, $el)"
+                    data-testid="pp-history-block-{{ dl.id }}"
+                    class="downloads-action-btn"
+                    data-tip="Block release"
+                    data-tip-pos="left"
+                    aria-label="Block release"
+                    type="button"
+                  >
+                    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                    </svg>
+                  </button>
+                  <button
+                    @click="retryProcessing({{ dl.id }}, $el)"
+                    data-testid="pp-history-retry-{{ dl.id }}"
+                    class="downloads-action-btn is-warn"
+                    data-tip="Retry processing"
+                    data-tip-pos="left"
+                    aria-label="Retry processing"
+                    type="button"
+                  >
+                    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+                    </svg>
+                  </button>
+                  {% if dl.error_message %}
+                    <button
+                      @click="toggle()"
+                      class="downloads-action-btn"
+                      data-tip="Error"
+                      data-tip-pos="left"
+                      aria-label="Toggle error details"
+                      type="button"
+                    >
+                      <svg class="transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                      </svg>
+                    </button>
+                  {% endif %}
+                {% endif %}
+                <button
+                  @click="removeHistory({{ dl.id }}, $el)"
+                  data-testid="pp-history-remove-{{ dl.id }}"
+                  class="downloads-action-btn is-danger"
+                  data-tip="Remove"
+                  data-tip-pos="left"
+                  aria-label="Remove from history"
+                  type="button"
+                >
+                  <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% if is_failed and dl.error_message %}
+            <tr
+              data-testid="pp-history-error-detail-{{ dl.id }}"
+              class="downloads-error-row table-detail-row"
+              x-show="expanded"
+              x-cloak
+            >
+              <td colspan="8">
+                <div class="downloads-error-content">
+                  <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+                  </svg>
+                  <span>{{ dl.error_message }}</span>
+                </div>
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div data-testid="pp-history-empty" class="downloads-empty-state is-history">
+      <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      {% if result_filter != "all" or client_filter or search_query %}
+        <p class="downloads-empty-title">No matching history</p>
+        <p class="downloads-empty-copy">Try widening the search or clearing one of the active filters.</p>
+      {% else %}
+        <p class="downloads-empty-title">History is clear</p>
+        <p class="downloads-empty-copy">Imported and processing-failed records will appear here.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

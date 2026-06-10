@@ -1,0 +1,241 @@
+{% from "components/sidebar_nav.html" import sidebar_link, sidebar_section with context %}
+
+{% set request_path = request.url.path %}
+{% set dashboard_item = {
+  "key": "dashboard",
+  "href": "/",
+  "label": "Dashboard",
+  "icon_path": "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4",
+  "match": "exact"
+} %}
+{% set library_section = {
+  "key": "library",
+  "label": "Library",
+  "items": [
+    {
+      "key": "series",
+      "href": "/series",
+      "label": "Series",
+      "icon_path": "M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253",
+      "match": "prefix",
+      "series_index_link": true
+    },
+    {
+      "key": "library",
+      "href": "/library",
+      "label": "Library",
+      "icon_path": "M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4",
+      "match": "prefix"
+    },
+    {
+      "key": "pull-list",
+      "href": "/pull-list",
+      "label": "Pull List",
+      "icon_path": "M5.25 4.5h13.5A1.5 1.5 0 0120.25 6v12A1.5 1.5 0 0118.75 19.5H5.25A1.5 1.5 0 013.75 18V6a1.5 1.5 0 011.5-1.5zm3.5 4.25h6.5m-6.5 3.5h6.5m-6.5 3.5h4.5",
+      "match": "exact"
+    }
+  ]
+} %}
+{% set acquisition_section = {
+  "key": "acquisition",
+  "label": "Acquisition",
+  "items": [
+    {
+      "key": "whats-new",
+      "href": "/whats-new",
+      "label": "What's New",
+      "icon_path": "M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z",
+      "match": "prefix"
+    },
+    {
+      "key": "downloads",
+      "href": "/downloads",
+      "label": "Downloads",
+      "icon_path": "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4",
+      "match": "prefix"
+    },
+    {
+      "key": "post-processing",
+      "href": "/post-processing",
+      "label": "Post-Processing",
+      "icon_path": "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99",
+      "match": "prefix"
+    },
+    {
+      "key": "blocklist",
+      "href": "/blocklist",
+      "label": "Blocklist",
+      "icon_path": "M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636",
+      "match": "prefix"
+    },
+    {
+      "key": "import",
+      "href": "/import",
+      "label": "Import",
+      "icon_path": "M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5",
+      "match": "exact"
+    }
+  ]
+} %}
+{% set matching_section = {
+  "key": "matching",
+  "label": "Matching",
+  "items": [
+    {
+      "key": "intervention",
+      "href": "/intervention",
+      "label": "Intervention",
+      "icon_path": "M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z",
+      "match": "prefix",
+      "disinherit": true,
+      "badge": {
+        "key": "intervention",
+        "endpoint": "/htmx/intervention/count",
+        "trigger": "every 10s"
+      }
+    },
+    {
+      "key": "search-history",
+      "href": "/search-history",
+      "label": "Search History",
+      "icon_path": "M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z",
+      "match": "prefix"
+    }
+  ]
+} %}
+{% set admin_section = {
+  "key": "admin",
+  "label": "Admin",
+  "items": [
+    {
+      "key": "utilities",
+      "href": "/utilities",
+      "label": "Utilities",
+      "icon_path": "M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085",
+      "match": "prefix"
+    },
+    {
+      "key": "settings",
+      "href": "/settings",
+      "label": "Settings",
+      "icon_path": "M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7 7 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.212-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28zM15 12a3 3 0 11-6 0 3 3 0 016 0z",
+      "match": "prefix"
+    },
+    {
+      "key": "security",
+      "href": "/security",
+      "label": "Security",
+      "icon_path": "M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z",
+      "match": "prefix"
+    },
+    {
+      "key": "system",
+      "href": "/system",
+      "label": "System",
+      "icon_path": "M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25A2.25 2.25 0 015.25 3h13.5A2.25 2.25 0 0121 5.25z",
+      "match": "prefix"
+    },
+    {
+      "key": "health",
+      "href": "/health",
+      "label": "Health",
+      "icon_path": "M3 12h4l3-9 4 18 3-9h4",
+      "match": "prefix",
+      "disinherit": true,
+      "badge": {
+        "key": "health",
+        "endpoint": "/health/badge",
+        "trigger": "every 10s"
+      }
+    }
+  ]
+} %}
+
+<div
+  x-show="sidebarMobileOpen"
+  x-transition:enter="transition-opacity ease-linear duration-200"
+  x-transition:enter-start="opacity-0"
+  x-transition:enter-end="opacity-100"
+  x-transition:leave="transition-opacity ease-linear duration-200"
+  x-transition:leave-start="opacity-100"
+  x-transition:leave-end="opacity-0"
+  data-testid="sidebar-mobile-backdrop"
+  class="app-sidebar-backdrop fixed inset-0 z-40 lg:hidden"
+  @click="closeMobileSidebar()"
+  x-cloak
+></div>
+
+<aside
+  role="complementary"
+  aria-label="Sidebar"
+  data-testid="app-sidebar"
+  class="app-sidebar-shell fixed inset-y-0 left-0 z-50 flex w-[240px] flex-col -translate-x-full lg:translate-x-0"
+  :class="sidebarMobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'"
+  :style="sidebarInlineStyle()"
+>
+  <a
+    href="/"
+    aria-label="Pullbox — home"
+    data-testid="sidebar-logo-link"
+    class="app-sidebar-brand shrink-0 no-underline"
+    :class="showSidebarLabels ? '' : 'app-sidebar-brand-collapsed px-0'"
+    hx-boost="true"
+    hx-target="#content"
+    hx-select="#content"
+    hx-select-oob="#page-footer-dock"
+    hx-swap="outerHTML"
+  >
+    <div class="app-sidebar-brand-card" :class="showSidebarLabels ? '' : 'app-sidebar-brand-card-collapsed'">
+      <span class="app-sidebar-brand-mark">
+        <svg class="h-8 w-8 shrink-0 text-pb-text-sec" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false">
+          <rect x="6" y="5" width="3.5" height="10" rx="0.75" class="text-pb-error" fill="currentColor"/>
+          <rect x="10.5" y="4" width="3.5" height="11" rx="0.75" class="text-pb-warning" fill="currentColor"/>
+          <rect x="15" y="5" width="3.5" height="10" rx="0.75" class="text-pb-interactive" fill="currentColor"/>
+          <rect x="19.5" y="6" width="3.5" height="9" rx="0.75" class="text-pb-success" fill="currentColor"/>
+          <rect x="24" y="5" width="3" height="10" rx="0.75" class="text-pb-brand" fill="currentColor"/>
+          <rect x="3" y="11" width="26" height="12.75" rx="1.5" stroke="currentColor" stroke-width="1" fill="var(--pb-bg-surface)"/>
+        </svg>
+      </span>
+      <span
+        data-sidebar-logo-label
+        class="app-sidebar-brand-copy"
+        :class="showSidebarLabels ? '' : 'app-sidebar-brand-copy-collapsed'"
+      >
+        <span class="app-sidebar-brand-title">PULLB<span class="text-pb-brand">O</span>X</span>
+        <span data-testid="sidebar-brand-version" class="app-sidebar-brand-version">v{{ version }}</span>
+      </span>
+    </div>
+  </a>
+
+  <nav
+    aria-label="Main navigation"
+    data-testid="sidebar-nav"
+    class="app-sidebar-nav flex-1 overflow-y-auto"
+    :class="showSidebarLabels ? '' : 'app-sidebar-nav-collapsed'"
+    @click="handleSidebarNavClick($event)"
+    hx-boost="true"
+    hx-target="#content"
+    hx-select="#content"
+    hx-select-oob="#page-footer-dock"
+    hx-swap="outerHTML"
+  >
+    {{ sidebar_link(dashboard_item, request_path) }}
+    {{ sidebar_section(library_section, request_path) }}
+    {{ sidebar_section(acquisition_section, request_path) }}
+    {{ sidebar_section(matching_section, request_path) }}
+    {{ sidebar_section(admin_section, request_path) }}
+  </nav>
+
+  <button
+    @click="toggleSidebar()"
+    data-testid="sidebar-collapse-toggle"
+    class="app-sidebar-toggle absolute hidden lg:flex"
+    x-bind:data-tip="sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'"
+    data-tip-pos="right"
+    data-tip-size="narrow"
+  >
+    <svg class="h-3.5 w-3.5 transition-transform duration-200" :class="sidebarOpen ? '' : 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/>
+    </svg>
+  </button>
+</aside>

@@ -1,0 +1,89 @@
+{% from "components/search_field.html" import search_field %}
+{% from "components/dropdown_select.html" import dropdown_select %}
+
+<section
+  id="blocklist-content"
+  data-testid="blocklist-content"
+  class="downloads-view"
+>
+  <div data-testid="blocklist-header" class="downloads-header">
+    <div class="downloads-header-main">
+      <div
+        id="blocklist-header-metrics"
+        data-testid="blocklist-header-metrics"
+        class="downloads-header-summary"
+      >
+        {% include "partials/blocklist_header_metrics.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="blocklist-results" class="downloads-panel-stack">
+    <div class="downloads-table-wrap">
+      <form
+        id="blocklist-filter-form"
+        data-testid="blocklist-filter-form"
+        class="series-toolbar-frame downloads-history-toolbar"
+        autocomplete="off"
+        action="/blocklist"
+        method="get"
+        hx-get="/blocklist"
+        hx-target="#blocklist-results-body"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        hx-trigger="submit"
+      >
+        {% include "partials/blocklist_sort_input.html" %}
+        <div class="series-toolbar-body">
+          <div class="series-toolbar-browse">
+            <div class="series-toolbar-primary" data-testid="blocklist-filters">
+              {{ search_field(
+                name="search",
+                value=search_query,
+                placeholder="Search blocked releases...",
+                input_testid="blocklist-search-input",
+                clear_testid="blocklist-search-clear",
+                panel_testid="blocklist-search-history-panel",
+                root_testid="blocklist-search-field",
+                mode="remote",
+                history_key="pullbox.searchHistory.blocklist",
+                debounce_ms=250,
+                size="sm",
+                class_name="series-registry-search blocklist-search-field"
+              ) }}
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Reason</span>
+                {{ dropdown_select(
+                  name="reason",
+                  value=reason_filter,
+                  size="sm",
+                  options=[
+                    ("", "All Reasons"),
+                    ("failed", "Failed"),
+                    ("rejected", "Rejected"),
+                    ("manual", "Manual"),
+                  ],
+                  root_testid="blocklist-filter-reason",
+                  hx_get="/blocklist",
+                  hx_target="#blocklist-results-body",
+                  hx_swap="outerHTML",
+                  hx_push_url="true",
+                  hx_include="#blocklist-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+            </div>
+
+            <div class="series-toolbar-actions">
+              {% include "partials/blocklist_clear_slot.html" %}
+            </div>
+          </div>
+        </div>
+      </form>
+
+      {% include "partials/blocklist_results_body.html" %}
+    </div>
+  </div>
+</section>

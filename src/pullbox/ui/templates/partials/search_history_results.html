@@ -1,0 +1,113 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/search_field.html" import search_field %}
+
+<section
+  id="search-history-content"
+  data-testid="search-history-content"
+  class="downloads-view"
+>
+  <div data-testid="search-history-header" class="downloads-header">
+    <div class="downloads-header-main">
+      <div
+        id="search-history-header-metrics"
+        data-testid="search-history-header-metrics"
+        class="downloads-header-summary"
+      >
+        {% include "partials/search_history_header_metrics.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="search-history-results" class="downloads-panel-stack">
+    <div class="downloads-table-wrap">
+      <form
+        id="search-history-filter-form"
+        data-testid="search-history-filter-form"
+        class="series-toolbar-frame downloads-history-toolbar"
+        autocomplete="off"
+        action="/search-history"
+        method="get"
+        hx-get="/search-history"
+        hx-target="#search-history-results-body"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        hx-trigger="submit"
+      >
+        <input id="search-history-sort-input" type="hidden" name="sort" value="{{ sort }}">
+        <div class="series-toolbar-body">
+          <div class="series-toolbar-browse">
+            <div class="series-toolbar-primary" data-testid="search-history-filters">
+              {{ search_field(
+                name="search",
+                value=search_query,
+                placeholder="Search history...",
+                root_testid="search-history-search-field",
+                input_testid="search-history-search-input",
+                clear_testid="search-history-search-clear",
+                panel_testid="search-history-search-history-panel",
+                mode="remote",
+                history_key="pullbox.searchHistory.searchLogs",
+                debounce_ms=250,
+                size="sm",
+                class_name="series-registry-search search-history-search-field"
+              ) }}
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Type</span>
+                {{ dropdown_select(
+                  name="search_type",
+                  value=search_type_filter or "",
+                  size="sm",
+                  options=[
+                    ("", "All Types"),
+                    ("manual", "Manual"),
+                    ("automated", "Auto"),
+                    ("bulk", "Bulk"),
+                  ],
+                  root_testid="search-history-filter-type",
+                  hx_get="/search-history",
+                  hx_target="#search-history-results-body",
+                  hx_swap="outerHTML",
+                  hx_push_url="true",
+                  hx_include="#search-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Confidence</span>
+                {{ dropdown_select(
+                  name="confidence",
+                  value=confidence_filter or "",
+                  size="sm",
+                  options=[
+                    ("", "All Confidence"),
+                    ("high", "High"),
+                    ("medium", "Medium"),
+                    ("low", "Low"),
+                    ("none", "No Confidence"),
+                  ],
+                  root_testid="search-history-filter-confidence",
+                  hx_get="/search-history",
+                  hx_target="#search-history-results-body",
+                  hx_swap="outerHTML",
+                  hx_push_url="true",
+                  hx_include="#search-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+            </div>
+
+            <div class="series-toolbar-actions">
+              {% include "partials/search_history_clear_slot.html" %}
+            </div>
+          </div>
+        </div>
+      </form>
+
+      {% include "partials/search_history_results_body.html" %}
+    </div>
+  </div>
+</section>

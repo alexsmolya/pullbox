@@ -1,0 +1,12 @@
+<div
+  data-testid="health-status-region"
+  id="health-status-region"
+  x-data="healthPage({ csrfToken: '{{ csrf_token }}' })"
+  hx-get="/health/status"
+  hx-trigger="every 30s [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <div class="dashboard-mission-page">
+    {% include "partials/health_status.html" %}
+  </div>
+</div>

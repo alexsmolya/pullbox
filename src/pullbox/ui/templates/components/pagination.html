@@ -1,0 +1,111 @@
+{#- Pagination component — renders prev/next and page number controls with HTMX support.
+
+    Parameters:
+      hx_select — CSS selector to extract from response. Defaults to hx_target
+                   (for full-page responses). Pass "" to skip hx-select entirely
+                   (for routes that return partials directly).
+-#}
+{% macro pagination(page, total_pages, base_url, hx_target="#content", hx_swap="outerHTML transition:true", hx_select=none, page_param="page", hx_base_url=none, hx_sync=none, hx_select_oob=none, hx_push_url="true", hx_indicator=none) %}
+{%- set sep = "&" if "?" in base_url else "?" -%}
+{%- set actual_hx_base_url = hx_base_url if hx_base_url is not none else base_url -%}
+{%- set hx_sep = "&" if "?" in actual_hx_base_url else "?" -%}
+{% if total_pages > 1 %}
+{%- set pager = namespace(tokens=[]) -%}
+{%- if total_pages <= 5 -%}
+  {%- for p in range(1, total_pages + 1) -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": p}) -%}
+  {%- endfor -%}
+{%- elif page <= 2 or page >= total_pages - 1 -%}
+  {%- set _ = pager.tokens.append({"type": "page", "value": 1}) -%}
+  {%- set _ = pager.tokens.append({"type": "page", "value": 2}) -%}
+  {%- set _ = pager.tokens.append({"type": "gap", "value": "middle"}) -%}
+  {%- set _ = pager.tokens.append({"type": "page", "value": total_pages - 1}) -%}
+  {%- set _ = pager.tokens.append({"type": "page", "value": total_pages}) -%}
+{%- else -%}
+  {%- set midpoint = ((total_pages + 1) // 2) -%}
+  {%- if page <= midpoint -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": page - 1}) -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": page}) -%}
+    {%- set _ = pager.tokens.append({"type": "gap", "value": "middle"}) -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": total_pages - 1}) -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": total_pages}) -%}
+  {%- else -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": 1}) -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": 2}) -%}
+    {%- set _ = pager.tokens.append({"type": "gap", "value": "middle"}) -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": page}) -%}
+    {%- set _ = pager.tokens.append({"type": "page", "value": page + 1}) -%}
+  {%- endif -%}
+{%- endif -%}
+<nav class="flex items-center justify-center gap-1" aria-label="Pagination" hx-boost="false">
+  {#- Previous button -#}
+  {% if page > 1 %}
+  <button type="button"
+     id="pagination-prev"
+     data-testid="series-pagination-prev"
+     data-page-url="{{ base_url }}{{ sep }}{{ page_param }}={{ page - 1 }}"
+     hx-get="{{ actual_hx_base_url }}{{ hx_sep }}{{ page_param }}={{ page - 1 }}"
+     hx-target="{{ hx_target }}"
+     {% if hx_select != '' %}hx-select="{{ hx_select if hx_select else hx_target }}"{% endif %}
+     {% if hx_select_oob %}hx-select-oob="{{ hx_select_oob }}"{% endif %}
+     {% if hx_sync %}hx-sync="{{ hx_sync }}"{% endif %}
+     {% if hx_indicator %}hx-indicator="{{ hx_indicator }}"{% endif %}
+     hx-swap="{{ hx_swap }}"
+     hx-push-url="{{ hx_push_url }}"
+     class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-sec hover:bg-pb-card-hover transition-colors">
+    &laquo; Prev
+  </button>
+  {% else %}
+    <span id="pagination-prev" class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-dim cursor-not-allowed">&laquo; Prev</span>
+  {% endif %}
+
+  {#- Fixed-width page tokens -#}
+  {% for token in pager.tokens %}
+    {% if token.type == "page" %}
+      {% if token.value == page %}
+    <span id="pagination-page-{{ token.value }}" class="px-3 py-2 rounded-md text-sm font-medium bg-pb-interactive text-white">{{ token.value }}</span>
+      {% else %}
+    <button type="button"
+       id="pagination-page-{{ token.value }}"
+       data-testid="series-pagination-page-{{ token.value }}"
+       data-page-url="{{ base_url }}{{ sep }}{{ page_param }}={{ token.value }}"
+       hx-get="{{ actual_hx_base_url }}{{ hx_sep }}{{ page_param }}={{ token.value }}"
+       hx-target="{{ hx_target }}"
+       {% if hx_select != '' %}hx-select="{{ hx_select if hx_select else hx_target }}"{% endif %}
+       {% if hx_select_oob %}hx-select-oob="{{ hx_select_oob }}"{% endif %}
+       {% if hx_sync %}hx-sync="{{ hx_sync }}"{% endif %}
+       {% if hx_indicator %}hx-indicator="{{ hx_indicator }}"{% endif %}
+       hx-swap="{{ hx_swap }}"
+       hx-push-url="{{ hx_push_url }}"
+       class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-sec hover:bg-pb-card-hover transition-colors">
+      {{ token.value }}
+    </button>
+      {% endif %}
+    {% else %}
+    <span id="pagination-gap-{{ token.value }}" class="px-3 py-2 text-sm text-pb-text-dim">&hellip;</span>
+    {% endif %}
+  {% endfor %}
+
+  {#- Next button -#}
+  {% if page < total_pages %}
+  <button type="button"
+     id="pagination-next"
+     data-testid="series-pagination-next"
+     data-page-url="{{ base_url }}{{ sep }}{{ page_param }}={{ page + 1 }}"
+     hx-get="{{ actual_hx_base_url }}{{ hx_sep }}{{ page_param }}={{ page + 1 }}"
+     hx-target="{{ hx_target }}"
+     {% if hx_select != '' %}hx-select="{{ hx_select if hx_select else hx_target }}"{% endif %}
+     {% if hx_select_oob %}hx-select-oob="{{ hx_select_oob }}"{% endif %}
+     {% if hx_sync %}hx-sync="{{ hx_sync }}"{% endif %}
+     {% if hx_indicator %}hx-indicator="{{ hx_indicator }}"{% endif %}
+     hx-swap="{{ hx_swap }}"
+     hx-push-url="{{ hx_push_url }}"
+     class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-sec hover:bg-pb-card-hover transition-colors">
+    Next &raquo;
+  </button>
+  {% else %}
+  <span id="pagination-next" class="px-3 py-2 rounded-md text-sm font-medium text-pb-text-dim cursor-not-allowed">Next &raquo;</span>
+  {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}

@@ -1,0 +1,67 @@
+{% set _queue_gauge_total = (active_count + recent_imported_count + failed_count) if (active_count + recent_imported_count + failed_count) > 0 else 1 %}
+{% set _queue_active_offset = (113.1 * (1 - (active_count / _queue_gauge_total)))|round(1) %}
+{% set _queue_imported_offset = (113.1 * (1 - (recent_imported_count / _queue_gauge_total)))|round(1) %}
+{% set _queue_failed_offset = (113.1 * (1 - (failed_count / _queue_gauge_total)))|round(1) %}
+
+<div class="downloads-header-copy">
+  <h1 class="downloads-title">POST <span>PROCESSING</span></h1>
+  <p class="downloads-subtitle">
+    {{ active_count }} active · {{ recent_imported_count }} imported · {{ failed_count }} failed
+  </p>
+</div>
+
+<div data-testid="pp-gauges" class="downloads-gauges">
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-warning"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _queue_active_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-warning">{{ active_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Active</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-success"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _queue_imported_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-success">{{ recent_imported_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Imported</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-error"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _queue_failed_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-error">{{ failed_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Failed</div>
+  </div>
+</div>

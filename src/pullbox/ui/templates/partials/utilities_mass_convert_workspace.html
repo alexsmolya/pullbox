@@ -1,0 +1,240 @@
+{% from "components/settings_shell.html" import inline_alert, section_card %}
+
+<div data-testid="utilities-mass-convert-workspace" class="space-y-6">
+  <section>
+    {% call section_card(
+      class_name="utility-workspace-shell",
+      body_class="utility-workspace-body utility-tool-body"
+    ) %}
+      <div x-show="validationError" x-cloak data-testid="utilities-mass-convert-error">
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <p x-text="validationError"></p>
+        {% endcall %}
+      </div>
+
+      <p class="utility-tool-section-label">Pipeline Steps</p>
+      <div class="utility-step-grid">
+        <div class="utility-step-card utility-step-card-inline utility-step-card-static utility-step-card-locked">
+          <span class="utility-step-num">01</span>
+          <span class="utility-step-name">Convert to CBZ</span>
+          <span class="utility-step-tag">Required</span>
+          <input type="checkbox" checked disabled class="checkbox-pb utility-step-check opacity-60" />
+        </div>
+
+        <label
+          :class="steps.metadata ? 'utility-step-card-active' : ''"
+          class="utility-step-card utility-step-card-inline cursor-pointer transition-colors hover:border-pb-border-strong"
+        >
+          <span class="utility-step-num">02</span>
+          <span class="utility-step-name">Embed ComicInfo.xml</span>
+          <span class="utility-step-tag">Optional</span>
+          <input x-model="steps.metadata" type="checkbox" class="checkbox-pb utility-step-check" />
+        </label>
+
+        <label
+          :class="steps.verify ? 'utility-step-card-active' : ''"
+          class="utility-step-card utility-step-card-inline cursor-pointer transition-colors hover:border-pb-border-strong"
+        >
+          <span class="utility-step-num">03</span>
+          <span class="utility-step-name">Verify integrity</span>
+          <span class="utility-step-tag">Optional</span>
+          <input x-model="steps.verify" type="checkbox" class="checkbox-pb utility-step-check" />
+        </label>
+      </div>
+    {% endcall %}
+  </section>
+
+  <section>
+    {% call section_card(
+      class_name="utility-workspace-shell",
+      body_class="utility-workspace-body utility-tool-body"
+    ) %}
+      <p class="utility-tool-section-label">Scope</p>
+      <div class="utility-scope-chip-row">
+        <button
+          type="button"
+          @click="setScope('library')"
+          data-testid="utilities-mass-convert-scope-library"
+          :class="scope === 'library' ? 'utility-scope-chip-active' : ''"
+          :aria-pressed="scope === 'library' ? 'true' : 'false'"
+          class="utility-scope-chip"
+        >
+          Entire library
+        </button>
+        <button
+          type="button"
+          @click="setScope('folder')"
+          data-testid="utilities-mass-convert-scope-folder"
+          :class="scope === 'folder' ? 'utility-scope-chip-active' : ''"
+          :aria-pressed="scope === 'folder' ? 'true' : 'false'"
+          class="utility-scope-chip"
+        >
+          Select folders
+        </button>
+        <button
+          type="button"
+          @click="setScope('files')"
+          data-testid="utilities-mass-convert-scope-files"
+          :class="scope === 'files' ? 'utility-scope-chip-active' : ''"
+          :aria-pressed="scope === 'files' ? 'true' : 'false'"
+          class="utility-scope-chip"
+        >
+          Select files
+        </button>
+      </div>
+
+      <div x-show="scope === 'folder'" x-cloak class="space-y-3">
+        <button
+          type="button"
+          @click="openFolderPicker()"
+          data-testid="utilities-mass-convert-browse-folder"
+          class="btn-ghost utility-tool-browse-button self-start"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+          </svg>
+          Browse folders
+        </button>
+
+        <div x-show="selectedFolders.length > 0" x-cloak class="utility-path-pill">
+          <svg class="h-4 w-4 shrink-0 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+          </svg>
+          <span class="text-[0.72rem] font-medium text-pb-text-sec">
+            <span x-text="selectedFolders.length"></span> folder<span x-show="selectedFolders.length !== 1">s</span> ready for preview
+          </span>
+        </div>
+      </div>
+
+      <div x-show="scope === 'files'" x-cloak class="space-y-3">
+        <button
+          type="button"
+          @click="openFilePicker()"
+          data-testid="utilities-mass-convert-browse-files"
+          class="btn-ghost utility-tool-browse-button self-start"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+          </svg>
+          Browse files
+        </button>
+
+        <div x-show="selectedFiles.length > 0" x-cloak class="utility-path-pill">
+          <svg class="h-4 w-4 shrink-0 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+          </svg>
+          <span class="text-[0.72rem] font-medium text-pb-text-sec">
+            <span x-text="selectedFiles.length"></span> file<span x-show="selectedFiles.length !== 1">s</span> ready for preview
+          </span>
+        </div>
+      </div>
+
+      <div class="utility-tool-section-row">
+        <p class="utility-tool-section-label !mb-0">Conversion Preview</p>
+        <div class="flex items-center gap-2">
+          <span class="pill pill-info">
+            <span x-text="previewFileCount()"></span> files
+          </span>
+          <span
+            x-show="previewLoading"
+            x-cloak
+            class="utility-template-meta-token"
+          >
+            Updating…
+          </span>
+        </div>
+      </div>
+
+      <div data-testid="utilities-mass-convert-preview-table" class="utility-tool-table-wrap">
+        <template x-if="previewLoaded && previewRows().length > 0">
+          <div class="overflow-x-auto">
+            <table class="utility-tool-table min-w-[640px]">
+              <thead>
+                <tr>
+                  <th>Source File</th>
+                  <th>Format</th>
+                  <th>Output</th>
+                  <th class="r">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="file in previewRows()" :key="file.path">
+                  <tr>
+                    <td class="max-w-[240px]">
+                      <div class="truncate utility-tool-table-mono" x-text="file.name"></div>
+                    </td>
+                    <td class="utility-tool-table-mono" x-text="file.format"></td>
+                    <td class="max-w-[260px]">
+                      <div class="truncate utility-tool-table-mono utility-tool-table-output" x-text="file.output"></div>
+                    </td>
+                    <td class="r utility-tool-table-mono" x-text="file.size"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <div x-show="!previewLoaded && !previewLoading" class="table-empty">
+          <p class="table-empty-copy" x-text="previewEmptyMessage()"></p>
+        </div>
+
+        <div x-show="previewLoading && !previewLoaded" x-cloak class="table-empty">
+          <p class="table-empty-copy">Building the latest conversion preview…</p>
+        </div>
+
+        <div x-show="previewLoaded && previewRows().length === 0" x-cloak class="table-empty">
+          <p class="table-empty-copy">No preview rows were generated for the current selection.</p>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="utility-tool-field-label">Trash Folder</label>
+          <p class="mt-1 text-[0.78rem] text-pb-text-sec">
+            Successful originals move here after the pipeline completes. Leave empty to use
+            <span class="utility-tool-table-mono">{library}/.trash</span>.
+          </p>
+        </div>
+        <div class="flex flex-col gap-3 sm:flex-row">
+          <input
+            x-model="trashFolder"
+            data-testid="utilities-mass-convert-trash-folder"
+            type="text"
+            class="input-pb flex-1"
+            :placeholder="defaultTrashFolder || '/path/to/.trash'"
+          />
+          <button
+            type="button"
+            @click="browseTrashFolder()"
+            data-testid="utilities-mass-convert-browse-trash-folder"
+            data-tip="Browse for folder"
+            data-tip-pos="left"
+            class="btn-ghost btn-sm !min-h-10 !w-10 !px-0 !py-0 sm:shrink-0"
+            aria-label="Browse for trash folder"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="utility-tool-action-footer utility-tool-action-footer-card">
+        <div class="settings-footer-actions">
+          <a href="/utilities" class="btn-ghost">Cancel</a>
+          <button
+            type="button"
+            @click="startPipeline()"
+            data-testid="utilities-mass-convert-start"
+            :disabled="!canStart() || submitting"
+            class="btn-primary"
+          >
+            <span x-show="!submitting">Start conversion</span>
+            <span x-show="submitting">Submitting...</span>
+          </button>
+        </div>
+      </div>
+    {% endcall %}
+  </section>
+</div>

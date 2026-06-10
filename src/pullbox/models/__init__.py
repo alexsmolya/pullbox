@@ -1,0 +1,119 @@
+"""
+Pullbox ORM models — imports all models so Alembic autogenerate discovers them.
+
+Import Base from here for migration target_metadata.
+"""
+
+from pullbox.models.audit_log import AuditEventType, AuditLog
+from pullbox.models.base import Base, IdentityMixin, TimestampMixin
+from pullbox.models.blocklist import BlocklistEntry, BlocklistReason
+from pullbox.models.client import DownloadClientConfig
+from pullbox.models.config import SystemConfig
+from pullbox.models.creator import Creator, IssueCreator
+from pullbox.models.dashboard import DashboardMetricRollup, DashboardStorageSnapshot
+from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
+from pullbox.models.health import (
+    HealthCheckResult,
+    HealthCurrentStatus,
+    HealthIncident,
+    HealthStatus,
+)
+from pullbox.models.import_job import (
+    ImportedFile,
+    ImportedFileStatus,
+    ImportedSeries,
+    ImportJob,
+    ImportJobLog,
+    ImportJobStatus,
+    ImportSeriesStatus,
+    ImportSourceType,
+)
+from pullbox.models.indexer import IndexerConfig, IndexerSource, IndexerType
+from pullbox.models.issue import Issue, IssueStatus, IssueType
+from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
+from pullbox.models.matching_suggestion import MatchingSuggestion, SuggestionStatus
+from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
+from pullbox.models.provider_cache import MetadataProviderCacheEntry
+from pullbox.models.publisher import Publisher
+from pullbox.models.scheduler_task_stat import ScheduledTaskStat
+from pullbox.models.search_log import SearchLog, SearchType
+from pullbox.models.series import IssueCatalogState, Series, SeriesStatus, SeriesType
+from pullbox.models.story_arc import IssueStoryArc, StoryArc
+from pullbox.models.user import APIKey, User
+from pullbox.models.whats_new import WhatsNewCacheKind, WhatsNewReleaseCache
+from pullbox.utilities.models import (
+    ItemState,
+    JobState,
+    JobType,
+    LogLevel,
+    UtilityJob,
+    UtilityJobItem,
+    UtilityJobLog,
+)
+
+__all__ = [
+    "APIKey",
+    "AuditEventType",
+    "AuditLog",
+    "Base",
+    "BlocklistEntry",
+    "BlocklistReason",
+    "Creator",
+    "DashboardMetricRollup",
+    "DashboardStorageSnapshot",
+    "DownloadClientConfig",
+    "DownloadClientType",
+    "DownloadHistory",
+    "DownloadState",
+    "FileFormat",
+    "HealthCheckResult",
+    "HealthCurrentStatus",
+    "HealthIncident",
+    "HealthStatus",
+    "IdentityMixin",
+    "ImportJob",
+    "ImportJobLog",
+    "ImportJobStatus",
+    "ImportSeriesStatus",
+    "ImportSourceType",
+    "ImportedFile",
+    "ImportedFileStatus",
+    "ImportedSeries",
+    "IndexerConfig",
+    "IndexerSource",
+    "IndexerType",
+    "Issue",
+    "IssueCatalogState",
+    "IssueCreator",
+    "IssueStatus",
+    "IssueStoryArc",
+    "IssueType",
+    "ItemState",
+    "JobState",
+    "JobType",
+    "LibraryFile",
+    "LibraryRoot",
+    "LogLevel",
+    "MatchConfidence",
+    "MatchingSuggestion",
+    "MetadataProviderCacheEntry",
+    "PendingMatch",
+    "PendingMatchStatus",
+    "Publisher",
+    "ScheduledTaskStat",
+    "SearchLog",
+    "SearchType",
+    "Series",
+    "SeriesStatus",
+    "SeriesType",
+    "StoryArc",
+    "SuggestionStatus",
+    "SystemConfig",
+    "TimestampMixin",
+    "User",
+    "UtilityJob",
+    "UtilityJobItem",
+    "UtilityJobLog",
+    "WhatsNewCacheKind",
+    "WhatsNewReleaseCache",
+]

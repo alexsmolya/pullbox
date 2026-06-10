@@ -1,0 +1,124 @@
+{#- Compact series card — lighter than the old multi-view card layout.
+    Expects: s, owned_count -#}
+{% from "components/status_badge.html" import status_badge %}
+{% set total_issues = s.issues|length %}
+{% set cover_src = series_cover_url(s) %}
+<article
+  id="series-compact-card-{{ s.id }}"
+  data-testid="series-compact-card"
+  data-series-id="{{ s.id }}"
+  x-bind:class="isSelected({{ s.id }}) ? 'library-series-card-active' : ''"
+  class="library-series-card p-4"
+>
+  <div class="flex items-start gap-3">
+    <div data-series-selection-control="compact" class="shrink-0 pt-1">
+      <input
+        type="checkbox"
+        value="{{ s.id }}"
+        data-testid="series-row-checkbox"
+        data-series-row-checkbox
+        class="h-4 w-4 rounded border-pb-border-hover bg-pb-card-hover text-pb-interactive focus:ring-pb-interactive"
+        x-bind:checked="isSelected({{ s.id }})"
+        x-on:change="toggleSelection({{ s.id }}, $event.target.checked)"
+        aria-label="Select {{ s.title }}"
+      >
+    </div>
+
+    <a
+      href="/series/{{ s.id }}"
+      hx-boost="false"
+      data-testid="series-compact-cover-link"
+      aria-label="Open {{ s.title }}"
+      class="w-12 shrink-0 sm:w-14"
+    >
+      <div class="library-series-cover-frame library-series-cover-frame-compact aspect-[2/3] overflow-hidden">
+        {% if cover_src %}
+        <img src="{{ cover_src }}" alt="{{ s.title }} cover" class="h-full w-full object-contain p-2" loading="lazy">
+        {% elif s.cover_url %}
+        <img src="{{ s.cover_url }}" alt="{{ s.title }} cover" class="h-full w-full object-contain p-2" loading="lazy">
+        {% else %}
+        <div class="library-series-placeholder">
+          <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+          </svg>
+        </div>
+        {% endif %}
+      </div>
+    </a>
+
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+          <div class="flex items-start gap-2">
+            <a
+              id="series-item-link-{{ s.id }}"
+              href="/series/{{ s.id }}"
+              hx-boost="false"
+              data-testid="series-item-link"
+              class="min-w-0 flex-1 break-words text-sm font-semibold text-pb-text transition-colors hover:text-pb-interactive"
+            >{{ s.title }}</a>
+            {% if s.monitored %}
+              <svg
+                data-testid="series-monitored-indicator"
+                class="mt-0.5 h-3.5 w-3.5 shrink-0 text-pb-interactive"
+                fill="currentColor"
+                viewBox="0 0 20 20"
+                aria-label="Monitored"
+                role="img"
+              >
+                <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z"/>
+              </svg>
+            {% endif %}
+          </div>
+
+          <div class="library-series-meta mt-2 flex flex-wrap items-center gap-2">
+            {% if s.publisher %}
+              <span class="truncate">{{ s.publisher.name }}</span>
+            {% endif %}
+            {% if s.year_start %}
+              <span class="text-pb-text-dim">&middot;</span>
+              <span>{{ format_series_year_label(s.year_start, s.year_end, s.status) }}</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          data-testid="series-row-delete"
+          x-on:click='openRowDeleteConfirm({{ s.id }}, {{ s.title|tojson }})'
+          x-bind:disabled="bulkBusy"
+          class="btn-ghost btn-sm self-start text-pb-error disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Delete {{ s.title }}"
+        >
+          Delete
+        </button>
+      </div>
+
+      <div class="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-pb-text-sec">
+        {{ status_badge(s.status) }}
+        {% if s.series_type.value != 'standard' %}
+          <span class="pill pill-purple">
+            {{ s.series_type.ui_display_name }}
+          </span>
+        {% endif %}
+      </div>
+
+      <div class="mt-3 flex flex-col gap-2 rounded-xl border border-pb-border bg-pb-card-hover/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <p class="text-xs text-pb-text-sec">
+          <span class="font-medium text-pb-success">{{ owned_count }}</span>
+          <span class="text-pb-text-sec">/</span>
+          <span>{{ total_issues }}</span>
+          <span class="ml-1">owned</span>
+        </p>
+        {% if total_issues > 0 %}
+        <div class="flex items-center gap-2 sm:w-48">
+          <div class="library-series-progress-track h-1.5 flex-1 overflow-hidden rounded-full">
+            <div class="h-full rounded-full bg-pb-success" style="width: {{ (owned_count / total_issues * 100)|round|int }}%"></div>
+          </div>
+          <span class="text-xs text-pb-text-sec tabular-nums">{{ ((owned_count / total_issues) * 100)|round|int }}%</span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</article>

@@ -1,0 +1,58 @@
+{#- Form field component — renders labeled input with validation error display. -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+
+{% macro form_field(name, label, type="text", value="", error="", placeholder="", help="", required=false, options=none) %}
+<div class="space-y-1.5">
+  <label for="{{ name }}" class="block text-sm font-medium text-pb-text-sec">
+    {{ label }}
+    {% if required %}<span class="text-pb-error">*</span>{% endif %}
+  </label>
+
+  {% if type == "select" %}
+  {%- set select_options = namespace(value=[]) -%}
+  {%- if placeholder -%}
+    {%- set select_options.value = select_options.value + [{"value": "", "label": placeholder, "disabled": true}] -%}
+  {%- endif -%}
+  {%- if options -%}
+    {%- for opt_value, opt_label in options -%}
+      {%- set select_options.value = select_options.value + [{"value": opt_value, "label": opt_label}] -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {{ dropdown_select(
+      name=name,
+      value=value,
+      options=select_options.value,
+      trigger_id=name,
+      class_name="w-full",
+      invalid=error|length > 0,
+      describedby=(name ~ "-error") if error else "",
+      extra_input_attrs="required" if required else ""
+  ) }}
+
+  {% elif type == "textarea" %}
+  <textarea id="{{ name }}" name="{{ name }}" placeholder="{{ placeholder }}"
+            {% if required %}required{% endif %}
+            {% if error %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}
+            class="w-full rounded-lg bg-pb-card-hover border border-pb-border-hover text-pb-text px-3 py-2 text-sm
+                   focus:outline-hidden focus:ring-2 focus:ring-pb-interactive focus:border-transparent
+                   {% if error %}border-pb-error{% endif %}"
+            rows="3">{{ value }}</textarea>
+
+  {% else %}
+  <input type="{{ type }}" id="{{ name }}" name="{{ name }}" value="{{ value }}"
+         placeholder="{{ placeholder }}" {% if required %}required{% endif %}
+         {% if error %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}
+         class="w-full rounded-lg bg-pb-card-hover border border-pb-border-hover text-pb-text px-3 py-2 text-sm
+                focus:outline-hidden focus:ring-2 focus:ring-pb-interactive focus:border-transparent
+                {% if error %}border-pb-error{% endif %}">
+  {% endif %}
+
+  {% if error %}
+  <p id="{{ name }}-error" class="text-sm text-pb-error" role="alert">{{ error }}</p>
+  {% endif %}
+
+  {% if help %}
+  <p class="text-sm text-pb-text-dim">{{ help }}</p>
+  {% endif %}
+</div>
+{% endmacro %}

@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/search_field.html" import search_field %}
+
+{% block title %}Pull List — {{ instance_name() }}{% endblock %}
+{% block page_title %}Pull List{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+{% set pull_filter_options = [
+  ("", "All Monitored"),
+  ("wanted", "Has Wanted Issues"),
+  ("complete", "Fully Downloaded"),
+] %}
+
+<div data-testid="pull-list-page">
+  <section class="series-registry-header" data-testid="pull-list-header">
+    <div class="series-registry-header-left">
+      <div class="series-registry-title-block">
+        <h1 class="series-registry-title" data-testid="pull-list-title">PULL <span>LIST</span></h1>
+        <p class="series-registry-subtitle" data-testid="pull-list-subtitle">
+          {{ pull_metrics.monitored_series }} monitored · {{ pull_metrics.wanted_series }} with wanted issues · {{ pull_metrics.total_wanted }} total wanted
+        </p>
+      </div>
+
+      <div class="series-registry-gauges" data-testid="pull-list-gauges">
+        {% set pull_gauges = [
+          {
+            "key": "series",
+            "label": "Series",
+            "value": pull_metrics.monitored_series,
+            "tone": "info",
+            "stroke_offset": 0
+          },
+          {
+            "key": "wanted",
+            "label": "Wanted",
+            "value": pull_metrics.total_wanted,
+            "tone": "warning",
+            "stroke_offset": 138.2 * (1 - pull_metrics.wanted_ratio)
+          },
+          {
+            "key": "downloading",
+            "label": "Active DL",
+            "value": pull_metrics.downloading_series,
+            "tone": "info",
+            "stroke_offset": 138.2 * (1 - pull_metrics.downloading_ratio)
+          },
+          {
+            "key": "paused",
+            "label": "Paused",
+            "value": pull_metrics.paused_series,
+            "tone": "default",
+            "stroke_offset": 138.2 * (1 - pull_metrics.paused_ratio)
+          },
+        ] %}
+        {% for gauge in pull_gauges %}
+          <div class="series-registry-gauge" data-testid="pull-list-gauge-{{ gauge.key }}">
+            <div class="series-registry-gauge-ring">
+              <svg viewBox="0 0 56 56" aria-hidden="true">
+                <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+                <circle
+                  class="series-registry-gauge-fill {% if gauge.tone == 'info' %}series-registry-gauge-fill-info{% elif gauge.tone == 'warning' %}series-registry-gauge-fill-warning{% else %}series-registry-gauge-fill-default{% endif %}"
+                  cx="28"
+                  cy="28"
+                  r="22"
+                  stroke-dasharray="138.2"
+                  stroke-dashoffset="{{ gauge.stroke_offset }}"
+                ></circle>
+              </svg>
+              <span class="series-registry-gauge-value {% if gauge.tone == 'info' %}text-pb-interactive{% elif gauge.tone == 'warning' %}text-pb-warning{% else %}text-pb-text{% endif %}">
+                {{ gauge.value }}
+              </span>
+            </div>
+            <div class="series-registry-gauge-label">{{ gauge.label }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <div class="downloads-panel-stack">
+    <section class="downloads-table-wrap" data-testid="pull-list-table-shell">
+      <form
+        id="pull-list-filter-form"
+        data-testid="pull-list-filter-form"
+        class="series-toolbar-frame downloads-history-toolbar"
+        autocomplete="off"
+        action="/pull-list"
+        method="get"
+        hx-get="/pull-list"
+        hx-target="#pull-list-results-body"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        hx-trigger="submit"
+      >
+        <input type="hidden" name="page" value="1">
+        <input id="pull-list-sort-input" type="hidden" name="sort" value="{{ sort }}">
+        <div class="series-toolbar-body">
+          <div class="series-toolbar-browse">
+            <div class="series-toolbar-primary" data-testid="pull-list-filters">
+              {{ search_field(
+                name="search",
+                value=search_query,
+                placeholder="Search series...",
+                root_testid="pull-list-search-field",
+                input_testid="pull-list-search-input",
+                clear_testid="pull-list-search-clear",
+                panel_testid="pull-list-search-history-panel",
+                mode="remote",
+                history_key="pullbox.searchHistory.pullList",
+                debounce_ms=250,
+                size="sm",
+                class_name="series-registry-search pull-list-search-field"
+              ) }}
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Filter</span>
+                {{ dropdown_select(
+                  name="filter",
+                  value=filter_value or "",
+                  size="sm",
+                  options=pull_filter_options,
+                  root_testid="pull-list-filter-select",
+                  hx_get="/pull-list",
+                  hx_target="#pull-list-results-body",
+                  hx_swap="outerHTML",
+                  hx_push_url="true",
+                  hx_include="#pull-list-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+            </div>
+
+            <div class="series-toolbar-actions">
+              <a href="/series/add" class="btn-primary btn-sm whitespace-nowrap" data-testid="pull-list-add-series">
+                <svg class="shrink-0" style="width:var(--pb-control-icon-size);height:var(--pb-control-icon-size);" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+                </svg>
+                <span>Add Series</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      </form>
+
+      {% include "partials/pull_list_results_body.html" %}
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/pull_list_footer_dock.html" %}
+{% endblock %}

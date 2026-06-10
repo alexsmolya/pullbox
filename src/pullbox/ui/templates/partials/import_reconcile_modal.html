@@ -1,0 +1,248 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+
+<div
+  class="modal-shell"
+  x-data="importReconcileModal({
+    jobId: {{ imported_series.import_job_id }},
+    importedSeriesId: {{ imported_series.id }},
+    csrfToken: {{ csrf_token|tojson|forceescape }},
+  })"
+  x-show="open"
+  data-testid="import-reconcile-modal"
+  @keydown.escape.window="open = false; closeModal()"
+>
+  <div
+    class="modal-backdrop"
+    @click="open = false; closeModal()"
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0"
+    x-transition:enter-end="opacity-100"
+  ></div>
+
+  <div
+    class="modal-panel max-w-5xl"
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+    x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+    @click.outside="if (!$event.target.closest('[data-dropdown-select-panel]')) { open = false; closeModal() }"
+  >
+    <div class="modal-header">
+      <div class="space-y-1">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-brand">Reconcile for Import</p>
+        <h3 class="text-base font-semibold text-pb-text">{{ imported_series.cv_title or imported_series.raw_series_name }}</h3>
+        <p class="text-xs leading-5 text-pb-text-dim">
+          Assign each unresolved file to an issue in the selected ComicVine series, or skip it for this import. No files are moved until Step 4 starts.
+        </p>
+      </div>
+      <button
+        @click="open = false; closeModal()"
+        onclick="closeImportCvSearchModal()"
+        class="icon-btn icon-btn-sm"
+        aria-label="Close reconciliation dialog"
+        type="button"
+      >
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body">
+      <div class="space-y-4 px-5 py-5">
+        <div class="grid gap-3 md:grid-cols-4">
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Series</p>
+            <p class="mt-1 text-sm font-semibold text-pb-text">{{ imported_series.cv_title or imported_series.raw_series_name }}</p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Publisher</p>
+            <p class="mt-1 text-sm font-semibold text-pb-text">{{ imported_series.cv_publisher or imported_series.raw_publisher or '—' }}</p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Needs decision</p>
+            <p class="mt-1 text-sm font-semibold text-pb-text">{{ files_remaining }}</p>
+          </div>
+          <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-3">
+            <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Already resolved</p>
+            <p class="mt-1 text-sm font-semibold text-pb-text">{{ files_completed }}</p>
+          </div>
+        </div>
+
+        <div
+          class="table-shell overflow-hidden"
+          x-bind:class="saving ? 'pointer-events-none opacity-70' : ''"
+        >
+          <div class="table-toolbar">
+            <div class="table-toolbar-title-block">
+              <h4 class="table-toolbar-title">Issue decisions</h4>
+              <p class="table-toolbar-copy">Use the already-selected ComicVine series; change the series match only if these issue choices are wrong.</p>
+            </div>
+          </div>
+          <div class="max-h-[28rem] overflow-auto">
+            <table class="downloads-table">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th class="w-[118px] is-right">Issue</th>
+                  <th class="w-[240px]">Decision</th>
+                  <th class="w-[128px]">Status</th>
+                  <th class="w-[84px] is-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for file in files %}
+                  {% set selected_issue_cv_id = file.matched_issue_cv_id or file.suggested_issue_cv_id %}
+                  {% set provisional_issue_number = file.provisional_issue_number if file.provisional_issue_number is defined else none %}
+                  {% set can_create_provisional_issue = file.can_create_provisional_issue if file.can_create_provisional_issue is defined else false %}
+                  {% set dropdown_state = namespace(options=[["", "Choose an issue…"]]) %}
+                  {% for option in issue_options %}
+                    {% set option_label = "#" ~ (option.issue_number|issue_num) ~ (" — " ~ option.title if option.title else "") %}
+                    {% set dropdown_state.options = dropdown_state.options + [[option.issue_cv_id|string, option_label]] %}
+                  {% endfor %}
+                  <tr
+                    data-reconcile-file-row
+                    data-imported-file-id="{{ file.imported_file_id }}"
+                    data-status="{{ file.status.value }}"
+                    data-decision-locked="{{ 'true' if file.decision_locked else 'false' }}"
+                    data-can-create-provisional="{{ 'true' if can_create_provisional_issue else 'false' }}"
+                    data-provisional-issue-number="{{ provisional_issue_number|issue_num if provisional_issue_number is not none else '' }}"
+                    data-testid="import-reconcile-file-{{ file.imported_file_id }}"
+                  >
+                    <td>
+                      <div class="min-w-0">
+                        <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                          <span class="block truncate" data-tooltip-measure>{{ file.file_name }}</span>
+                        </span>
+                        <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-pb-text-dim">
+                          {% if file.parsed_issue_number is not none %}
+                            <span class="pill pill-neutral">Parsed #{{ file.parsed_issue_number|issue_num }}</span>
+                          {% endif %}
+                          {% if file.archive_entry_issue_number is defined and file.archive_entry_issue_number is not none %}
+                            <span class="pill pill-warning">Archive pages suggest #{{ file.archive_entry_issue_number|issue_num }}</span>
+                          {% endif %}
+                          {% if file.comicvine_issue_id %}
+                            <span class="pill pill-info">ComicInfo CV {{ file.comicvine_issue_id }}</span>
+                          {% endif %}
+                          {% if file.suggested_issue_label and not file.decision_locked %}
+                            <span class="pill pill-success">Suggested {{ file.suggested_issue_label }}</span>
+                          {% endif %}
+                        </div>
+                      </div>
+                    </td>
+                    <td class="downloads-mono-cell is-right">
+                      {% if selected_issue_cv_id and file.suggested_issue_label %}
+                        {{ file.suggested_issue_label }}
+                      {% elif file.parsed_issue_number is not none %}
+                        #{{ file.parsed_issue_number|issue_num }}
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if file.decision_locked %}
+                        <span class="downloads-muted-text">
+                          {% if file.status.value == 'matched' %}
+                            Already matched
+                          {% elif file.status.value == 'skipped' %}
+                            Skipped
+                          {% else %}
+                            No decision needed
+                          {% endif %}
+                        </span>
+                      {% else %}
+                        {{ dropdown_select(
+                          name="import-reconcile-issue-select-" ~ file.imported_file_id,
+                          value=selected_issue_cv_id|string if selected_issue_cv_id else "",
+                          options=dropdown_state.options,
+                          trigger_id="import-reconcile-issue-trigger-" ~ file.imported_file_id,
+                          root_testid="import-reconcile-issue-select-" ~ file.imported_file_id,
+                          input_testid="import-reconcile-issue-input-" ~ file.imported_file_id,
+                          trigger_testid="import-reconcile-issue-trigger-" ~ file.imported_file_id,
+                          class_name="w-full import-reconcile-issue-dropdown",
+                          panel_class_name="dropdown-select-panel-wrap",
+                          wrap_options=true,
+                          on_change="clearSkip(" ~ file.imported_file_id ~ ");",
+                          extra_input_attrs='id="import-reconcile-issue-' ~ file.imported_file_id ~ '" data-reconcile-issue-select'
+                        ) }}
+                        {% if can_create_provisional_issue and file.provisional_issue_label %}
+                          <button
+                            type="button"
+                            class="btn-warning btn-sm mt-2 w-full justify-center"
+                            data-reconcile-provisional-button
+                            data-testid="import-reconcile-provisional-{{ file.imported_file_id }}"
+                            x-bind:aria-pressed="isFileProvisional({{ file.imported_file_id }}) ? 'true' : 'false'"
+                            @click="toggleProvisional({{ file.imported_file_id }})"
+                          >
+                            <span x-text="isFileProvisional({{ file.imported_file_id }}) ? 'Using provisional {{ file.provisional_issue_label }}' : 'Create provisional {{ file.provisional_issue_label }}'">Create provisional {{ file.provisional_issue_label }}</span>
+                          </button>
+                        {% endif %}
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if file.decision_locked %}
+                        <span class="pill pill-success">Resolved</span>
+                      {% else %}
+                        <span
+                          class="pill justify-center text-center"
+                          x-bind:class="isFileSkipped({{ file.imported_file_id }}) ? 'pill-neutral' : (isFileProvisional({{ file.imported_file_id }}) ? 'pill-warning' : 'pill-info')"
+                          x-text="isFileSkipped({{ file.imported_file_id }}) ? 'Will skip' : (isFileProvisional({{ file.imported_file_id }}) ? 'Will create issue' : 'Needs decision')"
+                        >Needs decision</span>
+                      {% endif %}
+                    </td>
+                    <td class="is-right">
+                      {% if file.decision_locked %}
+                        <span class="downloads-muted-text">—</span>
+                      {% else %}
+                        <div class="flex justify-end">
+                          <button
+                            type="button"
+                            class="downloads-action-btn"
+                            x-bind:class="isFileSkipped({{ file.imported_file_id }}) ? 'is-danger' : 'is-warn'"
+                            x-bind:data-tip="isFileSkipped({{ file.imported_file_id }}) ? 'Restore issue decision' : 'Skip this file for now'"
+                            x-bind:aria-label="isFileSkipped({{ file.imported_file_id }}) ? 'Restore issue decision for ' + {{ file.file_name|tojson|forceescape }} : 'Skip ' + {{ file.file_name|tojson|forceescape }} + ' for now'"
+                            x-bind:aria-pressed="isFileSkipped({{ file.imported_file_id }}) ? 'true' : 'false'"
+                            data-tip-pos="left"
+                            data-testid="import-reconcile-skip-{{ file.imported_file_id }}"
+                            @click="toggleSkip({{ file.imported_file_id }})"
+                          >
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 6.75l10.5 10.5M17.25 6.75l-10.5 10.5"/>
+                            </svg>
+                          </button>
+                        </div>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button
+        type="button"
+        class="btn-ghost btn-sm"
+        onclick="closeImportCvSearchModal()"
+        @click="open = false; closeModal()"
+      >
+        Close
+      </button>
+      <button
+        type="button"
+        data-testid="import-reconcile-save"
+        class="btn-primary btn-sm ml-auto min-w-[11.5rem] shrink-0 gap-2 whitespace-nowrap"
+        :disabled="saving"
+        @click="save()"
+      >
+        <svg x-cloak x-show="saving" class="h-4 w-4 animate-spin text-pb-text-inverse" fill="none" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+        </svg>
+        <span class="text-pb-text-inverse" x-text="saving ? 'Saving...' : 'Save reconciliation'">Save reconciliation</span>
+      </button>
+    </div>
+  </div>
+</div>

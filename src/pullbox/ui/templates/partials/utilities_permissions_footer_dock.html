@@ -1,0 +1,30 @@
+<div
+  data-testid="utilities-permissions-footer-dock"
+  x-data="{ mode: 'Dry-run', scope: 'Entire library', targets: 'folders + files' }"
+  x-on:utilities:permissions-footer.window="
+    mode = $event.detail.mode;
+    scope = $event.detail.scope;
+    targets = $event.detail.targets;
+  "
+>
+  <div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+    <div class="page-dock-status" data-testid="page-dock-status">
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">tool</span>
+        <strong class="page-dock-status-value">Library Permissions</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">mode</span>
+        <strong class="page-dock-status-value" x-text="mode">Dry-run</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">scope</span>
+        <strong class="page-dock-status-value" x-text="scope">Entire library</strong>
+      </span>
+      <span class="page-dock-status-item">
+        <span class="page-dock-status-label">targets</span>
+        <strong class="page-dock-status-value" x-text="targets">folders + files</strong>
+      </span>
+    </div>
+  </div>
+</div>

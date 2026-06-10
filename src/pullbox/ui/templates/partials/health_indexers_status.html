@@ -1,0 +1,167 @@
+<section
+  class="health-detail-shell pt-6"
+  data-testid="health-indexers-detail-page"
+>
+  <a href="/health" class="health-detail-back" data-testid="health-detail-back-link">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
+    </svg>
+    Back to health
+  </a>
+
+  <div class="health-detail-card" data-testid="health-component-detail-indexers">
+    <div class="health-detail-card__header">
+      <div class="health-detail-card__title-row">
+        <span class="health-led health-led--{{ health_component.led_tone }} health-led--header"></span>
+        <h2 class="health-detail-card__title">INDEXERS DETAIL</h2>
+        <span class="pill {{ health_component.pill_tone }}">{{ health_component.status_label }}</span>
+        <span class="pill pill-neutral">{{ health_component.sublabel }}</span>
+      </div>
+
+      <button
+        @click="refreshNow()"
+        :disabled="refreshing"
+        class="btn-primary gap-2 shrink-0"
+        data-testid="health-detail-refresh-button"
+        type="button"
+      >
+        <svg class="h-4 w-4" :class="refreshing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+        </svg>
+        <span x-text="refreshing ? 'Checking...' : 'Recheck all'"></span>
+      </button>
+    </div>
+
+    <div class="health-detail-card__stats">
+      {% for stat in health_component.detail_stats %}
+        <div class="health-detail-card__stat">
+          <span class="health-detail-card__stat-label">{{ stat.label }}</span>
+          <span class="health-detail-card__stat-value{% if stat.tone != 'default' %} health-detail-card__stat-value--{{ stat.tone }}{% endif %}">
+            {{ stat.value_label }}
+          </span>
+        </div>
+      {% endfor %}
+    </div>
+
+    <p class="health-section__label">Search Proxy</p>
+    <div class="downloads-table-wrap health-history-wrap">
+      <table class="downloads-table health-history-table" data-testid="health-prowlarr-table">
+        <thead>
+          <tr>
+            <th class="is-center">SYS</th>
+            <th>Service</th>
+            <th class="is-right">Response</th>
+            <th>Last Check</th>
+            <th>Status</th>
+            <th class="is-right">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if health_prowlarr_row %}
+            <tr data-testid="health-prowlarr-row">
+              <td class="is-center"><span class="health-led health-led--{{ health_prowlarr_row.led_tone }}"></span></td>
+              <td>
+                <div class="health-table__name">{{ health_prowlarr_row.display_name }}</div>
+                <div class="health-table__detail">{{ health_prowlarr_row.detail_label }}</div>
+              </td>
+              <td class="is-right downloads-mono-cell">{{ health_prowlarr_row.response_label }}</td>
+              <td class="downloads-mono-cell">{{ health_prowlarr_row.last_check_label }}</td>
+              <td><span class="pill {{ health_prowlarr_row.pill_tone }}">{{ health_prowlarr_row.status_label }}</span></td>
+              <td class="is-right">
+                <div class="downloads-action-group justify-end">
+                  <a
+                    href="{{ health_prowlarr_row.href }}"
+                    class="downloads-action-btn"
+                    data-tip="Open details"
+                    data-tip-pos="left"
+                    aria-label="Open Prowlarr details"
+                    data-testid="health-indexer-open-prowlarr"
+                  >
+                    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                    </svg>
+                  </a>
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6">
+                <div class="downloads-empty-state is-history border-0 bg-transparent px-0 py-8 shadow-none">
+                  <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                  <p class="downloads-empty-title">Prowlarr not configured</p>
+                  <p class="downloads-empty-copy">Add the Prowlarr URL and API key in Settings to track proxy health here.</p>
+                </div>
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="health-section__label">Indexers ({{ health_indexer_rows | length }})</p>
+    <div class="downloads-table-wrap health-history-wrap">
+      <table class="downloads-table health-history-table" data-testid="health-indexers-table">
+        <thead>
+          <tr>
+            <th class="is-center">SYS</th>
+            <th>Indexer</th>
+            <th>Type</th>
+            <th class="is-right">Response</th>
+            <th>Last Check</th>
+            <th>Status</th>
+            <th class="is-right">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if health_indexer_rows %}
+            {% for row in health_indexer_rows %}
+              <tr data-testid="health-indexer-row-{{ row.key }}">
+                <td class="is-center"><span class="health-led health-led--{{ row.led_tone }}"></span></td>
+                <td>
+                  <div class="health-table__name">{{ row.display_name }}</div>
+                  <div class="health-table__detail">{{ row.detail_label }}</div>
+                </td>
+                <td class="downloads-mono-cell">{{ row.kind_label }}</td>
+                <td class="is-right downloads-mono-cell">{{ row.response_label }}</td>
+                <td class="downloads-mono-cell">{{ row.last_check_label }}</td>
+                <td><span class="pill {{ row.pill_tone }}">{{ row.status_label }}</span></td>
+                <td class="is-right">
+                  <div class="downloads-action-group justify-end">
+                    <a
+                      href="{{ row.href }}"
+                      class="downloads-action-btn"
+                      data-tip="Open details"
+                      data-tip-pos="left"
+                      aria-label="Open {{ row.display_name }} details"
+                      data-testid="health-indexer-open-{{ row.key }}"
+                    >
+                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                      </svg>
+                    </a>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="7">
+                <div class="downloads-empty-state is-history border-0 bg-transparent px-0 py-8 shadow-none">
+                  <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                  <p class="downloads-empty-title">No indexers configured</p>
+                  <p class="downloads-empty-copy">Add a Newznab or Torznab indexer in Settings to start recording individual indexer health.</p>
+                </div>
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>

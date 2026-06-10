@@ -1,0 +1,1248 @@
+{#- Settings: Indexers tab -#}
+{% from "components/settings_shell.html" import field_note, section_card, section_header, settings_footer, settings_row %}
+{%- set indexer_accent_map = {
+  'newznab': 'bg-pb-info-dim text-pb-info',
+  'torznab': 'bg-pb-success-dim text-pb-success',
+  'prowlarr': 'bg-pb-purple-dim text-pb-purple'
+} -%}
+{%- set indexer_lane_map = {
+  'newznab': 'Usenet',
+  'torznab': 'Torrent'
+} -%}
+{%- set indexer_icon_map = {
+  'newznab': 'NZB',
+  'torznab': 'TOR'
+} -%}
+{%- set indexer_lane_pill_map = {
+  'newznab': 'pill-info',
+  'torznab': 'pill-success'
+} -%}
+{%- set indexer_picker_hover_map = {
+  'newznab': 'hover:border-pb-info/40 hover:bg-pb-info-dim',
+  'torznab': 'hover:border-pb-success/40 hover:bg-pb-success-dim'
+} -%}
+<div class="space-y-6 pt-6" x-data="indexersSettings()">
+  <section class="section-card" data-testid="settings-indexers-prowlarr-card">
+    {% call section_header(
+      title="Prowlarr connection",
+      eyebrow="Sync",
+      title_style="plain",
+      attrs='data-testid="settings-indexers-prowlarr-header"'
+    ) %}
+      <button
+        @click="syncProwlarr()"
+        :disabled="prowlarr.syncing || !prowlarrReady()"
+        class="btn-ghost btn-sm gap-2"
+        data-testid="settings-indexers-prowlarr-sync"
+      >
+        <svg class="h-3.5 w-3.5" :class="prowlarr.syncing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+        </svg>
+        <span x-text="prowlarr.syncing ? 'Syncing...' : 'Sync Now'"></span>
+      </button>
+    {% endcall %}
+
+    <form
+      class="section-body p-0"
+      data-testid="settings-indexers-prowlarr-form"
+      @submit.prevent="saveProwlarrAndSync()"
+    >
+      <input type="text" name="prowlarr_username" value="prowlarr" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(label="Prowlarr URL") %}
+          <input
+            type="url"
+            x-model="prowlarr.url"
+            class="input-pb font-mono w-[22rem]"
+            placeholder="http://172.20.0.5:9696"
+            data-testid="settings-indexers-prowlarr-url"
+          >
+        {% endcall %}
+
+        {% call settings_row(label="API Key") %}
+          <div class="w-full max-w-xl space-y-3">
+            <input
+              type="password"
+              x-model="prowlarr.apiKey"
+              class="input-pb font-mono w-full"
+              autocomplete="new-password"
+              :placeholder="prowlarr.hasApiKey ? '(set — leave blank to keep)' : 'Enter your Prowlarr API key'"
+              data-testid="settings-indexers-prowlarr-api-key"
+            >
+
+            {% call field_note(tone="info", icon="check", attrs='x-show="prowlarr.hasApiKey && !prowlarr.apiKey" x-cloak') %}
+              Current stored key: <code class="font-mono text-[11px]" x-text="prowlarr.obfuscatedApiKey"></code>
+            {% endcall %}
+          </div>
+        {% endcall %}
+      </div>
+
+      <template x-if="prowlarr.message">
+        <div class="border-t border-pb-border px-5 py-3">
+          <div class="inline-alert" :class="prowlarr.success ? 'inline-alert-success' : 'inline-alert-danger'">
+            <p class="text-xs" x-text="prowlarr.message"></p>
+          </div>
+        </div>
+      </template>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button
+            type="button"
+            @click="testProwlarr()"
+            :disabled="prowlarr.testing || !prowlarrReady()"
+            class="btn-ghost gap-2 shrink-0"
+            data-testid="settings-indexers-prowlarr-test"
+          >
+            <svg class="h-3.5 w-3.5" :class="prowlarr.testing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728"/>
+            </svg>
+            <span x-text="prowlarr.testing ? 'Testing...' : 'Test'"></span>
+          </button>
+          <button
+            type="submit"
+            :disabled="prowlarr.syncing || !prowlarrReady() || !prowlarrDirty()"
+            class="btn-primary"
+            data-testid="settings-indexers-prowlarr-save-sync"
+          >
+            <span x-text="prowlarr.syncing ? 'Syncing...' : 'Save & Sync'"></span>
+          </button>
+        </div>
+      {% endcall %}
+    </form>
+  </section>
+
+  <section class="section-card" data-testid="settings-indexers-registry-card">
+    {% call section_header(
+      title="Indexer registry",
+      eyebrow="Connections",
+      title_style="plain"
+    ) %}
+      <button
+        @click="testAll()"
+        :disabled="testingAll"
+        class="btn-ghost btn-sm gap-2"
+        data-testid="settings-indexers-test-all"
+      >
+        <svg class="h-3.5 w-3.5" :class="testingAll && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728"/>
+        </svg>
+        <span x-text="testingAll ? 'Testing...' : 'Test All'"></span>
+      </button>
+      <button
+        @click="openAdd()"
+        class="btn-primary btn-sm gap-2"
+        data-testid="settings-indexers-add-indexer"
+      >
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+        </svg>
+        <span>Add Indexer</span>
+      </button>
+    {% endcall %}
+
+    <div class="section-body">
+      <div class="settings-connection-list" data-testid="settings-indexers-registry-list">
+        {% if indexers %}
+          {% for idx in indexers %}
+          {%- set indexer_type = idx.indexer_type.value -%}
+          {%- set indexer_status = indexer_status_seed.get(idx.id) if indexer_status_seed is defined else none -%}
+          <article
+            @click="openEdit({{ idx.id }})"
+            role="button"
+            data-testid="settings-indexers-registry-entry"
+            class="settings-connection-card {% if not idx.enabled %}settings-connection-card-muted{% endif %}"
+          >
+            <div class="flex items-start gap-4">
+              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[10px] font-bold tracking-tight {{ indexer_accent_map.get(indexer_type, 'bg-pb-info-dim text-pb-info') }}">
+                {{ indexer_icon_map.get(indexer_type, 'IDX') }}
+              </div>
+
+              <div class="min-w-0 flex-1 space-y-3">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-pb-text">{{ idx.name }}</p>
+                    <p class="mt-1 truncate font-mono text-[11px] text-pb-text-dim">{{ idx.url }}</p>
+                  </div>
+                  <button
+                    @click.stop="quickDelete({{ idx.id }}, '{{ idx.name | e }}', '{{ idx.source | e }}')"
+                    data-testid="settings-indexers-delete-{{ idx.id }}"
+                    class="downloads-action-btn is-danger"
+                    data-tip="{{ 'Remove' if idx.source == 'prowlarr' else 'Delete' }}"
+                    data-tip-pos="left"
+                    aria-label="{{ 'Remove' if idx.source == 'prowlarr' else 'Delete' }} {{ idx.name | e }}"
+                    title="{{ 'Remove' if idx.source == 'prowlarr' else 'Delete' }} {{ idx.name | e }}"
+                    type="button"
+                  >
+                    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="pill {{ indexer_lane_pill_map.get(indexer_type, 'pill-info') }}">{{ indexer_lane_map.get(indexer_type, indexer_type|title) }}</span>
+                  {% if idx.source == 'prowlarr' %}
+                    <span class="pill pill-purple">Prowlarr</span>
+                  {% else %}
+                    <span class="pill pill-muted">Manual</span>
+                  {% endif %}
+                  {% if idx.enabled %}
+                    <span class="pill pill-success">Enabled</span>
+                  {% else %}
+                    <span class="pill pill-warning">Disabled</span>
+                  {% endif %}
+                  <span
+                    data-testid="settings-indexers-health-{{ idx.id }}"
+                    class="pill {% if indexer_status is sameas true %}pill-success{% elif indexer_status is sameas false %}pill-error{% else %}pill-info{% endif %}"
+                    :class="testResults[{{ idx.id }}] === true
+                      ? 'pill-success'
+                      : (testResults[{{ idx.id }}] === false ? 'pill-error' : 'pill-info')"
+                    x-text="testResults[{{ idx.id }}] === true
+                      ? 'Healthy'
+                      : (testResults[{{ idx.id }}] === false ? 'Issue' : 'Pending')"
+                  >{% if indexer_status is sameas true %}Healthy{% elif indexer_status is sameas false %}Issue{% else %}Pending{% endif %}</span>
+                  {% if idx.priority != 50 %}
+                    <span class="pill pill-purple">Priority {{ idx.priority }}</span>
+                  {% endif %}
+                  {% if idx.failure_count > 0 %}
+                    <span class="pill pill-warning">{{ idx.failure_count }} fail{{ 's' if idx.failure_count != 1 }}</span>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        {% else %}
+          <div class="info-panel info-panel-muted">
+            <p class="text-sm font-semibold text-pb-text">No search sources configured yet.</p>
+            <p class="mt-2 text-sm leading-6 text-pb-text-sec">
+              Add at least one indexer so Pullbox can search, prioritize lanes, and route retries cleanly.
+            </p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  {% call section_card(
+    title="Search priority",
+    eyebrow="Rules",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="settings-indexers-priority-card"'
+  ) %}
+    <div x-data="sourcePriority()">
+      <div class="space-y-4 p-5">
+        <div class="flex max-w-2xl flex-col gap-2">
+        <template x-for="(item, index) in order" :key="item">
+          <div class="flex items-center gap-3 rounded-xl border border-pb-border bg-pb-card px-4 py-3"
+               :class="item === 'ddl' ? 'border-dashed opacity-40' : 'hover:border-pb-border-hover hover:bg-pb-card-hover/20'">
+            <span class="w-5 text-center text-sm font-bold text-pb-text-dim" x-text="index + 1"></span>
+
+            <div class="flex flex-col gap-0.5" x-show="item !== 'ddl'">
+              <button type="button" @click="moveUp(index)" :disabled="index === 0"
+                      class="rounded p-0.5 text-pb-text-dim transition-colors hover:text-pb-text disabled:opacity-20">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5"/>
+                </svg>
+              </button>
+              <button type="button" @click="moveDown(index)" :disabled="index >= order.length - 2"
+                      class="rounded p-0.5 text-pb-text-dim transition-colors hover:text-pb-text disabled:opacity-20">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
+                </svg>
+              </button>
+            </div>
+
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <template x-if="item === 'usenet'">
+                  <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-warning-dim text-[10px] font-bold text-pb-warning">NZB</div>
+                </template>
+                <template x-if="item === 'torrent'">
+                  <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-info-dim text-[10px] font-bold text-pb-info">TOR</div>
+                </template>
+                <template x-if="item === 'ddl'">
+                  <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-card-hover text-[10px] font-bold text-pb-text-dim">DDL</div>
+                </template>
+                <div class="min-w-0">
+                  <p class="text-sm font-medium" :class="item === 'ddl' ? 'text-pb-text-dim' : 'text-pb-text'" x-text="labels[item]"></p>
+                </div>
+              </div>
+            </div>
+
+            <template x-if="item === 'ddl'">
+              <span class="shrink-0 rounded bg-pb-card-hover px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-pb-text-dim">Coming soon</span>
+            </template>
+          </div>
+        </template>
+        </div>
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="dirty" x-cloak @click="reset()" class="btn-ghost">Reset</button>
+          <button type="button" @click="save()" :disabled="!dirty" class="btn-primary">Save priority</button>
+        </div>
+      {% endcall %}
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Failure guardrail",
+    eyebrow="Rules",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="settings-indexers-failure-card"'
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(label="Failure threshold", help="Mark an indexer unhealthy after this many failed checks.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" name="indexer_failure_threshold"
+                   value="{{ configs.get('indexer_failure_threshold', '3') }}"
+                   min="1" max="20"
+                   class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">failures</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost">Reset</button>
+          <button type="submit" :disabled="!isDirty" class="btn-primary">Save Changes</button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  <script>
+  function sourcePriority() {
+    {%- set sp_default = '["usenet", "torrent"]' -%}
+    const stored = {{ configs.get("source_priority", sp_default) | tojson }};
+    let initial;
+    try { initial = JSON.parse(stored); } catch { initial = ['usenet', 'torrent']; }
+    // Ensure DDL is always last
+    const active = initial.filter(p => p !== 'ddl');
+    const full = [...active, 'ddl'];
+
+    return {
+      savedOrder: [...active],
+      order: full,
+      dirty: false,
+      saved: false,
+      labels: { usenet: 'Usenet', torrent: 'Torrents', ddl: 'Direct Downloads' },
+      descriptions: {
+        usenet: 'SABnzbd, NZBGet \\u2022 Newznab indexers',
+        torrent: 'qBittorrent, Transmission, Deluge \\u2022 Torznab indexers',
+        ddl: 'GetComics, direct file downloads',
+      },
+
+      moveUp(index) {
+        if (index <= 0) return;
+        [this.order[index], this.order[index - 1]] = [this.order[index - 1], this.order[index]];
+        this.dirty = JSON.stringify(this.order.filter(p => p !== 'ddl')) !== JSON.stringify(this.savedOrder);
+        this.saved = false;
+      },
+
+      moveDown(index) {
+        if (index >= this.order.length - 2) return; // Can't move past DDL
+        [this.order[index], this.order[index + 1]] = [this.order[index + 1], this.order[index]];
+        this.dirty = JSON.stringify(this.order.filter(p => p !== 'ddl')) !== JSON.stringify(this.savedOrder);
+        this.saved = false;
+      },
+
+      reset() {
+        this.order = [...this.savedOrder, 'ddl'];
+        this.dirty = false;
+        this.saved = false;
+      },
+
+      save() {
+        const value = JSON.stringify(this.order.filter(p => p !== 'ddl'));
+        fetch('/api/v1/config', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token }}',
+          },
+          body: JSON.stringify({ values: { source_priority: value } }),
+        })
+          .then(r => { if (!r.ok) throw new Error('Failed to save.'); })
+          .then(() => {
+            this.savedOrder = [...this.order.filter(p => p !== 'ddl')];
+            this.dirty = false;
+            this.saved = true;
+            if (typeof showToast === 'function') showToast({ message: 'Source priority saved.', level: 'success' });
+          })
+          .catch(err => {
+            if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+          });
+      },
+    };
+  }
+  </script>
+
+  {% call section_card(
+    title="Blocked release groups",
+    eyebrow="Safety",
+    title_style="plain"
+  ) %}
+    <div x-data="blockedGroups()" class="space-y-4">
+      <form class="flex flex-col gap-2 sm:flex-row" @submit.prevent="addGroup()">
+        <input type="text" x-model="newGroup" placeholder="Group name or wildcard pattern" class="input-pb flex-1">
+        <button type="submit" :disabled="saving || !newGroup.trim()" class="btn-primary btn-sm">Add Group</button>
+      </form>
+
+      <div class="rounded-xl border border-pb-border bg-pb-card p-4">
+        <div class="flex flex-wrap gap-2">
+          <template x-for="(group, idx) in groups" :key="idx">
+            <span class="pill pill-neutral">
+              <span x-text="group"></span>
+              <button @click="removeGroup(idx)" class="ml-0.5 text-pb-text-dim transition-colors hover:text-pb-error" title="Remove">
+                &times;
+              </button>
+            </span>
+          </template>
+          <template x-if="groups.length === 0">
+            <span class="text-xs italic text-pb-text-dim">No groups are blocked right now.</span>
+          </template>
+        </div>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Auto-blocklist",
+    eyebrow="Safety",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="settings-indexers-blocklist-card"'
+  ) %}
+    <div x-data="blocklistOptions()">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(label="Auto-blocklist failed downloads") %}
+          <label class="relative inline-flex cursor-pointer items-center">
+            <input type="checkbox" x-model="autoAdd" class="peer toggle-input">
+            <span class="toggle-switch"></span>
+          </label>
+        {% endcall %}
+
+        {% call settings_row(label="Expiry period", help="Remove blocklist entries after this many days. Use 0 to keep them.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" x-model="expiryDays" min="0" max="9999" step="1" class="input-pb w-20 text-center">
+            <span class="text-sm text-pb-text-sec">days</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="dirty" x-cloak @click="reset()" class="btn-ghost">Reset</button>
+          <button @click="save()" :disabled="!dirty || saving" class="btn-primary">
+            <span x-show="!saving">Save Changes</span>
+            <span x-show="saving">Saving...</span>
+          </button>
+        </div>
+      {% endcall %}
+    </div>
+  {% endcall %}
+
+  {# ════════════════════════════════════════════════════════════════════
+     INDEXER MODAL — Add and Edit
+     ════════════════════════════════════════════════════════════════════ #}
+  <div x-show="showModal" x-cloak
+       data-testid="settings-indexers-modal"
+       class="modal-shell"
+       @keydown.escape.window="closeModal()">
+
+    {# Backdrop #}
+    <div class="modal-backdrop"
+         data-testid="settings-indexers-modal-backdrop"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         @click="closeModal()"></div>
+
+    <div class="modal-panel max-w-lg max-h-[90vh]"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+         x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 translate-y-0 scale-100"
+         x-transition:leave-end="opacity-0 translate-y-2 scale-95">
+
+      {# Modal header #}
+      <div class="modal-header">
+        <div class="flex items-center gap-3">
+          <template x-if="form.indexer_type === 'newznab'">
+            <div class="w-7 h-7 rounded-lg {{ indexer_accent_map['newznab'] }} flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+              </svg>
+            </div>
+          </template>
+          <template x-if="form.indexer_type === 'torznab'">
+            <div class="w-7 h-7 rounded-lg {{ indexer_accent_map['torznab'] }} flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+          </template>
+          <h3 class="text-sm font-semibold text-pb-text"
+              x-text="modalMode === 'add'
+                ? (form.indexer_type ? 'Add ' + typeLabel(form.indexer_type) + ' Indexer' : 'Add Indexer')
+                : 'Edit ' + form.name"></h3>
+        </div>
+        <button @click="closeModal()" class="icon-btn icon-btn-sm">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      {# Step 1 — type picker (add mode only) #}
+      <div x-show="modalMode === 'add' && !form.indexer_type" class="p-5 overflow-y-auto">
+        <p class="text-sm text-pb-text-sec mb-4">What type of indexer are you adding?</p>
+        <div class="grid grid-cols-2 gap-3">
+          <button @click="form.indexer_type = 'newznab'"
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all {{ indexer_picker_hover_map['newznab'] }}">
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ indexer_accent_map['newznab'] }}">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+              </svg>
+            </div>
+            <p class="text-sm font-semibold text-pb-text">Newznab</p>
+            <p class="text-[11px] text-pb-text-dim mt-0.5">Usenet indexer (NZBgeek, NZBPlanet, etc.)</p>
+          </button>
+          <button @click="form.indexer_type = 'torznab'"
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all {{ indexer_picker_hover_map['torznab'] }}">
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ indexer_accent_map['torznab'] }}">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m-6 3.75l3 3m0 0l3-3m-3 3V1.5"/>
+              </svg>
+            </div>
+            <p class="text-sm font-semibold text-pb-text">Torznab</p>
+            <p class="text-[11px] text-pb-text-dim mt-0.5">Torrent indexer (Jackett, etc.)</p>
+          </button>
+        </div>
+      </div>
+
+      {# Step 2 / Edit — full form #}
+      <form x-show="form.indexer_type && (modalMode === 'edit' || form.indexer_type)"
+            @submit.prevent="saveIndexer()"
+            class="flex flex-col flex-1 min-h-0">
+        <input type="text" name="indexer_username" value="indexer" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+
+        <div class="modal-body">
+        <div class="px-5 py-4 space-y-4">
+
+          {# Prowlarr source notice #}
+          <template x-if="form.source === 'prowlarr'">
+            <div class="inline-alert inline-alert-info">
+              <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/>
+              </svg>
+              <span>Synced from Prowlarr. URL and API key are managed by Prowlarr sync. You can toggle enabled state, priority, and search options.</span>
+            </div>
+          </template>
+
+          {# Name + Enabled toggle #}
+          <div class="grid grid-cols-[1fr_auto] gap-4 items-end">
+            <div>
+              <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Name</label>
+              <input type="text" x-model="form.name" placeholder="NZBgeek"
+                     :disabled="form.source === 'prowlarr'"
+                     :class="form.source === 'prowlarr' ? 'opacity-60 cursor-not-allowed' : ''"
+                     autocomplete="nickname"
+                     class="input-pb">
+            </div>
+            <div class="pb-2">
+              <label class="relative inline-flex items-center cursor-pointer gap-2">
+                <input type="checkbox" x-model="form.enabled" class="peer toggle-input">
+                <span class="toggle-switch"></span>
+                <span class="text-xs text-pb-text-sec">Enabled</span>
+              </label>
+            </div>
+          </div>
+
+          {# URL #}
+          <div>
+            <label class="block text-xs font-medium text-pb-text-sec mb-1.5">URL</label>
+            <input type="url" x-model="form.url" placeholder="https://api.nzbgeek.info"
+                   :disabled="form.source === 'prowlarr'"
+                   :class="form.source === 'prowlarr' ? 'opacity-60 cursor-not-allowed' : ''"
+                   autocomplete="url"
+                   class="input-pb font-mono">
+            <p x-show="form.source !== 'prowlarr'" class="text-[11px] text-pb-text-dim mt-1">Base URL of the indexer. Include protocol.</p>
+          </div>
+
+          {# API Key (masked) #}
+          <div>
+            <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
+              API Key
+              <template x-if="modalMode === 'edit' && form.has_api_key">
+                <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
+              </template>
+            </label>
+            <input type="password" x-model="form.api_key" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                   :disabled="form.source === 'prowlarr'"
+                   :class="form.source === 'prowlarr' ? 'opacity-60 cursor-not-allowed' : ''"
+                   autocomplete="new-password"
+                   class="input-pb font-mono">
+          </div>
+
+          {# Search capabilities — toggles like Radarr #}
+          <div class="space-y-2 pt-1">
+            <p class="text-xs font-medium text-pb-text-sec">Search Capabilities</p>
+            <div class="grid grid-cols-3 gap-3">
+              <label class="flex items-center gap-2 text-xs text-pb-text-sec cursor-pointer">
+                <input type="checkbox" x-model="form.enable_rss" class="checkbox-pb">
+                RSS
+              </label>
+              <label class="flex items-center gap-2 text-xs text-pb-text-sec cursor-pointer">
+                <input type="checkbox" x-model="form.enable_automatic_search" class="checkbox-pb">
+                Automatic Search
+              </label>
+              <label class="flex items-center gap-2 text-xs text-pb-text-sec cursor-pointer">
+                <input type="checkbox" x-model="form.enable_interactive_search" class="checkbox-pb">
+                Interactive Search
+              </label>
+            </div>
+          </div>
+
+          {# Advanced collapsible #}
+          <div x-data="{ open: false }">
+            <button type="button" @click="open = !open"
+                    class="flex items-center gap-1.5 text-xs text-pb-text-sec transition-colors hover:text-pb-text">
+              <svg class="w-3.5 h-3.5 transition-transform duration-150" :class="open && 'rotate-90'"
+                   fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+              </svg>
+              Advanced Settings
+            </button>
+            <div x-show="open" class="mt-3 space-y-3 pl-5 border-l border-pb-border">
+
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Categories</label>
+                <input type="text" x-model="form.categories" placeholder="7030,7010"
+                       autocomplete="off"
+                       class="input-pb">
+                <p class="text-[11px] text-pb-text-dim mt-1">Comma-separated Newznab/Torznab category IDs. 7030 = Comics, 7010 = Books/Comics.</p>
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Priority</label>
+                <div class="flex items-center gap-2">
+                  <input type="number" x-model.number="form.priority" min="1" max="100" class="input-pb w-20">
+                  <span class="text-xs text-pb-text-dim">1 = highest, 100 = lowest</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+
+        {# Test result banner #}
+        <div x-show="testMessage" x-transition class="border-t border-pb-border px-5 py-3">
+          <div class="inline-alert" :class="testSuccess ? 'inline-alert-success' : 'inline-alert-danger'">
+            <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path x-show="testSuccess" stroke-linecap="round" stroke-linejoin="round"
+                    d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              <path x-show="!testSuccess" stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+            </svg>
+            <span x-text="testMessage"></span>
+          </div>
+        </div>
+
+        {# Save error banner #}
+        <div x-show="modalError" x-transition class="border-t border-pb-border px-5 py-3">
+          <div class="inline-alert inline-alert-danger">
+            <p class="text-xs" x-text="modalError"></p>
+          </div>
+        </div>
+
+        </div>{# end scrollable body #}
+
+        {# Footer #}
+        <div class="modal-footer">
+
+          {# Delete button — edit mode, manual indexers only #}
+          <div>
+            <template x-if="modalMode === 'edit'">
+              <button type="button" @click="deleteIndexer()"
+                      class="btn-ghost btn-sm gap-1.5 text-pb-error hover:border-pb-error/40 hover:text-pb-error">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                </svg>
+                <span x-text="form.source === 'prowlarr' ? 'Remove' : 'Delete'"></span>
+              </button>
+            </template>
+          </div>
+
+          {# Right: back / test / cancel / save #}
+          <div class="flex items-center gap-2">
+            <template x-if="modalMode === 'add' && form.indexer_type">
+              <button type="button" @click="form.indexer_type = ''" class="btn-ghost btn-sm">
+                &larr; Back
+              </button>
+            </template>
+
+            <button type="button" @click="testModal()" :disabled="testing || !form.url" class="btn-ghost btn-sm gap-1.5">
+              <svg class="w-3.5 h-3.5" :class="testing && 'animate-spin'"
+                   fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a4 4 0 010-5.656m5.656 0a4 4 0 010 5.656M12 12h.008v.008H12V12z"/>
+              </svg>
+              <span x-text="testing ? 'Testing...' : 'Test'"></span>
+            </button>
+
+            <button type="button" @click="closeModal()" class="btn-ghost btn-sm">
+              Cancel
+            </button>
+
+            <button type="submit"
+                    :disabled="saving || !form.name || !form.url || !form.indexer_type || (!form.api_key && !form.has_api_key && form.source !== 'prowlarr')"
+                    class="btn-primary btn-sm">
+              <span x-text="saving ? 'Saving...' : (modalMode === 'add' ? 'Add Indexer' : 'Save Changes')"></span>
+            </button>
+          </div>
+
+        </div>
+      </form>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+function blocklistOptions() {
+  var _initAutoAdd = {{ 'true' if blocklist_auto_add | default(true) else 'false' }};
+  var _initExpiry = '{{ blocklist_expiry_days | default("90") }}';
+  return {
+    autoAdd: _initAutoAdd,
+    expiryDays: _initExpiry,
+    dirty: false,
+    saving: false,
+
+    init() {
+      this.$watch('autoAdd', () => this.checkDirty());
+      this.$watch('expiryDays', () => this.checkDirty());
+    },
+
+    checkDirty() {
+      this.dirty = this.autoAdd !== _initAutoAdd || String(this.expiryDays) !== _initExpiry;
+    },
+
+    reset() {
+      this.autoAdd = _initAutoAdd;
+      this.expiryDays = _initExpiry;
+      this.dirty = false;
+    },
+
+    async save() {
+      this.saving = true;
+      // Clamp negative values to 0
+      if (parseInt(this.expiryDays) < 0 || isNaN(parseInt(this.expiryDays))) this.expiryDays = '0';
+      try {
+        var values = {};
+        if (this.autoAdd !== _initAutoAdd) values['blocklist.auto_add_on_failure'] = String(this.autoAdd);
+        if (String(this.expiryDays) !== _initExpiry) values['blocklist.expiry_days'] = String(this.expiryDays);
+        await fetch('/api/v1/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' },
+          body: JSON.stringify({ values: values }),
+        });
+        _initAutoAdd = this.autoAdd;
+        _initExpiry = String(this.expiryDays);
+        this.dirty = false;
+        if (typeof showToast === 'function') showToast({ message: 'Blocklist settings saved.', level: 'success' });
+      } catch (e) {
+        if (typeof showToast === 'function') showToast({ message: 'Failed to save.', level: 'error' });
+      } finally {
+        this.saving = false;
+      }
+    }
+  };
+}
+
+function blockedGroups() {
+  return {
+    groups: {{ blocked_groups | default([], true) | tojson }},
+    newGroup: '',
+    saving: false,
+    async addGroup() {
+      if (this.saving) return;
+      const g = this.newGroup.trim();
+      if (!g) return;
+      if (this.groups.some(x => x.toLowerCase() === g.toLowerCase())) {
+        this.newGroup = '';
+        if (typeof showToast === 'function') showToast({ message: '"' + g + '" is already in the blocked groups.', level: 'warning' });
+        return;
+      }
+      this.groups.push(g);
+      this.newGroup = '';
+      await this.saveGroups();
+    },
+    async removeGroup(idx) {
+      if (this.saving) return;
+      this.groups.splice(idx, 1);
+      await this.saveGroups();
+    },
+    async saveGroups() {
+      if (this.saving) return;
+      this.saving = true;
+      try {
+        const resp = await fetch('/api/v1/blocklist/groups', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' },
+          body: JSON.stringify({ groups: this.groups }),
+        });
+        if (!resp.ok) throw new Error('Failed to save');
+        const data = await resp.json();
+        this.groups = data.groups;
+        if (typeof showToast === 'function') showToast({ message: 'Release groups updated.', level: 'success' });
+      } catch (e) {
+        if (typeof showToast === 'function') showToast({ message: e.message, level: 'error' });
+      } finally {
+        this.saving = false;
+      }
+    }
+  };
+}
+
+function indexersSettings() {
+  return {
+    testResults: {{ indexer_status_seed|default({}, true)|tojson }},
+    testingAll: false,
+    statusCacheCookieName: 'pb_indexer_status_cache',
+
+    showModal: false,
+    modalMode: 'add',
+    editingId: null,
+    saving: false,
+    testing: false,
+    testMessage: '',
+    testSuccess: false,
+    modalError: '',
+
+    form: {
+      indexer_type: '', name: '', url: '', api_key: '', has_api_key: false, enabled: true,
+      priority: 50, categories: '', source: 'manual',
+      enable_rss: true, enable_automatic_search: true, enable_interactive_search: true,
+    },
+
+    // Prowlarr connection state
+    prowlarr: {
+      url: '{{ configs.get("prowlarr_url", "") }}',
+      apiKey: '',
+      obfuscatedApiKey: '{{ configs.get("obfuscated_prowlarr_api_key", "") }}',
+      hasApiKey: {{ 'true' if configs.get('has_prowlarr_api_key', '') else 'false' }},
+      testing: false,
+      syncing: false,
+      message: '',
+      success: false,
+    },
+    initialProwlarrUrl: '{{ configs.get("prowlarr_url", "") }}',
+
+    blankForm() {
+      return {
+        indexer_type: '', name: '', url: '', api_key: '', has_api_key: false, enabled: true,
+        priority: 50, categories: '', source: 'manual',
+        enable_rss: true, enable_automatic_search: true, enable_interactive_search: true,
+      };
+    },
+
+    typeLabel(type) {
+      const labels = { newznab: 'Newznab', torznab: 'Torznab', prowlarr: 'Prowlarr' };
+      return labels[type] || type;
+    },
+
+    async quickDelete(id, name, source) {
+      const label = source === 'prowlarr' ? 'Remove' : 'Delete';
+      const ok = await pbConfirm({
+        title: `${label} Indexer`,
+        message: `${label} "${name}"? This cannot be undone.`,
+        confirmText: label,
+      });
+      if (!ok) return;
+      fetch(`/api/v1/indexers/${id}`, {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => {
+          if (!r.ok && r.status !== 204) throw new Error('Failed to delete.');
+          if (typeof showToast === 'function') showToast({ message: 'Indexer removed.', level: 'success' });
+          window.location.reload();
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    testedIndexerCount() {
+      return Object.keys(this.testResults).length;
+    },
+
+    healthyIndexerCount() {
+      return Object.values(this.testResults).filter(value => value === true).length;
+    },
+
+    failingIndexerCount() {
+      return Object.values(this.testResults).filter(value => value === false).length;
+    },
+
+    prowlarrReady() {
+      return Boolean(this.prowlarr.url && (this.prowlarr.apiKey || this.prowlarr.hasApiKey));
+    },
+
+    prowlarrDirty() {
+      return this.prowlarr.url !== this.initialProwlarrUrl || Boolean(this.prowlarr.apiKey);
+    },
+
+    obfuscateStoredKey(key) {
+      if (!key) return '';
+      const visible = Math.min(5, key.length);
+      return '•'.repeat(Math.max(0, key.length - visible)) + key.slice(-visible);
+    },
+
+    persistIndexerStatusCache() {
+      try {
+        const payload = {};
+        Object.entries(this.testResults || {}).forEach(([indexerId, result]) => {
+          if (typeof result === 'boolean') payload[indexerId] = result;
+        });
+        document.cookie = `${this.statusCacheCookieName}=${encodeURIComponent(JSON.stringify(payload))}; Max-Age=2592000; Path=/; SameSite=Lax`;
+      } catch (_error) {
+        // Ignore cache persistence problems; the live status UI still works.
+      }
+    },
+
+    setIndexerResult(indexerId, healthy) {
+      this.testResults[indexerId] = healthy;
+      this.persistIndexerStatusCache();
+    },
+
+    init() {
+      this.persistIndexerStatusCache();
+      {% if indexers %}this._silentTestAll();{% endif %}
+    },
+
+    // ── Modal lifecycle ──────────────────────────────────────────
+    openAdd() {
+      this.modalMode = 'add';
+      this.editingId = null;
+      this.form = this.blankForm();
+      this.testMessage = '';
+      this.modalError = '';
+      this.showModal = true;
+    },
+
+    openEdit(id) {
+      this.modalMode = 'edit';
+      this.editingId = id;
+      this.testMessage = '';
+      this.modalError = '';
+      fetch(`/api/v1/indexers/${id}`, {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed to load indexer'); return r.json(); })
+        .then(data => {
+          this.form = {
+            indexer_type: data.indexer_type,
+            name: data.name,
+            url: data.url,
+            api_key: '',
+            has_api_key: data.has_api_key,
+            enabled: data.enabled,
+            priority: data.priority,
+            categories: data.categories || '',
+            source: data.source || 'manual',
+            enable_rss: data.enable_rss !== false,
+            enable_automatic_search: data.enable_automatic_search !== false,
+            enable_interactive_search: data.enable_interactive_search !== false,
+          };
+          this.showModal = true;
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    closeModal() {
+      this.showModal = false;
+      this.testMessage = '';
+      this.modalError = '';
+    },
+
+    // ── Indexer CRUD ─────────────────────────────────────────────
+    saveIndexer() {
+      this.saving = true;
+      this.modalError = '';
+
+      const body = {
+        name: this.form.name,
+        url: this.form.url,
+        enabled: this.form.enabled,
+        priority: Number(this.form.priority),
+        categories: this.form.categories || null,
+        enable_rss: this.form.enable_rss,
+        enable_automatic_search: this.form.enable_automatic_search,
+        enable_interactive_search: this.form.enable_interactive_search,
+      };
+
+      // Only send api_key if user entered a new one
+      if (this.form.api_key) body.api_key = this.form.api_key;
+
+      const isAdd = this.modalMode === 'add';
+      if (isAdd) body.indexer_type = this.form.indexer_type;
+
+      fetch(isAdd ? '/api/v1/indexers' : `/api/v1/indexers/${this.editingId}`, {
+        method: isAdd ? 'POST' : 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify(body),
+      })
+        .then(r => {
+          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Failed to save.'); });
+          return r.json();
+        })
+        .then(() => {
+          this.closeModal();
+          if (typeof showToast === 'function')
+            showToast({ message: isAdd ? 'Indexer added.' : 'Indexer updated.', level: 'success' });
+          window.location.reload();
+        })
+        .catch(err => {
+          this.modalError = err.message;
+          this.saving = false;
+        });
+    },
+
+    async deleteIndexer() {
+      const label = this.form.source === 'prowlarr' ? 'Remove' : 'Delete';
+      const ok = await pbConfirm({
+        title: label + ' Indexer',
+        message: `${label} "${this.form.name}"? This cannot be undone.`,
+        confirmText: label,
+      });
+      if (!ok) return;
+      fetch(`/api/v1/indexers/${this.editingId}`, {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => {
+          if (!r.ok && r.status !== 204) throw new Error('Failed to delete.');
+          this.closeModal();
+          if (typeof showToast === 'function') showToast({ message: 'Indexer removed.', level: 'success' });
+          window.location.reload();
+        })
+        .catch(err => { this.modalError = err.message; });
+    },
+
+    // ── Test ─────────────────────────────────────────────────────
+    testModal() {
+      this.testMessage = '';
+      this.testSuccess = false;
+
+      if (this.modalMode === 'edit' && this.editingId) {
+        this.testing = true;
+        fetch(`/api/v1/indexers/${this.editingId}/test`, {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+        })
+          .then(r => r.json())
+          .then(data => {
+            this.testSuccess = data.healthy;
+            const ms = data.response_time_ms ? ` (${pbFormatDurationMs(data.response_time_ms)})` : '';
+            this.testMessage = data.healthy
+              ? `Connected successfully${ms}.`
+              : (data.message || 'Connection failed.');
+            this.setIndexerResult(this.editingId, data.healthy);
+          })
+          .catch(() => {
+            this.testSuccess = false;
+            this.testMessage = 'Test request failed — check Pullbox logs.';
+          })
+          .finally(() => { this.testing = false; });
+      } else {
+        this.testSuccess = false;
+        this.testMessage = 'Save the indexer first, then use Test to verify the connection.';
+      }
+    },
+
+    testAll() {
+      this.testingAll = true;
+      fetch('/api/v1/indexers', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => r.json())
+        .then(indexers => Promise.all(
+          indexers.map(idx =>
+            fetch(`/api/v1/indexers/${idx.id}/test`, {
+              method: 'POST',
+              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+            })
+              .then(r => r.json())
+              .then(data => { this.setIndexerResult(idx.id, data.healthy); })
+              .catch(() => { this.setIndexerResult(idx.id, false); })
+          )
+        ))
+        .finally(() => { this.testingAll = false; });
+    },
+
+    _silentTestAll() {
+      fetch('/api/v1/indexers', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => r.json())
+        .then(indexers => Promise.all(
+          indexers.map(idx =>
+            fetch(`/api/v1/indexers/${idx.id}/test`, {
+              method: 'POST',
+              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+            })
+              .then(r => r.json())
+              .then(data => { this.setIndexerResult(idx.id, data.healthy); })
+              .catch(() => { this.setIndexerResult(idx.id, false); })
+          )
+        ));
+    },
+
+    // ── Prowlarr ─────────────────────────────────────────────────
+    testProwlarr() {
+      this.prowlarr.testing = true;
+      this.prowlarr.message = '';
+
+      // Use stored credentials if no new key entered
+      const useStored = !this.prowlarr.apiKey && this.prowlarr.hasApiKey;
+      const url = useStored ? '/api/v1/indexers/prowlarr/test-stored' : '/api/v1/indexers/prowlarr/test';
+      const opts = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+      };
+      if (!useStored) {
+        opts.body = JSON.stringify({
+          prowlarr_url: this.prowlarr.url,
+          prowlarr_api_key: this.prowlarr.apiKey,
+        });
+      }
+
+      fetch(url, opts)
+        .then(r => r.json())
+        .then(data => {
+          this.prowlarr.success = data.healthy;
+          const ms = data.response_time_ms ? ` (${pbFormatDurationMs(data.response_time_ms)})` : '';
+          this.prowlarr.message = data.healthy
+            ? `${data.message}${ms}`
+            : (data.message || 'Connection failed.');
+        })
+        .catch(() => {
+          this.prowlarr.success = false;
+          this.prowlarr.message = 'Test request failed.';
+        })
+        .finally(() => {
+          this.prowlarr.testing = false;
+          setTimeout(() => { this.prowlarr.message = ''; }, 3000);
+        });
+    },
+
+    syncProwlarr() {
+      this.prowlarr.syncing = true;
+      this.prowlarr.message = '';
+
+      // If user entered a new API key, use save+sync; otherwise use stored credentials
+      const useStored = !this.prowlarr.apiKey && this.prowlarr.hasApiKey;
+      const url = useStored ? '/api/v1/indexers/prowlarr/resync' : '/api/v1/indexers/prowlarr/sync';
+      const opts = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+      };
+      if (!useStored) {
+        opts.body = JSON.stringify({
+          prowlarr_url: this.prowlarr.url,
+          prowlarr_api_key: this.prowlarr.apiKey,
+        });
+      }
+
+      fetch(url, opts)
+        .then(r => {
+          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Sync failed.'); });
+          return r.json();
+        })
+        .then(data => {
+          this.prowlarr.success = true;
+          const parts = [];
+          if (data.added > 0) parts.push(`${data.added} added`);
+          if (data.updated > 0) parts.push(`${data.updated} updated`);
+          if (data.removed > 0) parts.push(`${data.removed} removed`);
+          this.prowlarr.message = parts.length
+            ? `Sync complete: ${parts.join(', ')}. ${data.total} total indexers.`
+            : `Sync complete. ${data.total} indexers up to date.`;
+          this.initialProwlarrUrl = this.prowlarr.url;
+          if (this.prowlarr.apiKey) {
+            this.prowlarr.obfuscatedApiKey = this.obfuscateStoredKey(this.prowlarr.apiKey);
+          }
+          this.prowlarr.apiKey = '';
+          this.prowlarr.hasApiKey = true;
+          if (typeof showToast === 'function')
+            showToast({ message: this.prowlarr.message, level: 'success' });
+          // Reload to show new tiles (3s so banner is readable)
+          setTimeout(() => window.location.reload(), 3000);
+        })
+        .catch(err => {
+          this.prowlarr.success = false;
+          this.prowlarr.message = err.message;
+        })
+        .finally(() => { this.prowlarr.syncing = false; });
+    },
+
+    saveProwlarrAndSync() {
+      this.syncProwlarr();
+    },
+
+    // ── Config save ──────────────────────────────────────────────
+    saveConfig(formEl) {
+      const values = {};
+      formEl.querySelectorAll('[name]').forEach(el => {
+        if (el.type === 'checkbox') values[el.name] = el.checked ? 'true' : 'false';
+      });
+      new FormData(formEl).forEach((val, key) => {
+        if (formEl.querySelector(`[name="${key}"]`)?.type !== 'checkbox') values[key] = val;
+      });
+      return fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed to save.'); })
+        .then(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Settings saved.', level: 'success' });
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+  };
+}
+</script>

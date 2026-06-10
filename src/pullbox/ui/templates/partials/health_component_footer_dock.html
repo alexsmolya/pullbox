@@ -1,0 +1,20 @@
+{% from "components/page_dock.html" import page_dock %}
+{% set _history_base_qs = [] %}
+{% if health_component.history_search_query %}{% set _ = _history_base_qs.append("search=" ~ (health_component.history_search_query|urlencode)) %}{% endif %}
+{% if health_component.history_sort and health_component.history_sort != "-checked_at" %}{% set _ = _history_base_qs.append("sort=" ~ (health_component.history_sort|urlencode)) %}{% endif %}
+{% set _history_base_url = health_component.history_base_path ~ ("?" ~ _history_base_qs|join("&") if _history_base_qs else "") %}
+{% set _history_hx_base_url = health_component.history_base_path ~ "/status" ~ ("?" ~ _history_base_qs|join("&") if _history_base_qs else "") %}
+
+<div data-testid="health-component-footer-dock">
+  {{ page_dock(
+    page=health_component.history_page,
+    total_pages=health_component.history_total_pages,
+    base_url=_history_base_url,
+    status_items=health_detail_footer_items,
+    hx_target="#health-component-status-region",
+    hx_swap="outerHTML",
+    hx_select="",
+    page_param="history_page",
+    hx_base_url=_history_hx_base_url
+  ) }}
+</div>

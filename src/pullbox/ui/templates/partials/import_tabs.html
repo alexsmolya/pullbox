@@ -1,0 +1,48 @@
+{% set current_view = view|default("all") %}
+{% set current_page = page|default(1) %}
+{% set unmatched_href = "/import?tab=unmatched" %}
+{% if current_view == "dismissed" %}
+  {% set unmatched_href = unmatched_href ~ "&view=dismissed" %}
+{% endif %}
+{% if current_page > 1 and tab == "unmatched" %}
+  {% set unmatched_href = unmatched_href ~ "&page=" ~ current_page %}
+{% endif %}
+
+<div id="import-tabs" data-testid="import-tabs" class="downloads-tab-rail">
+  <a
+    href="{{ collection_href|default('/import?tab=collection') }}"
+    data-testid="import-tab-collection"
+    hx-get="{{ collection_href|default('/import?tab=collection') }}"
+    hx-target="#import-content"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'collection' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'collection' %} is-active{% endif %}"
+  >
+    Collection
+  </a>
+  <a
+    href="{{ unmatched_href }}"
+    data-testid="import-tab-unmatched"
+    hx-get="{{ unmatched_href }}"
+    hx-target="#import-content"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'unmatched' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'unmatched' %} is-active{% endif %}"
+  >
+    Unmatched
+  </a>
+  <a
+    href="/import?tab=history"
+    data-testid="import-tab-history"
+    hx-get="/import?tab=history"
+    hx-target="#import-content"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'history' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'history' %} is-active{% endif %}"
+  >
+    History
+  </a>
+</div>

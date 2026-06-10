@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Library Permissions — {{ instance_name() }}{% endblock %}
+{% block page_title %}Utilities{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div
+  data-testid="utilities-permissions-page"
+  class="utilities-tool-page space-y-6"
+  x-data='utilitiesPermissionsPage({ csrfToken: "{{ csrf_token }}", libraryRoots: {{ library_roots|tojson }} })'
+  x-init="initPermissionsPage()"
+>
+  {% include "partials/utilities_permissions_header.html" %}
+  {% include "partials/utilities_permissions_workspace.html" %}
+
+  {% include "components/file_browser.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/utilities_permissions_footer_dock.html" %}
+{% endblock %}

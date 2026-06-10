@@ -1,0 +1,342 @@
+{#- Security: File Safety tab -#}
+{% from "components/settings_shell.html" import field_note, inline_alert, section_card, settings_footer, settings_row %}
+
+<div class="space-y-6" x-data="fileSafety()">
+  {% call section_card(
+    title="Import allowlist",
+    eyebrow="Accepted content",
+    title_style="plain",
+    attrs='data-testid="security-file-safety-allowlist-card"'
+  ) %}
+    <div class="space-y-4">
+      <div>
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Allowed extensions</p>
+        <div class="mt-3 flex min-h-[36px] flex-wrap gap-2">
+          <template x-for="(ext, index) in allowedExtensions" :key="ext">
+            <span class="pill pill-success gap-1.5">
+              <span x-text="ext"></span>
+              <button type="button" @click="removeExtension(index)" class="transition-colors hover:text-pb-text" title="Remove">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </span>
+          </template>
+        </div>
+
+        {% call inline_alert(attrs='x-show="allowedExtensions.length === 0" x-cloak', class_name="mt-3") %}
+          <span>No extensions are currently allowed, so nothing can be imported until you restore at least one safe format.</span>
+        {% endcall %}
+      </div>
+
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
+        <div class="relative w-full sm:max-w-xs">
+          <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-pb-text-dim">.</span>
+          <input
+            type="text"
+            data-testid="security-file-safety-extension-input"
+            x-model="newExtension"
+            @keydown.enter.prevent="addExtension()"
+            placeholder="cbz"
+            class="input-pb pl-6"
+          >
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="security-file-safety-add-extension"
+            @click="addExtension()"
+            :disabled="!newExtension.trim() || isBlocked(newExtension) || allowlistSaving"
+            class="btn-ghost btn-sm"
+          >
+            Add extension
+          </button>
+          <button
+            type="button"
+            data-testid="security-file-safety-reset-extensions"
+            @click="resetExtensions()"
+            :disabled="allowlistSaving"
+            class="btn-ghost btn-sm"
+          >
+            Reset defaults
+          </button>
+        </div>
+      </div>
+
+      {% call inline_alert(tone="warning", attrs='x-show="isBlocked(newExtension)" x-cloak') %}
+        <span>The entered extension is on the blocked list and cannot be added to the allowlist.</span>
+      {% endcall %}
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Dangerous file detection",
+    eyebrow="Release blocking",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="security-file-safety-dangerous-card"'
+  ) %}
+    <div class="settings-rows">
+      {% call settings_row(label="Reject Dangerous Releases", help="If a blocked extension is detected inside a completed download, the entire release is rejected.") %}
+        <div class="flex items-center gap-3">
+          <label class="relative inline-flex cursor-pointer items-center">
+            <input
+              type="checkbox"
+              data-testid="security-file-safety-dangerous-toggle"
+              x-model="blockDangerous"
+              {% if configs.get('block_dangerous_files', 'true') == 'true' %}checked{% endif %}
+              :disabled="dangerousSaving"
+              @change="toggleDangerous($event.target.checked)"
+              class="peer toggle-input toggle-input-overlay"
+            >
+            <span class="toggle-switch"></span>
+          </label>
+          <span
+            class="text-sm {{ 'text-pb-success' if configs.get('block_dangerous_files', 'true') == 'true' else 'text-pb-warning' }}"
+            :class="blockDangerous ? 'text-pb-success' : 'text-pb-warning'"
+            x-text="blockDangerous ? 'Enabled' : 'Disabled'"
+          >{{ 'Enabled' if configs.get('block_dangerous_files', 'true') == 'true' else 'Disabled' }}</span>
+        </div>
+      {% endcall %}
+
+      {% call settings_row(label="Blocked Extensions", help="Executables, scripts, installers, and similar formats stay on this reference list.") %}
+        <div class="space-y-3" :class="!blockDangerous && 'opacity-60'">
+          <div class="flex flex-wrap gap-2">
+            <template x-for="ext in blockedExtensions" :key="ext">
+              <span class="pill pill-error" x-text="ext"></span>
+            </template>
+          </div>
+          <p class="text-[11px] leading-5 text-pb-text-dim">
+            This list covers common executable, installer, and script formats. A legitimate comic release should not need them.
+          </p>
+        </div>
+      {% endcall %}
+    </div>
+
+    <div class="px-6 py-3" x-show="!blockDangerous" x-cloak>
+      {% call inline_alert(tone="warning") %}
+        <span>Dangerous release blocking is turned off. Releases containing blocked file types will no longer be rejected automatically.</span>
+      {% endcall %}
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Archive protection",
+    eyebrow="Archive safeguards",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="security-file-safety-archive-card"'
+  ) %}
+    <div class="settings-rows">
+      {% call settings_row(label="Archive Inspection Size Limit", help="Maximum decompressed size to inspect during import before the archive is aborted.") %}
+        <div class="flex items-center gap-2">
+          <input
+            type="number"
+            data-testid="security-file-safety-archive-limit-input"
+            x-model.number="archiveSizeLimitMb"
+            min="100"
+            max="10000"
+            step="100"
+            class="input-pb w-28"
+          >
+          <span class="text-sm text-pb-text-sec">MB</span>
+        </div>
+        {% call field_note(tone="info", icon="check") %}
+          Default: <code class="font-mono">2000</code> MB. Increase this only when legitimate oversized archives need deeper inspection.
+        {% endcall %}
+      {% endcall %}
+
+      {% call settings_row(label="Path Traversal Protection", help="Reject archives that use absolute paths or parent-directory traversal to escape the library root.") %}
+        <div class="flex items-center gap-2 pt-1.5">
+          <span class="pill pill-success">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Always Active
+          </span>
+        </div>
+        {% call field_note(tone="info", icon="lock") %}
+          This safeguard cannot be disabled.
+        {% endcall %}
+      {% endcall %}
+    </div>
+
+    {% call settings_footer() %}
+      <span class="settings-footer-copy"
+            x-text="archiveMessage || 'Save the archive limits after adjusting inspection depth.'"
+            :class="archiveMessage ? (archiveSuccess ? 'text-pb-success' : 'text-pb-error') : ''"></span>
+      <div class="settings-footer-actions">
+        <button
+          data-testid="security-file-safety-save-archive"
+          @click="saveArchive()"
+          :disabled="archiveSaving || !archiveDirty()"
+          class="btn-primary"
+        >
+          <span x-text="archiveSaving ? 'Saving...' : 'Save Archive Protection'"></span>
+        </button>
+      </div>
+    {% endcall %}
+  {% endcall %}
+</div>
+
+<script>
+function fileSafety() {
+
+  const DEFAULT_ALLOWED = ['.cbr', '.cbz', '.cb7', '.cbt', '.pdf', '.epub'];
+
+  const BLOCKED_EXTENSIONS = [
+    '.exe', '.bat', '.cmd', '.com', '.msi', '.msp', '.mst',
+    '.ps1', '.psm1', '.psd1', '.vbs', '.vbe', '.js', '.jse', '.wsh', '.wsf',
+    '.scr', '.cpl', '.dll', '.sys', '.drv',
+    '.sh', '.bash', '.csh', '.ksh', '.zsh',
+    '.app', '.action', '.command', '.workflow',
+    '.reg', '.inf', '.hta', '.pif', '.lnk',
+  ];
+
+  return {
+    allowedExtensions: {{ configs.get('allowed_import_extensions', '') | tojson }} !== ''
+      ? {{ configs.get('allowed_import_extensions', '') | tojson }}.split(',').map(s => s.trim()).filter(Boolean)
+      : [...DEFAULT_ALLOWED],
+    newExtension: '',
+    blockDangerous: {{ 'true' if configs.get('block_dangerous_files', 'true') == 'true' else 'false' }},
+    blockedExtensions: BLOCKED_EXTENSIONS,
+    archiveSizeLimitMb: parseInt({{ configs.get('archive_size_limit_mb', '2000') | tojson }}, 10) || 2000,
+    archiveSavedLimitMb: parseInt({{ configs.get('archive_size_limit_mb', '2000') | tojson }}, 10) || 2000,
+    allowlistSaving: false,
+    allowlistMessage: '',
+    allowlistSuccess: false,
+    dangerousSaving: false,
+    dangerousMessage: '',
+    dangerousSuccess: false,
+    archiveSaving: false,
+    archiveMessage: '',
+    archiveSuccess: false,
+
+    isBlocked(ext) {
+      let norm = ext.trim().toLowerCase().replace(/^\.+/, '');
+      if (!norm) return false;
+      return BLOCKED_EXTENSIONS.includes('.' + norm);
+    },
+
+    allowlistSnapshot() {
+      return this.allowedExtensions.join(',');
+    },
+
+    archiveDirty() {
+      return Number(this.archiveSizeLimitMb) !== Number(this.archiveSavedLimitMb);
+    },
+
+    addExtension() {
+      let ext = this.newExtension.trim().toLowerCase().replace(/^\.+/, '');
+      if (!ext) return;
+      ext = '.' + ext;
+      if (BLOCKED_EXTENSIONS.includes(ext)) {
+        this.allowlistSuccess = false;
+        this.allowlistMessage = `Extension ${ext} is blocked for security reasons.`;
+        setTimeout(() => { this.allowlistMessage = ''; }, 4000);
+        return;
+      }
+      if (this.allowedExtensions.includes(ext)) {
+        this.newExtension = '';
+        return;
+      }
+      this.allowedExtensions.push(ext);
+      this.newExtension = '';
+      this.saveAllowlist();
+    },
+
+    removeExtension(index) {
+      this.allowedExtensions.splice(index, 1);
+      this.saveAllowlist();
+    },
+
+    resetExtensions() {
+      this.allowedExtensions = [...DEFAULT_ALLOWED];
+      this.saveAllowlist();
+    },
+
+    saveValues(values, stateKey) {
+      this[stateKey + 'Saving'] = true;
+      this[stateKey + 'Message'] = '';
+
+      fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error('Failed to save.');
+          this[stateKey + 'Success'] = true;
+          this[stateKey + 'Message'] = 'Settings saved.';
+          if (stateKey === 'archive') {
+            this.archiveSavedLimitMb = Number(this.archiveSizeLimitMb);
+          }
+          if (typeof showToast === 'function') showToast({ message: 'File safety settings saved.', level: 'success' });
+          setTimeout(() => { this[stateKey + 'Message'] = ''; }, 3000);
+        })
+        .catch(err => {
+          this[stateKey + 'Success'] = false;
+          this[stateKey + 'Message'] = err.message || 'Failed to save settings.';
+          if (typeof showToast === 'function') showToast({ message: 'Failed to save file safety settings.', level: 'error' });
+        })
+        .finally(() => { this[stateKey + 'Saving'] = false; });
+    },
+
+    saveAllowlist() {
+      this.saveValues(
+        { allowed_import_extensions: this.allowedExtensions.join(',') },
+        'allowlist'
+      );
+    },
+
+    saveDangerous() {
+      this.saveValues(
+        { block_dangerous_files: this.blockDangerous ? 'true' : 'false' },
+        'dangerous'
+      );
+    },
+
+    toggleDangerous(nextValue) {
+      const previousValue = this.blockDangerous;
+      this.blockDangerous = nextValue;
+      this.dangerousSaving = true;
+      this.dangerousSuccess = false;
+      this.dangerousMessage = '';
+
+      fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({
+          values: { block_dangerous_files: nextValue ? 'true' : 'false' },
+        }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error('Failed to save.');
+          if (typeof showToast === 'function') showToast({ message: 'File safety settings saved.', level: 'success' });
+        })
+        .catch(err => {
+          this.blockDangerous = previousValue;
+          this.dangerousSuccess = false;
+          this.dangerousMessage = err.message || 'Failed to save settings.';
+          if (typeof showToast === 'function') showToast({ message: 'Failed to save file safety settings.', level: 'error' });
+        })
+        .finally(() => {
+          this.dangerousSaving = false;
+        });
+    },
+
+    saveArchive() {
+      this.saveValues(
+        { archive_size_limit_mb: String(this.archiveSizeLimitMb) },
+        'archive'
+      );
+    },
+  };
+}
+</script>

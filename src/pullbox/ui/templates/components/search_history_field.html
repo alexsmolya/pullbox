@@ -1,0 +1,136 @@
+{#- Shared search field with local history dropdown.
+
+    Requires the shared Alpine controller:
+      searchHistoryField({ storageKey: "..." })
+-#}
+
+{% macro search_history_field(
+  name,
+  value="",
+  placeholder="Search...",
+  storage_key="",
+  root_testid="",
+  input_testid="",
+  clear_testid="",
+  panel_testid="",
+  item_testid="",
+  remove_testid="",
+  class_name="",
+  input_class_name=""
+) %}
+<div
+  {% if root_testid %}data-testid="{{ root_testid }}"{% endif %}
+  class="search-field {{ class_name }}"
+  x-data="searchHistoryField({ storageKey: '{{ storage_key }}' })"
+  @click.outside="open = false"
+  @keydown.escape.window="open = false"
+>
+  <input
+    x-ref="hiddenInput"
+    type="hidden"
+    name="{{ name }}"
+    value="{{ value|default('', true) }}"
+  >
+
+  <svg
+    class="search-field-icon"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
+    <path
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+    />
+  </svg>
+
+  <div
+    x-ref="editor"
+    contenteditable="true"
+    tabindex="0"
+    role="textbox"
+    aria-multiline="false"
+    aria-autocomplete="none"
+    aria-label="{{ placeholder }}"
+    spellcheck="false"
+    autocapitalize="off"
+    autocorrect="off"
+    data-search-history-input
+    data-placeholder="{{ placeholder }}"
+    :data-empty="query.trim() === '' ? 'true' : 'false'"
+    {% if input_testid %}data-testid="{{ input_testid }}"{% endif %}
+    @focus="handleFocus()"
+    @click="handleFocus()"
+    @input="handleInput()"
+    @keydown.enter.prevent="rememberCurrentQuery(); open = false; submitSearch()"
+    class="search-field-input search-field-editor {{ input_class_name }}"
+  >{{ value|default('', true) }}</div>
+
+  <button
+    type="button"
+    x-show="query.length > 0"
+    x-cloak
+    @click="clearQuery()"
+    {% if clear_testid %}data-testid="{{ clear_testid }}"{% endif %}
+    data-tip="Clear search"
+    data-tip-pos="top"
+    data-tip-size="narrow"
+    class="search-field-clear"
+  >
+    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+    </svg>
+  </button>
+
+  <div
+    x-show="open && history.length > 0"
+    x-cloak
+    x-transition:enter="transition ease-out duration-100"
+    x-transition:enter-start="opacity-0 -translate-y-1"
+    x-transition:enter-end="opacity-100 translate-y-0"
+    x-transition:leave="transition ease-in duration-75"
+    x-transition:leave-start="opacity-100 translate-y-0"
+    x-transition:leave-end="opacity-0 -translate-y-1"
+    {% if panel_testid %}data-testid="{{ panel_testid }}"{% endif %}
+    class="search-history-panel"
+  >
+    <div class="search-history-panel-header">
+      <span class="search-history-panel-title">Recent Searches</span>
+      <button type="button" @click.stop="clearHistory()" class="search-history-panel-clear">Clear all</button>
+    </div>
+    <ul class="search-history-list">
+      <template x-for="(term, idx) in history" :key="term + idx">
+        <li class="group search-history-item">
+          <button
+            type="button"
+            @click="selectTerm(term)"
+            {% if item_testid %}data-testid="{{ item_testid }}"{% endif %}
+            class="search-history-item-button"
+          >
+            <svg class="h-3.5 w-3.5 shrink-0 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span x-text="term" class="truncate"></span>
+          </button>
+          <button
+            type="button"
+            @click.stop="removeTerm(idx)"
+            {% if remove_testid %}data-testid="{{ remove_testid }}"{% endif %}
+            data-tip="Remove"
+            data-tip-pos="top"
+            data-tip-size="narrow"
+            class="search-history-item-remove"
+          >
+            <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </li>
+      </template>
+    </ul>
+  </div>
+</div>
+{% endmacro %}

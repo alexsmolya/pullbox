@@ -1,0 +1,369 @@
+"""Tests for import action journal helpers."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
+
+from pullbox.core.exceptions import NotFoundError
+from pullbox.models.import_job import (
+    ImportJob,
+    ImportJobAction,
+    ImportJobActionStatus,
+    ImportJobStatus,
+    ImportSourceType,
+)
+from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
+from pullbox.services.import_rollback_execution import RollbackActionPlan
+from pullbox.services.import_service import ImportService
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def _create_job_row(session: AsyncSession) -> ImportJob:
+    job = ImportJob(
+        source_path="/tmp/comics",
+        source_type=ImportSourceType.FILESYSTEM,
+        status=ImportJobStatus.IMPORTING,
+    )
+    session.add(job)
+    await session.flush()
+    return job
+
+
+def _make_service() -> ImportService:
+    return ImportService(
+        series_service=AsyncMock(),
+        metadata_service=AsyncMock(),
+        event_bus=AsyncMock(),
+    )
+
+
+def _rollback_plan(action: ImportJobAction) -> RollbackActionPlan:
+    return RollbackActionPlan(
+        action_id=action.id,
+        sequence_no=action.sequence_no,
+        action_type=action.action_type,
+        payload=dict(action.payload or {}),
+    )
+
+
+async def test_next_action_sequence_uses_highest_existing_sequence(
+    db_session: AsyncSession,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    db_session.add_all(
+        [
+            ImportJobAction(
+                import_job_id=job.id,
+                sequence_no=1,
+                phase="import",
+                action_type="series_created",
+                status=ImportJobActionStatus.COMPLETED,
+                payload={"series_id": 10},
+            ),
+            ImportJobAction(
+                import_job_id=job.id,
+                sequence_no=4,
+                phase="import",
+                action_type="library_file_registered",
+                status=ImportJobActionStatus.COMPLETED,
+                payload={"library_file_id": 20},
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    assert await service._next_action_sequence(db_session, job.id) == 5
+
+
+async def test_record_action_persists_completed_action_with_next_sequence(
+    db_session: AsyncSession,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+
+    action = await service._record_action(
+        db_session,
+        job,
+        phase="import",
+        action_type="series_created",
+        payload={"series_id": 123, "import_series_id": 456},
+    )
+
+    assert action.import_job_id == job.id
+    assert action.sequence_no == 1
+    assert action.phase == "import"
+    assert action.action_type == "series_created"
+    assert action.status == ImportJobActionStatus.COMPLETED
+    assert action.payload == {"series_id": 123, "import_series_id": 456}
+    assert await service._next_action_sequence(db_session, job.id) == 2
+
+
+async def test_rollback_action_removes_copied_library_file_and_journal_row(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    destination_path = tmp_path / "library" / "Absolute Wonder Woman 019.cbz"
+    destination_path.parent.mkdir(parents=True)
+    destination_path.write_text("comic", encoding="utf-8")
+    original_path = tmp_path / "incoming" / "Absolute Wonder Woman 019.cbz"
+    root = LibraryRoot(name="Library", path=str(tmp_path / "library"))
+    db_session.add(root)
+    await db_session.flush()
+    library_file = LibraryFile(
+        file_path=str(destination_path),
+        file_name=destination_path.name,
+        file_size=destination_path.stat().st_size,
+        file_format=FileFormat.CBZ,
+        file_hash=None,
+        file_modified_at=datetime.now(tz=UTC),
+        match_confidence=MatchConfidence.HIGH,
+        issue_id=None,
+        library_root_id=root.id,
+    )
+    db_session.add(library_file)
+    await db_session.flush()
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="library_file_registered",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "library_file_id": library_file.id,
+            "destination_path": str(destination_path),
+            "original_source_path": str(original_path),
+            "transfer_method": "copy",
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert await db_session.get(LibraryFile, library_file.id) is None
+    assert not destination_path.exists()
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
+async def test_rollback_action_deletes_created_series_without_files(
+    db_session: AsyncSession,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="series_created",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={"series_id": 321},
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    service._series_service.delete.assert_awaited_once_with(
+        db_session,
+        321,
+        delete_files=False,
+        delete_folder=True,
+    )
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
+async def test_rollback_action_tolerates_missing_created_series(
+    db_session: AsyncSession,
+) -> None:
+    service = _make_service()
+    service._series_service.delete.side_effect = NotFoundError("Series", 321)
+    job = await _create_job_row(db_session)
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="series_created",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={"series_id": 321},
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    service._series_service.delete.assert_awaited_once_with(
+        db_session,
+        321,
+        delete_files=False,
+        delete_folder=True,
+    )
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
+async def test_rollback_action_removes_empty_import_created_series_folder(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    series_folder = tmp_path / "library" / "New Series (2026)"
+    series_folder.mkdir(parents=True)
+    destination_path = series_folder / "New Series 001.cbz"
+    destination_path.write_text("comic", encoding="utf-8")
+    original_path = tmp_path / "incoming" / "New Series 001.cbz"
+    original_path.parent.mkdir(parents=True)
+    original_path.write_text("source", encoding="utf-8")
+    root = LibraryRoot(name="Library", path=str(tmp_path / "library"))
+    db_session.add(root)
+    await db_session.flush()
+    library_file = LibraryFile(
+        file_path=str(destination_path),
+        file_name=destination_path.name,
+        file_size=destination_path.stat().st_size,
+        file_format=FileFormat.CBZ,
+        file_hash=None,
+        file_modified_at=datetime.now(tz=UTC),
+        match_confidence=MatchConfidence.HIGH,
+        issue_id=None,
+        library_root_id=root.id,
+    )
+    db_session.add(library_file)
+    await db_session.flush()
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="library_file_registered",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "library_file_id": library_file.id,
+            "destination_path": str(destination_path),
+            "original_source_path": str(original_path),
+            "transfer_method": "copy",
+            "created_series_folder": True,
+            "created_series_folder_path": str(series_folder),
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert not destination_path.exists()
+    assert not series_folder.exists()
+
+
+async def test_rollback_action_preserves_preexisting_series_folder(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    series_folder = tmp_path / "library" / "Existing Series (2020)"
+    series_folder.mkdir(parents=True)
+    destination_path = series_folder / "Existing Series 001.cbz"
+    destination_path.write_text("comic", encoding="utf-8")
+    original_path = tmp_path / "incoming" / "Existing Series 001.cbz"
+    root = LibraryRoot(name="Library", path=str(tmp_path / "library"))
+    db_session.add(root)
+    await db_session.flush()
+    library_file = LibraryFile(
+        file_path=str(destination_path),
+        file_name=destination_path.name,
+        file_size=destination_path.stat().st_size,
+        file_format=FileFormat.CBZ,
+        file_hash=None,
+        file_modified_at=datetime.now(tz=UTC),
+        match_confidence=MatchConfidence.HIGH,
+        issue_id=None,
+        library_root_id=root.id,
+    )
+    db_session.add(library_file)
+    await db_session.flush()
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="library_file_registered",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "library_file_id": library_file.id,
+            "destination_path": str(destination_path),
+            "original_source_path": str(original_path),
+            "transfer_method": "copy",
+            "created_series_folder": False,
+            "created_series_folder_path": str(series_folder),
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert series_folder.exists()
+
+
+async def test_rollback_action_restores_surviving_permission_mode(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    source_path = tmp_path / "incoming" / "Saga 001.cbz"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("comic", encoding="utf-8")
+    source_path.chmod(0o600)
+    destination_path = tmp_path / "library" / "Saga (2012)" / "Saga 001.cbz"
+    destination_path.parent.mkdir(parents=True)
+    destination_path.hardlink_to(source_path)
+    destination_path.chmod(0o640)
+    root = LibraryRoot(name="Library", path=str(tmp_path / "library"))
+    db_session.add(root)
+    await db_session.flush()
+    library_file = LibraryFile(
+        file_path=str(destination_path),
+        file_name=destination_path.name,
+        file_size=destination_path.stat().st_size,
+        file_format=FileFormat.CBZ,
+        file_hash=None,
+        file_modified_at=datetime.now(tz=UTC),
+        match_confidence=MatchConfidence.HIGH,
+        issue_id=None,
+        library_root_id=root.id,
+    )
+    db_session.add(library_file)
+    await db_session.flush()
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="library_file_registered",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "library_file_id": library_file.id,
+            "destination_path": str(destination_path),
+            "original_source_path": str(source_path),
+            "transfer_method": "hardlink",
+            "permission_restores": [{"path": str(source_path), "mode": 0o600}],
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert not destination_path.exists()
+    assert source_path.exists()
+    assert source_path.stat().st_mode & 0o777 == 0o600

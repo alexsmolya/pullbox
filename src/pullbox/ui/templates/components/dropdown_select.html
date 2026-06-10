@@ -1,0 +1,239 @@
+{#- Shared custom dropdown select.
+
+    Design-system contract:
+    - Visible trigger/button + listbox panel
+    - Hidden input carries the submitted value for forms/HTMX
+    - No visible native <select>, so browser default menus never render
+
+    Usage:
+      {% from "components/dropdown_select.html" import dropdown_select %}
+      {{ dropdown_select(
+          name="status",
+          value=status_filter,
+          options=[("", "All Status"), ("continuing", "Continuing")],
+          root_testid="series-status-select",
+          hx_get="/series",
+          hx_target="#series-results-body",
+          hx_include="#series-filter-form",
+          class_name="w-full",
+      ) }}
+-#}
+
+{% macro dropdown_select(
+  name,
+  value="",
+  options=[],
+  size="md",
+  trigger_id="",
+  root_testid="",
+  input_testid="",
+  trigger_testid="",
+  panel_testid="",
+  hx_get="",
+  hx_target="",
+  hx_select="",
+  hx_include="",
+  hx_swap="innerHTML transition:true",
+  hx_sync="",
+  hx_push_url="true",
+  extra_input_attrs="",
+  class_name="",
+  panel_class_name="",
+  disabled=false,
+  invalid=false,
+  describedby="",
+  fit_width=false,
+  wrap_options=false,
+  local_model="",
+  local_on_change="",
+  on_change=""
+) %}
+{%- set normalized_size = namespace(value=size) -%}
+{%- if normalized_size.value == "default" -%}
+  {%- set normalized_size.value = "md" -%}
+{%- elif normalized_size.value == "compact" -%}
+  {%- set normalized_size.value = "sm" -%}
+{%- endif -%}
+{%- set current_label = namespace(value=(options[0][1] if options else "")) -%}
+{%- set change_handler = namespace(value="") -%}
+{%- for option in options -%}
+  {%- if option is mapping -%}
+    {%- set opt_value = option.value|default("", true) -%}
+    {%- set opt_label = option.label|default(opt_value, true) -%}
+  {%- else -%}
+    {%- set opt_value = option[0] -%}
+    {%- set opt_label = option[1] -%}
+  {%- endif -%}
+  {%- set normalized_value = opt_value|default("", true)|string -%}
+  {%- set selected_value = value|default("", true)|string -%}
+  {%- if normalized_value == selected_value -%}
+    {%- set current_label.value = opt_label -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if local_model -%}
+  {%- set change_handler.value = change_handler.value ~ local_model ~ " = $event.detail.value;" -%}
+{%- endif -%}
+{%- if local_on_change -%}
+  {%- set change_handler.value = change_handler.value ~ " " ~ local_on_change -%}
+{%- endif -%}
+{%- if on_change -%}
+  {%- set change_handler.value = change_handler.value ~ " " ~ on_change -%}
+{%- endif -%}
+
+<div
+  x-data='dropdownSelectData({
+    value: {{ value|default("", true)|string|tojson }},
+    options: {{ options|tojson }},
+    disabled: {{ "true" if disabled else "false" }},
+    fitWidth: {{ "true" if fit_width else "false" }},
+    wrapOptions: {{ "true" if wrap_options else "false" }},
+    changeExpression: {{ change_handler.value|trim|tojson }}
+  })'
+  x-init="init()"
+  {% if local_model %}x-effect="syncExternalValue({{ local_model }})"{% endif %}
+  x-on:keydown.escape.prevent.stop="close()"
+  x-on:keydown.tab="close(false)"
+  x-bind:data-dropdown-value="value"
+  x-bind:data-dropdown-placement="panelPlacement"
+  data-dropdown-select
+  data-dropdown-select-contract="v1"
+  data-dropdown-select-mode="{{ 'local' if local_model else ('htmx' if hx_get else 'form') }}"
+  data-dropdown-select-size="{{ normalized_size.value }}"
+  data-dropdown-value="{{ value|default('', true)|string }}"
+  data-dropdown-placement="bottom"
+  {% if fit_width %}data-dropdown-fit-width="true"{% endif %}
+  {% if wrap_options %}data-dropdown-wrap-options="true"{% endif %}
+  {% if root_testid %}data-testid="{{ root_testid }}"{% endif %}
+  class="dropdown-select control-size-{{ normalized_size.value }} {{ class_name }}"
+  {% if fit_width %}style="width: fit-content; max-width: 100%; --pb-dropdown-fit-width: auto; --pb-dropdown-panel-fit-width: auto;"{% endif %}
+>
+  <input
+    type="hidden"
+    name="{{ name }}"
+    value="{{ value|default('', true)|string }}"
+    x-ref="input"
+    x-bind:value="value"
+    data-dropdown-select-input
+    {% if input_testid %}data-testid="{{ input_testid }}"{% endif %}
+    {% if hx_get %}
+    hx-get="{{ hx_get }}"
+    hx-trigger="change"
+    {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}
+    {% if hx_select %}hx-select="{{ hx_select }}"{% endif %}
+    {% if hx_swap %}hx-swap="{{ hx_swap }}"{% endif %}
+    {% if hx_sync %}hx-sync="{{ hx_sync }}"{% endif %}
+    {% if hx_push_url %}hx-push-url="{{ hx_push_url }}"{% endif %}
+    {% if hx_include %}hx-include="{{ hx_include }}"{% endif %}
+    {% endif %}
+    {{ extra_input_attrs }}
+  >
+
+  <button
+    type="button"
+    {% if trigger_id %}id="{{ trigger_id }}"{% endif %}
+    {% if not trigger_id %}id="{{ name }}-dropdown-trigger"{% endif %}
+    x-ref="trigger"
+    x-on:click="toggle()"
+    x-on:keydown.enter.prevent="toggle()"
+    x-on:keydown.space.prevent="toggle()"
+    x-on:keydown.arrow-down.prevent="openAndFocus(1)"
+    x-on:keydown.arrow-up.prevent="openAndFocus(-1)"
+    x-bind:aria-expanded="open ? 'true' : 'false'"
+    x-bind:disabled="disabled"
+    aria-haspopup="listbox"
+    {% if invalid %}aria-invalid="true"{% endif %}
+    {% if describedby %}aria-describedby="{{ describedby }}"{% endif %}
+    data-dropdown-select-trigger
+    {% if trigger_testid %}data-testid="{{ trigger_testid }}"{% endif %}
+    class="dropdown-select-trigger"
+    {% if fit_width %}style="width: var(--pb-dropdown-fit-width);"{% endif %}
+    {% if disabled %}disabled{% endif %}
+  >
+    <span
+      data-dropdown-select-trigger-label
+      class="dropdown-select-trigger-label"
+      x-text="currentLabel"
+    >{{ current_label.value }}</span>
+    <svg
+      class="dropdown-select-chevron"
+      x-bind:class="open ? 'rotate-180' : ''"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"></path>
+    </svg>
+  </button>
+
+  <template x-teleport="body">
+    <div
+      x-cloak
+      x-show="open"
+      x-ref="panel"
+      x-on:keydown.escape.prevent.stop="close()"
+      x-on:keydown.tab="close(false)"
+      x-on:keydown.arrow-down.prevent="move(1)"
+      x-on:keydown.arrow-up.prevent="move(-1)"
+      x-on:keydown.home.prevent="focusBoundary('start')"
+      x-on:keydown.end.prevent="focusBoundary('end')"
+      x-on:keydown.enter.prevent="selectActive()"
+      x-on:keydown.space.prevent="selectActive()"
+      role="listbox"
+      aria-label="{{ name|replace('_', ' ')|replace('-', ' ')|title }}"
+      aria-labelledby="{{ trigger_id if trigger_id else name ~ '-dropdown-trigger' }}"
+      tabindex="0"
+      data-dropdown-select-panel
+      x-bind:data-ready="panelReady ? 'true' : 'false'"
+      {% if panel_testid %}data-testid="{{ panel_testid }}"{% endif %}
+      class="dropdown-select-panel {{ panel_class_name }}"
+    >
+      {% for option in options %}
+      {% if option is mapping %}
+      {% set opt_value = option.value|default("", true)|string %}
+      {% set opt_label = option.label|default(option.value, true)|string %}
+      {% set opt_disabled = option.disabled|default(false) %}
+      {% else %}
+      {% set opt_value = option[0]|default("", true)|string %}
+      {% set opt_label = option[1]|default(option[0], true)|string %}
+      {% set opt_disabled = false %}
+      {% endif %}
+      <button
+        type="button"
+        role="option"
+        tabindex="-1"
+        data-dropdown-option
+        data-value="{{ opt_value }}"
+        aria-disabled="{{ 'true' if opt_disabled else 'false' }}"
+        x-bind:aria-selected="isSelected({{ loop.index0 }}) ? 'true' : 'false'"
+        x-on:click="selectByIndex({{ loop.index0 }})"
+        x-on:mouseenter="setActive({{ loop.index0 }})"
+        x-on:mouseover="setActive({{ loop.index0 }})"
+        x-on:mousemove="setActive({{ loop.index0 }})"
+        x-on:focus="setActive({{ loop.index0 }})"
+        class="dropdown-select-option{% if opt_disabled %} pointer-events-none cursor-default text-[11px] font-semibold uppercase tracking-wider text-pb-text-dim{% endif %}"
+        x-bind:class="optionClasses({{ loop.index0 }})"
+        {% if opt_disabled %}disabled{% endif %}
+      >
+        <span class="dropdown-select-option-label">{{ opt_label }}</span>
+        <svg
+          x-cloak
+          x-show="!{{ 'true' if opt_disabled else 'false' }} && isSelected({{ loop.index0 }})"
+          class="dropdown-select-option-check"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.25"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+        </svg>
+      </button>
+      {% endfor %}
+    </div>
+  </template>
+</div>
+{% endmacro %}

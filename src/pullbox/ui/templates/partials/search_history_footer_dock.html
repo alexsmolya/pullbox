@@ -1,0 +1,24 @@
+{% from "components/page_dock.html" import page_dock %}
+
+{% set _base_params = [] %}
+{% if search_type_filter %}{% set _ = _base_params.append("search_type=" ~ search_type_filter) %}{% endif %}
+{% if confidence_filter %}{% set _ = _base_params.append("confidence=" ~ confidence_filter) %}{% endif %}
+{% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
+{% if sort and sort != "-created_at" %}{% set _ = _base_params.append("sort=" ~ sort) %}{% endif %}
+{% set _base_url = "/search-history" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
+
+{{ page_dock(
+  page=page,
+  total_pages=search_log_pages,
+  base_url=_base_url,
+  status_items=[
+    {"label": "total", "value": search_log_total|string ~ " searches"},
+    {"label": "grabbed", "value": search_log_grabbed_total|string},
+    {"label": "queued", "value": search_log_queued_total|string},
+    {"label": "rejected", "value": search_log_rejected_total|string},
+  ],
+  hx_target="#search-history-results-body",
+  hx_swap="outerHTML",
+  hx_select="",
+  hx_base_url=_base_url
+) }}

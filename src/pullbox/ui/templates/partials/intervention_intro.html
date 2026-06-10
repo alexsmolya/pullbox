@@ -1,0 +1,45 @@
+<section
+  data-testid="intervention-intro"
+  class="review-note-card space-y-4"
+>
+  <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+    <div class="max-w-2xl space-y-3">
+      <p class="section-eyebrow">Decision guide</p>
+      <h3 class="text-lg font-semibold text-pb-text">
+        Approve only when the issue, source, and file facts agree.
+      </h3>
+      <p class="text-sm leading-6 text-pb-text-sec">
+        Matches land here when they do not meet the auto-grab threshold cleanly enough to trust on
+        their own. Confidence helps you triage, but it should not replace manual review.
+      </p>
+    </div>
+
+    <div class="grid gap-3 sm:grid-cols-3 xl:min-w-[30rem]">
+      <div class="rounded-xl border border-pb-border bg-pb-card px-4 py-3">
+        <p class="flex items-center gap-2 text-sm font-semibold text-pb-text">
+          <span class="h-2.5 w-2.5 rounded-full bg-pb-success"></span>
+          High
+        </p>
+        <p class="mt-2 text-xs leading-5 text-pb-text-sec">Strong title and issue alignment. Confirm quickly, but still sanity-check the release.</p>
+      </div>
+      <div class="rounded-xl border border-pb-border bg-pb-card px-4 py-3">
+        <p class="flex items-center gap-2 text-sm font-semibold text-pb-text">
+          <span class="h-2.5 w-2.5 rounded-full bg-pb-warning"></span>
+          Medium
+        </p>
+        <p class="mt-2 text-xs leading-5 text-pb-text-sec">Partial match or conflicting signals. Review source, size, and issue details before you approve.</p>
+      </div>
+      <div class="rounded-xl border border-pb-border bg-pb-card px-4 py-3">
+        <p class="flex items-center gap-2 text-sm font-semibold text-pb-text">
+          <span class="h-2.5 w-2.5 rounded-full bg-pb-error"></span>
+          Low
+        </p>
+        <p class="mt-2 text-xs leading-5 text-pb-text-sec">Weak match quality. Treat these as exceptions and reject when the evidence is not convincing.</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="text-[11px] text-pb-text-dim">
+    Unresolved matches expire automatically after the configured retention period (Settings &rarr; Search &rarr; Intervention Queue).
+  </p>
+</section>

@@ -1,0 +1,67 @@
+{% set _search_history_gauge_total = (search_log_grabbed_total + search_log_queued_total + search_log_rejected_total) if (search_log_grabbed_total + search_log_queued_total + search_log_rejected_total) > 0 else 1 %}
+{% set _grabbed_offset = (113.1 * (1 - (search_log_grabbed_total / _search_history_gauge_total)))|round(1) %}
+{% set _queued_offset = (113.1 * (1 - (search_log_queued_total / _search_history_gauge_total)))|round(1) %}
+{% set _rejected_offset = (113.1 * (1 - (search_log_rejected_total / _search_history_gauge_total)))|round(1) %}
+
+<div class="downloads-header-copy">
+  <h1 class="downloads-title">SEARCH <span>HISTORY</span></h1>
+  <p class="downloads-subtitle">
+    {{ search_log_total }} searches · {{ search_log_grabbed_total }} grabbed · {{ search_log_queued_total }} queued · {{ search_log_rejected_total }} rejected
+  </p>
+</div>
+
+<div data-testid="search-history-gauges" class="downloads-gauges">
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-success"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _grabbed_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-success">{{ search_log_grabbed_total }}</span>
+    </div>
+    <div class="downloads-gauge-label">Grabbed</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-warning"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _queued_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-warning">{{ search_log_queued_total }}</span>
+    </div>
+    <div class="downloads-gauge-label">Queued</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-error"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _rejected_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-error">{{ search_log_rejected_total }}</span>
+    </div>
+    <div class="downloads-gauge-label">Rejected</div>
+  </div>
+</div>

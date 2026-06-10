@@ -1,0 +1,10 @@
+{#- Utilities: Job History tab — backend-sorted, paginated history with expandable logs -#}
+<script id="utilities-queue-initial-data" type="application/json">{{ {"jobs": initial_jobs|default([]), "stats": initial_stats|default({})}|tojson }}</script>
+<div
+  data-testid="utilities-history-panel"
+  x-data="utilitiesQueue({ csrfToken: '{{ csrf_token }}', disableInitialQueueLoad: true, pollQueue: false })"
+  x-init="init()"
+  class="space-y-6"
+>
+  {% include "partials/utilities_history_section.html" %}
+</div>

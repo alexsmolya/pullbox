@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Security — {{ instance_name() }}{% endblock %}
+{% block page_title %}Security{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div class="admin-workspace-page" data-testid="security-page" data-admin-workspace-contract="v1">
+  {% include "partials/security_header.html" %}
+  {% include "partials/security_body.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/security_footer_dock.html" %}
+{% endblock %}

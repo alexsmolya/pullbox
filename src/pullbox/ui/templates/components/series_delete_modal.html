@@ -1,0 +1,156 @@
+{% from "components/settings_shell.html" import inline_alert %}
+{% set modal_testid = modal_testid|default('series-delete-modal') %}
+{% set close_button_testid = close_button_testid|default('series-delete-close') %}
+{% set cancel_testid = cancel_testid|default('series-delete-cancel') %}
+{% set submit_testid = submit_testid|default('series-delete-submit') %}
+{% set busy_expr = busy_expr|default('false') %}
+{% set cancel_disabled_expr = cancel_disabled_expr|default(busy_expr) %}
+{% set submit_disabled_expr = submit_disabled_expr|default(busy_expr) %}
+{% set show_files_option = show_files_option|default(true) %}
+{% set show_folders_option = show_folders_option|default(true) %}
+{% set show_files_option_expr = show_files_option_expr|default(None) %}
+{% set show_folders_option_expr = show_folders_option_expr|default(None) %}
+{% set delete_files_disabled_expr = delete_files_disabled_expr|default('false') %}
+{% set files_option_label = files_option_label|default('Delete linked files from disk') %}
+{% set files_option_copy = files_option_copy|default('Also remove any library files associated with the selected series.') %}
+{% set folders_option_label = folders_option_label|default('Delete series folders from disk') %}
+{% set folders_option_copy = folders_option_copy|default('Remove the series folders and any remaining contents from disk. This also requires deleting linked files.') %}
+{% set files_option_label_expr = files_option_label_expr|default(None) %}
+{% set files_option_copy_expr = files_option_copy_expr|default(None) %}
+{% set folders_option_label_expr = folders_option_label_expr|default(None) %}
+{% set folders_option_copy_expr = folders_option_copy_expr|default(None) %}
+
+<div>
+  <div
+    x-show="{{ show_expr }}"
+    x-cloak
+    data-testid="{{ modal_testid }}"
+    data-delete-modal-contract="series-v1"
+    class="modal-shell"
+    @keydown.escape.window="{{ show_expr }} && {{ close_handler }}"
+  >
+    <div
+      class="modal-backdrop"
+      @click="{{ close_handler }}"
+    ></div>
+    <section
+      class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form library-delete-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="series-delete-title"
+    >
+      <header class="modal-header library-browser-modal__header">
+        <div class="library-browser-modal__title-block">
+          <div class="library-browser-modal__icon library-browser-modal__icon--danger">
+            <svg fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 6.75h18"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75V5.25A1.5 1.5 0 019.75 3.75h4.5a1.5 1.5 0 011.5 1.5v1.5m-9 0v11.25A2.25 2.25 0 009 20.25h6A2.25 2.25 0 0017.25 18V6.75"/>
+            </svg>
+          </div>
+          <div>
+            <p class="library-delete-modal__eyebrow">Danger Zone</p>
+            <h2 id="series-delete-title" data-testid="series-delete-title" class="library-browser-modal__title" x-text="{{ title_expr }}"></h2>
+          </div>
+        </div>
+        <button
+          type="button"
+          data-testid="{{ close_button_testid }}"
+          @click="{{ close_handler }}"
+          class="library-browser-modal__close shrink-0"
+          aria-label="Close"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="modal-body library-browser-modal__body">
+        <div class="library-browser-modal__section-stack library-browser-modal__section-stack--delete">
+          <div
+            class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+            data-testid="series-delete-warning-row"
+          >
+            {% call inline_alert(tone="danger", icon="warning", attrs='data-testid="series-delete-summary"') %}
+              <p class="text-sm leading-6 text-pb-text" x-text="{{ message_expr }}"></p>
+            {% endcall %}
+          </div>
+
+          <section class="library-browser-modal__section-panel">
+            <div
+              class="library-browser-modal__section-heading-row"
+              data-testid="series-delete-options-header"
+            >
+              Options
+            </div>
+            <div
+              class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top library-browser-modal__body-inset--roomy-bottom"
+              data-testid="series-delete-options-panel"
+            >
+              <div class="series-delete-modal__options">
+                {% if show_files_option %}
+                <label class="series-delete-modal__option" {% if show_files_option_expr %}x-show="{{ show_files_option_expr }}"{% endif %}>
+                  <input
+                    type="checkbox"
+                    data-testid="series-delete-files"
+                    x-model="{{ delete_files_model }}"
+                    :disabled="{{ delete_files_disabled_expr }}"
+                    class="series-delete-modal__checkbox"
+                  >
+                  <div class="series-delete-modal__option-copy">
+                    <p class="series-delete-modal__option-title" {% if files_option_label_expr %}x-text="{{ files_option_label_expr }}"{% endif %}>{{ files_option_label }}</p>
+                    <p class="series-delete-modal__option-text" {% if files_option_copy_expr %}x-text="{{ files_option_copy_expr }}"{% endif %}>{{ files_option_copy }}</p>
+                  </div>
+                </label>
+                {% endif %}
+
+                {% if show_folders_option %}
+                <label class="series-delete-modal__option" {% if show_folders_option_expr %}x-show="{{ show_folders_option_expr }}"{% endif %}>
+                  <input
+                    type="checkbox"
+                    data-testid="series-delete-folders"
+                    x-model="{{ delete_folders_model }}"
+                    {% if folders_change_handler is defined and folders_change_handler %}
+                    @change="{{ folders_change_handler }}"
+                    {% endif %}
+                    class="series-delete-modal__checkbox"
+                  >
+                  <div class="series-delete-modal__option-copy">
+                    <p class="series-delete-modal__option-title" {% if folders_option_label_expr %}x-text="{{ folders_option_label_expr }}"{% endif %}>{{ folders_option_label }}</p>
+                    <p class="series-delete-modal__option-text" {% if folders_option_copy_expr %}x-text="{{ folders_option_copy_expr }}"{% endif %}>{{ folders_option_copy }}</p>
+                  </div>
+                </label>
+                {% endif %}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <footer class="modal-footer">
+        <button
+          type="button"
+          {% if cancel_ref is defined and cancel_ref %}
+          x-ref="{{ cancel_ref }}"
+          {% endif %}
+          data-testid="{{ cancel_testid }}"
+          @click="{{ close_handler }}"
+          :disabled="{{ cancel_disabled_expr }}"
+          class="btn-ghost !px-4 !py-2"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-testid="{{ submit_testid }}"
+          @click="{{ submit_handler }}"
+          :disabled="{{ submit_disabled_expr }}"
+          class="btn-danger !px-4 !py-2"
+        >
+          <span x-show="!({{ busy_expr }})" x-text="{{ submit_label_expr }}"></span>
+          <span x-show="{{ busy_expr }}" x-cloak x-text="{{ submitting_label_expr }}"></span>
+        </button>
+      </footer>
+    </section>
+  </div>
+</div>

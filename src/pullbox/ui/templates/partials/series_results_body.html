@@ -1,0 +1,56 @@
+{% from "components/mission_control_table.html" import mission_control_table %}
+
+{% if series_data %}
+  {% if active_view == "grid" %}
+    <section data-testid="series-collector-wall-view" class="series-collector-wall-shell">
+      <div class="series-collector-wall-grid">
+        {% for item in series_data %}
+          {% set s = item.series %}
+          {% set owned_count = item.owned_count %}
+          {% include "partials/series_grid_card.html" %}
+        {% endfor %}
+      </div>
+    </section>
+  {% else %}
+    <section data-testid="series-mission-control-view" class="series-mission-control-shell">
+      {% call mission_control_table("series-mission-control-table") %}
+          <thead>
+            <tr>
+              <th data-series-selection-cell class="c" style="width: 40px">SEL</th>
+              <th class="c" style="width: 36px">SYS</th>
+              <th>Target</th>
+              <th style="width: 64px">Year</th>
+              <th class="c" style="width: 78px">Owned</th>
+              <th style="width: 220px">Acquisition</th>
+              <th class="c" style="width: 72px">Type</th>
+              <th class="r" style="width: 88px">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in series_data %}
+              {% set s = item.series %}
+              {% set owned_count = item.owned_count %}
+              {% include "partials/series_list_row.html" %}
+            {% endfor %}
+          </tbody>
+      {% endcall %}
+    </section>
+  {% endif %}
+{% else %}
+  <div
+    data-series-empty-state="true"
+    data-testid="series-empty-state"
+    class="series-empty-state"
+  >
+    <svg class="h-12 w-12 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+    </svg>
+    {% if q %}
+      <p class="series-empty-state-title">No series matching “{{ q }}”</p>
+      <p class="series-empty-state-copy">Try a shorter title, loosen the filters, or search for the publisher instead.</p>
+    {% else %}
+      <p class="series-empty-state-title">Nothing in the registry yet</p>
+      <p class="series-empty-state-copy">Add a series to start tracking issues, library progress, and missing files from here.</p>
+    {% endif %}
+  </div>
+{% endif %}

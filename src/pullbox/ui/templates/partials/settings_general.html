@@ -1,0 +1,709 @@
+{#- Settings: General tab -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import alert_banner, field_note, section_card, settings_footer, settings_row, ui_icon %}
+
+<div class="space-y-6 pt-6" x-data="generalSettings()">
+
+  {% call section_card(
+    title="Application identity",
+    eyebrow="General",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <div class="settings-rows settings-rows-align-end">
+      {% call settings_row(label="Instance Name", help="Displayed in the browser tab and system logs.") %}
+        <input type="text" x-model="host.instanceName" class="input-pb max-w-sm" placeholder="Pullbox">
+      {% endcall %}
+
+      {% call settings_row(
+        label="External URL",
+        help="The public URL people use to access Pullbox. Reverse-proxy deployments should use the external URL."
+      ) %}
+        <input type="text" x-model="host.baseUrl" class="input-pb max-w-sm" placeholder="http://localhost:8585">
+        {% call field_note() %}
+          Stored in Pullbox settings and used for generated links, browser metadata, and external callbacks.
+        {% endcall %}
+      {% endcall %}
+    </div>
+
+    {% call settings_footer() %}
+      <div class="settings-footer-actions ml-auto justify-end">
+        <button type="button" x-show="hostDirty" x-cloak @click="resetHost()" class="btn-ghost">Reset</button>
+        <button type="button" @click="saveHost()" :disabled="!hostDirty" class="btn-primary">
+          Save Changes
+        </button>
+      </div>
+    {% endcall %}
+  {% endcall %}
+
+  {% call section_card(
+    title="Runtime network",
+    eyebrow="Status",
+    description="These values come from the runtime environment used to start Pullbox.",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <div class="settings-rows settings-rows-align-end">
+      {% call settings_row(
+        label="Bind Address",
+        help="Network interface Pullbox is currently bound to."
+      ) %}
+        <input type="text" readonly value="{{ runtime_info.bind_address.value }}" aria-label="Bind address" class="input-pb max-w-xs cursor-not-allowed font-mono opacity-70">
+        {% call field_note(tone="warning", icon="lock") %}
+          Runtime-managed at startup.
+        {% endcall %}
+      {% endcall %}
+
+      {% call settings_row(
+        label="Port Number",
+        help="Internal port Pullbox is currently listening on."
+      ) %}
+        <input type="text" readonly value="{{ runtime_info.port.value }}" aria-label="Bind port" class="input-pb w-32 cursor-not-allowed font-mono opacity-70">
+        {% call field_note(tone="warning", icon="lock") %}
+          Runtime-managed at startup.
+        {% endcall %}
+      {% endcall %}
+    </div>
+  {% endcall %}
+
+  {% set https_any_editable = https_settings.https_enabled.editable or https_settings.https_cert_path.editable or https_settings.https_key_path.editable %}
+  {% call section_card(
+    title="Native HTTPS",
+    eyebrow="Security",
+    description="Serve Pullbox over HTTPS on the same listener port. Docker/env-managed values are shown as effective runtime settings.",
+    title_style="plain",
+    body_class="p-0",
+    attrs='data-testid="settings-general-https-card"'
+  ) %}
+    <div class="settings-rows settings-rows-align-end">
+      {% call settings_row(
+        label="Enable HTTPS",
+        help="Uses the normal Pullbox port with TLS enabled after restart."
+      ) %}
+        <div class="flex items-center gap-3">
+          <label class="inline-flex items-center gap-3">
+            <input
+              type="checkbox"
+              x-model="https.enabled"
+              class="peer toggle-input"
+              aria-label="Enable HTTPS"
+              data-testid="settings-general-https-enabled"
+              {% if not https_settings.https_enabled.editable %}disabled{% endif %}
+            >
+            <span class="toggle-switch"></span>
+          </label>
+          <span class="text-sm text-pb-text-sec" x-text="https.enabled ? 'Enabled' : 'Disabled'"></span>
+        </div>
+        {% call field_note() %}
+          HTTPS uses <code class="font-mono">PULLBOX_PORT</code>; map a different external port in Docker if needed.
+        {% endcall %}
+        {% if not https_settings.https_enabled.editable %}
+          {% call field_note(tone="warning", icon="lock") %}
+            Runtime-managed at startup by <code class="font-mono">PULLBOX_HTTPS_ENABLED</code>.
+          {% endcall %}
+        {% endif %}
+      {% endcall %}
+
+      {% call settings_row(
+        label="Certificate File",
+        help="Absolute path to the mounted certificate file inside Pullbox."
+      ) %}
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="text"
+            x-model="https.certPath"
+            class="input-pb w-[30rem] max-w-full font-mono"
+            placeholder="/config/certs/pullbox.crt"
+            data-testid="settings-general-https-cert-path"
+            {% if not https_settings.https_cert_path.editable %}readonly{% endif %}
+          >
+          {% if https_settings.https_cert_path.editable %}
+            <button
+              type="button"
+              class="btn-ghost btn-sm self-start sm:self-auto"
+              @click="browseHttpsCertificate()"
+              data-testid="settings-general-https-cert-browse"
+            >
+              Browse
+            </button>
+          {% endif %}
+        </div>
+        {% if not https_settings.https_cert_path.editable %}
+          {% call field_note(tone="warning", icon="lock") %}
+            Runtime-managed at startup by <code class="font-mono">PULLBOX_HTTPS_CERT_PATH</code>.
+          {% endcall %}
+        {% endif %}
+      {% endcall %}
+
+      {% call settings_row(
+        label="Private Key File",
+        help="Absolute path to the mounted private key file inside Pullbox."
+      ) %}
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="text"
+            x-model="https.keyPath"
+            class="input-pb w-[30rem] max-w-full font-mono"
+            placeholder="/config/certs/pullbox.key"
+            data-testid="settings-general-https-key-path"
+            {% if not https_settings.https_key_path.editable %}readonly{% endif %}
+          >
+          {% if https_settings.https_key_path.editable %}
+            <button
+              type="button"
+              class="btn-ghost btn-sm self-start sm:self-auto"
+              @click="browseHttpsPrivateKey()"
+              data-testid="settings-general-https-key-browse"
+            >
+              Browse
+            </button>
+          {% endif %}
+        </div>
+        {% if not https_settings.https_key_path.editable %}
+          {% call field_note(tone="warning", icon="lock") %}
+            Runtime-managed at startup by <code class="font-mono">PULLBOX_HTTPS_KEY_PATH</code>.
+          {% endcall %}
+        {% endif %}
+      {% endcall %}
+
+      {% call settings_row(
+        label="Certificate Root",
+        help="Browse and validation are constrained to this runtime-managed folder."
+      ) %}
+        <input type="text" readonly x-model="https.certRoot" aria-label="HTTPS certificate root" class="input-pb w-[30rem] max-w-full cursor-not-allowed font-mono opacity-70">
+        {% call field_note(tone="warning", icon="lock") %}
+          Runtime-managed by <code class="font-mono">PULLBOX_HTTPS_CERT_ROOT</code>.
+        {% endcall %}
+      {% endcall %}
+
+      <div x-show="httpsBaseUrlWarning" x-cloak>
+        {% call alert_banner(
+          tone="warning",
+          icon="warning",
+          title="External URL still uses HTTP",
+          description="HTTPS can be enabled without changing External URL, but generated links will keep using http:// until you update it."
+        ) %}
+        {% endcall %}
+      </div>
+
+      <div x-show="httpsRestartRequired" x-cloak>
+        {% call alert_banner(
+          tone="warning",
+          icon="warning",
+          title="Restart required",
+          description="HTTPS listener changes apply after Pullbox restarts."
+        ) %}
+          <button type="button" class="btn-primary btn-sm" @click="restartPullbox()">Restart Pullbox</button>
+        {% endcall %}
+      </div>
+    </div>
+
+    {% if https_any_editable %}
+      {% call settings_footer() %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="httpsDirty" x-cloak @click="resetHttps()" class="btn-ghost">Reset</button>
+          <button type="button" @click="saveHttps()" :disabled="!httpsDirty" class="btn-primary">
+            Save Changes
+          </button>
+        </div>
+      {% endcall %}
+    {% endif %}
+  {% endcall %}
+
+  {% call section_card(
+    title="Help improve Pullbox",
+    eyebrow="Project insights",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <div class="settings-rows settings-rows-align-end">
+      {% call settings_row(
+        label="Share anonymous usage stats",
+        help="Controls whether Pullbox can share install-level usage information like active version adoption."
+      ) %}
+        <div class="flex items-center gap-3">
+          <label class="inline-flex items-center gap-3">
+	            <input
+	              type="checkbox"
+	              x-model="usageStats.enabled"
+	              class="peer toggle-input"
+	              aria-label="Share anonymous usage stats"
+	              data-testid="settings-general-usage-stats-toggle"
+	            >
+            <span class="toggle-switch"></span>
+          </label>
+          <span class="text-sm text-pb-text-sec" x-text="usageStats.enabled ? 'Enabled' : 'Disabled'"></span>
+        </div>
+        {% call field_note() %}
+          Shares anonymous install and version information only. This never includes your library contents, credentials, or download history.
+        {% endcall %}
+        <template x-if="usageStats.consent === 'unknown'">
+          {% call field_note(tone="warning", icon="warning") %}
+            No choice has been saved yet. The first sign-in prompt will stay pending until you choose.
+          {% endcall %}
+        </template>
+      {% endcall %}
+    </div>
+
+    {% call settings_footer() %}
+      <div class="settings-footer-actions ml-auto justify-end">
+        <button type="button" x-show="usageStatsDirty" x-cloak @click="resetUsageStats()" class="btn-ghost">Reset</button>
+        <button type="button" @click="saveUsageStatsPreference()" :disabled="!usageStatsDirty" class="btn-primary">
+          Save Changes
+        </button>
+      </div>
+    {% endcall %}
+  {% endcall %}
+
+  {% call section_card(
+    title="Logging",
+    eyebrow="Observability",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveLogging().then(() => markClean())">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(label="Log Level", help="Controls application log verbosity.") %}
+          {{ dropdown_select(
+            name="logging_log_level",
+            value=configs.get("log_level", "info")|lower,
+            options=[
+              ("debug", "Debug"),
+              ("info", "Info"),
+              ("warning", "Warning"),
+              ("error", "Error"),
+            ],
+            root_testid="settings-general-log-level-select",
+            class_name="w-48",
+            local_model="logging.logLevel"
+          ) }}
+        {% endcall %}
+
+        {% call settings_row(label="Log Directory", help="Directory where log files are stored.") %}
+          <input type="text" readonly value="{{ runtime_info.logs_dir.value }}" aria-label="Log directory" class="input-pb w-[28rem] max-w-full cursor-not-allowed font-mono opacity-70">
+          {% call field_note(tone="warning", icon="lock") %}
+            Runtime-managed at startup.
+          {% endcall %}
+        {% endcall %}
+
+        {% call settings_row(label="Log Size Limit", help="Maximum log file size in MB before rotation.") %}
+          <div class="flex flex-wrap items-center gap-2">
+            <input type="number" x-model="logging.logSizeLimitMb" min="1" max="100" aria-label="Log size limit in megabytes" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">MB</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Backup Count", help="Number of rotated log files to keep before the oldest is deleted.") %}
+          <div class="flex flex-wrap items-center gap-2">
+            <input type="number" x-model="logging.logBackupCount" min="1" max="20" aria-label="Number of rotated log files to keep" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">files</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer() %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost">Reset</button>
+          <button type="submit" :disabled="!isDirty" class="btn-primary">Save Changes</button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Backup and recovery",
+    eyebrow="Recovery",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveBackupSettings().then(() => markClean())">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(label="Backup Directory", help="Directory where backup archives are stored.") %}
+          <input type="text" readonly value="{{ runtime_info.backup_dir.value }}" aria-label="Backup directory" class="input-pb w-[28rem] max-w-full cursor-not-allowed font-mono opacity-70">
+          {% call field_note(tone="warning", icon="lock") %}
+            Runtime-managed at startup.
+          {% endcall %}
+        {% endcall %}
+
+        {% call settings_row(label="Backup Interval", help="How often automatic backups are created.") %}
+          <div class="flex flex-wrap items-center gap-2">
+            <input type="number" x-model="backup.intervalDays" min="1" max="90" aria-label="Backup interval in days" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">days</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Backup Retention", help="How long to keep scheduled backups before automatic deletion.") %}
+          <div class="flex flex-wrap items-center gap-2">
+            <input type="number" x-model="backup.retentionDays" min="1" max="365" aria-label="Backup retention in days" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">days</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer() %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost">Reset</button>
+          <button type="submit" :disabled="!isDirty" class="btn-primary">Save Changes</button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% include 'components/file_browser.html' %}
+</div>
+
+<script>
+function generalSettings() {
+  return {
+    ...fileBrowserMixin({ csrfToken: '{{ csrf_token }}' }),
+
+    init() {
+      const self = this;
+      this._usageStatsListener = function(event) {
+        const detail = event && event.detail ? event.detail : {};
+        const consent = typeof detail.consent === 'string' ? detail.consent : 'unknown';
+        self.usageStats.consent = consent;
+        self.usageStats.enabled = consent === 'enabled';
+        self.usageStats._originalConsent = consent;
+        self.usageStats._originalEnabled = consent === 'enabled';
+      };
+      window.addEventListener('pullbox:usage-stats-preference-updated', this._usageStatsListener);
+    },
+
+    destroy() {
+      if (this._usageStatsListener) {
+        window.removeEventListener('pullbox:usage-stats-preference-updated', this._usageStatsListener);
+      }
+    },
+
+    // Application identity — DB-backed
+    host: {
+      instanceName: '{{ identity.instance_name }}',
+      baseUrl: '{{ identity.base_url }}',
+      _originalInstanceName: '{{ identity.instance_name }}',
+      _originalBaseUrl: '{{ identity.base_url }}',
+    },
+
+    get hostDirty() {
+      return this.host.instanceName !== this.host._originalInstanceName
+        || this.host.baseUrl !== this.host._originalBaseUrl;
+    },
+
+    resetHost() {
+      this.host.instanceName = this.host._originalInstanceName;
+      this.host.baseUrl = this.host._originalBaseUrl;
+    },
+
+    // Native HTTPS — DB-backed unless overridden by runtime env settings.
+    https: {
+      enabled: {{ 'true' if https_settings.https_enabled.value|lower in ["true", "1"] else 'false' }},
+      certPath: {{ https_settings.https_cert_path.value|tojson }},
+      keyPath: {{ https_settings.https_key_path.value|tojson }},
+      certRoot: {{ runtime_info.https_cert_root.value|tojson }},
+      enabledEditable: {{ 'true' if https_settings.https_enabled.editable else 'false' }},
+      certPathEditable: {{ 'true' if https_settings.https_cert_path.editable else 'false' }},
+      keyPathEditable: {{ 'true' if https_settings.https_key_path.editable else 'false' }},
+      anyEditable: {{ 'true' if https_any_editable else 'false' }},
+      _originalEnabled: {{ 'true' if https_settings.https_enabled.value|lower in ["true", "1"] else 'false' }},
+      _originalCertPath: {{ https_settings.https_cert_path.value|tojson }},
+      _originalKeyPath: {{ https_settings.https_key_path.value|tojson }},
+      restartRequired: false,
+    },
+
+    get httpsDirty() {
+      return Boolean(this.https.anyEditable) && (
+        (this.https.enabledEditable && Boolean(this.https.enabled) !== Boolean(this.https._originalEnabled))
+        || (this.https.certPathEditable && (this.https.certPath || '') !== (this.https._originalCertPath || ''))
+        || (this.https.keyPathEditable && (this.https.keyPath || '') !== (this.https._originalKeyPath || ''))
+      );
+    },
+
+    get httpsRestartRequired() {
+      return Boolean(this.https.restartRequired);
+    },
+
+    get httpsBaseUrlWarning() {
+      return Boolean(this.https.enabled)
+        && String(this.host.baseUrl || '').trim().toLowerCase().startsWith('http://');
+    },
+
+    resetHttps() {
+      this.https.enabled = Boolean(this.https._originalEnabled);
+      this.https.certPath = this.https._originalCertPath || '';
+      this.https.keyPath = this.https._originalKeyPath || '';
+    },
+
+    browseHttpsCertificate() {
+      if (!this.https.certPathEditable) return;
+      const certRoot = this.https.certRoot || '/config/certs';
+      this.openFileBrowser('httpsCertPath', this.https.certPath, {
+        selectionMode: 'file',
+        startPath: certRoot,
+        allowedRoots: [certRoot],
+        extensions: 'pem,crt,cer,key',
+        title: 'Select HTTPS certificate',
+        emptyMessage: 'No certificate or key files found in this folder.',
+        onSelectAction: 'applyHttpsCertificateSelection',
+      });
+    },
+
+    browseHttpsPrivateKey() {
+      if (!this.https.keyPathEditable) return;
+      const certRoot = this.https.certRoot || '/config/certs';
+      this.openFileBrowser('httpsKeyPath', this.https.keyPath, {
+        selectionMode: 'file',
+        startPath: certRoot,
+        allowedRoots: [certRoot],
+        extensions: 'pem,crt,cer,key',
+        title: 'Select HTTPS private key',
+        emptyMessage: 'No certificate or key files found in this folder.',
+        onSelectAction: 'applyHttpsPrivateKeySelection',
+      });
+    },
+
+    applyHttpsCertificateSelection(selection) {
+      this.https.certPath = selection && selection.path ? selection.path : '';
+    },
+
+    applyHttpsPrivateKeySelection(selection) {
+      this.https.keyPath = selection && selection.path ? selection.path : '';
+    },
+
+    saveHttps() {
+      const values = {};
+      if (this.https.enabledEditable) values.https_enabled = this.https.enabled ? 'true' : 'false';
+      if (this.https.certPathEditable) values.https_cert_path = String(this.https.certPath || '').trim();
+      if (this.https.keyPathEditable) values.https_key_path = String(this.https.keyPath || '').trim();
+      if (Object.keys(values).length === 0) return Promise.resolve();
+      return fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' },
+        body: JSON.stringify({ values }),
+      })
+        .then(async r => {
+          let payload = {};
+          try {
+            payload = await r.json();
+          } catch (_err) {}
+          if (!r.ok) {
+            throw new Error(payload.error?.message || payload.detail || 'Failed to save HTTPS settings.');
+          }
+          return payload;
+        })
+        .then(payload => {
+          if (this.https.enabledEditable) this.https._originalEnabled = Boolean(this.https.enabled);
+          if (this.https.certPathEditable) {
+            this.https._originalCertPath = values.https_cert_path;
+            this.https.certPath = values.https_cert_path;
+          }
+          if (this.https.keyPathEditable) {
+            this.https._originalKeyPath = values.https_key_path;
+            this.https.keyPath = values.https_key_path;
+          }
+          this.https.restartRequired = Boolean(payload.restart_required);
+          if (typeof showToast === 'function') {
+            showToast({
+              message: this.https.restartRequired
+                ? 'HTTPS settings saved. Restart Pullbox to apply them.'
+                : 'HTTPS settings saved.',
+              level: 'success',
+            });
+          }
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    restartPullbox() {
+      fetch('/api/v1/system/restart', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(async r => {
+          let payload = {};
+          try {
+            payload = await r.json();
+          } catch (_err) {}
+          if (!r.ok) {
+            throw new Error(payload.error?.message || payload.detail || 'Failed to restart Pullbox.');
+          }
+          if (typeof showToast === 'function') {
+            showToast({ message: payload.message || 'Restart initiated.', level: 'success' });
+          }
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    saveHost() {
+      const name = this.host.instanceName.trim();
+      const url = this.host.baseUrl.trim();
+      if (!name) {
+        if (typeof showToast === 'function') showToast({ message: 'Instance name cannot be empty.', level: 'error' });
+        return;
+      }
+      if (!url) {
+        if (typeof showToast === 'function') showToast({ message: 'External URL cannot be empty.', level: 'error' });
+        return;
+      }
+      fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' },
+        body: JSON.stringify({ values: { instance_name: name, base_url: url } }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error('Failed to save application identity settings.');
+          return r.json();
+        })
+        .then(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Application identity saved.', level: 'success' });
+          this.host._originalInstanceName = name;
+          this.host._originalBaseUrl = url;
+      })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    usageStats: {
+      consent: '{{ configs.get("usage_stats_consent", "unknown")|lower }}',
+      enabled: {{ 'true' if configs.get("usage_stats_consent", "unknown")|lower == 'enabled' else 'false' }},
+      _originalConsent: '{{ configs.get("usage_stats_consent", "unknown")|lower }}',
+      _originalEnabled: {{ 'true' if configs.get("usage_stats_consent", "unknown")|lower == 'enabled' else 'false' }},
+    },
+
+    get usageStatsDirty() {
+      return this.usageStats.consent === 'unknown'
+        || this.usageStats.enabled !== this.usageStats._originalEnabled;
+    },
+
+    resetUsageStats() {
+      this.usageStats.consent = this.usageStats._originalConsent;
+      this.usageStats.enabled = this.usageStats._originalEnabled;
+    },
+
+    saveUsageStatsPreference() {
+      return fetch('/api/v1/system/usage-stats', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({ enabled: Boolean(this.usageStats.enabled) }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error('Failed to save anonymous usage stats preference.');
+          return r.json();
+        })
+        .then(payload => {
+          const consent = typeof payload.consent === 'string' ? payload.consent : 'unknown';
+          this.usageStats.consent = consent;
+          this.usageStats.enabled = Boolean(payload.enabled);
+          this.usageStats._originalConsent = consent;
+          this.usageStats._originalEnabled = Boolean(payload.enabled);
+          if (typeof window.__pullboxUpdateUsageStatsPreference === 'function') {
+            window.__pullboxUpdateUsageStatsPreference(payload);
+          }
+          if (typeof showToast === 'function') {
+            showToast({
+              message: payload.enabled
+                ? 'Anonymous usage stats enabled.'
+                : 'Anonymous usage stats disabled.',
+              level: 'success',
+            });
+          }
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    // Logging settings — DB-backed policy, runtime-managed directory
+    logging: {
+      logLevel: '{{ configs.get("log_level", "info")|lower }}',
+      logsDir: '{{ runtime_info.logs_dir.value }}',
+      logSizeLimitMb: '{{ configs.get("log_size_limit_mb", "1") }}',
+      logBackupCount: '{{ configs.get("log_backup_count", "5") }}',
+    },
+
+    // Backup settings — DB-backed interval/retention, runtime-managed directory
+    backup: {
+      backupDir: '{{ runtime_info.backup_dir.value }}',
+      intervalDays: '{{ configs.get("backup_interval_days", "7") }}',
+      retentionDays: '{{ configs.get("backup_retention_days", "28") }}',
+    },
+
+    // ── Logging save ──────────────────────────────────────────────
+    saveLogging() {
+      const values = {
+        log_level: this.logging.logLevel,
+        log_size_limit_mb: String(this.logging.logSizeLimitMb),
+        log_backup_count: String(this.logging.logBackupCount),
+      };
+      return fetch("/api/v1/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "{{ csrf_token }}",
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error("Failed to save logging settings.");
+          if (typeof showToast === "function") showToast({ message: "Logging settings saved.", level: "success" });
+        })
+        .catch(err => {
+          if (typeof showToast === "function") showToast({ message: err.message, level: "error" });
+        });
+    },
+
+    // ── Backup save ────────────────────────────────────────────────
+    saveBackupSettings() {
+      const values = {
+        backup_interval_days: String(this.backup.intervalDays),
+        backup_retention_days: String(this.backup.retentionDays),
+      };
+      return fetch("/api/v1/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "{{ csrf_token }}",
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error("Failed to save backup settings.");
+          if (typeof showToast === "function") showToast({ message: "Backup settings saved.", level: "success" });
+        })
+        .catch(err => {
+          if (typeof showToast === "function") showToast({ message: err.message, level: "error" });
+        });
+    },
+
+    // ── Config save ────────────────────────────────────────────────
+    saveConfig(formEl) {
+      const formData = new FormData(formEl);
+      const values = {};
+      for (const [key, val] of formData.entries()) values[key] = val;
+      return fetch("/api/v1/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "{{ csrf_token }}",
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error("Failed to save settings.");
+          if (typeof showToast === "function") showToast({ message: "Settings saved.", level: "success" });
+        })
+        .catch(err => {
+          if (typeof showToast === "function") showToast({ message: err.message, level: "error" });
+        });
+    },
+
+  };
+}
+</script>

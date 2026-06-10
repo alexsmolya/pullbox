@@ -1,0 +1,487 @@
+{#- Settings: Media Management tab -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import field_note, section_card, settings_footer, settings_row, ui_icon %}
+
+<div class="space-y-6 pt-6" x-data="mediaSettings()">
+  {% call section_card(
+    title="Comics Directory",
+    description="This path is controlled by the deployment environment and stays visible here for reference.",
+    eyebrow="Storage source",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <div class="settings-rows">
+      {% call settings_row(label="Comics Directory", help="All imports and download handoff work eventually target this library root.") %}
+        <input type="text" readonly value="{{ host_info.library_root }}" class="input-pb max-w-lg cursor-not-allowed font-mono opacity-70">
+        {% call field_note(tone="warning", icon="lock") %}
+          Set by <code class="font-mono">PULLBOX_LIBRARY_ROOT</code> in the environment.
+        {% endcall %}
+      {% endcall %}
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Format and import behavior",
+    description="Choose how incoming files are prioritized and how existing library entries are treated during import.",
+    eyebrow="Import policy",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% call settings_row(label="Preferred Format", help="When two otherwise valid releases exist, this format receives priority.") %}
+          {{ dropdown_select(
+            name="preferred_format",
+            value=configs.get("preferred_format", "cbz"),
+            options=[
+              ("cbz", "CBZ"),
+              ("cbr", "CBR"),
+              ("cb7", "CB7"),
+              ("pdf", "PDF"),
+              ("epub", "EPUB"),
+            ],
+            root_testid="settings-media-preferred-format-select",
+            class_name="w-32"
+          ) }}
+        {% endcall %}
+
+        {% call settings_row(label="Normalize Imported Archives to CBZ", help="When enabled, Pullbox will convert imported archives to CBZ during import processing. This does not change the search preferred format setting above.") %}
+          <div class="flex items-center gap-3">
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input
+                type="checkbox"
+                name="convert_to_preferred_format_on_import"
+                value="true"
+                x-model="convertToPreferredFormat"
+                class="peer toggle-input"
+              >
+              <span class="toggle-switch"></span>
+            </label>
+            <span class="text-sm text-pb-text-sec" x-text="convertToPreferredFormat ? 'Enabled' : 'Disabled'"></span>
+          </div>
+          {% call field_note(tone="info", icon="information-circle") %}
+            CBZ files are kept as-is. CBR, CB7, PDF, and other supported import formats are normalized into CBZ when this is enabled.
+          {% endcall %}
+        {% endcall %}
+
+        {% call settings_row(label="Update Embedded ComicInfo.xml on Import", help="When enabled, Pullbox rewrites ComicInfo.xml on the final imported library artifact using the matched issue metadata.") %}
+          <div class="flex items-center gap-3">
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input
+                type="checkbox"
+                name="update_embedded_comicinfo_from_match_on_import"
+                value="true"
+                x-model="updateEmbeddedComicInfoOnImport"
+                class="peer toggle-input"
+              >
+              <span class="toggle-switch"></span>
+            </label>
+            <span class="text-sm text-pb-text-sec" x-text="updateEmbeddedComicInfoOnImport ? 'Enabled' : 'Disabled'"></span>
+          </div>
+          {% call field_note(tone="info", icon="information-circle") %}
+            Metadata updates apply to the final library artifact only. If a non-CBZ archive needs rewriting, Pullbox uses the same CBZ normalization path as import conversion.
+          {% endcall %}
+        {% endcall %}
+
+        {% call settings_row(label="Search on Add", help="When Pullbox adds a brand-new series through import, Add Series, or suggestion acceptance, immediately search its wanted issues.") %}
+          <div class="flex items-center gap-3">
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input
+                type="checkbox"
+                name="search_on_add_default"
+                value="true"
+                x-model="searchOnAddDefault"
+                class="peer toggle-input"
+              >
+              <span class="toggle-switch"></span>
+            </label>
+            <span class="text-sm text-pb-text-sec" x-text="searchOnAddDefault ? 'Enabled' : 'Disabled'"></span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="File Transfer Method", help="Controls whether completed downloads are moved, copied, or linked into the library.") %}
+          {% set pp_method = configs.get('post_processing_method', 'move') %}
+          <div class="space-y-3">
+            {{ dropdown_select(
+              name="post_processing_method",
+              value=pp_method,
+              options=[
+                ("move", "Move"),
+                ("copy", "Copy"),
+                ("hardlink", "Hardlink"),
+                ("symlink", "Symlink"),
+              ],
+              root_testid="settings-media-post-processing-select",
+              class_name="w-40"
+            ) }}
+            <div class="info-panel info-panel-muted max-w-2xl">
+              <div class="space-y-2 text-xs leading-6 text-pb-text-sec">
+                <p><span class="font-semibold text-pb-text">Move:</span> frees download space immediately, but the original source copy disappears.</p>
+                <p><span class="font-semibold text-pb-text">Copy:</span> keeps the original intact, but doubles storage use.</p>
+                <p><span class="font-semibold text-pb-text">Hardlink:</span> keeps one physical copy, but requires source and destination on the same filesystem.</p>
+                <p><span class="font-semibold text-pb-text">Symlink:</span> keeps a pointer to the original file, which must stay available.</p>
+              </div>
+            </div>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Torrent Import Strategy", help="Controls how automated torrent post-processing treats the original seeding file.") %}
+          {% set torrent_strategy = configs.get('torrent_import_strategy', 'standard') %}
+          <div class="space-y-3">
+            {{ dropdown_select(
+              name="torrent_import_strategy",
+              value=torrent_strategy,
+              options=[
+                ("standard", "Standard"),
+                ("seed_safe", "Seed-safe"),
+              ],
+              root_testid="settings-media-torrent-import-strategy-select",
+              class_name="w-44"
+            ) }}
+            {% call field_note(tone="info", icon="information-circle") %}
+              Seed-safe mode applies only to automated torrent post-processing. Pullbox preserves the torrent source for seeding, then hardlinks when safe or copies when a separate library artifact is needed. Imports that rewrite archive contents still require Move or Copy.
+            {% endcall %}
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Library Permission Management", help="Optionally apply chmod modes to new folders and files Pullbox creates during import.") %}
+          <div class="space-y-4 max-w-2xl" data-testid="settings-media-library-permissions-card">
+            <div class="flex items-center gap-3">
+              <label class="relative inline-flex cursor-pointer items-center">
+                <input
+                  type="checkbox"
+                  name="library_permissions_enabled"
+                  value="true"
+                  x-model="libraryPermissionsEnabled"
+                  class="peer toggle-input"
+                  aria-label="Enable library permission management"
+                  data-testid="settings-media-library-permissions-enabled"
+                >
+                <span class="toggle-switch"></span>
+              </label>
+              <span class="text-sm text-pb-text-sec" x-text="libraryPermissionsEnabled ? 'Enabled' : 'Disabled'"></span>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-2" :class="!libraryPermissionsEnabled && 'opacity-60'">
+              <label class="space-y-1">
+                <span class="block text-xs font-semibold uppercase tracking-wide text-pb-text-dim">Folder mode</span>
+                <input
+                  type="text"
+                  name="library_permissions_folder_mode"
+                  value="{{ configs.get('library_permissions_folder_mode', '755') }}"
+                  inputmode="numeric"
+                  pattern="0?[0-7]{3}"
+                  class="input-pb w-28 font-mono"
+                  data-testid="settings-media-library-folder-mode"
+                >
+              </label>
+              <label class="space-y-1">
+                <span class="block text-xs font-semibold uppercase tracking-wide text-pb-text-dim">File mode</span>
+                <input
+                  type="text"
+                  name="library_permissions_file_mode"
+                  value="{{ configs.get('library_permissions_file_mode', '644') }}"
+                  inputmode="numeric"
+                  pattern="0?[0-7]{3}"
+                  class="input-pb w-28 font-mono"
+                  data-testid="settings-media-library-file-mode"
+                >
+              </label>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-2" :class="!libraryPermissionsEnabled && 'opacity-60'">
+              <label class="flex items-start gap-3 rounded-xl border border-pb-border bg-pb-surface/60 p-3">
+                <input
+                  type="checkbox"
+                  name="library_permissions_apply_to_created_folders"
+                  value="true"
+                  x-model="libraryPermissionsApplyFolders"
+                  class="mt-1 rounded border-pb-border text-pb-accent focus:ring-pb-accent"
+                  data-testid="settings-media-library-created-folders"
+                >
+                <span>
+                  <span class="block text-sm font-medium text-pb-text">Created folders</span>
+                  <span class="block text-xs text-pb-text-sec">Apply the folder mode only when Pullbox creates a new series folder.</span>
+                </span>
+              </label>
+              <label class="flex items-start gap-3 rounded-xl border border-pb-border bg-pb-surface/60 p-3">
+                <input
+                  type="checkbox"
+                  name="library_permissions_apply_to_materialized_files"
+                  value="true"
+                  x-model="libraryPermissionsApplyFiles"
+                  class="mt-1 rounded border-pb-border text-pb-accent focus:ring-pb-accent"
+                  data-testid="settings-media-library-materialized-files"
+                >
+                <span>
+                  <span class="block text-sm font-medium text-pb-text">Imported files</span>
+                  <span class="block text-xs text-pb-text-sec">Apply the file mode after move, copy, conversion, or ComicInfo updates complete.</span>
+                </span>
+              </label>
+            </div>
+
+            {% call field_note(tone="info", icon="information-circle") %}
+              Pullbox skips hardlinks and symlinks to stay seed-safe and avoid changing linked targets. Recursive library fixes belong in the Utilities workflow planned for this feature.
+            {% endcall %}
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Skip Existing Files", help="If a file for the target issue already exists in the library, Pullbox can skip the import instead of writing another copy.") %}
+          <div class="flex items-center gap-3">
+            {% set skip = configs.get('skip_existing_files', 'true') %}
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input type="checkbox" name="skip_existing_files" value="true" {% if skip == 'true' %}checked{% endif %} class="peer toggle-input">
+              <span class="toggle-switch"></span>
+            </label>
+            <span class="text-sm text-pb-text-sec">{{ 'Enabled' if skip == 'true' else 'Disabled' }}</span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost btn-sm">
+            Reset
+          </button>
+          <button
+            type="submit"
+            data-testid="settings-media-import-save"
+            :disabled="!isDirty"
+            :class="!isDirty && 'opacity-50 cursor-not-allowed'"
+            class="btn-primary"
+          >
+            Save import rules
+          </button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Naming behavior",
+    description="Turn automatic renaming on or off, then control how Pullbox sanitizes invalid filename characters.",
+    eyebrow="Rename rules",
+    title_style="plain",
+    body_class="p-0",
+    class_name="section-card-visible"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% call settings_row(label="Rename Comics", help="Apply your naming templates during import instead of keeping the original download filename.") %}
+          <div class="flex items-center gap-3">
+            {% set rename = configs.get('rename_on_import', 'true') %}
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input type="checkbox" name="rename_on_import" value="true" {% if rename == 'true' %}checked{% endif %} class="peer toggle-input">
+              <span class="toggle-switch"></span>
+            </label>
+            <span class="text-sm text-pb-text-sec">{{ 'Enabled' if rename == 'true' else 'Disabled' }}</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Replace Illegal Characters", help="Replace filesystem characters such as <code class='text-pb-text-sec font-mono'>&lt; &gt; : &quot; / &#92; | ? *</code> so generated file and folder names stay valid.") %}
+          <div class="flex items-center gap-3">
+            {% set replace_illegal = configs.get('replace_illegal_characters', 'true') %}
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input type="checkbox" name="replace_illegal_characters" value="true" {% if replace_illegal == 'true' %}checked{% endif %} class="peer toggle-input">
+              <span class="toggle-switch"></span>
+            </label>
+            <span class="text-sm text-pb-text-sec">{{ 'Enabled' if replace_illegal == 'true' else 'Disabled' }}</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Colon Replacement", help="Choose how Pullbox rewrites colons when illegal-character cleanup is enabled.") %}
+          {% set colon_repl = configs.get('colon_replacement', 'dash') %}
+          {{ dropdown_select(
+            name="colon_replacement",
+            value=colon_repl,
+            options=[
+              ("dash", "Dash ( - )"),
+              ("space", "Space"),
+              ("empty", "Remove"),
+              ("smart", "Em-dash ( — )"),
+            ],
+            root_testid="settings-media-colon-replacement-select",
+            class_name="w-40 text-xs"
+          ) }}
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost btn-sm">
+            Reset
+          </button>
+          <button type="submit" :disabled="!isDirty" :class="!isDirty && 'opacity-50 cursor-not-allowed'" class="btn-primary">
+            Save naming behavior
+          </button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call section_card(
+    title="Naming templates",
+    description="Preview each template against sample library content before you save it.",
+    eyebrow="Template previews",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form x-data="dirtyForm()" @input="checkDirty()" @change="checkDirty()" @submit.prevent="saveConfig($el).then(() => markClean())">
+      <div class="settings-rows">
+        {% set folder_tmpl = configs.get('series_folder_template', '{Series} ({Year})') %}
+        {% call settings_row(label="Series Folder Format", help='Tokens: {Series}, {Year}, {Publisher}, {ComicVineId}, {Type}') %}
+          <div class="space-y-2 max-w-2xl">
+            <input type="text" name="series_folder_template" value="{{ folder_tmpl }}" @input.debounce.300ms="previewNaming($event.target.value, 'folder', 'preview-folder')" class="input-pb font-mono">
+            <div id="preview-folder" class="info-panel settings-media-preview-panel min-h-[2rem] font-mono text-xs space-y-1" x-init='previewNaming({{ folder_tmpl|tojson|forceescape }}, "folder", "preview-folder")'>
+              <span class="block italic text-pb-text-dim">Loading preview...</span>
+            </div>
+          </div>
+        {% endcall %}
+
+        {% set std_tmpl = configs.get('comic_file_template', '{Series} ({Year}) #{Issue:03d}') %}
+        {% call settings_row(label="Standard Comic Format", help='Tokens: {Series}, {Year}, {Issue}, {Issue:03d}, {Publisher}') %}
+          <div class="space-y-2 max-w-2xl">
+            <input type="text" name="comic_file_template" value="{{ std_tmpl }}" @input.debounce.300ms="previewNaming($event.target.value, 'standard', 'preview-standard')" class="input-pb font-mono">
+            <div id="preview-standard" class="info-panel settings-media-preview-panel min-h-[2rem] font-mono text-xs space-y-1" x-init='previewNaming({{ std_tmpl|tojson|forceescape }}, "standard", "preview-standard")'>
+              <span class="block italic text-pb-text-dim">Loading preview...</span>
+            </div>
+          </div>
+        {% endcall %}
+
+        {% set annual_tmpl = configs.get('annual_file_template', '{Series} ({Year}) Annual #{Issue:03d}') %}
+        {% call settings_row(label="Annual Format", help='Use the same core tokens as the standard comic template and include the annual marker when needed.') %}
+          <div class="space-y-2 max-w-2xl">
+            <input type="text" name="annual_file_template" value="{{ annual_tmpl }}" @input.debounce.300ms="previewNaming($event.target.value, 'annual', 'preview-annual')" class="input-pb font-mono">
+            <div id="preview-annual" class="info-panel settings-media-preview-panel min-h-[2rem] font-mono text-xs space-y-1" x-init='previewNaming({{ annual_tmpl|tojson|forceescape }}, "annual", "preview-annual")'>
+              <span class="block italic text-pb-text-dim">Loading preview...</span>
+            </div>
+          </div>
+        {% endcall %}
+
+        {% set ns_tmpl = configs.get('non_standard_file_template', '{Series} ({Year}) {Type} {Volume:02d} - {Title}') %}
+        {% call settings_row(label="Collection Non-Standard Format", help='For TPBs, omnibuses, compendiums, hardcovers, and other multi-book collection releases. Extra tokens: {Type}, {Title}, {Volume}, {Volume:02d}.') %}
+          <div class="space-y-2 max-w-2xl">
+            <input type="text" name="non_standard_file_template" value="{{ ns_tmpl }}" @input.debounce.300ms="previewNaming($event.target.value, 'non_standard_collection', 'preview-nonstandard')" class="input-pb font-mono">
+            <div id="preview-nonstandard" class="info-panel settings-media-preview-panel min-h-[2rem] font-mono text-xs space-y-1" x-init='previewNaming({{ ns_tmpl|tojson|forceescape }}, "non_standard_collection", "preview-nonstandard")'>
+              <span class="block italic text-pb-text-dim">Loading preview...</span>
+            </div>
+          </div>
+        {% endcall %}
+
+        {% set single_ns_tmpl = configs.get('single_non_standard_file_template', '{Series} ({Year}) {Type} - {Title}') %}
+        {% call settings_row(label="Single-Release Non-Standard Format", help='For one-shots, graphic novels, and specials. Extra tokens: {Type}, {Title}.') %}
+          <div class="space-y-2 max-w-2xl">
+            <input type="text" name="single_non_standard_file_template" value="{{ single_ns_tmpl }}" @input.debounce.300ms="previewNaming($event.target.value, 'non_standard_single', 'preview-nonstandard-single')" class="input-pb font-mono">
+            <div id="preview-nonstandard-single" class="info-panel settings-media-preview-panel min-h-[2rem] font-mono text-xs space-y-1" x-init='previewNaming({{ single_ns_tmpl|tojson|forceescape }}, "non_standard_single", "preview-nonstandard-single")'>
+              <span class="block italic text-pb-text-dim">Loading preview...</span>
+            </div>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button type="button" x-show="isDirty" x-cloak @click="resetForm()" class="btn-ghost btn-sm">
+            Reset
+          </button>
+          <button type="submit" :disabled="!isDirty" :class="!isDirty && 'opacity-50 cursor-not-allowed'" class="btn-primary">
+            Save naming templates
+          </button>
+        </div>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% include 'components/file_browser.html' %}
+</div>
+
+<script>
+function mediaSettings() {
+  return {
+    ...fileBrowserMixin(),
+    convertToPreferredFormat: {{ 'true' if configs.get('convert_to_preferred_format_on_import', 'false') == 'true' else 'false' }},
+    updateEmbeddedComicInfoOnImport: {{ 'true' if configs.get('update_embedded_comicinfo_from_match_on_import', 'false') == 'true' else 'false' }},
+    searchOnAddDefault: {{ 'true' if configs.get('search_on_add_default', 'false') == 'true' else 'false' }},
+    libraryPermissionsEnabled: {{ 'true' if configs.get('library_permissions_enabled', 'false') == 'true' else 'false' }},
+    libraryPermissionsApplyFolders: {{ 'true' if configs.get('library_permissions_apply_to_created_folders', 'true') == 'true' else 'false' }},
+    libraryPermissionsApplyFiles: {{ 'true' if configs.get('library_permissions_apply_to_materialized_files', 'true') == 'true' else 'false' }},
+
+    saveConfig(formEl) {
+      const formData = new FormData(formEl);
+      const values = {};
+      formEl.querySelectorAll('[name]').forEach(el => {
+        if (el.type === 'checkbox') values[el.name] = el.checked ? 'true' : 'false';
+      });
+      for (const [key, val] of formData.entries()) {
+        if (formEl.querySelector(`[name="${key}"]`)?.type !== 'checkbox') values[key] = val;
+      }
+
+      return fetch("/api/v1/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "{{ csrf_token }}",
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(async r => {
+          if (!r.ok) {
+            let message = "Failed to save settings.";
+            try {
+              const data = await r.json();
+              message = data.error?.message || data.detail || message;
+            } catch (_err) {}
+            throw new Error(message);
+          }
+          if (typeof showToast === "function") showToast({ message: "Settings saved.", level: "success" });
+        })
+        .catch(err => {
+          if (typeof showToast === "function") showToast({ message: err.message, level: "error" });
+          throw err;
+        });
+    },
+
+    previewNaming(template, templateType, targetId) {
+      const el = document.getElementById(targetId);
+      if (!el) return;
+      if (!template.trim()) {
+        el.innerHTML = '<span class="block text-pb-text-dim italic">Enter a template above.</span>';
+        return;
+      }
+      el.innerHTML = '<span class="block text-pb-text-dim italic">Loading…</span>';
+
+      const params = new URLSearchParams({
+        template: template,
+        template_type: templateType,
+      });
+
+      fetch("/api/v1/config/naming/preview?" + params.toString(), {
+        headers: { "X-CSRF-Token": "{{ csrf_token }}" },
+      })
+        .then(r => r.json())
+        .then(data => {
+          const examples = data.examples || [];
+          if (examples.length === 0) {
+            el.innerHTML = '<span class="block text-pb-text-dim italic">No matching examples.</span>';
+            return;
+          }
+          el.innerHTML = examples.map(ex => {
+            const inputHtml = '<span class="text-pb-text-dim">' + escapeHtml(ex.input || '') + '</span>';
+            const arrow = '<span class="text-pb-text-dim mx-1">→</span>';
+            const outputHtml = '<span class="text-pb-success">' + escapeHtml(ex.output || '') + '</span>';
+            return '<div class="flex items-baseline gap-0 flex-wrap">' + inputHtml + arrow + outputHtml + '</div>';
+          }).join("");
+        })
+        .catch(() => {
+          el.innerHTML = '<span class="block text-pb-error">Preview failed.</span>';
+        });
+    },
+  };
+}
+
+function escapeHtml(value) {
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode(String(value)));
+  return div.innerHTML;
+}
+</script>

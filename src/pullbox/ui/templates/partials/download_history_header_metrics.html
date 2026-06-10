@@ -1,0 +1,67 @@
+{% set _history_gauge_total = history_total if history_total > 0 else 1 %}
+{% set _history_completed_offset = (113.1 * (1 - (history_completed_count / _history_gauge_total)))|round(1) %}
+{% set _history_failed_offset = (113.1 * (1 - (history_failed_count / _history_gauge_total)))|round(1) %}
+{% set _history_cancelled_offset = (113.1 * (1 - (history_cancelled_count / _history_gauge_total)))|round(1) %}
+
+<div class="downloads-header-copy">
+  <h1 class="downloads-title">DOWNLOAD <span>HISTORY</span></h1>
+  <p class="downloads-subtitle">
+    {{ history_total }} records · {{ history_completed_count }} completed · {{ history_failed_count }} failed · {{ history_cancelled_count }} cancelled
+  </p>
+</div>
+
+<div data-testid="downloads-gauges" class="downloads-gauges">
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-success"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _history_completed_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-success">{{ history_completed_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Completed</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-error"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _history_failed_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-error">{{ history_failed_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Failed</div>
+  </div>
+
+  <div class="downloads-gauge">
+    <div class="downloads-gauge-ring">
+      <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+        <circle
+          class="downloads-gauge-fill downloads-gauge-fill-muted"
+          cx="24"
+          cy="24"
+          r="18"
+          stroke-dasharray="113.1"
+          stroke-dashoffset="{{ _history_cancelled_offset }}"
+        ></circle>
+      </svg>
+      <span class="downloads-gauge-value downloads-gauge-value-muted">{{ history_cancelled_count }}</span>
+    </div>
+    <div class="downloads-gauge-label">Cancelled</div>
+  </div>
+</div>

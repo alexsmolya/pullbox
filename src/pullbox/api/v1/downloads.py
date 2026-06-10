@@ -1,0 +1,437 @@
+"""Download API routes — queue, history, cancel, retry, and blocklist actions."""
+
+import structlog
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import joinedload
+
+from pullbox.api.deps import AuthenticatedUser, DbSession
+from pullbox.core.exceptions import NotFoundError
+from pullbox.models.blocklist import BlocklistReason
+from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
+from pullbox.models.issue import Issue, IssueStatus
+from pullbox.schemas.blocklist import BlocklistEntryResponse
+from pullbox.schemas.download import DownloadHistoryItem, DownloadQueueItem
+from pullbox.schemas.pagination import PaginatedResponse
+from pullbox.services.blocklist_service import BlocklistService
+from pullbox.services.download_history_classification import (
+    download_history_clause,
+    post_processing_history_clause,
+)
+
+logger = structlog.get_logger(__name__)
+
+router = APIRouter(prefix="/downloads", tags=["downloads"])
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _enrich_download(download: DownloadHistory) -> dict[str, object]:
+    """Add computed fields (series_title, issue_number) to a download."""
+    return {
+        "id": download.id,
+        "issue_id": download.issue_id,
+        "title": download.title,
+        "state": download.state,
+        "download_client": download.download_client,
+        "external_id": download.external_id,
+        "file_size": download.file_size,
+        "error_message": download.error_message,
+        "sent_at": download.sent_at,
+        "completed_at": download.completed_at,
+        "imported_at": download.imported_at,
+        "created_at": download.created_at,
+        "series_title": (
+            download.issue.series.title if download.issue and download.issue.series else None
+        ),
+        "issue_number": download.issue.issue_number if download.issue else None,
+    }
+
+
+def _blocklist_entry_to_response(entry: object) -> BlocklistEntryResponse:
+    """Convert a blocklist ORM row to the shared response schema."""
+    from pullbox.models.blocklist import BlocklistEntry
+
+    assert isinstance(entry, BlocklistEntry)
+    return BlocklistEntryResponse(
+        id=entry.id,
+        release_title=entry.release_title,
+        release_title_normalized=entry.release_title_normalized,
+        download_url=entry.download_url,
+        series_id=entry.series_id,
+        issue_id=entry.issue_id,
+        indexer_id=entry.indexer_id,
+        reason=entry.reason,
+        error_message=entry.error_message,
+        release_group=entry.release_group,
+        download_history_id=entry.download_history_id,
+        series_title=entry.series.title if entry.series else None,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+    )
+
+
+# ── Queue ────────────────────────────────────────────────────────────
+
+
+_QUEUE_STATES = [
+    DownloadState.QUEUED,
+    DownloadState.SENT,
+    DownloadState.DOWNLOADING,
+    DownloadState.PAUSED,
+]
+
+
+@router.get("/queue", response_model=list[DownloadQueueItem])
+async def download_queue(
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> list[DownloadQueueItem]:
+    """Get all active downloads in the queue."""
+    result = await session.execute(
+        select(DownloadHistory)
+        .options(joinedload(DownloadHistory.issue).joinedload(Issue.series))
+        .where(DownloadHistory.state.in_(_QUEUE_STATES))
+        .order_by(DownloadHistory.created_at.desc())
+    )
+    downloads = result.unique().scalars().all()
+    return [DownloadQueueItem.model_validate(_enrich_download(d)) for d in downloads]
+
+
+# ── History ──────────────────────────────────────────────────────────
+
+
+_HISTORY_FILTER = download_history_clause()
+_POST_PROCESSING_HISTORY_FILTER = post_processing_history_clause()
+
+
+@router.get("/history", response_model=PaginatedResponse[DownloadHistoryItem])
+async def download_history(
+    _user: AuthenticatedUser,
+    session: DbSession,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> PaginatedResponse[DownloadHistoryItem]:
+    """Get download history with pagination.
+
+    Shows download-client outcomes only:
+    - completed downloads that have not yet been imported
+    - failed/cancelled downloads that never became post-processing runs
+
+    Imported records and failed post-processing rows belong on the
+    post-processing history page instead.
+    """
+    total = (
+        await session.execute(select(func.count(DownloadHistory.id)).where(_HISTORY_FILTER))
+    ).scalar_one()
+
+    result = await session.execute(
+        select(DownloadHistory)
+        .options(joinedload(DownloadHistory.issue).joinedload(Issue.series))
+        .where(_HISTORY_FILTER)
+        .order_by(DownloadHistory.updated_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    downloads = result.unique().scalars().all()
+
+    items = [DownloadHistoryItem.model_validate(_enrich_download(d)) for d in downloads]
+    return PaginatedResponse[DownloadHistoryItem](
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total,
+    )
+
+
+# ── Clear History ──────────────────────────────────────────────────
+
+
+@router.delete("/history")
+async def clear_download_history(
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> dict[str, int]:
+    """Delete download history entries visible on the downloads page.
+
+    Removes only rows that belong to the downloads history page.
+    Does NOT remove active downloads, imported records, or failed
+    post-processing rows.
+    """
+    cursor_result = await session.execute(delete(DownloadHistory).where(_HISTORY_FILTER))
+    count: int = cursor_result.rowcount  # type: ignore[attr-defined]
+    logger.info("download_history_cleared", count=count)
+    return {"deleted": count}
+
+
+@router.delete("/history/post-processing")
+async def clear_post_processing_history(
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> dict[str, int]:
+    """Delete imported and failed post-processing history entries."""
+    cursor_result = await session.execute(
+        delete(DownloadHistory).where(_POST_PROCESSING_HISTORY_FILTER)
+    )
+    count: int = cursor_result.rowcount  # type: ignore[attr-defined]
+    logger.info("post_processing_history_cleared", count=count)
+    return {"deleted": count}
+
+
+# ── Cancel / Remove ─────────────────────────────────────────────────
+
+_CANCELLABLE_STATES = frozenset(
+    {
+        DownloadState.QUEUED,
+        DownloadState.SENT,
+        DownloadState.DOWNLOADING,
+        DownloadState.PAUSED,
+        DownloadState.RETRY_PENDING,
+    }
+)
+
+
+async def _cancel_on_client(download: DownloadHistory, session: DbSession) -> None:
+    """Best-effort cancellation on the download client.
+
+    Builds a provider registry, locates the client for the download's type,
+    and calls ``remove_download``. Failures are logged but never raised —
+    the user's intent is to remove the download regardless of client state.
+    """
+    if not download.external_id:
+        return
+
+    from pullbox.composition.providers import register_download_clients
+    from pullbox.providers.base import ProviderRegistry
+
+    registry = ProviderRegistry()
+    await register_download_clients(session, registry)
+
+    client = registry.get_client_for_type(str(download.download_client))
+
+    if not client:
+        logger.warning(
+            "cancel_no_client_configured",
+            download_id=download.id,
+            client_type=download.download_client,
+        )
+        return
+
+    try:
+        removed = await client.remove_download(download.external_id, delete_files=True)
+        if removed:
+            logger.info("download_cancelled_on_client", download_id=download.id)
+        else:
+            logger.info(
+                "download_not_found_on_client",
+                download_id=download.id,
+                external_id=download.external_id,
+            )
+    except Exception:
+        logger.exception("cancel_client_error", download_id=download.id)
+
+
+@router.post("/{download_id}/retry-processing", status_code=200)
+async def retry_post_processing(
+    download_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> dict[str, str]:
+    """Retry post-processing for a failed download.
+
+    Re-queues a FAILED download that has a downloaded_path so the
+    process_completed task picks it up again. The last error is preserved
+    until the import actually succeeds.
+    """
+    download = await session.get(DownloadHistory, download_id)
+    if not download:
+        raise NotFoundError("Download", download_id)
+
+    if download.state != DownloadState.FAILED or not download.downloaded_path:
+        raise HTTPException(
+            status_code=409,
+            detail="Only failed post-processing items can be retried.",
+        )
+
+    download.state = DownloadState.COMPLETED
+    await session.flush()
+
+    # Trigger post-processing immediately
+    from pullbox.core.scheduler import get_scheduler
+
+    get_scheduler().run_task_now("process_completed")
+
+    logger.info("post_processing_retry_triggered", download_id=download_id)
+    return {"status": "queued"}
+
+
+@router.post("/{download_id}/blocklist", response_model=BlocklistEntryResponse, status_code=201)
+async def blocklist_failed_download(
+    download_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> BlocklistEntryResponse:
+    """Add a failed download or failed post-processing row to the blocklist."""
+    from pullbox.core.release_parser import parse_release_title
+
+    result = await session.execute(
+        select(DownloadHistory)
+        .options(joinedload(DownloadHistory.issue))
+        .where(DownloadHistory.id == download_id)
+    )
+    download = result.scalar_one_or_none()
+    if not download:
+        raise NotFoundError("Download", download_id)
+
+    if download.state != DownloadState.FAILED:
+        raise HTTPException(
+            status_code=409,
+            detail="Only failed download history items can be blocklisted.",
+        )
+
+    if download.error_message == "Cancelled by user":
+        raise HTTPException(
+            status_code=409,
+            detail="Cancelled downloads cannot be blocklisted.",
+        )
+
+    parsed = parse_release_title(download.title)
+    release_group = parsed.scan_group if parsed else None
+    series_id = download.issue.series_id if download.issue else None
+
+    entry = await BlocklistService.add_entry(
+        session,
+        download.title,
+        BlocklistReason.FAILED,
+        download_url=download.download_url,
+        series_id=series_id,
+        issue_id=download.issue_id,
+        indexer_id=download.indexer_id,
+        error_message=download.error_message,
+        release_group=release_group,
+        download_history_id=download.id,
+    )
+    if entry is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"message": "Release already in blocklist"}},
+        )
+
+    logger.info(
+        "download_history_blocklisted",
+        download_id=download.id,
+        issue_id=download.issue_id,
+        state=download.state.value,
+        has_downloaded_path=bool(download.downloaded_path),
+    )
+    return _blocklist_entry_to_response(entry)
+
+
+@router.post("/{download_id}/retry", status_code=200)
+async def retry_download(
+    download_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> dict[str, str]:
+    """Retry a failed or cancelled download.
+
+    Re-sends the original download URL to the download client and resets
+    the download state to SENT.
+    """
+    from datetime import UTC, datetime
+
+    from pullbox.composition.providers import register_download_clients
+    from pullbox.providers.base import ProviderRegistry
+
+    download = await session.get(DownloadHistory, download_id)
+    if not download:
+        raise NotFoundError("Download", download_id)
+
+    if download.state != DownloadState.FAILED:
+        raise HTTPException(status_code=409, detail="Only failed downloads can be retried.")
+
+    # PP failures should use the retry-processing endpoint
+    if download.downloaded_path and download.error_message != "Cancelled by user":
+        raise HTTPException(
+            status_code=409,
+            detail="Use retry-processing for post-processing failures.",
+        )
+
+    # Build provider registry and get the right client
+    registry = ProviderRegistry()
+    await register_download_clients(session, registry)
+
+    client = registry.get_client_for_type(str(download.download_client))
+    if not client:
+        raise HTTPException(
+            status_code=503,
+            detail="No download client configured for this download type.",
+        )
+
+    # Re-send to client
+    dl_type = DownloadClientType(str(download.download_client))
+    if dl_type.is_torrent:
+        external_id = await client.add_torrent(download.download_url, download.title)
+    else:
+        external_id = await client.add_nzb(download.download_url, download.title)
+
+    download.external_id = external_id
+    download.state = DownloadState.SENT
+    download.sent_at = datetime.now(UTC)
+    download.error_message = None
+    download.downloaded_path = None
+    download.completed_at = None
+
+    # Set issue back to DOWNLOADING
+    issue = await session.get(Issue, download.issue_id)
+    if issue and issue.status in (IssueStatus.WANTED, IssueStatus.OWNED):
+        issue.status = IssueStatus.DOWNLOADING
+
+    await session.flush()
+    logger.info("download_retry_sent", download_id=download_id, external_id=external_id)
+    return {"status": "sent"}
+
+
+@router.delete("/{download_id}", status_code=204)
+async def cancel_download(
+    download_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> None:
+    """Cancel an active download or remove a history entry.
+
+    For active downloads (QUEUED, SENT, DOWNLOADING, PAUSED, RETRY_PENDING):
+    - Cancels on the download client (SABnzbd/qBittorrent)
+    - Clears the in-memory progress cache entry
+    - Reverts the related issue status from DOWNLOADING → WANTED
+    - Marks the download as FAILED with "Cancelled by user"
+
+    For POST_PROCESSING: rejects deletion (must finish processing).
+    For terminal-state records (COMPLETED, FAILED, IMPORTED): deletes from history.
+    """
+    download = await session.get(DownloadHistory, download_id)
+    if not download:
+        raise NotFoundError("Download", download_id)
+
+    if download.state in _CANCELLABLE_STATES:
+        # Cancel on the download client (best-effort)
+        await _cancel_on_client(download, session)
+
+        # Clear progress cache
+        from pullbox.tasks.download_task import _clear_progress
+
+        _clear_progress(download_id)
+
+        # Revert issue status
+        issue = await session.get(Issue, download.issue_id)
+        if issue and issue.status == IssueStatus.DOWNLOADING:
+            issue.status = IssueStatus.WANTED
+
+        download.state = DownloadState.FAILED
+        download.error_message = "Cancelled by user"
+        logger.info("download_cancelled", download_id=download_id)
+    else:
+        await session.delete(download)
+        logger.info("download_history_removed", download_id=download_id)

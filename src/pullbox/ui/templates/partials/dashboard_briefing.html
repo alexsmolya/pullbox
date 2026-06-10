@@ -1,0 +1,40 @@
+<section
+  id="dashboard-mission-control-region"
+  data-testid="dashboard-mission-control"
+  class="dashboard-mission-control"
+  hx-get="/htmx/dashboard/briefing"
+  hx-trigger="every 30s [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <div data-testid="dashboard-mission-summary" class="dashboard-mission-control__summary">
+    <div data-testid="dashboard-mission-title-block" class="dashboard-mission-control__title-block">
+      <h1 class="dashboard-mission-control__title">MISSION <span>CONTROL</span></h1>
+      <p class="dashboard-mission-control__subtitle">System overview · live monitoring</p>
+    </div>
+
+    <div data-testid="dashboard-mission-gauges" class="dashboard-mission-control__gauges">
+      {% for gauge in dashboard_view.gauges %}
+        <div
+          data-testid="dashboard-gauge-{{ gauge.key }}"
+          class="dashboard-gauge dashboard-gauge--{{ gauge.tone }}"
+        >
+          <div class="dashboard-gauge__ring">
+            <svg viewBox="0 0 56 56" aria-hidden="true">
+              <circle class="dashboard-gauge__track" cx="28" cy="28" r="22"></circle>
+              <circle
+                class="dashboard-gauge__fill"
+                cx="28"
+                cy="28"
+                r="22"
+                stroke-dasharray="138.2"
+                stroke-dashoffset="{{ gauge.stroke_offset }}"
+              ></circle>
+            </svg>
+            <span class="dashboard-gauge__value">{{ gauge.value_label }}</span>
+          </div>
+          <span class="dashboard-gauge__label">{{ gauge.label }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>

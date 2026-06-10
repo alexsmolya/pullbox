@@ -1,0 +1,138 @@
+{% from "components/settings_shell.html" import inline_alert, ui_icon %}
+
+{#- ComicVine search results for orphaned series assignment.
+
+    Template context:
+      - imported_series_id: int
+      - query: str
+      - results: list of dicts with cv_id, name, start_year, publisher, issue_count
+      - search_error: str (empty if no error)
+-#}
+
+<div class="modal-shell"
+     x-data="{ open: true }"
+     x-show="open"
+     data-testid="import-orphaned-cv-search-modal"
+     @keydown.escape.window="open = false; closeCvSearchModal()">
+
+  {#- Backdrop -#}
+  <div class="modal-backdrop"
+       @click="open = false; closeCvSearchModal()"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"></div>
+
+  {#- Modal -#}
+  <div class="modal-panel max-w-lg"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+       x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+       @click.outside="open = false; closeCvSearchModal()">
+
+    {#- Header -#}
+    <div class="modal-header">
+      <div class="space-y-1">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-brand">Identify series</p>
+        <h3 class="text-base font-semibold text-pb-text">Search ComicVine</h3>
+        <p class="text-xs leading-5 text-pb-text-dim">Choose the right series first. You&apos;ll recover the files to issues in the next step.</p>
+      </div>
+      <button @click="open = false; closeCvSearchModal()"
+              class="icon-btn icon-btn-sm"
+              aria-label="Close search dialog"
+              type="button">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body">
+      <div class="space-y-4 px-5 py-5">
+        <div class="space-y-2">
+          <label for="cv-search-input" class="block text-[11px] font-semibold uppercase tracking-[0.14em] text-pb-text-dim">Series search</label>
+          <div class="flex gap-2">
+            <input type="text" id="cv-search-input" data-testid="import-orphaned-cv-search-input" value="{{ query }}"
+                   placeholder="Search series name..."
+                   @keydown.enter.prevent="searchCv({{ imported_series_id }}, document.getElementById('cv-search-input').value)"
+                   class="input-pb flex-1">
+            <button type="button"
+                    data-testid="import-orphaned-cv-search-submit"
+                    @click="searchCv({{ imported_series_id }}, document.getElementById('cv-search-input').value)"
+                    class="btn-primary btn-sm">
+              Search
+            </button>
+          </div>
+          <p class="text-xs text-pb-text-dim">Try the series title first, then add a publisher or year if you need to narrow the match.</p>
+        </div>
+
+        {#- Error -#}
+        {% if search_error %}
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <p>{{ search_error }}</p>
+        {% endcall %}
+        {% endif %}
+
+        {#- Results -#}
+        {% if results %}
+        <div class="table-shell overflow-hidden">
+          <div class="table-toolbar">
+            <div class="table-toolbar-title-block">
+              <h4 class="table-toolbar-title">Search results</h4>
+              <p class="table-toolbar-copy">{{ results|length }} candidate{% if results|length != 1 %}s{% endif %} found</p>
+            </div>
+          </div>
+          <div class="max-h-80 divide-y divide-pb-border overflow-y-auto">
+            {% for r in results %}
+            <div data-testid="import-orphaned-cv-result-{{ r.cv_id }}"
+                 class="group flex w-full min-w-0 items-start gap-3 px-5 py-4 text-left transition-colors hover:bg-pb-card-hover/45">
+              <div class="min-w-0 flex-1">
+                {% if r.cv_url %}
+                <a href="{{ r.cv_url }}"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   class="flex min-w-0 items-start gap-1.5 text-sm font-medium text-pb-text transition-colors hover:text-pb-interactive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pb-focus focus-visible:ring-offset-2 focus-visible:ring-offset-pb-bg"
+                   aria-label="Open {{ r.name }} on Comic Vine">
+                  <span class="min-w-0 break-words whitespace-normal">{{ r.name }}</span>
+                  <svg class="h-3.5 w-3.5 shrink-0 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 17 17 7m0 0H9m8 0v8"/>
+                  </svg>
+                </a>
+                {% else %}
+                <div class="text-sm font-medium text-pb-text break-words">{{ r.name }}</div>
+                {% endif %}
+                <div class="mt-1 text-xs leading-5 text-pb-text-dim">
+                  {% if r.start_year %}{{ r.start_year }}{% endif %}
+                  {% if r.publisher %}&middot; {{ r.publisher }}{% endif %}
+                  {% if r.issue_count %}&middot; {{ r.issue_count }} issues{% endif %}
+                </div>
+              </div>
+              <div class="flex shrink-0 items-center gap-2 self-start">
+                <span class="font-mono text-[10px] text-pb-text-dim">CV {{ r.cv_id }}</span>
+                <button type="button"
+                        data-testid="import-orphaned-cv-select-{{ r.cv_id }}"
+                        class="select-btn select-btn-success min-h-0 px-2.5 py-2"
+                        @click="assignCv({{ imported_series_id }}, {{ r.cv_id }})"
+                        aria-label="Select {{ r.name }} as the Comic Vine match">
+                  {{ ui_icon("check", "h-4 w-4") }}
+                  <span class="sr-only">Select match</span>
+                </button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% elif not search_error %}
+        <div class="utility-empty-state">
+          {% if query %}
+          <p class="text-sm text-pb-text-sec">No results found for "{{ query }}".</p>
+          <p class="mt-1 text-xs text-pb-text-dim">Try a shorter title, remove punctuation, or add the publisher or year.</p>
+          {% else %}
+          <p class="text-sm text-pb-text-sec">Enter a series name to start searching.</p>
+          <p class="mt-1 text-xs text-pb-text-dim">ComicVine results will appear here once the search runs.</p>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

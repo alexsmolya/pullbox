@@ -1,0 +1,199 @@
+{% from "components/settings_shell.html" import inline_alert, section_card %}
+
+<div data-testid="utilities-db-check-workspace" class="space-y-6">
+  <section>
+    {% call section_card(
+      class_name="utility-workspace-shell",
+      body_class="utility-workspace-body utility-tool-body"
+    ) %}
+      <div x-show="validationError" x-cloak data-testid="utilities-db-check-error">
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <p x-text="validationError"></p>
+        {% endcall %}
+      </div>
+
+      <p class="utility-tool-section-label">Checks to Run</p>
+      <div class="utility-step-grid sm:grid-cols-2">
+        <label
+          class="utility-step-card utility-step-card-inline cursor-pointer transition-colors hover:border-pb-border-hover"
+          :class="checks.orphans ? 'utility-step-card-active' : ''"
+        >
+          <span class="utility-step-num">01</span>
+          <span class="utility-step-name">Orphaned library records</span>
+          <input
+            x-model="checks.orphans"
+            type="checkbox"
+            data-testid="utilities-db-check-check-orphans"
+            class="checkbox-pb utility-step-check"
+          />
+        </label>
+
+        <label
+          class="utility-step-card utility-step-card-inline cursor-pointer transition-colors hover:border-pb-border-hover"
+          :class="checks.stale ? 'utility-step-card-active' : ''"
+        >
+          <span class="utility-step-num">02</span>
+          <span class="utility-step-name">Untracked library files</span>
+          <input
+            x-model="checks.stale"
+            type="checkbox"
+            data-testid="utilities-db-check-check-stale"
+            class="checkbox-pb utility-step-check"
+          />
+        </label>
+
+        <label
+          class="utility-step-card utility-step-card-inline cursor-pointer transition-colors hover:border-pb-border-hover"
+          :class="checks.referential ? 'utility-step-card-active' : ''"
+        >
+          <span class="utility-step-num">03</span>
+          <span class="utility-step-name">Stale series paths and root consistency</span>
+          <input
+            x-model="checks.referential"
+            type="checkbox"
+            data-testid="utilities-db-check-check-referential"
+            class="checkbox-pb utility-step-check"
+          />
+        </label>
+
+        <label
+          class="utility-step-card utility-step-card-inline cursor-pointer transition-colors hover:border-pb-border-hover"
+          :class="checks.reindex ? 'utility-step-card-active' : ''"
+        >
+          <span class="utility-step-num">04</span>
+          <span class="utility-step-name">Metadata refresh</span>
+          <input
+            x-model="checks.reindex"
+            type="checkbox"
+            data-testid="utilities-db-check-check-reindex"
+            class="checkbox-pb utility-step-check"
+          />
+        </label>
+      </div>
+
+      <div class="space-y-2">
+        <label class="utility-tool-field-label">Library root</label>
+        <input
+          x-model="libraryRoot"
+          data-testid="utilities-db-check-library-root"
+          type="text"
+          class="input-pb mono-input w-full disabled:cursor-default disabled:opacity-100"
+          placeholder="/comics"
+          disabled
+        />
+      </div>
+
+      <div x-show="previewLoaded" x-cloak data-testid="utilities-db-check-findings" class="space-y-3">
+        <div class="utility-tool-section-row">
+          <p class="utility-tool-section-label !mb-0">Preview</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="utility-token">
+              <span class="font-medium text-pb-text-sec" x-text="findings.length + (findings.length === 1 ? ' finding' : ' findings')"></span>
+            </span>
+            <span class="utility-token">
+              <span class="font-medium text-pb-text-sec" x-text="selectedChecksLabel() + ' checks'"></span>
+            </span>
+          </div>
+        </div>
+
+        <template x-if="findings.length > 0">
+          <div class="utility-tool-table-wrap">
+            <table class="utility-tool-table" style="table-layout: fixed">
+              <thead>
+                <tr>
+                  <th style="width: 120px">Check</th>
+                  <th style="width: calc((100% - 340px) / 2)">Finding</th>
+                  <th class="hidden lg:table-cell" style="width: calc((100% - 340px) / 2)">Path</th>
+                  <th class="r" style="width: 220px">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="finding in findings" :key="finding.finding_id">
+                  <tr>
+                    <td>
+                      <span
+                        class="pill"
+                        :class="finding.check_type === 'orphans'
+                          ? 'pill-warning'
+                          : finding.check_type === 'stale'
+                            ? 'pill-info'
+                            : finding.check_type === 'referential'
+                              ? 'pill-warning'
+                              : 'pill-neutral'"
+                        x-text="finding.checkTypeLabel"
+                      ></span>
+                    </td>
+                    <td>
+                      <span class="block tooltip-wrap" data-tooltip-auto data-tip-size="wide" style="width: 100%; max-width: 100%">
+                        <span
+                          class="block truncate text-sm text-pb-text-sec"
+                          data-tooltip-measure
+                          x-text="finding.description"
+                        ></span>
+                      </span>
+                    </td>
+                    <td class="hidden lg:table-cell">
+                      <span class="block tooltip-wrap" data-tooltip-auto data-tip-pos="left" data-tip-size="wide" style="width: 100%; max-width: 100%">
+                        <span
+                          class="block truncate font-mono text-[11px] text-pb-text-dim"
+                          data-tooltip-measure
+                          x-text="finding.file_path || '—'"
+                        ></span>
+                      </span>
+                    </td>
+                    <td class="r">
+                      <div class="flex flex-nowrap items-center justify-end gap-2">
+                        <template x-for="action in finding.allowed_actions" :key="action">
+                          <button
+                            type="button"
+                            class="chip-btn"
+                            :class="finding.current_action === action ? 'chip-btn-selected' : 'chip-btn-neutral'"
+                            @click="setFindingAction(finding.finding_id, action)"
+                            x-text="formatActionLabel(action)"
+                          ></button>
+                        </template>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <template x-if="findings.length === 0">
+          <div class="utility-empty-state utility-empty-state-compact">
+            <p class="text-sm text-pb-text-sec">No findings were returned for the selected checks.</p>
+            <p class="mt-1 text-xs text-pb-text-dim">That usually means the library metadata and filesystem are already in good shape for this scope.</p>
+          </div>
+        </template>
+      </div>
+
+      <div class="utility-tool-action-footer utility-tool-action-footer-card">
+        <div class="settings-footer-actions">
+          <a href="/utilities" class="btn-ghost">Cancel</a>
+          <button
+            type="button"
+            @click="runPreview()"
+            data-testid="utilities-db-check-preview"
+            :disabled="previewLoading"
+            class="btn-ghost"
+          >
+            <span x-show="!previewLoading">Run preview</span>
+            <span x-show="previewLoading">Scanning...</span>
+          </button>
+          <button
+            type="button"
+            @click="applyFixes()"
+            data-testid="utilities-db-check-start"
+            :disabled="!canApplyFixes() || submitting"
+            class="btn-primary"
+          >
+            <span x-show="!submitting">Start cleanup</span>
+            <span x-show="submitting">Submitting...</span>
+          </button>
+        </div>
+      </div>
+    {% endcall %}
+  </section>
+</div>

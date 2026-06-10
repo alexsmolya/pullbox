@@ -1,0 +1,156 @@
+{% from "components/settings_shell.html" import inline_alert, section_card %}
+
+<div data-testid="utilities-integrity-workspace" class="space-y-6">
+  <section>
+    {% call section_card(
+      class_name="utility-workspace-shell",
+      body_class="utility-workspace-body utility-tool-body"
+    ) %}
+      <div x-show="validationError" x-cloak data-testid="utilities-integrity-error">
+        {% call inline_alert(tone="danger", icon="warning") %}
+          <p x-text="validationError"></p>
+        {% endcall %}
+      </div>
+
+      <p class="utility-tool-section-label">Scan Mode</p>
+      <div class="utility-scan-mode-grid">
+        <button
+          type="button"
+          @click="setScanDepth('quick')"
+          data-testid="utilities-integrity-depth-quick"
+          :class="scanDepth === 'quick' ? 'utility-scan-mode-active' : ''"
+          :aria-pressed="scanDepth === 'quick' ? 'true' : 'false'"
+          class="utility-scan-mode"
+        >
+          <span class="utility-scan-mode-label">Quick</span>
+          <span class="utility-scan-mode-copy">Open archive and count pages</span>
+        </button>
+        <button
+          type="button"
+          @click="setScanDepth('deep')"
+          data-testid="utilities-integrity-depth-deep"
+          :class="scanDepth === 'deep' ? 'utility-scan-mode-active' : ''"
+          :aria-pressed="scanDepth === 'deep' ? 'true' : 'false'"
+          class="utility-scan-mode"
+        >
+          <span class="utility-scan-mode-label">Deep</span>
+          <span class="utility-scan-mode-copy">Full image decode</span>
+        </button>
+      </div>
+
+      <p class="utility-tool-section-label mt-2">Scope</p>
+      <div class="utility-scope-chip-row">
+        <button
+          type="button"
+          @click="setScope('library')"
+          data-testid="utilities-integrity-scope-library"
+          :class="scope === 'library' ? 'utility-scope-chip-active' : ''"
+          :aria-pressed="scope === 'library' ? 'true' : 'false'"
+          class="utility-scope-chip"
+        >
+          All tracked files
+        </button>
+        <button
+          type="button"
+          @click="setScope('folder')"
+          data-testid="utilities-integrity-scope-folder"
+          :class="scope === 'folder' ? 'utility-scope-chip-active' : ''"
+          :aria-pressed="scope === 'folder' ? 'true' : 'false'"
+          class="utility-scope-chip"
+        >
+          Select folders
+        </button>
+        <button
+          type="button"
+          @click="setScope('files')"
+          data-testid="utilities-integrity-scope-files"
+          :class="scope === 'files' ? 'utility-scope-chip-active' : ''"
+          :aria-pressed="scope === 'files' ? 'true' : 'false'"
+          class="utility-scope-chip"
+        >
+          Select files
+        </button>
+      </div>
+
+      <button
+        type="button"
+        @click="openBrowse()"
+        data-testid="utilities-integrity-browse"
+        x-show="scope !== 'library'"
+        x-cloak
+        class="btn-ghost utility-tool-browse-button self-start"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+        </svg>
+        Browse
+      </button>
+
+      <div x-show="scope === 'folder' && selectedFolders.length > 0" x-cloak class="utility-path-pill">
+        <svg class="h-4 w-4 shrink-0 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+        </svg>
+        <span class="text-[0.72rem] font-medium text-pb-text-sec">
+          <span x-text="selectedFolders.length"></span> folder<span x-show="selectedFolders.length !== 1">s</span> selected
+        </span>
+      </div>
+
+      <div x-show="scope === 'files' && selectedFiles.length > 0" x-cloak class="utility-path-pill">
+        <svg class="h-4 w-4 shrink-0 text-pb-text-dim" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+        </svg>
+        <span class="text-[0.72rem] font-medium text-pb-text-sec" x-text="selectedFilesLabel()"></span>
+      </div>
+
+      <p class="utility-tool-section-label mt-2">When corruption is found</p>
+      <div class="utility-scan-mode-grid" data-testid="utilities-integrity-remediation">
+        <button
+          type="button"
+          @click="corruptFileAction = 'report'"
+          data-testid="utilities-integrity-remediation-report"
+          :class="corruptFileAction === 'report' ? 'utility-scan-mode-active' : ''"
+          :aria-pressed="corruptFileAction === 'report' ? 'true' : 'false'"
+          class="utility-scan-mode"
+        >
+          <span class="utility-scan-mode-label">Report only</span>
+          <span class="utility-scan-mode-copy">Leave files in place and log the result.</span>
+        </button>
+        <button
+          type="button"
+          @click="corruptFileAction = 'quarantine'"
+          data-testid="utilities-integrity-remediation-quarantine"
+          :class="corruptFileAction === 'quarantine' ? 'utility-scan-mode-active' : ''"
+          :aria-pressed="corruptFileAction === 'quarantine' ? 'true' : 'false'"
+          class="utility-scan-mode"
+        >
+          <span class="utility-scan-mode-label">Trash corrupt files</span>
+          <span class="utility-scan-mode-copy">Move bad files into Utilities trash for review.</span>
+        </button>
+      </div>
+
+      <label
+        data-testid="utilities-integrity-requeue-search"
+        class="flex items-start gap-3 rounded-[var(--radius-card)] border border-pb-line bg-pb-panel px-4 py-3 text-sm text-pb-text-pri"
+      >
+        <input type="checkbox" x-model="requeueReplacements" class="checkbox-pb mt-0.5 shrink-0">
+        <span class="leading-5">Search for replacements when linked issues return to Wanted</span>
+      </label>
+
+      <div class="utility-tool-action-footer utility-tool-action-footer-card">
+        <div class="settings-footer-actions">
+          <a href="/utilities" class="btn-ghost">Cancel</a>
+          <button
+            type="button"
+            @click="startIntegrityCheck()"
+            data-testid="utilities-integrity-start"
+            :disabled="!canStart() || submitting"
+            class="btn-primary"
+          >
+            <span x-show="!submitting">Start scan</span>
+            <span x-show="submitting">Submitting...</span>
+          </button>
+        </div>
+      </div>
+    {% endcall %}
+  </section>
+</div>

@@ -1,0 +1,158 @@
+{#- Single orphaned series card — used by HTMX outerHTML swaps.
+
+    Template context:
+      - item: ImportedSeries instance
+      - view: str ("all" or "dismissed")
+-#}
+
+{% set known_series_no_match = item.status.value == 'no_match' and (item.cv_id or item.user_selected_cv_id or item.series_id) and (item.files_no_match or 0) > 0 %}
+<div id="orphan-row-{{ item.id }}" data-testid="import-orphaned-row-{{ item.id }}" class="rounded-xl border border-pb-border bg-pb-card-hover/40 p-4">
+  <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+    <div class="min-w-0 flex-1 space-y-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <h3 class="text-sm font-semibold text-pb-text">{{ item.raw_series_name }}</h3>
+        {% if item.status.value == 'skipped' %}
+        <span class="pill pill-neutral inline-flex min-h-8 items-center justify-center whitespace-normal text-center leading-tight">Dismissed</span>
+        {% elif known_series_no_match %}
+        <span class="pill pill-info inline-flex min-h-8 items-center justify-center whitespace-normal text-center leading-tight">Issue unresolved</span>
+        {% elif item.status.value == 'recovery_pending' %}
+        <span class="pill pill-info inline-flex min-h-8 items-center justify-center whitespace-normal text-center leading-tight">Series identified</span>
+        {% else %}
+        <span class="pill pill-warning inline-flex min-h-8 items-center justify-center whitespace-normal text-center leading-tight">Needs match</span>
+        {% endif %}
+      </div>
+
+      {% if item.raw_publisher %}
+      <p class="text-xs text-pb-text-dim">{{ item.raw_publisher }}</p>
+      {% endif %}
+
+      <div class="grid gap-2 text-xs text-pb-text-sec sm:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Year</p>
+          <p class="mt-1 text-sm font-semibold text-pb-text">{{ item.raw_year or '?' }}</p>
+        </div>
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Files</p>
+          <p class="mt-1 text-sm font-semibold text-pb-text">{{ item.file_count }}</p>
+        </div>
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Source folder</p>
+          <p class="mt-1 truncate text-sm font-semibold text-pb-text" title="{{ item.source_folder or '' }}">{{ item.source_folder or '—' }}</p>
+        </div>
+        <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+          <p class="text-[10px] font-medium uppercase tracking-[0.12em] text-pb-text-dim">Found in job</p>
+          <a href="/import?tab=history" class="mt-1 inline-flex text-sm font-semibold text-pb-interactive transition-colors hover:text-pb-interactive-hover">
+            Job #{{ item.import_job_id }}
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex shrink-0 flex-wrap items-center gap-2 xl:justify-end">
+      {% if known_series_no_match %}
+      <button
+        type="button"
+        class="downloads-action-btn is-warn"
+        data-testid="import-orphaned-recover-{{ item.id }}"
+        @click="openRecovery({{ item.id }})"
+        data-tip="Resolve files"
+        data-tip-pos="left"
+        aria-label="Resolve unresolved files for {{ item.raw_series_name }}"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12l-7.5 7.5M3 12h17.25"/>
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="downloads-action-btn is-danger"
+        data-testid="import-orphaned-dismiss-{{ item.id }}"
+        @click='dismissOrphan({{ item.id }}, {{ item.raw_series_name|tojson }}, {{ "Dismiss unresolved files for this series?"|tojson }})'
+        :disabled="isDismissingOrphan({{ item.id }})"
+        data-tip="Dismiss"
+        data-tip-pos="left"
+        aria-label="Dismiss unmatched files for {{ item.raw_series_name }}"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+      {% elif item.status.value == 'no_match' %}
+      <button
+        type="button"
+        class="downloads-action-btn"
+        data-testid="import-orphaned-search-{{ item.id }}"
+        hx-get="/import/orphaned/{{ item.id }}/cv-search?q={{ item.raw_series_name|urlencode }}"
+        hx-target="#cv-search-modal"
+        hx-swap="innerHTML"
+        data-tip="Search ComicVine"
+        data-tip-pos="left"
+        aria-label="Search ComicVine for {{ item.raw_series_name }}"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="downloads-action-btn is-danger"
+        data-testid="import-orphaned-dismiss-{{ item.id }}"
+        @click='dismissOrphan({{ item.id }}, {{ item.raw_series_name|tojson }}, {{ "Hide this series? It won't appear here again unless you re-import."|tojson }})'
+        :disabled="isDismissingOrphan({{ item.id }})"
+        data-tip="Dismiss"
+        data-tip-pos="left"
+        aria-label="Dismiss unmatched series {{ item.raw_series_name }}"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+      {% elif item.status.value == 'recovery_pending' %}
+      <button
+        type="button"
+        class="downloads-action-btn is-warn"
+        data-testid="import-orphaned-recover-{{ item.id }}"
+        @click="openRecovery({{ item.id }})"
+        data-tip="Continue recovery"
+        data-tip-pos="left"
+        aria-label="Continue recovery for {{ item.raw_series_name }}"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12l-7.5 7.5M3 12h17.25"/>
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="downloads-action-btn"
+        data-testid="import-orphaned-search-{{ item.id }}"
+        hx-get="/import/orphaned/{{ item.id }}/cv-search?q={{ (item.cv_title or item.raw_series_name)|urlencode }}"
+        hx-target="#cv-search-modal"
+        hx-swap="innerHTML"
+        data-tip="Change ComicVine match"
+        data-tip-pos="left"
+        aria-label="Change ComicVine match for {{ item.raw_series_name }}"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="downloads-action-btn is-danger"
+        data-testid="import-orphaned-dismiss-{{ item.id }}"
+        @click='dismissOrphan({{ item.id }}, {{ item.raw_series_name|tojson }}, {{ "Stop recovering this series for now? It will move to dismissed."|tojson }})'
+        :disabled="isDismissingOrphan({{ item.id }})"
+        data-tip="Dismiss"
+        data-tip-pos="left"
+        aria-label="Dismiss unmatched series {{ item.raw_series_name }}"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+      {% elif item.status.value == 'skipped' %}
+      <span class="text-xs italic text-pb-text-dim">Dismissed from active follow-up.</span>
+      {% endif %}
+    </div>
+  </div>
+</div>

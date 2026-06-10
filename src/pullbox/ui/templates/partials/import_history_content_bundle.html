@@ -1,0 +1,20 @@
+{% set oob = true %}
+{% include "partials/import_header.html" %}
+<input
+  id="import-history-page-input"
+  type="hidden"
+  name="page"
+  value="{{ page }}"
+  hx-swap-oob="outerHTML"
+>
+<input
+  id="import-history-sort-input"
+  type="hidden"
+  name="sort"
+  value="{{ sort }}"
+  hx-swap-oob="outerHTML"
+>
+{% include "partials/import_history_results.html" %}
+<div id="page-footer-dock" data-testid="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/import_footer_dock.html" %}
+</div>

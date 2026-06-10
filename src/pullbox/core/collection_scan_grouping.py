@@ -1,0 +1,147 @@
+"""Grouping and scan-candidate helpers for collection imports."""
+
+from __future__ import annotations
+
+import re
+from typing import TYPE_CHECKING
+
+from pullbox.core.type_semantics import TypeFamily, issue_type_family
+from pullbox.models.issue import IssueType
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pullbox.core.collection_scanner import DiscoveredFile
+
+
+_LOW_SIGNAL_GROUPING_TOKENS: frozenset[str] = frozenset(
+    {
+        "scan",
+        "scans",
+        "dup",
+        "dupe",
+        "duplicate",
+        "copy",
+        "digital",
+        "fixed",
+    }
+)
+
+_GENERIC_FILE_SERIES_RE = re.compile(
+    r"^(?:issue|issues|chapter|chapters|part|parts|book|books|file|files)\b(?:\s+\d+.*)?$",
+    re.IGNORECASE,
+)
+
+_OBVIOUS_NON_COMIC_PDF_RE = re.compile(
+    r"\b(?:"
+    r"booking\s+confirmation|"
+    r"invoice|"
+    r"payment(?:\s+(?:confirmation|portal|receipt))?|"
+    r"receipt|"
+    r"resume|"
+    r"statement|"
+    r"boarding\s+pass|"
+    r"itinerary|"
+    r"tax(?:\s+document)?|"
+    r"w\s*2|"
+    r"1099"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_series_identity(value: str) -> str:
+    """Normalize a parsed series string for grouping comparisons."""
+    normalized = re.sub(r"\s+", " ", value.strip().lower())
+    return re.sub(r"[^a-z0-9 ]+", "", normalized)
+
+
+def _strip_year_volume_tokens(value: str) -> str:
+    """Remove Mylar-style inline year markers like ``v2016`` for label comparison."""
+    return re.sub(r"\bv\d{4}\b", "", value, flags=re.IGNORECASE).strip()
+
+
+def _series_identity_tokens(value: str) -> set[str]:
+    """Tokenize a series label for grouping comparisons."""
+    normalized = _normalize_series_identity(_strip_year_volume_tokens(value))
+    return {token for token in normalized.split() if token and not token.isdigit()}
+
+
+def _should_collapse_to_folder_identity(parsed_series: str, folder_name: str) -> bool:
+    """Return true when a parsed series only differs from the folder by release noise."""
+    parsed_tokens = _series_identity_tokens(parsed_series)
+    folder_tokens = _series_identity_tokens(folder_name)
+    if not parsed_tokens or not folder_tokens:
+        return False
+    if parsed_tokens == folder_tokens:
+        return True
+    if not folder_tokens.issubset(parsed_tokens):
+        return False
+    extras = parsed_tokens - folder_tokens
+    return bool(extras) and extras.issubset(_LOW_SIGNAL_GROUPING_TOKENS)
+
+
+def _is_low_signal_file_series_name(parsed_series: str) -> bool:
+    """Return true when a parsed filename series looks like a generic placeholder."""
+    normalized = re.sub(r"[_-]+", " ", parsed_series.strip())
+    normalized = re.sub(r"\s+", " ", normalized)
+    return bool(_GENERIC_FILE_SERIES_RE.match(normalized))
+
+
+def _has_strong_file_identity(discovered_file: DiscoveredFile) -> bool:
+    """Return true when a parsed file has enough identity to stand on its own."""
+    return any(
+        (
+            discovered_file.parsed_issue_number is not None,
+            discovered_file.comicvine_issue_id is not None,
+            discovered_file.comicvine_series_id is not None,
+            discovered_file.has_comicinfo,
+        )
+    )
+
+
+def _non_standard_group_discriminator(issue_type: IssueType) -> str | None:
+    """Return a grouping discriminator for releases that should not merge with issues."""
+    if issue_type_family(issue_type) in {TypeFamily.ISSUE_LIKE, TypeFamily.COLLECTION}:
+        return issue_type.value
+    return None
+
+
+def _type_qualified_issue_like_label(series_name: str, issue_type: IssueType) -> str:
+    """Return a review label without turning metadata-only markers into title text."""
+    if issue_type == IssueType.ONE_SHOT:
+        return series_name
+
+    type_label = issue_type.display_name.strip()
+    if not type_label or issue_type_family(issue_type) != TypeFamily.ISSUE_LIKE:
+        return series_name
+
+    series_tokens = set(_normalize_series_identity(series_name).split())
+    label_tokens = set(_normalize_series_identity(type_label).split())
+    if label_tokens and label_tokens.issubset(series_tokens):
+        return series_name
+    return f"{series_name} {type_label}".strip()
+
+
+def _is_obvious_non_comic_document(path: Path) -> bool:
+    """Return true for document-like PDFs that should not enter import review."""
+    if path.suffix.lower() != ".pdf":
+        return False
+    normalized = re.sub(r"[_\-.]+", " ", path.stem)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return bool(_OBVIOUS_NON_COMIC_PDF_RE.search(normalized))
+
+
+def _is_scan_candidate_file(path: Path, extensions: frozenset[str]) -> bool:
+    """Return true when a path is a supported import candidate."""
+    return path.suffix.lower() in extensions and not _is_obvious_non_comic_document(path)
+
+
+def _source_issue_type_for_group(files: list[DiscoveredFile]) -> IssueType | None:
+    """Return a safe group-level issue type without letting mixed rows over-specialize."""
+    issue_types = {discovered_file.issue_type for discovered_file in files}
+    if len(issue_types) == 1:
+        return next(iter(issue_types))
+    if IssueType.ISSUE in issue_types:
+        return IssueType.ISSUE
+    return None

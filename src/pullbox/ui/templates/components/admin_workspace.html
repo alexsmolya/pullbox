@@ -1,0 +1,62 @@
+{#- Shared admin workspace shell for configuration pages with a compact header and left rail. -#}
+
+{% macro workspace_header(testid, title, title_accent="", description="", eyebrow="", title_testid="", description_testid="", tags=[]) -%}
+  <header
+    class="series-registry-header admin-workspace-header"
+    data-testid="{{ testid }}"
+    data-admin-workspace-header="v1"
+  >
+    <div class="series-registry-header-left admin-workspace-header-copy">
+      <div class="series-registry-title-block">
+        {% if eyebrow %}
+          <p class="section-eyebrow">{{ eyebrow }}</p>
+        {% endif %}
+        <h1 class="series-registry-title"{% if title_testid %} data-testid="{{ title_testid }}"{% endif %}>{{ title }}{% if title_accent %}<span>{{ title_accent }}</span>{% endif %}</h1>
+        {% if description %}
+          <p class="series-registry-subtitle"{% if description_testid %} data-testid="{{ description_testid }}"{% endif %}>{{ description }}</p>
+        {% endif %}
+        {% if tags %}
+          <div class="admin-workspace-tag-row">
+            {% for tag in tags %}
+              <span class="pill pill-neutral">{{ tag }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if caller is defined %}
+      <div class="series-registry-actions admin-workspace-header-aside">
+        {{ caller() }}
+      </div>
+    {% endif %}
+  </header>
+{%- endmacro %}
+
+{% macro workspace_nav_shell(testid, aria_label, eyebrow="", title="", description="") -%}
+  <nav
+    id="{{ testid }}"
+    class="admin-workspace-rail"
+    aria-label="{{ aria_label }}"
+    data-testid="{{ testid }}"
+    data-admin-workspace-rail="v1"
+  >
+    {% if eyebrow or title or description %}
+      <div class="admin-workspace-rail-copy">
+        {% if eyebrow %}
+          <p class="section-eyebrow">{{ eyebrow }}</p>
+        {% endif %}
+        {% if title %}
+          <h2 class="text-base font-semibold text-pb-text">{{ title }}</h2>
+        {% endif %}
+        {% if description %}
+          <p class="text-sm leading-6 text-pb-text-sec">{{ description }}</p>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="admin-workspace-rail-links">
+      {{ caller() }}
+    </div>
+  </nav>
+{%- endmacro %}

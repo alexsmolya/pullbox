@@ -1,0 +1,10 @@
+<div
+  data-testid="health-download-clients-status-region"
+  id="health-download-clients-status-region"
+  x-data="healthPage({ csrfToken: '{{ csrf_token }}', componentKey: 'download_clients' })"
+  hx-get="/health/download_clients/status"
+  hx-trigger="every 30s [window.healthComponentRefreshEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  {% include "partials/health_download_clients_status.html" %}
+</div>

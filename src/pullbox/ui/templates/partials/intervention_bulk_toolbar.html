@@ -1,0 +1,46 @@
+<section
+  x-show="selectedIds.length > 0"
+  x-cloak
+  data-testid="intervention-bulk-toolbar"
+  class="flex items-center gap-3 rounded-xl border border-pb-border-hover bg-pb-card px-4 py-3"
+>
+  <span class="text-sm text-pb-text-sec" x-text="selectedIds.length + ' selected'"></span>
+  <div class="ml-auto flex items-center gap-2">
+    <form
+      hx-post="/htmx/intervention/bulk-approve"
+      hx-target="#intervention-list"
+      hx-swap="innerHTML"
+      @htmx:after-request.window="clearSelection()"
+    >
+      <input type="hidden" name="ids" :value="selectedIds.join(',')">
+      <button
+        type="submit"
+        data-testid="intervention-bulk-approve"
+        class="chip-btn chip-btn-success"
+      >
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+        </svg>
+        <span x-text="'Approve selected (' + selectedIds.length + ')'"></span>
+      </button>
+    </form>
+    <form
+      hx-post="/htmx/intervention/bulk-reject"
+      hx-target="#intervention-list"
+      hx-swap="innerHTML"
+      @htmx:after-request.window="clearSelection()"
+    >
+      <input type="hidden" name="ids" :value="selectedIds.join(',')">
+      <button
+        type="submit"
+        data-testid="intervention-bulk-reject"
+        class="chip-btn chip-btn-error"
+      >
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+        <span x-text="'Reject selected (' + selectedIds.length + ')'"></span>
+      </button>
+    </form>
+  </div>
+</section>

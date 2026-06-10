@@ -1,0 +1,257 @@
+{#- Settings: Utilities tab -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import field_note, section_card, settings_footer, settings_row, ui_icon %}
+
+<div class="space-y-6 pt-6" x-data="utilitiesSettings()">
+  {% call section_card(
+    title="Utility operating defaults",
+    description="Tune the queue-wide defaults for workers, folders, retention, and diagnostic logging.",
+    eyebrow="Shared settings",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <form @submit.prevent="save()">
+      <div class="settings-rows">
+        {% call settings_row(label="Worker Count", help="Number of parallel workers available for utility operations. Higher values can speed up work, but they also increase disk and CPU pressure.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" x-model="form.workerCount" min="1" max="16" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">workers</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Trash Folder", help="Original files land here during conversion workflows. Leave this blank to use the default folder beneath the library.") %}
+          <div class="flex max-w-3xl items-center gap-2">
+            <input type="text" x-model="form.trashFolder" class="input-pb flex-1 font-mono placeholder:text-pb-text-sec" placeholder="{library_root}/.trash">
+            <button
+              type="button"
+              data-testid="settings-utilities-trash-folder-browse"
+              @click="browseTrashFolder()"
+              class="btn-ghost btn-sm !min-h-10 !w-10 !px-0 !py-0 shrink-0"
+              title="Browse for folder"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+              </svg>
+            </button>
+          </div>
+          {% call field_note(tone="info", icon="check") %}
+            Default location: <code class="font-mono">{library}/.trash</code>.
+          {% endcall %}
+        {% endcall %}
+
+        {% call settings_row(label="Trash Cleanup", help="Utility trash can be cleared on a schedule or emptied immediately when you are sure you no longer need the originals.") %}
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex items-center gap-2">
+              <input
+                type="number"
+                x-model="form.trashRetentionDays"
+                data-testid="settings-utilities-trash-retention-days"
+                min="1"
+                max="365"
+                class="input-pb w-24"
+              >
+              <span class="text-sm text-pb-text-sec">days</span>
+            </div>
+            <button
+              type="button"
+              data-testid="settings-utilities-empty-trash-now"
+              @click="emptyTrashNow()"
+              :disabled="emptyingTrash"
+              class="btn-danger btn-sm self-start sm:self-auto"
+            >
+              <span x-show="!emptyingTrash">Empty Trash Now</span>
+              <span x-show="emptyingTrash">Emptying...</span>
+            </button>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Export Folder", help="Exports and reports are written here. Leave this blank to use the default data-directory export location.") %}
+          <div class="flex max-w-3xl items-center gap-2">
+            <input type="text" x-model="form.exportFolder" class="input-pb flex-1 font-mono placeholder:text-pb-text-sec" placeholder="{data_dir}/exports">
+            <button
+              type="button"
+              data-testid="settings-utilities-export-folder-browse"
+              @click="browseExportFolder()"
+              class="btn-ghost btn-sm !min-h-10 !w-10 !px-0 !py-0 shrink-0"
+              title="Browse for folder"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+              </svg>
+            </button>
+          </div>
+          {% call field_note(tone="info", icon="check") %}
+            Default location: <code class="font-mono">{data}/exports</code>.
+          {% endcall %}
+        {% endcall %}
+
+        {% call settings_row(label="Job Retention", help="Completed utility job records remain in history this long before they are eligible for cleanup.") %}
+          <div class="flex items-center gap-2">
+            <input type="number" x-model="form.retentionDays" min="1" max="365" class="input-pb w-24">
+            <span class="text-sm text-pb-text-sec">days</span>
+          </div>
+        {% endcall %}
+
+        {% call settings_row(label="Log Level", help="Controls how much detail utility jobs emit into their queue logs.") %}
+          {{ dropdown_select(
+            name="utility_log_level",
+            value=configs.get("utility_log_level", "INFO"),
+            options=[
+              ("DEBUG", "Debug"),
+              ("INFO", "Info"),
+              ("WARNING", "Warning"),
+              ("ERROR", "Error"),
+            ],
+            root_testid="settings-utilities-log-level-select",
+            class_name="w-48",
+            local_model="form.logLevel"
+          ) }}
+        {% endcall %}
+      </div>
+
+      {% call settings_footer(align="end") %}
+        <button type="button" x-show="isDirty" x-cloak @click="reset()" class="btn-ghost btn-sm">
+          Reset
+        </button>
+        <button type="submit" :disabled="!isDirty" :class="!isDirty && 'opacity-50 cursor-not-allowed'" class="btn-primary">
+          Save utility settings
+        </button>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% include 'components/file_browser.html' %}
+</div>
+
+<script>
+function utilitiesSettings() {
+  return {
+    ...fileBrowserMixin({ csrfToken: '{{ csrf_token }}' }),
+
+    browsePaths: {
+      trashFolder: {{ utility_browse_paths.trash_folder|tojson }},
+      exportFolder: {{ utility_browse_paths.export_folder|tojson }},
+    },
+
+    form: {
+      workerCount: '{{ configs.get("utility_worker_count", "4") }}',
+      trashFolder: '{{ configs.get("utility_trash_folder", "") }}',
+      trashRetentionDays: '{{ configs.get("utility_trash_retention_days", "30") }}',
+      exportFolder: '{{ configs.get("utility_export_folder", "") }}',
+      retentionDays: '{{ configs.get("utility_job_retention_days", "30") }}',
+      logLevel: '{{ configs.get("utility_log_level", "INFO") }}',
+    },
+
+    _original: {
+      workerCount: '{{ configs.get("utility_worker_count", "4") }}',
+      trashFolder: '{{ configs.get("utility_trash_folder", "") }}',
+      trashRetentionDays: '{{ configs.get("utility_trash_retention_days", "30") }}',
+      exportFolder: '{{ configs.get("utility_export_folder", "") }}',
+      retentionDays: '{{ configs.get("utility_job_retention_days", "30") }}',
+      logLevel: '{{ configs.get("utility_log_level", "INFO") }}',
+    },
+
+    emptyingTrash: false,
+
+    get isDirty() {
+      return this.form.workerCount !== this._original.workerCount
+        || this.form.trashFolder !== this._original.trashFolder
+        || this.form.trashRetentionDays !== this._original.trashRetentionDays
+        || this.form.exportFolder !== this._original.exportFolder
+        || this.form.retentionDays !== this._original.retentionDays
+        || this.form.logLevel !== this._original.logLevel;
+    },
+
+    reset() {
+      this.form.workerCount = this._original.workerCount;
+      this.form.trashFolder = this._original.trashFolder;
+      this.form.trashRetentionDays = this._original.trashRetentionDays;
+      this.form.exportFolder = this._original.exportFolder;
+      this.form.retentionDays = this._original.retentionDays;
+      this.form.logLevel = this._original.logLevel;
+    },
+
+    browseTrashFolder() {
+      this.openFileBrowser('trashFolder', this.form.trashFolder, {
+        selectionMode: 'directory',
+        startPath: this.browsePaths.trashFolder,
+        title: 'Select Trash Folder',
+        confirmLabel: 'Use Folder',
+      });
+    },
+
+    browseExportFolder() {
+      this.openFileBrowser('exportFolder', this.form.exportFolder, {
+        selectionMode: 'directory',
+        startPath: this.browsePaths.exportFolder,
+        title: 'Select Export Folder',
+        confirmLabel: 'Use Folder',
+      });
+    },
+
+    save() {
+      const values = {
+        utility_worker_count: String(this.form.workerCount),
+        utility_trash_folder: this.form.trashFolder,
+        utility_trash_retention_days: String(this.form.trashRetentionDays),
+        utility_export_folder: this.form.exportFolder,
+        utility_job_retention_days: String(this.form.retentionDays),
+        utility_log_level: this.form.logLevel,
+      };
+      fetch('/api/v1/config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+        body: JSON.stringify({ values }),
+      })
+        .then(r => {
+          if (!r.ok) return r.json().then(d => { throw new Error(d.error?.message || 'Failed to save.'); });
+          if (typeof showToast === 'function') showToast({ message: 'Utility settings saved.', level: 'success' });
+          this._original = { ...this.form };
+        })
+        .catch(err => {
+          if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+        });
+    },
+
+    async emptyTrashNow() {
+      const ok = await window.pbConfirm({
+        title: 'Empty Utility Trash',
+        message: 'Delete everything currently in the utility trash folder? This cannot be undone.',
+        confirmText: 'Empty Trash',
+        destructive: true,
+      });
+      if (!ok) return;
+
+      this.emptyingTrash = true;
+      try {
+        const response = await fetch('/api/v1/utilities/trash/empty', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token }}',
+          },
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error?.message || 'Failed to empty trash.');
+        }
+        if (typeof showToast === 'function') {
+          showToast({
+            message: data.deleted_entries > 0
+              ? `Trash emptied. Deleted ${data.deleted_entries} item${data.deleted_entries === 1 ? '' : 's'}.`
+              : 'Trash is already empty.',
+            level: 'success',
+          });
+        }
+      } catch (err) {
+        if (typeof showToast === 'function') showToast({ message: err.message, level: 'error' });
+      } finally {
+        this.emptyingTrash = false;
+      }
+    },
+  };
+}
+</script>

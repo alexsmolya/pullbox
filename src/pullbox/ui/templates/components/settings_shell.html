@@ -1,0 +1,122 @@
+{#- Shared settings/admin shells for section cards, rows, alerts, and inline notes. -#}
+
+{% macro ui_icon(name, class_name="h-5 w-5") -%}
+  {% if name == "warning" %}
+    <svg class="{{ class_name }}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+    </svg>
+  {% elif name == "lock" %}
+    <svg class="{{ class_name }}" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/>
+    </svg>
+  {% elif name == "key" %}
+    <svg class="{{ class_name }}" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
+    </svg>
+  {% elif name == "check" %}
+    <svg class="{{ class_name }}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+  {% elif name == "shield" %}
+    <svg class="{{ class_name }}" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m6 2.25c0 4.97-3.657 9.085-8.438 9.879a.75.75 0 01-.248 0C7.657 21.085 4 16.97 4 12V7.5a.75.75 0 01.513-.711l7.5-2.5a.75.75 0 01.474 0l7.5 2.5A.75.75 0 0120 7.5V12z"/>
+    </svg>
+  {% else %}
+    <svg class="{{ class_name }}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/>
+    </svg>
+  {% endif %}
+{%- endmacro %}
+
+{% macro section_header(title, description="", eyebrow="", title_tag="h2", title_style="section", class_name="", attrs="") -%}
+  <div class="section-header {{ class_name }}" {{ attrs|safe }}>
+    <div class="section-header-copy">
+      {% if eyebrow %}
+        <p class="section-eyebrow">{{ eyebrow }}</p>
+      {% endif %}
+      <{{ title_tag }} class="{{ 'section-title-plain' if title_style == 'plain' else 'section-title' }}">{{ title }}</{{ title_tag }}>
+      {% if description %}
+        <p class="section-description">{{ description|safe }}</p>
+      {% endif %}
+    </div>
+    {% if caller is defined %}
+      <div class="section-header-actions">
+        {{ caller() }}
+      </div>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro section_card(title="", description="", eyebrow="", title_tag="h2", title_style="section", class_name="", body_class="section-body", attrs="") -%}
+  <div class="section-card {{ class_name }}" {{ attrs|safe }}>
+    {% if title or description or eyebrow %}
+      {{ section_header(title=title, description=description, eyebrow=eyebrow, title_tag=title_tag, title_style=title_style) }}
+    {% endif %}
+    <div class="{{ body_class }}">
+      {{ caller() }}
+    </div>
+  </div>
+{%- endmacro %}
+
+{% macro settings_row(label, help="", title_tag="label", row_class="", body_class="", attrs="") -%}
+  <div class="settings-row {{ row_class }}" {{ attrs|safe }}>
+    <div class="settings-row-meta">
+      <{{ title_tag }} class="settings-row-label">{{ label }}</{{ title_tag }}>
+      {% if help %}
+        <p class="settings-row-help">{{ help|safe }}</p>
+      {% endif %}
+    </div>
+    <div class="settings-row-content {{ body_class }}">
+      {{ caller() }}
+    </div>
+  </div>
+{%- endmacro %}
+
+{% macro settings_footer(class_name="", align="between", attrs="") -%}
+  <div class="settings-footer {{ 'settings-footer-end' if align == 'end' else '' }} {{ class_name }}" {{ attrs|safe }}>
+    {{ caller() }}
+  </div>
+{%- endmacro %}
+
+{% macro alert_banner(tone="info", icon="warning", title="", description="", class_name="", title_tag="h2", attrs="") -%}
+  <div class="alert-banner alert-banner-{{ tone }} {{ class_name }}" {{ attrs|safe }}>
+    <div class="alert-banner-main">
+      <div class="alert-banner-icon">
+        {{ ui_icon(icon, "h-5 w-5") }}
+      </div>
+      <div class="alert-banner-copy">
+        {% if title %}
+          <{{ title_tag }} class="alert-banner-title">{{ title }}</{{ title_tag }}>
+        {% endif %}
+        {% if description %}
+          <p class="alert-banner-description">{{ description|safe }}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% if caller is defined %}
+      <div class="alert-banner-actions">
+        {{ caller() }}
+      </div>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro inline_alert(tone="danger", icon="warning", class_name="", attrs="") -%}
+  <div class="inline-alert inline-alert-{{ tone }} {{ class_name }}" {{ attrs|safe }}>
+    <span class="inline-alert-icon">
+      {{ ui_icon(icon, "h-4 w-4") }}
+    </span>
+    <div class="min-w-0">
+      {{ caller() }}
+    </div>
+  </div>
+{%- endmacro %}
+
+{% macro field_note(tone="warning", icon="warning", class_name="", attrs="") -%}
+  <p class="field-note field-note-{{ tone }} {{ class_name }}" {{ attrs|safe }}>
+    <span class="field-note-icon">
+      {{ ui_icon(icon, "h-3 w-3") }}
+    </span>
+    <span class="min-w-0">{{ caller() }}</span>
+  </p>
+{%- endmacro %}

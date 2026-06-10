@@ -1,0 +1,69 @@
+{% macro utility_workflow_header(
+  root_testid,
+  back_testid,
+  title,
+  subtitle,
+  tag,
+  icon_key,
+  accent="",
+  back_href="/utilities",
+  back_label="Utilities"
+) %}
+<section data-testid="{{ root_testid }}" class="utility-tool-header-block">
+  <a
+    data-testid="{{ back_testid }}"
+    href="{{ back_href }}"
+    hx-boost="false"
+    class="utility-tool-back-link"
+  >
+    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/>
+    </svg>
+    <span>{{ back_label }}</span>
+  </a>
+
+  <div data-testid="{{ root_testid | replace('-header', '-card') }}" class="utility-tool-header-shell">
+    <div class="utility-tool-header-left">
+      <div class="utility-tool-header-icon {% if icon_key == 'converter' %}utility-tool-header-icon-converter{% elif icon_key == 'mass-convert' %}utility-tool-header-icon-mass-convert{% elif icon_key == 'integrity' %}utility-tool-header-icon-integrity{% elif icon_key == 'rename' %}utility-tool-header-icon-rename{% elif icon_key == 'db-check' %}utility-tool-header-icon-db-check{% elif icon_key == 'export' %}utility-tool-header-icon-export{% elif icon_key == 'permissions' %}utility-tool-header-icon-db-check{% endif %}">
+        {% if icon_key == "converter" %}
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+          </svg>
+        {% elif icon_key == "mass-convert" %}
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12a7.5 7.5 0 0015 0m-15 0a7.5 7.5 0 1115 0m-15 0H3m16.5 0H21m-1.5 0H12m-8.457 3.077 1.41-.513m14.095-5.13 1.41-.513M5.106 17.785l1.15-.964m11.49-9.642 1.149-.964M7.501 19.795l.75-1.3m7.5-12.99.75-1.3M9.688 20.863l.26-1.477m2.605-14.772.26-1.477m0 17.726-.26-1.477M10.698 4.614l-.26-1.477M16.5 19.794l-.75-1.299M7.5 4.205 12 12"/>
+          </svg>
+        {% elif icon_key == "rename" %}
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/>
+          </svg>
+        {% elif icon_key == "integrity" %}
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        {% elif icon_key == "db-check" %}
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125"/>
+          </svg>
+        {% elif icon_key == "export" %}
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+          </svg>
+        {% elif icon_key == "permissions" %}
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-7.5 9A9 9 0 013.75 12V6.75L12 3l8.25 3.75V12A9 9 0 0112 20.25a8.96 8.96 0 01-4.5-1.2z"/>
+          </svg>
+        {% endif %}
+      </div>
+      <div>
+        <p class="utility-tool-header-title">
+          {{ title }}
+          {% if accent %}<span>{{ accent }}</span>{% endif %}
+        </p>
+        <p class="utility-tool-header-subtitle">{{ subtitle }}</p>
+      </div>
+    </div>
+    <span class="utility-tool-header-tag">{{ tag }}</span>
+  </div>
+</section>
+{% endmacro %}

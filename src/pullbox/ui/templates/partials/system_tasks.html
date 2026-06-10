@@ -1,0 +1,420 @@
+{#- System: Tasks tab -#}
+{% from "components/settings_shell.html" import ui_icon %}
+
+<div class="space-y-6 pt-6" x-data='taskManager({{ system_tasks | default([], true) | tojson }})' x-init="init()">
+  <div class="section-card">
+    <div class="section-header">
+      <div class="section-header-copy">
+        <p class="section-eyebrow">Scheduler</p>
+        <h2 class="section-title-plain">Scheduled tasks</h2>
+        <p class="section-description">Review cadence, last run, and next run from one tighter registry.</p>
+      </div>
+      <div class="section-header-actions">
+        <div class="flex items-end">
+          <div class="flex flex-col items-end gap-1">
+            <button @click="manualRefresh()" :disabled="loading || refreshing" class="btn-primary btn-sm gap-2" type="button">
+              <svg class="h-4 w-4" :class="(loading || refreshing) && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+              </svg>
+              <span x-text="(loading || refreshing) ? 'Refreshing...' : 'Refresh'"></span>
+            </button>
+            <div
+              data-testid="system-tasks-auto-refresh-note"
+              class="hidden items-center gap-2 text-xs text-pb-text-dim md:flex"
+            >
+              <span class="h-2 w-2 rounded-full bg-pb-info"></span>
+              <span>Auto-refreshes every 10s</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div x-show="loading" class="section-body text-center text-sm text-pb-text-dim">
+      Loading tasks...
+    </div>
+
+    <div x-show="!loading && scheduled.length === 0" class="section-body">
+      <div class="info-panel info-panel-muted text-center">
+        <p class="text-sm font-semibold text-pb-text">No scheduled tasks are configured yet.</p>
+        <p class="mt-2 text-sm leading-6 text-pb-text-sec">Once background jobs are registered, they will appear here with cadence, status, and manual run controls.</p>
+      </div>
+    </div>
+
+    <div x-show="!loading && scheduled.length > 0" class="section-body">
+      <div class="downloads-table-wrap" data-testid="system-tasks-table">
+        <div class="overflow-x-auto">
+          <table class="downloads-table min-w-[860px]">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>Interval</th>
+                <th>Last execution</th>
+                <th>Duration</th>
+                <th>Next execution</th>
+                <th>Status</th>
+                <th class="is-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="task in scheduled" :key="task.task_id">
+                <tr>
+                  <td>
+                    <div class="min-w-0">
+                      <p class="font-medium text-pb-text" x-text="task.name"></p>
+                      <p class="downloads-mono-dim-cell mt-1" x-text="task.task_id"></p>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="text-pb-text" x-text="formatInterval(task.interval)"></span>
+                  </td>
+                  <td>
+                    <span class="text-pb-text" x-text="taskLastRunLabel(task)"></span>
+                  </td>
+                  <td>
+                    <span class="downloads-mono-dim-cell" x-text="taskDurationLabel(task)"></span>
+                  </td>
+                  <td>
+                    <span class="text-pb-text" x-text="task.next_run_time ? timeAgo(task.next_run_time) : '—'"></span>
+                  </td>
+                  <td>
+                    <span class="pill" :class="taskStatePillClass(task)" x-text="taskStateLabel(task)"></span>
+                  </td>
+                  <td class="is-right">
+                    <div class="downloads-action-group is-hover-reveal justify-end">
+                      <button
+                        @click.stop="runTask(task.task_id)"
+                        :disabled="isTaskRunning(task) || isTaskQueued(task)"
+                        class="downloads-action-btn"
+                        data-tip="Run now"
+                        data-tip-pos="left"
+                        :aria-label="'Run ' + task.name + ' now'"
+                        type="button"
+                      >
+                        <svg x-show="!isTaskRunning(task) && !isTaskQueued(task)" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+                        </svg>
+                        <svg x-show="isTaskRunning(task)" x-cloak class="h-4 w-4 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+                        </svg>
+                        <svg x-show="isTaskQueued(task)" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h8M8 12h8M8 17h5"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function taskManager(initialTasks) {
+  return {
+    scheduled: Array.isArray(initialTasks) ? initialTasks : [],
+    loading: false,
+    refreshing: false,
+    runningTasks: {},
+    _refreshInterval: null,
+
+    init() {
+      this.loading = false;
+      if (!this._refreshInterval) {
+        this._refreshInterval = setInterval(() => this.refreshTasks(false), 10000);
+      }
+    },
+
+    loadTasks() {
+      this.loading = true;
+      fetch('/api/v1/system/tasks', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.scheduled = data.scheduled || [];
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to load tasks.', level: 'error' });
+        })
+        .finally(() => {
+          this.loading = false;
+          if (!this._refreshInterval) {
+            this._refreshInterval = setInterval(() => this.refreshTasks(false), 10000);
+          }
+        });
+    },
+
+    refreshTasks(showSpinner) {
+      if (showSpinner) this.refreshing = true;
+      fetch('/api/v1/system/tasks', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.scheduled = data.scheduled || [];
+        })
+        .catch(() => {
+          if (showSpinner && typeof showToast === 'function') {
+            showToast({ message: 'Failed to refresh tasks.', level: 'error' });
+          }
+        })
+        .finally(() => {
+          if (showSpinner) this.refreshing = false;
+        });
+    },
+
+    manualRefresh() {
+      this.refreshTasks(true);
+    },
+
+    runTask(taskId) {
+      this.runningTasks[taskId] = true;
+      fetch(`/api/v1/system/tasks/${taskId}/run`, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          if (typeof showToast === 'function') {
+            const level = data.status === 'queued' ? 'success' : 'info';
+            showToast({ message: data.message, level });
+          }
+          setTimeout(() => this.refreshTasks(false), 150);
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to trigger task.', level: 'error' });
+        })
+        .finally(() => {
+          setTimeout(() => { delete this.runningTasks[taskId]; }, 250);
+        });
+    },
+
+    taskCount() {
+      return this.scheduled.length;
+    },
+
+    runningTaskCount() {
+      return this.scheduled.filter(task => this.isTaskRunning(task)).length;
+    },
+
+    failedTaskCount() {
+      return this.scheduled.filter(task => task.last_status === 'failed').length;
+    },
+
+    neverRunTaskCount() {
+      return this.scheduled.filter(task => !task.last_execution).length;
+    },
+
+    nextDueTask() {
+      return this.scheduled
+        .filter(task => !!task.next_run_time)
+        .sort((a, b) => {
+          const aTime = _pb.parseDate(a.next_run_time);
+          const bTime = _pb.parseDate(b.next_run_time);
+          if (!aTime && !bTime) return 0;
+          if (!aTime) return 1;
+          if (!bTime) return -1;
+          return aTime - bTime;
+        })[0] || null;
+    },
+
+    nextDueTaskName() {
+      const task = this.nextDueTask();
+      return task ? task.name : 'Nothing scheduled';
+    },
+
+    nextDueTaskShort() {
+      const task = this.nextDueTask();
+      if (!task || !task.next_run_time) return 'Pending';
+      return this.timeAgo(task.next_run_time);
+    },
+
+    nextDueTaskSummary() {
+      const task = this.nextDueTask();
+      if (!task || !task.next_run_time) return 'No upcoming execution is currently scheduled.';
+      return task.name + ' ' + this.timeAgo(task.next_run_time) + '.';
+    },
+
+    taskState(task) {
+      if (this.isTaskRunning(task)) return 'running';
+      if (this.isTaskQueued(task)) return 'queued';
+      if (!task.last_execution) return 'idle';
+      if (task.last_status === 'cancelled') return 'interrupted';
+      if (task.last_status === 'failed') return 'failed';
+      return 'healthy';
+    },
+
+    isTaskRunning(task) {
+      return this.runningTasks[task.task_id] === true || task.is_running === true;
+    },
+
+    isTaskQueued(task) {
+      return task.is_queued === true || Number.isInteger(task.manual_queue_position);
+    },
+
+    taskLastRunLabel(task) {
+      if (this.isTaskRunning(task)) return 'Running now';
+      if (this.isTaskQueued(task)) {
+        const position = Number.isInteger(task.manual_queue_position) ? task.manual_queue_position : null;
+        return position ? `Queued (#${position})` : 'Queued';
+      }
+      return task.last_execution ? this.timeAgo(task.last_execution) : 'Never';
+    },
+
+    taskDurationLabel(task) {
+      if (this.isTaskRunning(task)) return 'In progress';
+      if (this.isTaskQueued(task)) return 'Pending queue';
+      return task.last_duration_seconds != null ? this.formatDuration(task.last_duration_seconds) : '—';
+    },
+
+    taskStateLabel(task) {
+      const state = this.taskState(task);
+      if (state === 'running') return 'Running';
+      if (state === 'queued') return 'Queued';
+      if (state === 'interrupted') return 'Interrupted';
+      if (state === 'failed') return 'Failed';
+      if (state === 'idle') return 'Never run';
+      return 'Healthy';
+    },
+
+    taskStatePillClass(task) {
+      const state = this.taskState(task);
+      if (state === 'running') return 'pill-info';
+      if (state === 'queued') return 'pill-neutral';
+      if (state === 'interrupted') return 'pill-warning';
+      if (state === 'failed') return 'pill-error';
+      if (state === 'idle') return 'pill-neutral';
+      return 'pill-success';
+    },
+
+    taskSummary(task) {
+      if (this.taskState(task) === 'running') {
+        return 'A manual run from this page is already in progress. Wait for it to finish, then refresh if you need the newest schedule state.';
+      }
+      if (this.taskState(task) === 'queued') {
+        const position = Number.isInteger(task.manual_queue_position) ? task.manual_queue_position : null;
+        return position
+          ? `This task is queued behind ${position - 1} other manual run${position === 1 ? '' : 's'}. It will start automatically when its turn arrives.`
+          : 'This task is queued to run automatically as soon as the current manual work finishes.';
+      }
+      if (!task.last_execution) {
+        return 'This task has not completed yet. Use Run now when you want to seed the first execution without waiting for the scheduled window.';
+      }
+      if (task.last_status === 'cancelled') {
+        return 'The most recent execution was interrupted before it finished, usually because the app or scheduler stopped mid-run.';
+      }
+      if (task.last_status === 'failed') {
+        return 'The most recent execution failed. Review the dependency it relies on before you trigger it again.';
+      }
+      return 'The most recent execution completed normally. Use Run now when you need fresh state before the next scheduled window.';
+    },
+
+    taskActionHint(task) {
+      if (this.taskState(task) === 'running') return 'Manual execution is already underway.';
+      if (this.taskState(task) === 'queued') return 'This manual run is already queued and will start automatically.';
+      if (!task.last_execution) return 'Good for the first run or after initial setup.';
+      if (task.last_status === 'cancelled') {
+        return 'Best used after the app is stable again and background work is no longer being interrupted.';
+      }
+      if (task.last_status === 'failed') {
+        return 'Best used after you address the cause of the last failure.';
+      }
+      return 'Use this when you need the work completed ahead of schedule.';
+    },
+
+    formatInterval(triggerStr) {
+      if (!triggerStr) return '-';
+
+      const intervalMatch = triggerStr.match(/interval\[(.+)\]/);
+      if (intervalMatch) {
+        const inner = intervalMatch[1].trim();
+        const dayTimeMatch = inner.match(/(?:(\d+)\s+day[s]?,\s*)?(\d+):(\d+):(\d+)/);
+        if (!dayTimeMatch) return inner;
+
+        const d = parseInt(dayTimeMatch[1] || '0', 10);
+        const h = parseInt(dayTimeMatch[2], 10);
+        const m = parseInt(dayTimeMatch[3], 10);
+        const s = parseInt(dayTimeMatch[4], 10);
+        const parts = [];
+        if (d > 0) parts.push(d === 1 ? '1 day' : d + ' days');
+        if (h > 0) parts.push(h === 1 ? '1 hour' : h + ' hours');
+        if (m > 0) parts.push(m === 1 ? '1 minute' : m + ' minutes');
+        if (s > 0) parts.push(s === 1 ? '1 second' : s + ' seconds');
+        return parts.join(' ') || '-';
+      }
+
+      const cronMatch = triggerStr.match(/cron\[(.+)\]/);
+      if (cronMatch) {
+        const inner = cronMatch[1];
+        const hourMatch = inner.match(/hour='(\d+)'/);
+        const minuteMatch = inner.match(/minute='(\d+)'/);
+        if (hourMatch) {
+          const hr = parseInt(hourMatch[1], 10);
+          const minute = minuteMatch ? parseInt(minuteMatch[1], 10) : 0;
+          const ampm = hr >= 12 ? 'PM' : 'AM';
+          const hr12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+          return 'Daily at ' + hr12 + ':' + minute.toString().padStart(2, '0') + ' ' + ampm;
+        }
+        return inner;
+      }
+
+      return triggerStr;
+    },
+
+    formatDuration(seconds) {
+      if (seconds == null) return '-';
+      if (seconds <= 0) return '< 0.01 sec';
+      if (seconds < 60) {
+        const normalized = Number(seconds.toFixed(2));
+        return normalized.toString() + ' sec';
+      }
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      const parts = [];
+      if (h > 0) parts.push(h.toString().padStart(2, '0'));
+      parts.push(m.toString().padStart(2, '0'));
+      parts.push(s.toString().padStart(2, '0'));
+      return parts.join(':');
+    },
+
+    timeAgo(isoStr) {
+      if (!isoStr) return '-';
+      try {
+        const date = _pb.parseDate(isoStr);
+        if (!date) return '-';
+        const now = new Date();
+        const diffMs = now - date;
+        const diffS = Math.floor(Math.abs(diffMs) / 1000);
+        const future = diffMs < 0;
+
+        if (diffS < 10) return future ? 'in a few seconds' : 'a few seconds ago';
+        if (diffS < 60) return future ? 'in ' + diffS + ' seconds' : diffS + ' seconds ago';
+
+        const diffM = Math.floor(diffS / 60);
+        if (diffM < 60) return future ? 'in ' + diffM + ' minute' + (diffM > 1 ? 's' : '') : diffM + ' minute' + (diffM > 1 ? 's' : '') + ' ago';
+
+        const diffH = Math.floor(diffM / 60);
+        if (diffH < 24) return future ? 'in ' + diffH + ' hour' + (diffH > 1 ? 's' : '') : diffH + ' hour' + (diffH > 1 ? 's' : '') + ' ago';
+
+        const diffD = Math.floor(diffH / 24);
+        return future ? 'in ' + diffD + ' day' + (diffD > 1 ? 's' : '') : diffD + ' day' + (diffD > 1 ? 's' : '') + ' ago';
+      } catch {
+        return isoStr;
+      }
+    },
+
+    destroy() {
+      if (this._refreshInterval) {
+        clearInterval(this._refreshInterval);
+        this._refreshInterval = null;
+      }
+    },
+  };
+}
+</script>

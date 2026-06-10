@@ -1,0 +1,102 @@
+{% macro sidebar_count_badge(count, classes) -%}
+  {% set _count = count | default(0) %}
+  <span
+    data-sidebar-count="{{ _count }}"
+    {% if _count > 0 %}
+    class="count-badge {{ classes }}"
+    {% else %}
+    class="count-badge count-badge-neutral opacity-0"
+    aria-hidden="true"
+    {% endif %}
+  >
+    {% if _count > 0 %}{{ _count }}{% endif %}
+  </span>
+{%- endmacro %}
+
+{% macro sidebar_link(item, request_path) -%}
+  {% set match = item.match|default("prefix") %}
+  {% set active_classes = "app-sidebar-link-active text-pb-interactive" %}
+  {% set inactive_classes = "" %}
+  {% set badge = item.badge if item.badge is defined else none %}
+  {% if match == "exact" %}
+    {% set is_active = request_path == item.href %}
+  {% else %}
+    {% set is_active = request_path.startswith(item.href) %}
+  {% endif %}
+  <a
+    href="{{ item.href }}"
+    data-testid="sidebar-link-{{ item.key }}"
+    data-nav-link="true"
+    data-nav-key="{{ item.key }}"
+    data-nav-path="{{ item.href }}"
+    data-nav-match="{{ match }}"
+    data-nav-active-classes="{{ active_classes }}"
+    data-nav-inactive-classes="{{ inactive_classes }}"
+    {% if is_active %}aria-current="page"{% endif %}
+    {% if item.series_index_link|default(false) %}data-series-index-link="true"{% endif %}
+    {% if item.disinherit|default(false) %}hx-disinherit="*"{% endif %}
+    class="app-sidebar-link tooltip-wrap {{ active_classes if is_active else '' }}"
+    :class="showSidebarLabels ? '' : 'app-sidebar-link-collapsed'"
+    :data-tip='showSidebarLabels ? null : {{ item.label|tojson }}'
+    data-tip-pos="right"
+    data-tip-size="narrow"
+  >
+    <span
+      class="app-sidebar-link-icon"
+    >
+      <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="{{ item.icon_path }}"/>
+      </svg>
+    </span>
+    <span class="app-sidebar-link-copy" :class="showSidebarLabels ? '' : 'app-sidebar-link-copy-collapsed'">
+      <span
+        data-sidebar-label
+        class="app-sidebar-link-title"
+      >{{ item.label }}</span>
+      {% if badge %}
+      <span
+        id="sidebar-badge-{{ badge.key }}"
+        data-testid="sidebar-badge-{{ badge.key }}"
+        data-sidebar-badge-slot="true"
+        data-sidebar-badge="true"
+        data-sidebar-badge-key="{{ badge.key }}"
+        data-sidebar-badge-endpoint="{{ badge.endpoint }}"
+        data-sidebar-badge-trigger="{{ badge.trigger|default('load') }}"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        class="app-sidebar-badge-slot"
+        hx-get="{{ badge.endpoint }}"
+        hx-trigger="{{ badge.trigger|default('load') }}"
+        hx-target="this"
+        hx-swap="innerHTML"
+      >
+        {% if badge.template is defined %}
+          {% include badge.template %}
+        {% elif badge.key == "intervention" %}
+          {{ sidebar_count_badge(pending_match_count|default(0), "count-badge-warning") }}
+        {% elif badge.key == "health" %}
+          {{ sidebar_count_badge(
+            health_degraded|default(0) + health_unhealthy|default(0),
+            "count-badge-error" if health_unhealthy|default(0) > 0 else "count-badge-warning"
+          ) }}
+        {% endif %}
+      </span>
+      {% endif %}
+    </span>
+  </a>
+{%- endmacro %}
+
+{% macro sidebar_section(section, request_path) -%}
+  <div class="app-sidebar-section" data-testid="sidebar-section-{{ section['key'] }}" :class="showSidebarLabels ? '' : 'app-sidebar-section-collapsed'">
+    <span
+      data-sidebar-section-label
+      class="app-sidebar-section-label"
+      :class="showSidebarLabels ? '' : 'app-sidebar-section-label-collapsed'"
+    >{{ section['label'] }}</span>
+    <hr x-show="!showSidebarLabels" x-cloak data-sidebar-section-rule class="app-sidebar-section-rule">
+  </div>
+  {% for item in section['items'] %}
+    {{ sidebar_link(item, request_path) }}
+  {% endfor %}
+{%- endmacro %}

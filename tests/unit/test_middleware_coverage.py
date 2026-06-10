@@ -1,0 +1,407 @@
+"""Targeted unit tests for middleware coverage gaps.
+
+Covers setup detection redirect, slow request logging, rate limit
+bypass, and CSRF edge cases that aren't exercised by integration tests.
+
+Run:
+    pytest tests/unit/test_middleware_coverage.py -v
+"""
+
+from __future__ import annotations
+
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from starlette.requests import Request
+from starlette.responses import Response
+
+from pullbox.api.middleware import (
+    CsrfMiddleware,
+    RequestLoggingMiddleware,
+    SetupDetectionMiddleware,
+    mark_setup_complete,
+    reset_setup_cache,
+)
+
+os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-middleware-tests")
+
+
+class TestMarkSetupComplete:
+    """Tests for mark_setup_complete() and reset_setup_cache()."""
+
+    def test_mark_setup_complete(self) -> None:
+        """mark_setup_complete should set the module-level flag."""
+        import pullbox.api.middleware as mw
+
+        reset_setup_cache()
+        assert mw._setup_complete is None
+        mark_setup_complete()
+        assert mw._setup_complete is True
+        reset_setup_cache()
+
+
+class TestSetupDetectionRedirect:
+    """Tests for SetupDetectionMiddleware when setup is not completed."""
+
+    @pytest.mark.asyncio
+    async def test_redirect_html_to_setup(self) -> None:
+        """HTML requests should redirect to /setup when no users exist yet."""
+        reset_setup_cache()
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/dashboard",
+            "query_string": b"",
+            "headers": [(b"accept", b"text/html")],
+        }
+        request = Request(scope)
+
+        middleware = SetupDetectionMiddleware(app=MagicMock())
+
+        async def call_next(req: Request) -> Response:
+            return Response(status_code=200)
+
+        # Mock the DB query to return no users
+        mock_factory = MagicMock()
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("pullbox.api.middleware.get_session_factory", return_value=mock_factory):
+            response = await middleware.dispatch(request, call_next)
+
+        assert response.status_code == 302
+        assert response.headers["location"] == "/setup"
+        reset_setup_cache()
+
+    @pytest.mark.asyncio
+    async def test_root_html_rewrites_to_setup_path(self) -> None:
+        """Root browser navigations should render the setup page in one request."""
+        reset_setup_cache()
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [(b"accept", b"text/html")],
+        }
+        request = Request(scope)
+
+        middleware = SetupDetectionMiddleware(app=MagicMock())
+        seen_scope_path: str | None = None
+
+        async def call_next(req: Request) -> Response:
+            nonlocal seen_scope_path
+            seen_scope_path = req.scope["path"]
+            return Response(status_code=200)
+
+        mock_factory = MagicMock()
+        mock_session = AsyncMock()
+        no_users = MagicMock()
+        no_users.scalar_one_or_none.return_value = None
+        mock_session.execute = AsyncMock(return_value=no_users)
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("pullbox.api.middleware.get_session_factory", return_value=mock_factory):
+            response = await middleware.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert seen_scope_path == "/setup"
+        reset_setup_cache()
+
+    @pytest.mark.asyncio
+    async def test_existing_user_allows_request_through_without_setup_flag(self) -> None:
+        """A pre-existing user should count as completed setup."""
+        reset_setup_cache()
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/dashboard",
+            "query_string": b"",
+            "headers": [(b"accept", b"text/html")],
+        }
+        request = Request(scope)
+
+        middleware = SetupDetectionMiddleware(app=MagicMock())
+        call_next_called = False
+
+        async def call_next(req: Request) -> Response:
+            nonlocal call_next_called
+            call_next_called = True
+            return Response(status_code=200)
+
+        mock_factory = MagicMock()
+        mock_session = AsyncMock()
+        existing_user = MagicMock()
+        existing_user.scalar_one_or_none.return_value = 1
+        mock_session.execute = AsyncMock(return_value=existing_user)
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("pullbox.api.middleware.get_session_factory", return_value=mock_factory):
+            response = await middleware.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert call_next_called is True
+        reset_setup_cache()
+
+    @pytest.mark.asyncio
+    async def test_json_returns_403_setup_required(self) -> None:
+        """Non-HTML, non-API requests return 403 when setup not completed."""
+        reset_setup_cache()
+
+        # Use a non-exempt, non-API path with JSON accept
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/dashboard",
+            "query_string": b"",
+            "headers": [(b"accept", b"application/json")],
+        }
+        request = Request(scope)
+
+        middleware = SetupDetectionMiddleware(app=MagicMock())
+
+        async def call_next(req: Request) -> Response:
+            return Response(status_code=200)
+
+        mock_factory = MagicMock()
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("pullbox.api.middleware.get_session_factory", return_value=mock_factory):
+            response = await middleware.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        reset_setup_cache()
+
+    @pytest.mark.asyncio
+    async def test_db_error_passes_through(self) -> None:
+        """DB errors in setup check should pass through to the app."""
+        reset_setup_cache()
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+
+        middleware = SetupDetectionMiddleware(app=MagicMock())
+        call_next_called = False
+
+        async def call_next(req: Request) -> Response:
+            nonlocal call_next_called
+            call_next_called = True
+            return Response(status_code=200)
+
+        with patch(
+            "pullbox.api.middleware.get_session_factory",
+            side_effect=Exception("DB error"),
+        ):
+            response = await middleware.dispatch(request, call_next)
+
+        assert call_next_called
+        assert response.status_code == 200
+        reset_setup_cache()
+
+
+class TestRequestLoggingSlow:
+    """Test the slow request warning path."""
+
+    @pytest.mark.asyncio
+    async def test_slow_request_logs_warning(self) -> None:
+        """Requests taking >200ms should log a warning."""
+        import time
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+
+        middleware = RequestLoggingMiddleware(app=MagicMock())
+
+        async def slow_call_next(req: Request) -> Response:
+            time.sleep(0.25)  # 250ms
+            return Response(status_code=200)
+
+        with patch("pullbox.api.middleware.logger") as mock_logger:
+            response = await middleware.dispatch(request, slow_call_next)
+
+        assert response.status_code == 200
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args
+        assert call_args[0][0] == "http_request_slow"
+
+    @pytest.mark.asyncio
+    async def test_fast_server_error_logs_error(self) -> None:
+        """Fast 5xx responses should log as errors, not info."""
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+
+        middleware = RequestLoggingMiddleware(app=MagicMock())
+
+        async def failing_call_next(req: Request) -> Response:
+            return Response(status_code=500)
+
+        with patch("pullbox.api.middleware.logger") as mock_logger:
+            response = await middleware.dispatch(request, failing_call_next)
+
+        assert response.status_code == 500
+        mock_logger.error.assert_called_once()
+        call_args = mock_logger.error.call_args
+        assert call_args[0][0] == "http_request_failed"
+
+    @pytest.mark.asyncio
+    async def test_request_logging_sets_request_id_header(self) -> None:
+        """Logged requests should expose the request ID on the response."""
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+
+        middleware = RequestLoggingMiddleware(app=MagicMock())
+
+        async def ok_call_next(req: Request) -> Response:
+            return Response(status_code=200)
+
+        response = await middleware.dispatch(request, ok_call_next)
+
+        assert response.status_code == 200
+        assert response.headers["X-Request-ID"] == request.state.request_id
+
+    @pytest.mark.asyncio
+    async def test_fast_unauthorized_logs_warning(self) -> None:
+        """Auth/security-style 4xx responses should log as warnings."""
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+
+        middleware = RequestLoggingMiddleware(app=MagicMock())
+
+        async def rejected_call_next(req: Request) -> Response:
+            return Response(status_code=401)
+
+        with patch("pullbox.api.middleware.logger") as mock_logger:
+            response = await middleware.dispatch(request, rejected_call_next)
+
+        assert response.status_code == 401
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args
+        assert call_args[0][0] == "http_request_rejected"
+
+
+class TestCsrfInvalidSessionFallthrough:
+    """Test CSRF middleware when session token is invalid/expired."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_session_passes_through(self) -> None:
+        """Invalid session cookie should pass through to auth layer."""
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+        request._cookies = {"pullbox_session": "invalid-token-data"}
+
+        middleware = CsrfMiddleware(app=MagicMock())
+
+        async def call_next(req: Request) -> Response:
+            return Response(status_code=200)
+
+        response = await middleware.dispatch(request, call_next)
+        # Invalid session → CSRF middleware passes through, auth will handle it
+        assert response.status_code == 200
+
+
+class TestRateLimitDisabledBypass:
+    """Test rate limit middleware bypass when disabled."""
+
+    @pytest.mark.asyncio
+    async def test_disabled_rate_limiter_passes_through(self) -> None:
+        """Disabled rate limiter should skip all checks."""
+        from pullbox.api.middleware import RateLimitMiddleware
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+        request.scope["client"] = ("127.0.0.1", 12345)
+
+        limiter = MagicMock()
+        limiter.enabled = False
+        middleware = RateLimitMiddleware(app=MagicMock(), limiter=limiter)
+
+        async def call_next(req: Request) -> Response:
+            return Response(status_code=200)
+
+        response = await middleware.dispatch(request, call_next)
+        assert response.status_code == 200
+        # check() should NOT have been called
+        limiter.check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_pullbox_error_reraised(self) -> None:
+        """Non-PullboxError exceptions should be re-raised."""
+        from pullbox.api.middleware import RateLimitMiddleware
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+        request.scope["client"] = ("127.0.0.1", 12345)
+
+        limiter = MagicMock()
+        limiter.enabled = True
+        limiter.check = AsyncMock(side_effect=RuntimeError("unexpected"))
+        middleware = RateLimitMiddleware(app=MagicMock(), limiter=limiter)
+
+        async def call_next(req: Request) -> Response:
+            return Response(status_code=200)
+
+        with pytest.raises(RuntimeError, match="unexpected"):
+            await middleware.dispatch(request, call_next)

@@ -1,0 +1,48 @@
+{% set _oob = oob|default(false) %}
+{% if tab == "queue" %}
+  {% set _title = "JOB QUEUE" %}
+  {% set _subtitle = "Watch active and queued utility work without losing sight of running jobs." %}
+{% elif tab == "history" %}
+  {% set _title = "JOB HISTORY" %}
+  {% set _subtitle = "Review completed utility jobs, inspect logs, roll back changes, and clear history." %}
+{% else %}
+  {% set _title = "BATCH TOOLS" %}
+  {% set _subtitle = "6 utilities · shared job queue · preview before commit" %}
+{% endif %}
+<section
+  id="utilities-header"
+  data-testid="utilities-header"
+  {% if _oob %}hx-swap-oob="outerHTML"{% endif %}
+  class="utilities-header"
+>
+  <div class="utilities-header-copy">
+    <div>
+      <h1 class="utilities-header-title">{{ _title.split(" ")[0] }} <span>{{ _title.split(" ", 1)[1] if " " in _title else "" }}</span></h1>
+      <p class="utilities-header-subtitle">{{ _subtitle }}</p>
+    </div>
+    <div data-testid="utilities-gauges" class="utilities-gauges">
+      <div class="utilities-gauge">
+        <div class="utilities-gauge-ring utilities-gauge-ring-success">
+          <span class="utilities-gauge-value">{{ initial_stats.running|default(0) }}</span>
+        </div>
+        <span class="utilities-gauge-label">Running</span>
+      </div>
+      <div class="utilities-gauge">
+        <div class="utilities-gauge-ring utilities-gauge-ring-info">
+          <span class="utilities-gauge-value">{{ initial_stats.queued|default(0) }}</span>
+        </div>
+        <span class="utilities-gauge-label">Queued</span>
+      </div>
+      {% if tab in ["queue", "history"] %}
+      <div class="utilities-gauge">
+        <div class="utilities-gauge-ring utilities-gauge-ring-ink">
+          <span class="utilities-gauge-value">{{ initial_stats.total_completed|default(0) }}</span>
+        </div>
+        <span class="utilities-gauge-label">Done</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% include "partials/utilities_tabs.html" %}
+</section>

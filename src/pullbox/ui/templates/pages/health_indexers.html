@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Indexers Health — {{ instance_name() }}{% endblock %}
+{% block page_title %}Health{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div
+  class="w-full"
+  data-testid="health-indexers-page"
+  x-data="healthPage({ csrfToken: '{{ csrf_token }}', componentKey: 'indexers' })"
+>
+  {% include "partials/health_indexers_status_region.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/health_indexers_footer_dock.html" %}
+{% endblock %}

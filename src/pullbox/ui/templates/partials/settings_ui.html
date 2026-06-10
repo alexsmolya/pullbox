@@ -1,0 +1,314 @@
+{#- System: UI tab — display settings for date/time formatting -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import field_note, section_card, settings_footer, settings_row, ui_icon %}
+
+<div class="space-y-6 pt-6" x-data="uiSettings()">
+  {% call section_card(
+    title="Date and time display",
+    eyebrow="Formatting",
+    title_style="plain",
+    body_class="p-0"
+  ) %}
+    <div class="settings-rows">
+      {% call settings_row(label="Timezone", body_class="flex justify-end") %}
+        <div class="flex w-full max-w-sm flex-col items-end">
+          {{ dropdown_select(
+            name="display_timezone",
+            value=(ui_settings.timezone if ui_settings else "browser"),
+            options=[
+              ("browser", "Browser Auto-Detect"),
+              ("UTC", "UTC"),
+              {"label": "Americas", "disabled": true},
+              ("America/New_York", "Eastern (New York)"),
+              ("America/Chicago", "Central (Chicago)"),
+              ("America/Denver", "Mountain (Denver)"),
+              ("America/Los_Angeles", "Pacific (Los Angeles)"),
+              ("America/Anchorage", "Alaska"),
+              ("Pacific/Honolulu", "Hawaii"),
+              ("America/Toronto", "Toronto"),
+              ("America/Sao_Paulo", "São Paulo"),
+              {"label": "Europe", "disabled": true},
+              ("Europe/London", "London"),
+              ("Europe/Paris", "Paris"),
+              ("Europe/Berlin", "Berlin"),
+              ("Europe/Amsterdam", "Amsterdam"),
+              ("Europe/Rome", "Rome"),
+              ("Europe/Madrid", "Madrid"),
+              ("Europe/Stockholm", "Stockholm"),
+              ("Europe/Moscow", "Moscow"),
+              {"label": "Asia & Pacific", "disabled": true},
+              ("Asia/Tokyo", "Tokyo"),
+              ("Asia/Shanghai", "Shanghai"),
+              ("Asia/Hong_Kong", "Hong Kong"),
+              ("Asia/Singapore", "Singapore"),
+              ("Asia/Kolkata", "Kolkata"),
+              ("Asia/Dubai", "Dubai"),
+              ("Australia/Sydney", "Sydney"),
+              ("Australia/Melbourne", "Melbourne"),
+              ("Pacific/Auckland", "Auckland"),
+            ],
+            root_testid="settings-ui-timezone-select",
+            class_name="w-full max-w-sm",
+            disabled=tz_env,
+            local_model="timezone"
+          ) }}
+          {% if tz_env %}
+            {% call field_note(tone="info", icon="lock", class_name="w-full justify-start text-left") %}
+              This setting is locked by the environment and cannot be changed from the UI.
+            {% endcall %}
+          {% endif %}
+        </div>
+      {% endcall %}
+
+      {% call settings_row(label="Date Format", body_class="flex justify-end") %}
+        {{ dropdown_select(
+          name="display_date_format",
+          value=(ui_settings.date_format if ui_settings else "MMM DD, YYYY"),
+          options=[
+            ("MMM DD, YYYY", "Mar 22, 2026"),
+            ("DD/MM/YYYY", "22/03/2026"),
+            ("YYYY-MM-DD", "2026-03-22"),
+            ("MM/DD/YYYY", "03/22/2026"),
+          ],
+          root_testid="settings-ui-date-format-select",
+          class_name="w-full max-w-sm",
+          local_model="dateFormat"
+        ) }}
+      {% endcall %}
+
+      {% call settings_row(label="Time Format", body_class="flex justify-end") %}
+        <div class="flex flex-wrap justify-end gap-2">
+          <button type="button" @click="timeFormat = '24h'" :class="timeFormat === '24h' ? 'chip-btn-selected' : 'chip-btn-neutral'" class="chip-btn chip-btn-md">
+            24-hour
+          </button>
+          <button type="button" @click="timeFormat = '12h'" :class="timeFormat === '12h' ? 'chip-btn-selected' : 'chip-btn-neutral'" class="chip-btn chip-btn-md">
+            12-hour
+          </button>
+        </div>
+      {% endcall %}
+
+      {% call settings_row(label="Show Seconds", body_class="flex justify-end") %}
+        <div class="flex items-center justify-end gap-3">
+          <label class="relative inline-flex cursor-pointer items-center">
+            <input type="checkbox" x-model="showSeconds" class="peer toggle-input">
+            <span class="toggle-switch"></span>
+          </label>
+          <span class="text-sm" :class="showSeconds ? 'text-pb-interactive' : 'text-pb-text-sec'" x-text="showSeconds ? 'Enabled' : 'Disabled'"></span>
+        </div>
+      {% endcall %}
+
+      {% call settings_row(label="Show Timezone", body_class="flex justify-end") %}
+        <div class="flex items-center justify-end gap-3">
+          <label class="relative inline-flex cursor-pointer items-center">
+            <input type="checkbox" x-model="showTimezone" class="peer toggle-input">
+            <span class="toggle-switch"></span>
+          </label>
+          <span class="text-sm" :class="showTimezone ? 'text-pb-interactive' : 'text-pb-text-sec'" x-text="showTimezone ? 'Enabled' : 'Disabled'"></span>
+        </div>
+      {% endcall %}
+
+      <div x-show="timeFormat === '12h'" x-cloak>
+        {% call settings_row(label="Show AM/PM", body_class="flex justify-end") %}
+          <div class="flex items-center justify-end gap-3">
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input type="checkbox" x-model="showAmPm" class="peer toggle-input">
+              <span class="toggle-switch"></span>
+            </label>
+            <span class="text-sm" :class="showAmPm ? 'text-pb-interactive' : 'text-pb-text-sec'" x-text="showAmPm ? 'Enabled' : 'Disabled'"></span>
+          </div>
+        {% endcall %}
+      </div>
+
+      {% call settings_row(label="Preview", body_class="flex justify-end") %}
+        <p class="font-mono text-sm text-pb-text" x-text="previewTime()"></p>
+      {% endcall %}
+    </div>
+
+    {% call settings_footer(align="end") %}
+      <div class="settings-footer-actions ml-auto justify-end">
+        <button type="button" x-show="dirty" x-cloak @click="reset()" class="btn-ghost">
+          Reset
+        </button>
+        <button @click="save()" :disabled="saving || !dirty" :class="(saving || !dirty) && 'opacity-50 cursor-not-allowed'" class="btn-primary">
+          <span x-show="!saving">Save display settings</span>
+          <span x-show="saving">Saving...</span>
+        </button>
+      </div>
+    {% endcall %}
+  {% endcall %}
+
+  {% call section_card(
+    title="Theme",
+    eyebrow="Appearance",
+    title_style="plain"
+  ) %}
+    <div x-data="themeSettings()">
+      <div class="grid w-full gap-2 sm:grid-cols-3">
+        <template x-for="opt in options" :key="opt.value">
+          <button
+            type="button"
+            @click="select(opt.value)"
+            class="selection-card settings-theme-choice h-full w-full"
+            :class="active === opt.value ? 'selection-card-active' : ''"
+          >
+            <div class="flex items-center gap-3">
+              <div class="selection-card-icon settings-theme-choice-icon" :class="active === opt.value ? 'selection-card-icon-active' : ''">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" :d="opt.icon"/>
+                </svg>
+              </div>
+              <div class="min-w-0 text-left">
+                <p class="text-sm font-semibold text-pb-text" x-text="opt.label"></p>
+              </div>
+            </div>
+          </button>
+        </template>
+      </div>
+    </div>
+  {% endcall %}
+</div>
+
+<script>
+window._pb = window._pb || {};
+_pb.config = _pb.config || {
+  timezone: 'browser', dateFormat: 'MMM DD, YYYY', timeFormat: '24h',
+  showSeconds: false, showTimezone: true, showAmPm: true
+};
+_pb.format = _pb.format || function(iso) { return iso || '—'; };
+
+function themeSettings() {
+  return {
+    active: localStorage.getItem('pullbox-theme') || 'system',
+    options: [
+      {
+        value: 'light',
+        label: 'Light',
+        icon: 'M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z'
+      },
+      {
+        value: 'dark',
+        label: 'Dark',
+        icon: 'M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z'
+      },
+      {
+        value: 'system',
+        label: 'System',
+        icon: 'M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25A2.25 2.25 0 015.25 3h13.5A2.25 2.25 0 0121 5.25z'
+      },
+    ],
+    select(value) {
+      this.active = value;
+      applyTheme(value);
+    },
+  };
+}
+
+function uiSettings() {
+  return {
+    timezone: {{ (ui_settings.timezone if ui_settings else 'browser') | tojson }},
+    dateFormat: {{ (ui_settings.date_format if ui_settings else 'MMM DD, YYYY') | tojson }},
+    timeFormat: {{ (ui_settings.time_format if ui_settings else '24h') | tojson }},
+    showSeconds: {{ 'true' if ui_settings and ui_settings.show_seconds else 'false' }},
+    showTimezone: {{ 'false' if ui_settings and not ui_settings.show_timezone else 'true' }},
+    showAmPm: {{ 'false' if ui_settings and not ui_settings.show_ampm else 'true' }},
+    saving: false,
+    dirty: false,
+    _init: null,
+
+    init() {
+      this._init = {
+        timezone: this.timezone,
+        dateFormat: this.dateFormat,
+        timeFormat: this.timeFormat,
+        showSeconds: this.showSeconds,
+        showTimezone: this.showTimezone,
+        showAmPm: this.showAmPm,
+      };
+      this.$watch('timezone', () => this.checkDirty());
+      this.$watch('dateFormat', () => this.checkDirty());
+      this.$watch('timeFormat', () => this.checkDirty());
+      this.$watch('showSeconds', () => this.checkDirty());
+      this.$watch('showTimezone', () => this.checkDirty());
+      this.$watch('showAmPm', () => this.checkDirty());
+    },
+
+    checkDirty() {
+      this.dirty = this.timezone !== this._init.timezone
+        || this.dateFormat !== this._init.dateFormat
+        || this.timeFormat !== this._init.timeFormat
+        || this.showSeconds !== this._init.showSeconds
+        || this.showTimezone !== this._init.showTimezone
+        || this.showAmPm !== this._init.showAmPm;
+    },
+
+    previewTime() {
+      var now = new Date();
+      var cfg = {
+        timezone: this.timezone,
+        dateFormat: this.dateFormat,
+        timeFormat: this.timeFormat,
+        showSeconds: this.showSeconds,
+        showTimezone: this.showTimezone,
+        showAmPm: this.showAmPm,
+      };
+      var saved = Object.assign({}, _pb.config);
+      Object.assign(_pb.config, cfg);
+      var result = _pb.format(now.toISOString());
+      Object.assign(_pb.config, saved);
+      return result;
+    },
+
+    reset() {
+      this.timezone = this._init.timezone;
+      this.dateFormat = this._init.dateFormat;
+      this.timeFormat = this._init.timeFormat;
+      this.showSeconds = this._init.showSeconds;
+      this.showTimezone = this._init.showTimezone;
+      this.showAmPm = this._init.showAmPm;
+      this.dirty = false;
+    },
+
+    async save() {
+      this.saving = true;
+      try {
+        var values = {};
+        if (this.timezone !== this._init.timezone) values['display.timezone'] = this.timezone;
+        if (this.dateFormat !== this._init.dateFormat) values['display.date_format'] = this.dateFormat;
+        if (this.timeFormat !== this._init.timeFormat) values['display.time_format'] = this.timeFormat;
+        if (this.showSeconds !== this._init.showSeconds) values['display.show_seconds'] = this.showSeconds ? 'true' : 'false';
+        if (this.showTimezone !== this._init.showTimezone) values['display.show_timezone'] = this.showTimezone ? 'true' : 'false';
+        if (this.showAmPm !== this._init.showAmPm) values['display.show_ampm'] = this.showAmPm ? 'true' : 'false';
+
+        var resp = await fetch('/api/v1/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' },
+          body: JSON.stringify({ values: values }),
+        });
+        if (!resp.ok) throw new Error('Failed to save');
+
+        _pb.config.timezone = this.timezone;
+        _pb.config.dateFormat = this.dateFormat;
+        _pb.config.timeFormat = this.timeFormat;
+        _pb.config.showSeconds = this.showSeconds;
+        _pb.config.showTimezone = this.showTimezone;
+        _pb.config.showAmPm = this.showAmPm;
+
+        this._init = {
+          timezone: this.timezone,
+          dateFormat: this.dateFormat,
+          timeFormat: this.timeFormat,
+          showSeconds: this.showSeconds,
+          showTimezone: this.showTimezone,
+          showAmPm: this.showAmPm,
+        };
+        this.dirty = false;
+        if (typeof showToast === 'function') showToast({ message: 'Display settings saved.', level: 'success' });
+      } catch (e) {
+        if (typeof showToast === 'function') showToast({ message: e.message, level: 'error' });
+      } finally {
+        this.saving = false;
+      }
+    },
+  };
+}
+</script>

@@ -1,0 +1,510 @@
+---
+# Pullbox Docker Build & Push Pipeline
+# Builds multi-arch images, scans with Grype, runs smoke tests, then pushes to GHCR.
+#
+# Registry: GHCR only (private, inherits visibility from repo).
+# Docker Hub will be added at v1.0 launch when the repo goes public.
+# To add Docker Hub: add login step, add DOCKERHUB_IMAGE env, add to metadata images.
+#
+# Security: All actions pinned to full SHA. Container scanned before push.
+# See: docs/development/INFRASTRUCTURE.md
+#
+# Trigger rules:
+#   workflow_run → runs after CI passes on main for untagged SHAs
+#   push tags    → builds semver release images for tagged commits
+#   dispatch     → manual builds from any branch (tagged as "edge")
+# Trusted Docker publish stays on the self-hosted runner. This workflow is not
+# governed by the general checks-runner toggle.
+#
+# Tag strategy:
+#   v* tag       → 1.2.3, 1.2, 1, latest, sha-xxxxx
+#   manual       → edge (or custom), sha-xxxxx
+#
+# Versioning:
+#   Version is read from pullbox/__init__.py (__version__).
+#   During development: "0.X.0-dev" (bumped per sprint milestone).
+#   At release: "1.0.0-rc1" → "1.0.0" (git tag triggers release workflow).
+#   See CICD_SPRINT_GUIDE.md for the full versioning plan.
+
+name: Docker
+
+on:
+  # Build Docker images after CI passes on main (includes tag pushes merged to main).
+  # workflow_run uses the correct SHA from the triggering workflow, not HEAD.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+  push:
+    tags: ["v*"]
+
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: "Custom image tag (default: edge)"
+        required: false
+        default: "edge"
+
+permissions:
+  contents: read
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository }}
+  PYTHON_DEFAULT: "3.14"
+
+concurrency:
+  group: docker-${{ github.event_name }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 0: Decide whether this invocation should build
+  # ──────────────────────────────────────────────
+  gate:
+    name: Resolve Docker Trigger
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    outputs:
+      should-run: ${{ steps.decide.outputs.should_run }}
+      build-sha: ${{ steps.resolve-sha.outputs.sha }}
+    steps:
+      - name: Resolve correct SHA
+        id: resolve-sha
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip unsuccessful workflow_run invocations
+        id: workflow-run-status
+        if: github.event_name == 'workflow_run'
+        run: |
+          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "CI conclusion was '${{ github.event.workflow_run.conclusion }}'; skipping Docker build."
+            exit 0
+          fi
+
+          echo "should_run=undecided" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.workflow-run-status.outputs.should_run != 'false'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ steps.resolve-sha.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide whether to run Docker jobs
+        id: decide
+        if: steps.workflow-run-status.outputs.should_run != 'false'
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_run" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Direct tag/manual trigger; running Docker workflow."
+            exit 0
+          fi
+
+          TAG=$(git tag --points-at "${{ steps.resolve-sha.outputs.sha }}" | grep '^v' | head -1 || true)
+          if [ -n "$TAG" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "SHA already has release tag ${TAG}; skipping duplicate workflow_run build."
+            exit 0
+          fi
+
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Untagged main SHA after successful CI; running Docker workflow."
+
+  # ──────────────────────────────────────────────
+  # Job 1: Build multi-arch image
+  # ──────────────────────────────────────────────
+  build:
+    name: Build Multi-Arch Image
+    runs-on: self-hosted
+    needs: [gate]
+    timeout-minutes: 45
+    if: needs.gate.outputs.should-run == 'true'
+    permissions:
+      contents: read
+    outputs:
+      image-tags: ${{ steps.meta.outputs.tags }}
+      image-labels: ${{ steps.meta.outputs.labels }}
+      image-version: ${{ steps.version.outputs.version }}
+      build-sha: ${{ needs.gate.outputs.build-sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.gate.outputs.build-sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve tag from SHA
+        id: resolve-tag
+        run: |
+          TAG=$(git tag --points-at ${{ needs.gate.outputs.build-sha }} | grep '^v' | head -1 || true)
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "Found tag: $TAG"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "No release tag at this SHA"
+          fi
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh base docker
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Validate DHI authentication
+        env:
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: |
+          if [ -z "${DHI_USERNAME}" ] || [ -z "${DHI_TOKEN}" ]; then
+            echo "::error::DHI_USERNAME and DHI_TOKEN repository secrets are required to build Docker Hardened Images in CI."
+            exit 1
+          fi
+
+      - name: Log in to DHI
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: |
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.resolve-tag.outputs.tag }},enable=${{ steps.resolve-tag.outputs.is_release }}
+            type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release }}
+            type=raw,value=${{ inputs.tag_override || 'edge' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,format=short,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=Pullbox
+            org.opencontainers.image.description=Modern comic book management and acquisition platform
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.gate.outputs.build-sha }}
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pullbox/__init__.py | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Unable to extract Pullbox version from src/pullbox/__init__.py"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Build for amd64 only and export to local Docker for scanning + smoke tests.
+      # Multi-arch push happens in the push job after validation.
+      - name: Build amd64 image (for scan + smoke)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: pullbox:ci-scan
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            GIT_SHA=${{ needs.gate.outputs.build-sha }}
+            GIT_BRANCH=${{ github.ref_name }}
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save image for downstream jobs
+        run: docker save pullbox:ci-scan | gzip > "${{ runner.temp }}/pullbox-image.tar.gz"
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/pullbox-image.tar.gz
+          retention-days: 1
+
+  # ──────────────────────────────────────────────
+  # Job 2: Grype vulnerability scan
+  # ──────────────────────────────────────────────
+  scan:
+    name: Container Scan (Grype)
+    runs-on: self-hosted
+    needs: [build]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Download image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/docker-image-scan
+
+      - name: Load image
+        run: docker load < "${{ runner.temp }}/docker-image-scan/pullbox-image.tar.gz"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh docker
+
+      - name: Run Grype scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        id: scan
+        with:
+          image: pullbox:ci-scan
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          config: .grype.yaml
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        continue-on-error: true  # SARIF upload requires GitHub Advanced Security (paid for private repos)
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: container-scan
+
+  # ──────────────────────────────────────────────
+  # Job 3: Smoke test against Docker image
+  # ──────────────────────────────────────────────
+  smoke-test:
+    name: Docker Smoke Test
+    runs-on: self-hosted
+    needs: [build]
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Download image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/docker-image-smoke
+
+      - name: Load image
+        run: docker load < "${{ runner.temp }}/docker-image-smoke/pullbox-image.tar.gz"
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh docker
+
+      - name: Verify packaged static assets
+        run: |
+          docker run --rm --entrypoint python pullbox:ci-scan -c '
+          import pullbox.app
+
+          assets = [
+              pullbox.app.STATIC_DIR / "css" / "tailwind.css",
+              pullbox.app.STATIC_DIR / "js" / "htmx.min.js",
+          ]
+          missing = [str(asset) for asset in assets if not asset.is_file()]
+          if missing:
+              raise SystemExit("Missing packaged static assets: " + ", ".join(missing))
+          print("Packaged static assets verified")
+          '
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name pullbox-smoke \
+            -p 8585:8585 \
+            -e PULLBOX_SECRET_KEY=smoke-test-secret-key-for-docker-ci \
+            -e PULLBOX_LOG_LEVEL=WARNING \
+            pullbox:ci-scan
+
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8585/ping > /dev/null 2>&1; then
+              echo "✅ Container healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "❌ Container failed to become healthy"
+          docker logs pullbox-smoke
+          exit 1
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - name: Setup runner-local test venv
+        run: .github/scripts/setup-runner-venv.sh "dev,e2e"
+
+      - name: Install Playwright browsers
+        run: playwright install chromium
+
+      - name: Python preflight
+        run: .github/scripts/preflight-runner.sh python
+
+      - name: Run smoke tests
+        run: |
+          pytest tests/e2e/test_smoke.py \
+            -v \
+            --base-url http://localhost:8585
+        env:
+          PULLBOX_SMOKE_TEST: "true"
+
+      - name: Upload smoke traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-test-traces
+          path: test-results/smoke/
+          retention-days: 7
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs pullbox-smoke
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f pullbox-smoke || true
+
+  # ──────────────────────────────────────────────
+  # Job 4: Push to GHCR (after scan + smoke)
+  # ──────────────────────────────────────────────
+  push:
+    name: Push to GHCR
+    runs-on: self-hosted
+    needs: [build, scan, smoke-test]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.build.outputs.build-sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve tag from SHA
+        id: resolve-tag
+        run: |
+          TAG=$(git tag --points-at ${{ needs.build.outputs.build-sha }} | grep '^v' | head -1 || true)
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh base docker
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Validate DHI authentication
+        env:
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: |
+          if [ -z "${DHI_USERNAME}" ] || [ -z "${DHI_TOKEN}" ]; then
+            echo "::error::DHI_USERNAME and DHI_TOKEN repository secrets are required to build Docker Hardened Images in CI."
+            exit 1
+          fi
+
+      - name: Log in to DHI
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # TODO: Add Docker Hub login at v1.0 launch when repo goes public
+      # - name: Log in to Docker Hub
+      #   uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: |
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.resolve-tag.outputs.tag }},enable=${{ steps.resolve-tag.outputs.is_release }}
+            type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release }}
+            type=raw,value=${{ inputs.tag_override || 'edge' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,format=short,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=Pullbox
+            org.opencontainers.image.description=Modern comic book management and acquisition platform
+            org.opencontainers.image.revision=${{ needs.build.outputs.build-sha }}
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pullbox/__init__.py | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Unable to extract Pullbox version from src/pullbox/__init__.py"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push multi-arch
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            GIT_SHA=${{ needs.build.outputs.build-sha }}
+            GIT_BRANCH=${{ github.ref_name }}
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+
+      - name: Summary
+        run: |
+          {
+            echo "## Docker Image Published 🐳"
+            echo ""
+            echo "**Tags:**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

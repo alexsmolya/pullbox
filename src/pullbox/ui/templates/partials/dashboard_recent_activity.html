@@ -1,0 +1,29 @@
+<section
+  id="dashboard-recent-activity-region"
+  data-testid="dashboard-recent-activity"
+  class="dashboard-section"
+  hx-get="/htmx/dashboard/recent-activity"
+  hx-trigger="every 15m [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <p class="dashboard-section__label">Recent Outcomes</p>
+  <div class="dashboard-activity-card">
+    {% if dashboard_view.recent_activity %}
+      {% for item in dashboard_view.recent_activity %}
+        <div data-testid="dashboard-activity-{{ item.key }}" class="dashboard-activity-row">
+          <span class="dashboard-activity-row__dot dashboard-activity-row__dot--{{ item.kind }}"></span>
+          <div class="dashboard-activity-row__body">
+            <p class="dashboard-activity-row__summary">{{ item.summary }}</p>
+            <p class="dashboard-activity-row__detail">{{ item.detail }}</p>
+            <div class="dashboard-activity-row__meta">
+              <span class="dashboard-activity-row__time">{{ item.time_label }}</span>
+              <a href="{{ item.href }}" class="dashboard-activity-row__link">View →</a>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="dashboard-activity-card__empty">Outcomes will show up here once Pullbox has more work to report.</p>
+    {% endif %}
+  </div>
+</section>

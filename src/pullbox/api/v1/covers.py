@@ -1,0 +1,168 @@
+"""Cover image serving API — resolves covers from series folders or legacy storage.
+
+Series folder covers take priority over the legacy ``data/covers/`` directory.
+Returns proper image responses with caching headers, or 404 if no cover exists.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import structlog
+from fastapi import APIRouter
+from fastapi.responses import FileResponse, Response
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+
+from pullbox.api.deps import AuthenticatedUser, DbSession  # noqa: TC001
+from pullbox.config import get_settings
+from pullbox.core.exceptions import NotFoundError
+from pullbox.models.issue import Issue
+from pullbox.models.series import Series
+from pullbox.services.cover_cache_service import cache_series_cover, resolve_series_cover_file
+
+logger = structlog.get_logger(__name__)
+
+router = APIRouter(tags=["covers"], include_in_schema=False)
+
+# Cache control: authenticated image URLs should always revalidate before reuse.
+_CACHE_HEADERS = {"Cache-Control": "private, no-cache, max-age=0, must-revalidate"}
+
+
+def _serve_image(path: Path) -> FileResponse:
+    """Return a FileResponse for an image with caching headers."""
+    # Infer media type from extension
+    suffix = path.suffix.lower()
+    media_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }.get(suffix, "image/jpeg")
+
+    return FileResponse(
+        path=path,
+        media_type=media_type,
+        headers=_CACHE_HEADERS,
+    )
+
+
+def _find_cover_file(directory: Path, stem: str) -> Path | None:
+    """Look for a cover file with any common image extension."""
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        candidate = directory / f"{stem}{ext}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+# ── Series Cover ──────────────────────────────────────────────────
+
+
+@router.get("/series/{series_id}/cover")
+async def get_series_cover(
+    series_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> Response:
+    """Serve the series cover image.
+
+    Resolution order:
+    1. ``{series.path}/cover.{ext}`` (series folder)
+    2. ``{covers_dir}/{series_id}/series.{ext}`` (legacy location)
+    3. 404
+    """
+    series = await session.get(Series, series_id)
+    if series is None:
+        raise NotFoundError("Series", series_id)
+
+    # 1-3. Try any existing local cover location
+    cover = await resolve_series_cover_file(session, series)
+    if cover:
+        if not series.cover_path:
+            series.cover_path = f"/api/v1/series/{series.id}/cover"
+            await session.commit()
+        return _serve_image(cover)
+
+    # 4. Download and cache a remote cover on demand
+    if series.cover_url:
+        cover = await cache_series_cover(session, series)
+        if cover:
+            await session.commit()
+            return _serve_image(cover)
+
+    # 5. No cover found
+    return Response(status_code=404)
+
+
+# ── Issue Cover ───────────────────────────────────────────────────
+
+
+@router.get("/issues/{issue_id}/cover")
+async def get_issue_cover(
+    issue_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> Response:
+    """Serve an issue cover image.
+
+    Resolution order:
+    1. ``{series.path}/issue_{number}.{ext}`` (series folder, by issue number)
+    2. ``{covers_dir}/{series_id}/issue_{issue_id}.{ext}`` (legacy, by DB ID)
+    3. Series cover as fallback
+    4. 404
+    """
+    result = await session.execute(
+        select(Issue).options(joinedload(Issue.series)).where(Issue.id == issue_id)
+    )
+    issue = result.unique().scalar_one_or_none()
+    if issue is None:
+        raise NotFoundError("Issue", issue_id)
+
+    # Format issue number for filename (e.g. 1.0 → "001", 1.5 → "001.5")
+    num = issue.issue_number
+    issue_num_str = f"{int(num):03d}" if num == int(num) else f"{num:06.1f}"
+
+    # 1. Try series folder (by issue number — human-readable, survives DB rebuilds)
+    if issue.series and issue.series.path:
+        series_path = Path(issue.series.path)
+        cover = _find_cover_file(series_path, f"issue_{issue_num_str}")
+        if cover:
+            return _serve_image(cover)
+
+    # 2. Try .covers/ directory (by issue number)
+    from pullbox.services.cover_resolver import resolve_covers_dir
+
+    covers_base = await resolve_covers_dir(session)
+    if issue.series:
+        covers_dir = covers_base / str(issue.series_id)
+        cover = _find_cover_file(covers_dir, f"issue_{issue_num_str}")
+        if cover:
+            return _serve_image(cover)
+
+    # 3. Try legacy location (by DB ID)
+    settings = get_settings()
+    if issue.series and settings.covers_dir != covers_base:
+        legacy_dir = settings.covers_dir / str(issue.series_id)
+        cover = _find_cover_file(legacy_dir, f"issue_{issue_id}")
+        if cover:
+            return _serve_image(cover)
+
+    # 4. Fall back to series cover
+    if issue.series:
+        if issue.series.path:
+            cover = _find_cover_file(Path(issue.series.path), "cover")
+            if cover:
+                return _serve_image(cover)
+        covers_dir = covers_base / str(issue.series_id)
+        cover = _find_cover_file(covers_dir, "series")
+        if cover:
+            return _serve_image(cover)
+        if settings.covers_dir != covers_base:
+            legacy_dir = settings.covers_dir / str(issue.series_id)
+            cover = _find_cover_file(legacy_dir, "series")
+            if cover:
+                return _serve_image(cover)
+
+    # 5. No cover found
+    return Response(status_code=404)

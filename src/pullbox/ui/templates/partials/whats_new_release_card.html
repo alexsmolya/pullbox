@@ -1,0 +1,56 @@
+<article data-testid="whats-new-release-card" class="group flex gap-4 rounded-xl border border-pb-border bg-pb-card p-4 shadow-xs transition-colors hover:border-pb-border-hover">
+  <div class="h-32 w-20 shrink-0 overflow-hidden rounded-lg border border-pb-border bg-pb-surface">
+    {% if release.cover_url %}
+      <img
+        src="{{ release.cover_url }}"
+        alt="{{ release.display_title | default(release.title) }} cover"
+        class="h-full w-full object-cover"
+        loading="lazy"
+      >
+    {% else %}
+      <div class="flex h-full w-full items-center justify-center text-xs font-semibold uppercase tracking-[0.2em] text-pb-text-sec">
+        No cover
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="min-w-0 flex-1">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="badge badge-muted">{{ release.publisher.name }}</span>
+      {% if release.variant_count %}
+        <span class="badge badge-muted">{{ release.variant_count }} variants</span>
+      {% endif %}
+    </div>
+
+    <h3 class="mt-2 text-base font-semibold leading-6 text-pb-text">
+      {{ release.display_title | default(release.title) }}
+    </h3>
+    <p class="mt-1 text-sm text-pb-text-sec">
+      {{ release.series.title }}
+      {% if release.price %}
+        <span aria-hidden="true"> · </span>{{ "$%.2f"|format(release.price) }}
+      {% endif %}
+    </p>
+
+    {% if release.community_counts %}
+      <dl class="mt-4 grid grid-cols-2 gap-2 text-xs text-pb-text-sec sm:grid-cols-4">
+        <div class="rounded-lg bg-pb-surface-2 px-3 py-2">
+          <dt class="uppercase tracking-[0.16em]">Pulls</dt>
+          <dd class="mt-1 font-semibold text-pb-text">{{ "{:,}".format(release.community_counts.pull) }} pulls</dd>
+        </div>
+        <div class="rounded-lg bg-pb-surface-2 px-3 py-2">
+          <dt class="uppercase tracking-[0.16em]">Wants</dt>
+          <dd class="mt-1 font-semibold text-pb-text">{{ "{:,}".format(release.community_counts.want) }} wants</dd>
+        </div>
+        <div class="rounded-lg bg-pb-surface-2 px-3 py-2">
+          <dt class="uppercase tracking-[0.16em]">Picks</dt>
+          <dd class="mt-1 font-semibold text-pb-text">{{ "{:,}".format(release.community_counts.pick) }} picks</dd>
+        </div>
+        <div class="rounded-lg bg-pb-surface-2 px-3 py-2">
+          <dt class="uppercase tracking-[0.16em]">Have</dt>
+          <dd class="mt-1 font-semibold text-pb-text">{{ "{:,}".format(release.community_counts.have) }} have</dd>
+        </div>
+      </dl>
+    {% endif %}
+  </div>
+</article>

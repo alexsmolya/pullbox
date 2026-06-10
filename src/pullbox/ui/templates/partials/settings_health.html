@@ -1,0 +1,336 @@
+{#- Settings: Health tab -#}
+{% from "components/settings_shell.html" import section_card, ui_icon %}
+{%- set indexer_summary = namespace(total=indexers|length, healthy=0, degraded=0, disabled=0, no_data=0) -%}
+{% for idx in indexers %}
+  {% if not idx.enabled %}
+    {% set indexer_summary.disabled = indexer_summary.disabled + 1 %}
+  {% elif idx.failure_count > 0 or idx.last_error %}
+    {% set indexer_summary.degraded = indexer_summary.degraded + 1 %}
+  {% elif idx.last_success_at %}
+    {% set indexer_summary.healthy = indexer_summary.healthy + 1 %}
+  {% else %}
+    {% set indexer_summary.no_data = indexer_summary.no_data + 1 %}
+  {% endif %}
+{% endfor %}
+{%- set client_summary = namespace(total=clients|length, healthy=0, degraded=0, disabled=0, no_data=0) -%}
+{% for c in clients %}
+  {% if not c.enabled %}
+    {% set client_summary.disabled = client_summary.disabled + 1 %}
+  {% elif c.last_error %}
+    {% set client_summary.degraded = client_summary.degraded + 1 %}
+  {% elif c.last_success_at %}
+    {% set client_summary.healthy = client_summary.healthy + 1 %}
+  {% else %}
+    {% set client_summary.no_data = client_summary.no_data + 1 %}
+  {% endif %}
+{% endfor %}
+
+<div class="space-y-6" x-data="settingsHealthTab()" x-init="loadSystemInfo()">
+  <div class="grid gap-6 2xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
+    <div class="section-card">
+      <div class="section-body space-y-6">
+        <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div class="max-w-2xl space-y-3">
+            <p class="section-eyebrow">Quick health</p>
+            <h2 class="text-2xl font-semibold tracking-tight text-pb-text">
+              Confirm the platform, search sources, and download path are still behaving the way you expect.
+            </h2>
+            <p class="text-sm leading-7 text-pb-text-sec">
+              This summary is for quick checks inside Settings. When something looks off, the full Health page gives you deeper history, component detail, and more context for troubleshooting.
+            </p>
+          </div>
+
+          <a href="/health" class="btn-primary gap-2">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/>
+            </svg>
+            Open health page
+          </a>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div class="stat-card">
+            <p class="stat-card-kicker">Version</p>
+            <p class="stat-card-value" x-text="systemInfo?.version || 'Pending'"></p>
+            <p class="stat-card-copy">Current Pullbox build reported by the running system.</p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-card-kicker">Python</p>
+            <p class="stat-card-value" x-text="pythonVersionLabel()"></p>
+            <p class="stat-card-copy">Runtime version for the current process.</p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-card-kicker">Platform</p>
+            <p class="stat-card-value" x-text="platformLabel()"></p>
+            <p class="stat-card-copy">Operating system reported by the host.</p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-card-kicker">Uptime</p>
+            <p class="stat-card-value" x-text="uptimeLabel()"></p>
+            <p class="stat-card-copy">How long the current process has been running.</p>
+          </div>
+        </div>
+
+        <div class="grid gap-3 lg:grid-cols-2">
+          <div class="info-panel info-panel-muted">
+            <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Use this page for</p>
+            <div class="mt-3 space-y-2">
+              <div class="checklist-item">
+                <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                <span>Checking whether indexers or clients look obviously unhealthy during routine settings work.</span>
+              </div>
+              <div class="checklist-item">
+                <span class="text-pb-success">{{ ui_icon("check", "h-4 w-4") }}</span>
+                <span>Confirming the current runtime version, host platform, and uptime after a restart or deployment.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="info-panel info-panel-muted">
+            <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Open the full health page when</p>
+            <div class="mt-3 space-y-2 text-xs leading-6 text-pb-text-sec">
+              <p><span class="font-semibold text-pb-text">A source is failing repeatedly:</span> you need detailed checks, recent history, and guidance.</p>
+              <p><span class="font-semibold text-pb-text">A client looks unstable:</span> you want broader monitoring context than a quick summary can provide.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <div class="info-panel">
+        <p class="section-eyebrow">Snapshot</p>
+        <h3 class="mt-2 text-base font-semibold text-pb-text">The fastest read is whether the healthy counts still outnumber the noisy ones.</h3>
+        <div class="mt-4 grid gap-2">
+          <div class="flex items-center justify-between rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+            <span class="text-sm text-pb-text-sec">Healthy indexers</span>
+            <span class="text-sm font-semibold text-pb-text">{{ indexer_summary.healthy }}</span>
+          </div>
+          <div class="flex items-center justify-between rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+            <span class="text-sm text-pb-text-sec">Indexers needing review</span>
+            <span class="text-sm font-semibold text-pb-text">{{ indexer_summary.degraded }}</span>
+          </div>
+          <div class="flex items-center justify-between rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+            <span class="text-sm text-pb-text-sec">Healthy clients</span>
+            <span class="text-sm font-semibold text-pb-text">{{ client_summary.healthy }}</span>
+          </div>
+          <div class="flex items-center justify-between rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+            <span class="text-sm text-pb-text-sec">Clients needing review</span>
+            <span class="text-sm font-semibold text-pb-text">{{ client_summary.degraded }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-pb-border bg-pb-card-hover/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">What counts as healthy here</p>
+        <div class="mt-3 space-y-2 text-xs leading-6 text-pb-text-sec">
+          <p>Enabled items with a recent successful check are treated as healthy.</p>
+          <p>Failures, errors, or exhausted retries move an item into the review bucket so it is harder to miss.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% call section_card(
+    title="Indexer health",
+    description="See which search sources look ready, which ones are disabled on purpose, and which ones are asking for attention.",
+    eyebrow="Search sources",
+    title_style="plain"
+  ) %}
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="stat-card">
+        <p class="stat-card-kicker">Configured</p>
+        <p class="stat-card-value">{{ indexer_summary.total }}</p>
+        <p class="stat-card-copy">{{ 'No indexers are configured yet.' if indexer_summary.total == 0 else indexer_summary.total ~ ' total search source' ~ ('s' if indexer_summary.total != 1 else '') ~ ' are registered.' }}</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-card-kicker">Healthy</p>
+        <p class="stat-card-value">{{ indexer_summary.healthy }}</p>
+        <p class="stat-card-copy">Enabled sources with a recent successful check.</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-card-kicker">Needs review</p>
+        <p class="stat-card-value">{{ indexer_summary.degraded }}</p>
+        <p class="stat-card-copy">Failures or recent errors are showing up on these sources.</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-card-kicker">Disabled</p>
+        <p class="stat-card-value">{{ indexer_summary.disabled }}</p>
+        <p class="stat-card-copy">Sources intentionally kept out of the search path.</p>
+      </div>
+    </div>
+
+    {% if indexers %}
+      <div class="mt-6 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+        {% for idx in indexers %}
+          <article class="rounded-xl border border-pb-border bg-pb-card p-5">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Indexer</p>
+                <h3 class="mt-1 truncate text-base font-semibold text-pb-text">{{ idx.name }}</h3>
+                <p class="mt-1 text-xs text-pb-text-dim">{{ idx.indexer_type.value|title }}</p>
+              </div>
+              {% if not idx.enabled %}
+                <span class="pill pill-neutral">Disabled</span>
+              {% elif idx.failure_count > 0 or idx.last_error %}
+                <span class="pill pill-warning">Needs review</span>
+              {% elif idx.last_success_at %}
+                <span class="pill pill-success">Healthy</span>
+              {% else %}
+                <span class="pill pill-neutral">No data</span>
+              {% endif %}
+            </div>
+
+            <p class="mt-3 text-sm leading-6 text-pb-text-sec">
+              {% if idx.last_error %}
+                {{ idx.last_error }}
+              {% elif idx.disabled_until %}
+                Disabled until {{ idx.disabled_until|localtime }}.
+              {% elif idx.last_success_at %}
+                Recent checks look healthy.
+              {% elif not idx.enabled %}
+                This source is disabled and will not participate in searches.
+              {% else %}
+                No recent health signal has been recorded yet.
+              {% endif %}
+            </p>
+
+            <div class="mt-4 flex flex-wrap items-center gap-1.5">
+              {% if idx.failure_count > 0 %}
+                <span class="pill pill-warning">{{ idx.failure_count }} failure{{ "s" if idx.failure_count != 1 else "" }}</span>
+              {% endif %}
+              {% if idx.disabled_until %}
+                <span class="pill pill-error">Temporarily disabled</span>
+              {% endif %}
+              {% if idx.last_success_at %}
+                <span class="pill pill-success">Last success recorded</span>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="mt-6 info-panel info-panel-muted text-center">
+        <p class="text-sm font-semibold text-pb-text">No indexers are configured.</p>
+        <p class="mt-2 text-sm leading-6 text-pb-text-sec">Connect a search source first, then come back here to confirm it still looks healthy from the settings view.</p>
+      </div>
+    {% endif %}
+  {% endcall %}
+
+  {% call section_card(
+    title="Download client health",
+    description="Check whether the tools Pullbox hands work to still look reachable and ready.",
+    eyebrow="Delivery path",
+    title_style="plain"
+  ) %}
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="stat-card">
+        <p class="stat-card-kicker">Configured</p>
+        <p class="stat-card-value">{{ client_summary.total }}</p>
+        <p class="stat-card-copy">{{ 'No download clients are configured yet.' if client_summary.total == 0 else client_summary.total ~ ' total client connection' ~ ('s' if client_summary.total != 1 else '') ~ ' are registered.' }}</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-card-kicker">Healthy</p>
+        <p class="stat-card-value">{{ client_summary.healthy }}</p>
+        <p class="stat-card-copy">Clients with a recent successful health signal.</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-card-kicker">Needs review</p>
+        <p class="stat-card-value">{{ client_summary.degraded }}</p>
+        <p class="stat-card-copy">Clients showing a recent error or unhealthy state.</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-card-kicker">Disabled</p>
+        <p class="stat-card-value">{{ client_summary.disabled }}</p>
+        <p class="stat-card-copy">Clients intentionally held out of the routing path.</p>
+      </div>
+    </div>
+
+    {% if clients %}
+      <div class="mt-6 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+        {% for c in clients %}
+          <article class="rounded-xl border border-pb-border bg-pb-card p-5">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Client</p>
+                <h3 class="mt-1 truncate text-base font-semibold text-pb-text">{{ c.name }}</h3>
+                <p class="mt-1 text-xs capitalize text-pb-text-dim">{{ c.client_type.value }}</p>
+              </div>
+              {% if not c.enabled %}
+                <span class="pill pill-neutral">Disabled</span>
+              {% elif c.last_error %}
+                <span class="pill pill-error">Needs review</span>
+              {% elif c.last_success_at %}
+                <span class="pill pill-success">Healthy</span>
+              {% else %}
+                <span class="pill pill-neutral">No data</span>
+              {% endif %}
+            </div>
+
+            <p class="mt-3 text-sm leading-6 text-pb-text-sec">
+              {% if c.last_error %}
+                {{ c.last_error }}
+              {% elif c.last_success_at %}
+                Recent checks look healthy.
+              {% elif not c.enabled %}
+                This client is disabled and Pullbox will not route work to it.
+              {% else %}
+                No recent health signal has been recorded yet.
+              {% endif %}
+            </p>
+
+            <div class="mt-4 flex flex-wrap items-center gap-1.5">
+              {% if c.last_success_at %}
+                <span class="pill pill-success">Last success recorded</span>
+              {% endif %}
+              {% if c.last_error %}
+                <span class="pill pill-error">Error reported</span>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="mt-6 info-panel info-panel-muted text-center">
+        <p class="text-sm font-semibold text-pb-text">No download clients are configured.</p>
+        <p class="mt-2 text-sm leading-6 text-pb-text-sec">Connect a client first, then use this summary to spot whether the delivery path still looks dependable.</p>
+      </div>
+    {% endif %}
+  {% endcall %}
+</div>
+
+<script>
+function settingsHealthTab() {
+  return {
+    systemInfo: null,
+
+    loadSystemInfo() {
+      fetch('/api/v1/system/status', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => { this.systemInfo = data; })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to load system information.', level: 'error' });
+        });
+    },
+
+    pythonVersionLabel() {
+      return this.systemInfo?.python_version?.split(' ')[0] || 'Pending';
+    },
+
+    platformLabel() {
+      if (!this.systemInfo?.platform) return 'Pending';
+      return this.systemInfo.platform.length > 18 ? this.systemInfo.platform.slice(0, 18) + '...' : this.systemInfo.platform;
+    },
+
+    uptimeLabel() {
+      if (!this.systemInfo) return 'Pending';
+      const totalSeconds = this.systemInfo.uptime_seconds || 0;
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      return hours + 'h ' + minutes + 'm';
+    },
+  };
+}
+</script>

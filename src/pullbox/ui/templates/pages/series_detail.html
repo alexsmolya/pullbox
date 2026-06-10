@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}{{ series.title }} — {{ instance_name() }}{% endblock %}
+{% block page_title %}{{ series.title }}{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-5 sm:pt-7{% endblock %}
+
+{% block content %}
+<div
+  class="series-domain-page space-y-4"
+  data-testid="series-detail-page"
+  hx-history="false"
+  x-data="seriesDetailPage({
+    seriesId: {{ series.id }},
+    csrfToken: '{{ csrf_token }}',
+    monitored: {{ 'true' if series.monitored else 'false' }},
+    updateUrl: '/api/v1/series/{{ series.id }}',
+    refreshUrl: '/api/v1/series/{{ series.id }}/refresh',
+    searchUrl: '/api/v1/series/{{ series.id }}/search',
+    deleteUrl: '/htmx/series/{{ series.id }}/delete'
+  })"
+>
+  <div class="series-domain-breadcrumb-row">
+    <a
+      href="/series"
+      data-testid="series-detail-back-link"
+      data-series-index-link="true"
+      class="series-domain-back-link"
+    >
+      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+      </svg>
+      Back to series
+    </a>
+    <nav data-testid="series-detail-breadcrumbs" class="series-domain-breadcrumbs" aria-label="Breadcrumb">
+      <a href="/series" data-series-index-link="true">All Series</a>
+      {% if series.parent_series %}
+      <span class="series-domain-breadcrumb-sep">›</span>
+      <a href="/series/{{ series.parent_series.id }}">{{ series.parent_series.title }}</a>
+      {% endif %}
+      <span class="series-domain-breadcrumb-sep">›</span>
+      <span class="current">{{ series.title }}</span>
+    </nav>
+  </div>
+
+  {% include "partials/series_detail_hero.html" %}
+  {% include "partials/series_detail_catalog_state_banner.html" %}
+  {% include "partials/series_issues.html" %}
+
+  {% include "partials/series_detail_delete_modal.html" %}
+  {% include "components/cover_modal.html" %}
+  {% include "partials/issue_search_modal.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/series_detail_footer_dock.html" %}
+{% endblock %}

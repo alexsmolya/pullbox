@@ -1,0 +1,24 @@
+<div
+  data-testid="import-collection-footer-dock"
+  x-data="importCollectionFooterData({
+    step: {{ resume_step or 1 }},
+    resumeJobId: {{ resume_job_id or 'null' }},
+    recentJobs: {{ recent_jobs|default([])|length }},
+    unmatched: {{ unmatched_count|default(0) }},
+    libraryRoots: {{ library_roots|default([])|length }},
+    progressSnapshot: {{ resume_progress_snapshot|default({})|tojson|forceescape }}
+  })"
+  x-on:wizard:advance.window="applyWizardAdvance($event.detail)"
+  x-on:import:collection-footer.window="applyProgressState($event.detail)"
+>
+  <div class="page-dock-inner page-dock-inner-status-only" data-testid="page-dock-inner">
+    <div class="page-dock-status" data-testid="page-dock-status">
+      <template x-for="(item, idx) in items" :key="idx">
+        <span class="page-dock-status-item">
+          <span class="page-dock-status-label" x-text="item.label"></span>
+          <strong class="page-dock-status-value" x-text="item.value"></strong>
+        </span>
+      </template>
+    </div>
+  </div>
+</div>

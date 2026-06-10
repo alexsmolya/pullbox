@@ -1,0 +1,84 @@
+{% macro select_mode_toolbar(
+  prefix,
+  count_testid,
+  count_expr,
+  select_visible_click,
+  select_visible_disabled_expr,
+  deselect_all_click,
+  deselect_all_disabled_expr,
+  done_click,
+  done_testid="",
+  done_label="Done",
+  show_select_all_expr="",
+  select_all_click="",
+  select_all_disabled_expr="",
+  select_all_busy_expr="",
+  select_all_testid=""
+) %}
+  <div
+    data-testid="{{ prefix }}-select-toolbar"
+    data-select-toolbar
+    class="series-selection-shell"
+  >
+    <div
+      data-testid="{{ prefix }}-selection-inline"
+      class="series-selection-inline"
+    >
+      <p class="series-selection-count" data-testid="{{ count_testid }}" x-text="{{ count_expr }}">0 selected</p>
+    </div>
+
+    <div
+      data-testid="{{ prefix }}-selection-controls-row"
+      class="series-selection-controls-row"
+    >
+      <div class="series-selection-bulk">
+        <button
+          type="button"
+          data-testid="{{ prefix }}-select-visible"
+          x-on:click="{{ select_visible_click }}"
+          x-bind:disabled="{{ select_visible_disabled_expr }}"
+          class="select-btn whitespace-nowrap"
+        >
+          Select Visible
+        </button>
+        {% if show_select_all_expr %}
+          <button
+            type="button"
+            data-testid="{{ select_all_testid or prefix ~ '-select-all-results' }}"
+            x-show="{{ show_select_all_expr }}"
+            x-on:click="{{ select_all_click }}"
+            x-bind:disabled="{{ select_all_disabled_expr }}"
+            class="select-btn whitespace-nowrap"
+          >
+            <span x-show="!({{ select_all_busy_expr }})">Select All Results</span>
+            <span x-show="{{ select_all_busy_expr }}">Selecting...</span>
+          </button>
+        {% endif %}
+        <button
+          type="button"
+          data-testid="{{ prefix }}-deselect-all"
+          x-on:click="{{ deselect_all_click }}"
+          x-bind:disabled="{{ deselect_all_disabled_expr }}"
+          class="select-btn whitespace-nowrap"
+        >
+          Deselect All
+        </button>
+      </div>
+
+      <div
+        data-testid="{{ prefix }}-bulk-actions"
+        class="series-selection-actions"
+      >
+        {{ caller() }}
+        <button
+          type="button"
+          data-testid="{{ done_testid or prefix ~ '-select-mode-done' }}"
+          x-on:click="{{ done_click }}"
+          class="select-btn whitespace-nowrap"
+        >
+          {{ done_label }}
+        </button>
+      </div>
+    </div>
+  </div>
+{% endmacro %}

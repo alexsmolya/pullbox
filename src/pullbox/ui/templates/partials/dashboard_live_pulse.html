@@ -1,0 +1,56 @@
+<aside
+  id="dashboard-live-pulse-region"
+  data-testid="dashboard-live-pulse"
+  class="info-panel"
+  hx-get="/htmx/dashboard/live-pulse"
+  hx-trigger="every 15s [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <p class="section-eyebrow mb-3">Live pulse</p>
+  <div class="grid grid-cols-2 gap-0">
+    <div class="dashboard-pulse-tile">
+      <span data-testid="dashboard-live-pulse-label-downloads" class="text-xs text-pb-text-dim">
+        Downloads
+      </span>
+      <span data-testid="dashboard-live-pulse-value-downloads" class="dashboard-pulse-value text-pb-text">
+        {{ dashboard.live_pulse.active_downloads }}
+      </span>
+    </div>
+    <div class="dashboard-pulse-tile dashboard-pulse-tile-right">
+      <span
+        data-testid="dashboard-live-pulse-label-pending-decisions"
+        class="text-xs text-pb-text-dim"
+      >
+        Pending decisions
+      </span>
+      <span
+        data-testid="dashboard-live-pulse-value-pending-decisions"
+        class="dashboard-pulse-value {{ 'text-pb-warning' if dashboard.live_pulse.pending_decisions > 0 else 'text-pb-text' }}"
+      >
+        {{ dashboard.live_pulse.pending_decisions }}
+      </span>
+    </div>
+    <div class="dashboard-pulse-tile dashboard-pulse-tile-bottom">
+      <span data-testid="dashboard-live-pulse-label-next-72h-risk" class="text-xs text-pb-text-dim">
+        72h risk
+      </span>
+      <span
+        data-testid="dashboard-live-pulse-value-next-72h-risk"
+        class="dashboard-pulse-value {{ 'text-pb-warning' if dashboard.live_pulse.next_72h_risk > 0 else 'text-pb-text' }}"
+      >
+        {{ dashboard.live_pulse.next_72h_risk }}
+      </span>
+    </div>
+    <div class="dashboard-pulse-tile dashboard-pulse-tile-right dashboard-pulse-tile-bottom">
+      <span data-testid="dashboard-live-pulse-label-health-alerts" class="text-xs text-pb-text-dim">
+        Health alerts
+      </span>
+      <span
+        data-testid="dashboard-live-pulse-value-health-alerts"
+        class="dashboard-pulse-value {{ 'text-pb-error' if dashboard.live_pulse.health_alerts > 0 else 'text-pb-text' }}"
+      >
+        {{ dashboard.live_pulse.health_alerts }}
+      </span>
+    </div>
+  </div>
+</aside>

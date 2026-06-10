@@ -1,0 +1,42 @@
+{#- Issue list for manual matching — HTMX partial -#}
+
+{% if issues is defined and issues|length > 0 %}
+<div class="space-y-3">
+  <div class="flex items-center justify-between gap-3">
+    <div class="min-w-0">
+      <p class="text-sm font-semibold text-pb-text">{{ series_title }}</p>
+      <p class="mt-1 text-xs text-pb-text-sec">{{ issues|length }} issue{{ "s" if issues|length != 1 }} available for selection</p>
+    </div>
+    <span class="pill-neutral shrink-0">Choose one issue</span>
+  </div>
+
+  <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+    {% for issue in issues %}
+    <button type="button" onclick="Alpine.$data(document.getElementById('matching-queue-app')).matchToIssue({{ issue.id }})"
+            class="selection-card flex w-full items-start justify-between gap-4 text-left">
+      <div class="min-w-0">
+        <p class="text-sm font-semibold text-pb-text">#{{ issue.issue_number|issue_num }}</p>
+        <p class="mt-1 text-xs leading-5 text-pb-text-sec">
+          {% if issue.title %}{{ issue.title }}{% else %}No issue title saved{% endif %}
+        </p>
+      </div>
+      {% if issue.status.value == "owned" %}
+        <span class="pill-success shrink-0">Owned</span>
+      {% elif issue.status.value == "wanted" %}
+        <span class="pill-info shrink-0">Wanted</span>
+      {% elif issue.status.value == "downloading" %}
+        <span class="pill-warning shrink-0">Downloading</span>
+      {% else %}
+        <span class="pill-neutral shrink-0">Available</span>
+      {% endif %}
+    </button>
+    {% endfor %}
+  </div>
+</div>
+
+{% elif issues is defined %}
+<div class="info-panel info-panel-muted text-center">
+  <p class="text-sm font-medium text-pb-text">No issues were found for this series.</p>
+  <p class="mt-1 text-xs leading-5 text-pb-text-sec">Try a different title, check the year, or verify that the series already exists in your library.</p>
+</div>
+{% endif %}

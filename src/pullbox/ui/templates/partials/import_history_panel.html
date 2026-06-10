@@ -1,0 +1,66 @@
+{% from "components/search_field.html" import search_field %}
+
+<div
+  data-testid="import-history-page"
+  class="downloads-panel-stack import-history-page-shell"
+  x-data="importHistoryPage({ csrfToken: '{{ csrf_token }}' })"
+>
+  {% include "partials/import_history_delete_modal.html" %}
+  <div class="downloads-table-wrap" data-testid="import-history-table-shell">
+    <form
+      id="import-history-filter-form"
+      data-testid="import-history-toolbar"
+      class="series-toolbar-frame downloads-history-toolbar"
+      autocomplete="off"
+      action="/import"
+      method="get"
+      hx-get="/import"
+      hx-target="#import-history-results"
+      hx-swap="outerHTML"
+      hx-sync="#import-history-results:replace"
+      hx-push-url="true"
+      hx-trigger="submit"
+    >
+      <input type="hidden" name="tab" value="history">
+      <input id="import-history-page-input" type="hidden" name="page" value="{{ page }}">
+      <input id="import-history-sort-input" type="hidden" name="sort" value="{{ sort }}">
+      <div class="series-toolbar-body">
+        <div class="series-toolbar-browse">
+          <div class="series-toolbar-primary">
+            {{ search_field(
+              name="search",
+              value=search_query,
+              placeholder="Search imports...",
+              input_testid="import-history-search",
+              clear_testid="import-history-search-clear",
+              panel_testid="import-history-search-history-panel",
+              root_testid="import-history-search-field",
+              mode="remote",
+              history_key="pullbox.searchHistory.importHistory",
+              debounce_ms=250,
+              size="sm",
+              class_name="series-registry-search"
+            ) }}
+          </div>
+
+          {% if clearable_jobs_total|default(0) > 0 %}
+            <div class="series-toolbar-actions" data-testid="import-history-clear-shell">
+              <button
+                type="button"
+                @click="clearHistory($el)"
+                data-testid="import-history-clear"
+                class="btn-danger control-size-sm"
+              >
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                </svg>
+                Clear History
+              </button>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+    {% include "partials/import_history_results.html" %}
+  </div>
+</div>

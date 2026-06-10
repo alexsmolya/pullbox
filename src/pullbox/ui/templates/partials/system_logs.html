@@ -1,0 +1,591 @@
+{#- System: Log Files tab — Dozzle-style viewer with SSE streaming -#}
+{% from "components/log_viewer.html" import log_viewer %}
+{% from "components/settings_shell.html" import section_card, section_header, ui_icon %}
+
+<div class="space-y-6 pt-6" x-data='logFilesManager({{ system_log_files | default([], true) | tojson }})' x-init="init()">
+  <div class="section-card">
+    {% call section_header(
+      title="Log files",
+      description="Inspect a file, download it, or remove it when you no longer need the evidence.",
+      eyebrow="Registry",
+      title_style="plain"
+    ) %}
+      <button @click="refreshFiles(true)" :disabled="loadingFiles || refreshingFiles" class="btn-primary btn-sm gap-2" type="button">
+        <svg class="h-4 w-4" :class="(loadingFiles || refreshingFiles) && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+        </svg>
+        <span x-text="(loadingFiles || refreshingFiles) ? 'Refreshing...' : 'Refresh'"></span>
+      </button>
+      <button @click="clearAll()" :disabled="files.length === 0 || clearing" class="btn-danger btn-sm gap-2" type="button">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+        </svg>
+        <span x-text="clearing ? 'Clearing...' : 'Clear all'"></span>
+      </button>
+    {% endcall %}
+
+    <div class="section-body">
+    <div x-show="loadingFiles" class="text-center text-sm text-pb-text-dim">
+      Loading log files...
+    </div>
+
+    <div x-show="!loadingFiles && files.length === 0" class="info-panel info-panel-muted text-center">
+      <p class="text-sm font-semibold text-pb-text">No log files were found.</p>
+      <p class="mt-2 text-sm leading-6 text-pb-text-sec">Once Pullbox writes logs, they will appear here for quick inspection, download, and cleanup.</p>
+    </div>
+
+    <div x-show="!loadingFiles && files.length > 0" class="downloads-table-wrap" data-testid="system-logs-table">
+      <div class="overflow-x-auto">
+        <table class="downloads-table min-w-[720px]">
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Updated</th>
+              <th>Size</th>
+              <th class="is-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="f in files" :key="f.filename">
+              <tr @click="viewFile(f.filename)" class="cursor-pointer">
+                <td>
+                  <div class="flex min-w-0 items-center gap-3">
+                    <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-pb-card-hover text-pb-text-dim">
+                      {{ ui_icon("arrow", "h-4 w-4") }}
+                    </div>
+                    <div class="min-w-0">
+                      <p class="system-registry-filename truncate" :class="viewingFile === f.filename ? 'text-pb-interactive' : 'text-pb-text'" x-text="f.filename"></p>
+                      <p class="downloads-mono-dim-cell mt-1" x-text="viewingFile === f.filename ? 'Viewing' : 'Available'"></p>
+                    </div>
+                  </div>
+                </td>
+                <td class="downloads-mono-cell" x-text="formatDate(f.modified_at)"></td>
+                <td class="downloads-mono-cell" x-text="formatSize(f.size_bytes)"></td>
+                <td class="is-right" @click.stop>
+                  <div class="downloads-action-group is-hover-reveal justify-end">
+                    <a
+                      :href="'/api/v1/system/logs/' + f.filename + '/download'"
+                      class="downloads-action-btn"
+                      hx-boost="false"
+                      data-tip="Download"
+                      data-tip-pos="left"
+                      aria-label="Download log file"
+                    >
+                      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+                      </svg>
+                    </a>
+                    <button @click="deleteFile(f.filename)" class="downloads-action-btn is-danger" data-tip="Delete" data-tip-pos="left" aria-label="Delete log file" type="button">
+                      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <div x-show="viewingFile" x-transition class="space-y-3">
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-header-copy">
+          <p class="section-eyebrow">Viewer</p>
+          <h2 class="section-title-plain">Live log viewer</h2>
+          <p class="section-description">Search, filter, stream, and inspect the selected file without breaking your place.</p>
+        </div>
+      </div>
+
+      <div class="section-body">
+        {{ log_viewer(
+      root_id="system-log-viewer",
+      root_testid="system-log-viewer",
+      title_expr="viewingFile",
+      badge_show_expr="viewMeta.truncated",
+      badge_text_expr="'Last ' + tailLines + ' of ' + viewMeta.total_lines.toLocaleString()",
+      level_all_label="all",
+      levels=["DEBUG", "INFO", "WARNING", "ERROR"],
+      search_root_testid="system-log-search-field",
+      search_input_testid="system-log-search-input",
+      search_clear_testid="system-log-search-clear",
+      search_panel_testid="system-log-search-history-panel",
+      search_history_key="pullbox.searchHistory.systemLogs",
+      search_model="searchQuery",
+      size_name="tail_lines",
+      size_value="500",
+      size_options=[
+        ("100", "100"),
+        ("250", "250"),
+        ("500", "500"),
+        ("1000", "1K"),
+        ("5000", "5K"),
+      ],
+      size_root_testid="system-log-lines-select",
+      size_model="tailLines",
+      size_change="viewFile(viewingFile, { scrollToViewer: false })",
+      show_live=true,
+      live_expr="isLive",
+      live_toggle_action="toggleLive()",
+      live_testid="system-log-live-toggle",
+      show_download=true,
+      download_href_expr="'/api/v1/system/logs/' + encodeURIComponent(viewingFile) + '/download'",
+      download_testid="system-log-download",
+      show_refresh=true,
+      refresh_action="viewFile(viewingFile, { scrollToViewer: false })",
+      refresh_loading_expr="loadingContent",
+      refresh_testid="system-log-refresh",
+      show_close=true,
+      close_action="closeViewer()",
+      close_testid="system-log-close",
+      loading_expr="loadingContent",
+      entries_expr="displayEntries",
+      body_testid="system-log-viewer-body",
+      body_scroll_action="onViewerScroll()",
+      max_height="680px",
+      empty_text_expr="emptyLogViewerMessage",
+      footer_status_text_expr="displayEntries.length + ' entries' + ((searchQuery || levelFilter !== '') ? ' (filtered from ' + parsedEntries.length + ')' : '')",
+      footer_status_show_expr="isLive",
+      footer_status_label_expr="'Streaming'",
+        ) }}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function logFilesManager(initialFiles) {
+  return {
+    files: Array.isArray(initialFiles) ? initialFiles : [],
+    loadingFiles: false,
+    refreshingFiles: false,
+    clearing: false,
+
+    // Viewer state
+    viewingFile: null,
+    viewLines: [],
+    viewMeta: { total_lines: 0, truncated: false },
+    loadingContent: false,
+    tailLines: '500',
+    levelFilter: '',
+    searchQuery: '',
+    expandedIdx: null,
+    autoScroll: true,
+    isLive: false,
+    _eventSource: null,
+
+    // ── Parsed entries ──────────────────────────────────────────────
+
+    get parsedEntries() {
+      return this.viewLines.map(line => this._parseLine(line));
+    },
+
+    get displayEntries() {
+      let entries = this.parsedEntries;
+      if (this.levelFilter !== '') {
+        const target = this.levelFilter.toLowerCase();
+        entries = entries.filter(e => {
+          if (target === 'error') return e.level === 'error' || e.level === 'critical';
+          return e.level === target;
+        });
+      }
+      if (this.searchQuery) {
+        const q = this.searchQuery.toLowerCase();
+        entries = entries.filter(e => {
+          const message = (e.message || '').toLowerCase();
+          const extra = this.formatExtra(e.extra).toLowerCase();
+          const path = (e.file_path || '').toLowerCase();
+          return message.includes(q) || extra.includes(q) || path.includes(q);
+        });
+      }
+      return entries;
+    },
+
+    get emptyLogViewerMessage() {
+      if (!this.viewingFile) return 'No log entries match the current filters.';
+      return this.parsedEntries.length === 0
+        ? 'Log file is empty.'
+        : 'No log entries match the current filters.';
+    },
+
+    setLevel(level) {
+      this.levelFilter = level || '';
+      this.expandedIdx = null;
+    },
+
+    _parseLine(line) {
+      // Try JSON parse (structlog format)
+      try {
+        const obj = JSON.parse(line);
+        const level = (obj.level || obj.log_level || '').toLowerCase();
+        const event = obj.event || obj.msg || obj.message || '';
+        const time = obj.timestamp || obj.time || obj.ts || '';
+
+        // Build summary from remaining keys
+        const skipKeys = new Set([
+          'level', 'log_level', 'event', 'msg', 'message',
+          'timestamp', 'time', 'ts', 'logger', 'module',
+        ]);
+        const parts = [];
+        for (const [k, v] of Object.entries(obj)) {
+          if (!skipKeys.has(k) && v !== null && v !== undefined) {
+            const val = typeof v === 'string' ? v : JSON.stringify(v);
+            parts.push(k + '=' + val);
+          }
+        }
+
+        const messageParts = [];
+        if (event) messageParts.push(event);
+        if (parts.length > 0) messageParts.push(parts.join('  '));
+
+        return {
+          level: level || null,
+          timestamp: time,
+          formatted_timestamp: this._formatLogTime(time),
+          message: messageParts.length > 0 ? messageParts.join(' · ') : line,
+          file_path: obj.file_path || obj.path || obj.filename || '',
+          extra: obj,
+        };
+      } catch {
+        // Fall back to text-based parsing
+        const level = this._detectLevel(line);
+        return {
+          level,
+          timestamp: '',
+          formatted_timestamp: '',
+          message: line,
+          file_path: '',
+          extra: '',
+        };
+      }
+    },
+
+    _formatLogTime(ts) {
+      if (!ts) return '';
+      try {
+        return _pb.formatLogTime(ts);
+      } catch { return ts; }
+    },
+
+    // ── File list ───────────────────────────────────────────────────
+
+    init() {
+      this.loadingFiles = false;
+    },
+
+    loadFiles() {
+      this.loadingFiles = true;
+      this.refreshFiles(false, true);
+    },
+
+    refreshFiles(showSpinner, initialLoad) {
+      if (showSpinner) this.refreshingFiles = true;
+      fetch('/api/v1/system/logs', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => { this.files = data; })
+        .catch(() => {
+          if ((initialLoad || showSpinner) && typeof showToast === 'function') {
+            showToast({ message: 'Failed to load log files.', level: 'error' });
+          }
+        })
+        .finally(() => {
+          this.loadingFiles = false;
+          if (showSpinner) this.refreshingFiles = false;
+        });
+    },
+
+    // ── View file ───────────────────────────────────────────────────
+
+    viewFile(filename, options = {}) {
+      const scrollToViewer = options.scrollToViewer !== false;
+      this.stopLive();
+      this.viewingFile = filename;
+      this.loadingContent = true;
+      this.expandedIdx = null;
+      this.autoScroll = true;
+      if (scrollToViewer) {
+        this._scrollViewerIntoView();
+      }
+      fetch(`/api/v1/system/logs/${filename}/content?tail=${this.tailLines}`, {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          this.viewLines = data.lines;
+          this.viewMeta = { total_lines: data.total_lines, truncated: data.truncated };
+          this._scrollToBottom();
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to load log content.', level: 'error' });
+        })
+        .finally(() => { this.loadingContent = false; });
+    },
+
+    _refreshLogs() {
+      if (this.viewingFile) {
+        this.viewFile(this.viewingFile, { scrollToViewer: false });
+      }
+    },
+
+    closeViewer() {
+      this.stopLive();
+      this.viewingFile = null;
+      this.viewLines = [];
+      this.expandedIdx = null;
+      this.$nextTick(() => this._scrollLogRegistryToTop());
+    },
+
+    _scrollContainerToElement(target) {
+      if (!target) return;
+
+      const content = document.getElementById('content');
+      if (content && content.contains(target)) {
+        const contentRect = content.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const nextTop = content.scrollTop + (targetRect.top - contentRect.top);
+        content.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
+        content.dispatchEvent(new Event('scroll'));
+        return;
+      }
+
+      if (typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }
+    },
+
+    _scrollViewerIntoView() {
+      this.$nextTick(() => {
+        const viewer = this.$root.querySelector('[data-testid="system-log-viewer"]');
+        this._scrollContainerToElement(viewer);
+      });
+    },
+
+    _scrollLogRegistryToTop() {
+      this.$nextTick(() => {
+        this._scrollContainerToElement(this.$root);
+      });
+    },
+
+    // ── Live streaming ──────────────────────────────────────────────
+
+    toggleLive() {
+      if (this.isLive) {
+        this.stopLive();
+      } else {
+        this.startLive();
+      }
+    },
+
+    startLive() {
+      if (!this.viewingFile || this._eventSource) return;
+      this.isLive = true;
+
+      const normalizedLevel = this.levelFilter ? this.levelFilter.toLowerCase() : '';
+      const url = `/api/v1/system/logs/${this.viewingFile}/stream?level=${normalizedLevel}`;
+      this._eventSource = new EventSource(url);
+
+      this._eventSource.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+          if (data.heartbeat) return;
+          if (data.line) {
+            this.viewLines.push(data.line);
+            // Cap at 5000 lines in memory
+            if (this.viewLines.length > 5000) {
+              this.viewLines = this.viewLines.slice(-4000);
+            }
+            if (this.autoScroll) {
+              this.$nextTick(() => this._scrollToBottom());
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      };
+
+      this._eventSource.onerror = () => {
+        this.stopLive();
+      };
+    },
+
+    stopLive() {
+      this.isLive = false;
+      if (this._eventSource) {
+        this._eventSource.close();
+        this._eventSource = null;
+      }
+    },
+
+    // ── Scroll ──────────────────────────────────────────────────────
+
+    _scrollToBottom() {
+      this.$nextTick(() => {
+        const el = document.querySelector('[data-testid="system-log-viewer-body"]');
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    onViewerScroll() {
+      const el = document.querySelector('[data-testid="system-log-viewer-body"]');
+      if (!el) return;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      this.autoScroll = atBottom;
+    },
+
+    // ── Delete / Clear ──────────────────────────────────────────────
+
+    async deleteFile(filename) {
+      const ok = await pbConfirm({
+        title: 'Delete Log File',
+        message: 'Delete "' + filename + '"?',
+        confirmText: 'Delete',
+      });
+      if (!ok) return;
+      fetch('/api/v1/system/logs/' + filename, {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          if (typeof showToast === 'function') showToast({ message: data.message, level: 'success' });
+          if (this.viewingFile === filename) this.closeViewer();
+          this.refreshFiles(false, false);
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to delete log file.', level: 'error' });
+        });
+    },
+
+    async clearAll() {
+      const ok = await pbConfirm({
+        title: 'Clear All Logs',
+        message: 'Delete all log files? This cannot be undone.',
+        confirmText: 'Delete All',
+      });
+      if (!ok) return;
+      this.clearing = true;
+      fetch('/api/v1/system/logs', {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => {
+          if (typeof showToast === 'function') showToast({ message: data.message, level: 'success' });
+          this.closeViewer();
+          this.refreshFiles(false, false);
+        })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to clear log files.', level: 'error' });
+        })
+        .finally(() => { this.clearing = false; });
+    },
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    _detectLevel(line) {
+      const lower = line.toLowerCase();
+      for (const lvl of ['critical', 'error', 'warning', 'info', 'debug']) {
+        if (lower.includes('"level": "' + lvl + '"')
+            || lower.includes('"level":"' + lvl + '"')
+            || lower.includes('[' + lvl + ']')
+            || lower.includes('level=' + lvl)) {
+          return lvl;
+        }
+      }
+      return null;
+    },
+
+    formatExtra(extra) {
+      try {
+        if (!extra || extra === '{}') return '';
+        const obj = typeof extra === 'string' ? JSON.parse(extra) : extra;
+        return JSON.stringify(obj, null, 2);
+      } catch {
+        return String(extra || '');
+      }
+    },
+
+    formatDate(iso) {
+      if (!iso) return '—';
+      try {
+        return _pb.formatShort(iso);
+      } catch { return iso; }
+    },
+
+    newestFile() {
+      return this.files
+        .filter(file => !!file.modified_at)
+        .sort((a, b) => {
+          const aTime = _pb.parseDate(a.modified_at);
+          const bTime = _pb.parseDate(b.modified_at);
+          if (!aTime && !bTime) return 0;
+          if (!aTime) return 1;
+          if (!bTime) return -1;
+          return bTime - aTime;
+        })[0] || null;
+    },
+
+    fileCount() {
+      return this.files.length;
+    },
+
+    totalLogBytes() {
+      return this.files.reduce((total, file) => total + (file.size_bytes || 0), 0);
+    },
+
+    totalLogSize() {
+      return this.formatSize(this.totalLogBytes());
+    },
+
+    newestFileShort() {
+      const file = this.newestFile();
+      if (!file || !file.modified_at) return 'Pending';
+      return _pb.timeAgo(file.modified_at);
+    },
+
+    newestFileSummary() {
+      const file = this.newestFile();
+      if (!file) return 'No recent file activity is available yet.';
+      return file.filename + ' was updated most recently.';
+    },
+
+    activeViewerLabel() {
+      return this.viewingFile ? 'Open' : 'Idle';
+    },
+
+    activeViewerSummary() {
+      if (!this.viewingFile) return 'Select a file to open the viewer.';
+      return this.isLive
+        ? 'Streaming fresh entries from ' + this.viewingFile + '.'
+        : 'Viewing ' + this.viewingFile + ' with live mode paused.';
+    },
+
+    fileCardSummary(file) {
+      if (!file) return 'No log metadata is available for this file.';
+      if (this.viewingFile === file.filename) {
+        return this.isLive
+          ? 'This file is open and streaming fresh entries.'
+          : 'This file is open in the viewer and ready for searching or filtering.';
+      }
+      return 'Open this file to inspect entries, filter by level, or download a snapshot for support work.';
+    },
+
+    formatSize(bytes) {
+      if (bytes == null) return '—';
+      if (bytes === 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let val = bytes;
+      for (const unit of units) {
+        if (val < 1024) return val.toFixed(unit === 'B' ? 0 : 1) + ' ' + unit;
+        val /= 1024;
+      }
+      return val.toFixed(1) + ' TB';
+    },
+  };
+}
+</script>

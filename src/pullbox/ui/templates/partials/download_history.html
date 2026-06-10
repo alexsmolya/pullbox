@@ -1,0 +1,136 @@
+{% from "components/search_field.html" import search_field %}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% set _hist_qs = "?page=" ~ page %}
+{% if status_filter %}{% set _hist_qs = _hist_qs ~ "&status=" ~ status_filter %}{% endif %}
+{% if client_filter %}{% set _hist_qs = _hist_qs ~ "&client=" ~ client_filter %}{% endif %}
+{% if search_query %}{% set _hist_qs = _hist_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif %}
+{% if sort and sort != "-updated_at" %}{% set _hist_qs = _hist_qs ~ "&sort=" ~ sort %}{% endif %}
+{% set history_gauge_total = history_total if history_total > 0 else 1 %}
+{% set history_completed_offset = (113.1 * (1 - (history_completed_count / history_gauge_total)))|round(1) %}
+{% set history_failed_offset = (113.1 * (1 - (history_failed_count / history_gauge_total)))|round(1) %}
+{% set history_cancelled_offset = (113.1 * (1 - (history_cancelled_count / history_gauge_total)))|round(1) %}
+
+<section
+  id="downloads-content"
+  data-testid="downloads-content"
+  class="downloads-view"
+>
+  <div data-testid="downloads-header" class="downloads-header">
+    <div class="downloads-header-main">
+      <div
+        id="downloads-history-header-metrics"
+        data-testid="downloads-history-header-metrics"
+        class="downloads-header-summary"
+      >
+        {% include "partials/download_history_header_metrics.html" %}
+      </div>
+
+      <div data-testid="downloads-header-actions" class="downloads-header-actions">
+        {% include "partials/downloads_tabs.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="downloads-history-panel" class="downloads-panel-stack">
+    <div class="downloads-table-wrap">
+      <form
+        id="downloads-history-filter-form"
+        data-testid="downloads-history-toolbar"
+        class="series-toolbar-frame downloads-history-toolbar"
+        autocomplete="off"
+        action="/downloads"
+        method="get"
+        hx-get="/downloads"
+        hx-target="#downloads-history-results"
+        hx-swap="outerHTML"
+        hx-sync="#downloads-history-results:replace"
+        hx-push-url="true"
+        hx-trigger="submit"
+      >
+        <input type="hidden" name="tab" value="history">
+        <input id="downloads-history-sort-input" type="hidden" name="sort" value="{{ sort }}">
+        <div class="series-toolbar-body">
+          <div class="series-toolbar-browse">
+            <div class="series-toolbar-primary">
+              {{ search_field(
+                name="search",
+                value=search_query,
+                placeholder="Search releases...",
+                input_testid="downloads-history-search",
+                clear_testid="downloads-history-search-clear",
+                panel_testid="downloads-history-search-history-panel",
+                root_testid="downloads-history-search-field",
+                mode="remote",
+                history_key="pullbox.searchHistory.downloads",
+                debounce_ms=250,
+                size="sm",
+                class_name="series-registry-search"
+              ) }}
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Status</span>
+                {{ dropdown_select(
+                  name="status",
+                  value=status_filter,
+                  size="sm",
+                  options=[
+                    ("", "All Statuses"),
+                    ("completed", "Completed"),
+                    ("failed", "Failed"),
+                    ("cancelled", "Cancelled"),
+                  ],
+                  root_testid="downloads-history-filter-status",
+                  hx_get="/downloads",
+                  hx_target="#downloads-history-results",
+                  hx_swap="outerHTML",
+                  hx_sync="#downloads-history-results:replace",
+                  hx_push_url="true",
+                  hx_include="#downloads-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Client</span>
+                {{ dropdown_select(
+                  name="client",
+                  value=client_filter,
+                  size="sm",
+                  options=client_options,
+                  root_testid="downloads-history-filter-client",
+                  hx_get="/downloads",
+                  hx_target="#downloads-history-results",
+                  hx_swap="outerHTML",
+                  hx_sync="#downloads-history-results:replace",
+                  hx_push_url="true",
+                  hx_include="#downloads-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+            </div>
+
+            {% if history_total > 0 %}
+              <div class="series-toolbar-actions">
+                <button
+                  type="button"
+                  @click="clearHistory($el)"
+                  data-testid="downloads-history-clear"
+                  class="btn-danger control-size-sm"
+                >
+                  <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                  </svg>
+                  Clear History
+                </button>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </form>
+      {% include "partials/download_history_results.html" %}
+    </div>
+  </div>
+
+</section>

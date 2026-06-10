@@ -1,0 +1,8 @@
+{% if issue.description %}
+<section data-testid="issue-description-section" class="series-domain-section-card">
+  <p data-testid="issue-description-title" class="series-domain-section-title">Description</p>
+  <div class="series-domain-copy-block prose prose-sm max-w-none text-sm leading-7 text-pb-text-sec prose-p:text-pb-text-sec prose-strong:text-pb-text prose-a:text-pb-interactive">
+    {{ issue.description|sanitize_rich_html }}
+  </div>
+</section>
+{% endif %}

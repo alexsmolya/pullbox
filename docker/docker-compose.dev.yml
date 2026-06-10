@@ -1,0 +1,57 @@
+# Pullbox local Docker development
+#
+# Builds from the current checkout, bind-mounts the repo for live reload, and
+# keeps runtime state in a Docker volume so SQLite stays on Docker-managed
+# storage. Host-visible sample media stays under ./media-docker-dev.
+#
+# The recommended app-side namespace is:
+# - /comics for the library
+# - /downloads for completed downloads
+# - /imports for manual import/drop-folder scans
+# Client-specific Remote Path values are translated into this shared
+# /downloads root inside Pullbox.
+
+services:
+  pullbox:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: pullbox-dev
+    restart: unless-stopped
+    ports:
+      - "${PULLBOX_DEV_PORT:-8585}:8585"
+    volumes:
+      - ..:/app
+      - pullbox-dev-state:/data
+      - ../media-docker-dev/comics:/comics
+      - ../media-docker-dev/downloads:/downloads
+      - ../media-docker-dev/imports:/imports
+      # Optional native HTTPS certificate mount for local TLS testing.
+      # Files must be readable by UID 65532 in the production image.
+      # - ../media-docker-dev/certs:/config/certs:ro
+    environment:
+      PYTHONPATH: /app/src
+      PULLBOX_SECRET_KEY: dev-secret-key-for-local-docker-development-00000001
+      PULLBOX_DB_URL: sqlite+aiosqlite:////data/pullbox.db
+      PULLBOX_SQLITE_JOURNAL_MODE: WAL
+      PULLBOX_DATA_DIR: /data
+      PULLBOX_LIBRARY_ROOT: /comics
+      PULLBOX_COVERS_DIR: /comics/.covers
+      PULLBOX_LOGS_DIR: /data/logs
+      PULLBOX_TEMP_DIR: /data/tmp
+      PULLBOX_BACKUP_DIR: /data/backups
+      PULLBOX_BIND_ADDRESS: 0.0.0.0
+      PULLBOX_PORT: 8585
+      # Native HTTPS uses the normal Pullbox port; remap the host port above if needed.
+      # PULLBOX_HTTPS_ENABLED: "true"
+      # PULLBOX_HTTPS_CERT_PATH: /config/certs/pullbox.crt
+      # PULLBOX_HTTPS_KEY_PATH: /config/certs/pullbox.key
+      # PULLBOX_HTTPS_CERT_ROOT: /config/certs
+      PULLBOX_DEBUG: "false"
+      PULLBOX_RATE_LIMIT_ENABLED: "false"
+      TZ: America/Los_Angeles
+    command: ["python", "-m", "pullbox.devserver", "--reload"]
+
+volumes:
+  pullbox-dev-state:
+    name: pullbox-dev-state

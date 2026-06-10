@@ -1,0 +1,63 @@
+{% set phase_label = live.phase_label if live and live.phase_label is defined else "Queued for import" %}
+{% set status_label = live.status_label if live and live.status_label is defined else phase_label %}
+{% set shows_transfer_metrics = live.shows_transfer_metrics if live and live.shows_transfer_metrics is defined else false %}
+{% set state_tone = live.state_tone if live and live.state_tone is defined else "active" %}
+{% set phase_progress_label = live.phase_progress_label if live and live.phase_progress_label is defined else none %}
+{% set transfer_progress_pct = live.transfer_progress_pct if live and live.transfer_progress_pct is defined else none %}
+{% set transfer_done_bytes = live.transfer_done_bytes if live and live.transfer_done_bytes is defined else none %}
+{% set transfer_total_bytes = live.transfer_total_bytes if live and live.transfer_total_bytes is defined else none %}
+
+<div
+  id="pp-queue-detail-content-{{ dl.id }}"
+  data-testid="pp-queue-item-detail-content"
+  class="border-t border-pb-border bg-pb-surface px-4 py-4 sm:px-5"
+>
+  <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Issue</div>
+      {% if dl.issue and dl.issue.series %}
+        <a href="/issues/{{ dl.issue.id }}" class="mt-2 block text-sm text-pb-interactive transition-colors hover:text-pb-interactive-hover">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+      {% else %}
+        <div class="mt-2 text-sm text-pb-text-dim">No linked issue</div>
+      {% endif %}
+    </div>
+    <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Status</div>
+      <div class="mt-2 text-sm text-pb-text-sec" data-testid="pp-queue-item-details-phase">{{ status_label }}</div>
+    </div>
+    <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Elapsed</div>
+      <div class="mt-2 text-sm text-pb-text-sec tabular-nums">{{ live.elapsed_seconds|eta if live else "Pending" }}</div>
+    </div>
+    <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Progress</div>
+      <div class="mt-2 text-sm text-pb-text-sec tabular-nums" data-testid="pp-queue-item-details-progress">
+        {% if shows_transfer_metrics and transfer_progress_pct is not none %}
+          {{ transfer_progress_pct|round(0)|int }}% · {{ transfer_done_bytes|filesize }} / {{ transfer_total_bytes|filesize }}
+        {% elif state_tone == "success" %}
+          Complete
+        {% elif phase_progress_label %}
+          {{ phase_progress_label }}
+        {% else %}
+          Pending
+        {% endif %}
+      </div>
+    </div>
+    <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Completed</div>
+      <div class="mt-2 text-sm text-pb-text-sec tabular-nums">{{ dl.completed_at|localtime if dl.completed_at else "—" }}</div>
+    </div>
+    <div class="rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Imported</div>
+      <div class="mt-2 text-sm text-pb-text-sec tabular-nums">{{ dl.imported_at|localtime if dl.imported_at else "Pending" }}</div>
+    </div>
+    <div class="sm:col-span-2 xl:col-span-3 rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Source path</div>
+      <div class="mt-2 break-all text-sm text-pb-text-sec">{{ dl.downloaded_path or "—" }}</div>
+    </div>
+    <div class="sm:col-span-2 xl:col-span-3 rounded-2xl border border-pb-border bg-pb-card px-4 py-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Library path</div>
+      <div class="mt-2 break-all text-sm text-pb-text-sec">{{ dl.final_path or "Pending library move" }}</div>
+    </div>
+  </div>
+</div>

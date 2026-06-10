@@ -1,0 +1,526 @@
+"""Route-contract tests for the rewritten settings shell."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from datetime import UTC, datetime
+
+import pytest
+
+from pullbox.config import get_settings
+from pullbox.core.encryption import encrypt_secret
+from pullbox.models.client import DownloadClientConfig
+from pullbox.models.config import SystemConfig
+from pullbox.models.download import DownloadClientType
+from pullbox.utilities.settings import resolve_utility_directory
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+pytest_plugins = ["conftest_security"]
+
+os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-settings-ui")
+
+
+@pytest.mark.asyncio
+class TestSettingsRouteContracts:
+    """Verify the settings area renders a stable mounted shell."""
+
+    async def test_settings_clients_prefers_persisted_server_status_message(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DownloadClientConfig(
+                    name="Stable SAB",
+                    client_type=DownloadClientType.SABNZBD,
+                    url="http://localhost:8080",
+                    enabled=True,
+                    priority=10,
+                    last_success_at=datetime.now(UTC),
+                    last_test_message="SABnzbd 4.5.1",
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=clients")
+
+        assert response.status_code == 200
+        assert "SABnzbd 4.5.1" in response.text
+        assert "Connection healthy." not in response.text
+        assert "localhost</code> and <code" in response.text
+        assert "pbFormatDurationMs(data.response_time_ms)" in response.text
+
+    async def test_settings_clients_describes_process_completed_as_recovery_sweep(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=clients")
+
+        assert response.status_code == 200
+        assert "Recovery Sweep Interval" in response.text
+        assert (
+            "Normal completion handoff is triggered immediately when downloads finish."
+            in response.text
+        )
+        assert 'name="process_completed_interval_seconds"' in response.text
+        assert 'value="300"' in response.text
+        assert 'min="300"' in response.text
+
+    async def test_settings_clients_uses_simple_download_mapping_copy(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=clients")
+
+        assert response.status_code == 200
+        assert "Path inside Pullbox where completed downloads are mounted" in response.text
+        assert 'usually <code class="text-pb-text-sec">/downloads</code>' in response.text
+        assert (
+            "Path reported by the client; only set this when it differs from Pullbox."
+            in response.text
+        )
+        assert 'placeholder="/downloads"' in response.text
+        assert 'placeholder="/data/downloads"' in response.text
+
+    async def test_settings_metadata_is_minimal_and_shows_last_five_key_chars(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                SystemConfig(
+                    key="comicvine_api_key",
+                    value=encrypt_secret("1234567890abcde"),
+                    value_type="secret",
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=metadata")
+
+        assert response.status_code == 200
+        assert "Get one at" in response.text
+        assert "comicvine.gamespot.com/api" in response.text
+        assert "Current stored key:" in response.text
+        assert "••••••••••abcde" in response.text
+        assert "pbFormatDurationMs(testResult.response_time_ms)" in response.text
+        assert "Before you save" not in response.text
+        assert "Store a tested key before saving it" not in response.text
+        assert "Tune how often metadata is refreshed" not in response.text
+        assert "Weekly refresh is a practical default" not in response.text
+        assert "Lower values are safer" not in response.text
+
+    async def test_settings_indexers_prowlarr_api_key_matches_metadata_treatment(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add_all(
+                [
+                    SystemConfig(key="prowlarr_url", value="http://localhost:9696"),
+                    SystemConfig(
+                        key="prowlarr_api_key",
+                        value=encrypt_secret("1234567890abcde"),
+                        value_type="secret",
+                    ),
+                ]
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-indexers-prowlarr-form"' in response.text
+        assert '@submit.prevent="saveProwlarrAndSync()"' in response.text
+        assert 'name="prowlarr_username"' in response.text
+        assert 'autocomplete="username"' in response.text
+        assert 'data-testid="settings-indexers-prowlarr-api-key"' in response.text
+        assert 'autocomplete="new-password"' in response.text
+        assert "(set — leave blank to keep)" in response.text
+        assert "Current stored key:" in response.text
+        assert "••••••••••abcde" in response.text
+        assert "pbFormatDurationMs(data.response_time_ms)" in response.text
+
+    async def test_settings_indexers_source_priority_is_json_escaped(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        payload = """["usenet"]'; window.__pullboxXss = true; //"""
+        async with sec_db() as session:
+            session.add(SystemConfig(key="source_priority", value=payload, value_type="json"))
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert "const stored = '" not in response.text
+        assert "\\u0027; window.__pullboxXss = true; //" in response.text
+
+    async def test_settings_media_naming_preview_escapes_template_values_and_results(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        payload = """{Series}'); window.__pullboxXss = true; //"""
+        async with sec_db() as session:
+            session.add(SystemConfig(key="comic_file_template", value=payload))
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=media")
+
+        assert response.status_code == 200
+        assert "previewNaming('{{ std_tmpl }}'" not in response.text
+        assert "\\u0027); window.__pullboxXss = true; //" in response.text
+        assert "escapeHtml(ex.input || '')" in response.text
+        assert "escapeHtml(ex.output || '')" in response.text
+
+    async def test_settings_renders_standardized_shell(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-page"' in response.text
+        assert 'data-admin-workspace-contract="v1"' in response.text
+        assert 'hx-boost="false"' in response.text
+        assert 'data-testid="settings-header"' in response.text
+        assert 'data-admin-workspace-header="v1"' in response.text
+        assert 'data-testid="settings-page-title"' in response.text
+        assert 'data-testid="settings-page-subtitle"' in response.text
+        assert 'class="series-registry-title"' in response.text
+        assert ">SET<span>TINGS</span><" in response.text
+        assert 'class="series-registry-subtitle"' in response.text
+        assert 'data-testid="settings-body"' in response.text
+        assert 'data-testid="settings-tabs"' in response.text
+        assert 'data-admin-workspace-rail="v1"' in response.text
+        assert 'data-testid="settings-content"' in response.text
+        assert 'data-testid="page-footer-dock"' in response.text
+        assert 'data-testid="settings-footer-dock"' in response.text
+        assert 'data-testid="page-dock-inner"' in response.text
+        assert 'data-testid="settings-tab-general"' in response.text
+        assert 'data-testid="settings-panel-general"' in response.text
+
+    async def test_general_settings_exposes_usage_stats_toggle(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=general")
+
+        assert response.status_code == 200
+        assert "Help improve Pullbox" in response.text
+        assert "Share anonymous usage stats" in response.text
+        assert 'data-testid="settings-general-usage-stats-toggle"' in response.text
+        assert "install and version information" in response.text
+
+    async def test_general_settings_renders_https_controls(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=general")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-general-https-card"' in response.text
+        assert "Native HTTPS" in response.text
+        assert "Enable HTTPS" in response.text
+        assert 'data-testid="settings-general-https-enabled"' in response.text
+        assert 'data-testid="settings-general-https-cert-path"' in response.text
+        assert 'data-testid="settings-general-https-key-path"' in response.text
+        assert 'data-testid="settings-general-https-cert-browse"' in response.text
+        assert 'data-testid="settings-general-https-key-browse"' in response.text
+        assert "PULLBOX_HTTPS_CERT_ROOT" in response.text
+        assert "httpsRestartRequired" in response.text
+        assert "Restart Pullbox" in response.text
+        assert "pem,crt,cer,key" in response.text
+        assert "browseHttpsCertificate" in response.text
+        assert "browseHttpsPrivateKey" in response.text
+
+    async def test_settings_htmx_tab_returns_content_bundle(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(
+            "/htmx/settings/utilities",
+            headers={"HX-Request": "true"},
+        )
+
+        assert response.status_code == 200
+        assert 'id="page-footer-dock"' in response.text
+        assert 'hx-swap-oob="innerHTML"' in response.text
+        assert 'data-testid="settings-footer-dock"' in response.text
+        assert 'data-testid="page-dock-inner"' in response.text
+        assert 'data-testid="settings-content"' in response.text
+        assert 'data-testid="settings-panel-utilities"' in response.text
+        assert 'data-testid="settings-body"' not in response.text
+        assert 'data-testid="settings-tabs"' not in response.text
+        assert 'data-testid="settings-page"' not in response.text
+
+    async def test_settings_utilities_browse_buttons_use_resolved_start_paths(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=utilities")
+
+        settings = get_settings()
+        expected_trash = str(
+            resolve_utility_directory(
+                db_value="",
+                default_parent=settings.library_root,
+                default_subdir=".trash",
+                library_root=settings.library_root,
+                data_dir=settings.data_dir,
+            )
+        )
+        expected_export = str(
+            resolve_utility_directory(
+                db_value="",
+                default_parent=settings.data_dir,
+                default_subdir="exports",
+                library_root=settings.library_root,
+                data_dir=settings.data_dir,
+            )
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-utilities-trash-folder-browse"' in response.text
+        assert 'data-testid="settings-utilities-trash-retention-days"' in response.text
+        assert 'data-testid="settings-utilities-empty-trash-now"' in response.text
+        assert 'data-testid="settings-utilities-export-folder-browse"' in response.text
+        assert f"trashFolder: {json.dumps(expected_trash)}" in response.text
+        assert f"exportFolder: {json.dumps(expected_export)}" in response.text
+        assert "trashRetentionDays: '30'" in response.text
+        assert 'class="btn-ghost btn-sm !min-h-10 !w-10 !px-0 !py-0 shrink-0"' in response.text
+        assert 'class="btn-danger btn-sm self-start sm:self-auto"' in response.text
+
+    @pytest.mark.parametrize(
+        ("tab", "expected_ids", "absent_snippets"),
+        [
+            (
+                "general",
+                ["settings-general-log-level-select"],
+                ['<select x-model="logging.logLevel"'],
+            ),
+            (
+                "utilities",
+                ["settings-utilities-log-level-select"],
+                ['<select x-model="form.logLevel"'],
+            ),
+            (
+                "clients",
+                [
+                    "settings-clients-sab-priority-select",
+                    "settings-clients-sab-post-processing-select",
+                    "settings-clients-qbt-content-layout-select",
+                    "settings-clients-nzbget-priority-select",
+                    "settings-clients-nzbget-post-processing-select",
+                    "settings-clients-transmission-bandwidth-priority-select",
+                ],
+                [
+                    '<select x-model="form.sab_priority"',
+                    '<select x-model="form.sab_post_processing"',
+                    '<select x-model="form.qbt_content_layout"',
+                    '<select x-model="form.nzbget_priority"',
+                    '<select x-model="form.nzbget_post_processing"',
+                    '<select x-model="form.transmission_bandwidth_priority"',
+                ],
+            ),
+            (
+                "ui",
+                ["settings-ui-timezone-select", "settings-ui-date-format-select"],
+                ['<select x-model="timezone"', '<select x-model="dateFormat"'],
+            ),
+            (
+                "media",
+                [
+                    "settings-media-preferred-format-select",
+                    "settings-media-colon-replacement-select",
+                    "settings-media-post-processing-select",
+                    "settings-media-torrent-import-strategy-select",
+                ],
+                [
+                    '<select name="preferred_format"',
+                    '<select name="colon_replacement"',
+                    '<select name="post_processing_method"',
+                    '<select name="torrent_import_strategy"',
+                ],
+            ),
+            (
+                "search",
+                [
+                    "settings-search-threshold-issue-select",
+                    "settings-search-threshold-tpb-select",
+                    "settings-search-threshold-compendium-select",
+                ],
+                ['<select x-model="thresholds.issue"', '<select x-model="thresholds.tpb"'],
+            ),
+        ],
+    )
+    async def test_settings_tabs_use_shared_dropdown_contract(
+        self,
+        authenticated_client,
+        tab: str,
+        expected_ids: list[str],
+        absent_snippets: list[str],
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(f"/settings?tab={tab}")
+
+        assert response.status_code == 200
+        for expected_id in expected_ids:
+            assert f'data-testid="{expected_id}"' in response.text
+        assert 'data-dropdown-select-contract="v1"' in response.text
+        for snippet in absent_snippets:
+            assert snippet not in response.text
+        if tab == "general":
+            assert (
+                "Control the network-facing identity and address Pullbox presents"
+                not in response.text
+            )
+            assert "Tune default verbosity and storage" not in response.text
+            assert "Decide where backups live and how frequently" not in response.text
+            assert 'class="settings-rows settings-rows-align-end"' in response.text
+            assert 'class="settings-footer-actions ml-auto justify-end"' in response.text
+        if tab == "ui":
+            assert (
+                "Choose how timestamps appear across tables, cards, and detail views."
+                not in response.text
+            )
+            assert (
+                "Choose whether Pullbox follows the system theme or stays pinned to one appearance."
+                not in response.text
+            )
+            assert (
+                "All timestamps are stored in UTC and converted only for display."
+                not in response.text
+            )
+            assert "Controls how dates appear in tables and cards." not in response.text
+            assert "Choose a 24-hour clock or a 12-hour display with AM/PM." not in response.text
+            assert "Include seconds in displayed timestamps." not in response.text
+            assert (
+                "Append the timezone abbreviation after times when available." not in response.text
+            )
+            assert "Keep the AM/PM marker visible in 12-hour mode." not in response.text
+            assert (
+                "This live preview reflects the current combination of timezone, "
+                "date, and clock settings before you save." not in response.text
+            )
+            assert (
+                "Pullbox follows your operating system setting and opens in the matching theme."
+                not in response.text
+            )
+            assert 'class="selection-card settings-theme-choice h-full w-full"' in response.text
+            assert '@click="reset()"' in response.text
+            assert "Save display settings" in response.text
+        if tab == "media":
+            assert 'data-testid="settings-media-preferred-format-select"' in response.text
+            assert 'data-testid="settings-media-preferred-format-card"' not in response.text
+            assert "section-card-visible" in response.text
+            assert "Normalize Imported Archives to CBZ" in response.text
+            assert "Search on Add" in response.text
+            assert 'name="search_on_add_default"' in response.text
+            assert "convertToPreferredFormat ? 'Enabled' : 'Disabled'" in response.text
+            assert response.text.count('class="settings-footer-actions ml-auto justify-end"') >= 3
+            assert "peer sr-only" not in response.text
+            assert "peer toggle-input" in response.text
+            assert "{Title}" in response.text
+            assert "{Volume:02d}" in response.text
+            assert "{Edition}" not in response.text
+            assert 'name="non_standard_file_template"' in response.text
+            assert 'name="single_non_standard_file_template"' in response.text
+            assert "Collection Non-Standard Format" in response.text
+            assert "Single-Release Non-Standard Format" in response.text
+        if tab == "search":
+            assert "Search on Add" not in response.text
+            assert 'name="search_on_add_default"' not in response.text
+        if tab == "clients":
+            assert 'data-testid="settings-clients-registry-card"' in response.text
+            assert 'data-testid="settings-clients-registry-actions"' in response.text
+            assert 'data-testid="settings-clients-test-all"' in response.text
+            assert 'data-testid="settings-clients-add-client"' in response.text
+            assert 'data-testid="settings-clients-modal-form"' in response.text
+            assert 'data-testid="settings-clients-modal"' in response.text
+            assert 'data-testid="settings-clients-modal-backdrop"' in response.text
+            assert '@submit.prevent="saveClient()"' in response.text
+            assert 'name="client_password_username"' in response.text
+            assert 'placeholder="My Client Name"' in response.text
+            assert 'autocomplete="nickname"' in response.text
+            assert 'placeholder="http://localhost:8080"' in response.text
+            assert 'autocomplete="url"' in response.text
+            assert 'data-testid="settings-clients-registry-list"' in response.text
+            assert 'data-testid="settings-clients-import-card"' in response.text
+            assert 'data-testid="settings-clients-failure-card"' in response.text
+            assert 'data-testid="settings-clients-history-card"' in response.text
+            assert (
+                "Open this connection to update credentials, path mapping, or routing details."
+                not in response.text
+            )
+            assert "Registry notes" not in response.text
+            assert "Path mapping help" not in response.text
+            assert "Add another client" not in response.text
+            assert "xl:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.7fr)]" not in response.text
+            assert 'class="grid gap-6 xl:grid-cols-2"' not in response.text
+            assert "pill-danger" not in response.text
+        if tab == "indexers":
+            assert 'data-testid="settings-indexers-prowlarr-card"' in response.text
+            assert 'data-testid="settings-indexers-prowlarr-sync"' in response.text
+            assert 'data-testid="settings-indexers-prowlarr-url"' in response.text
+            assert 'data-testid="settings-indexers-prowlarr-api-key"' in response.text
+            assert 'data-testid="settings-indexers-prowlarr-test"' in response.text
+            assert 'data-testid="settings-indexers-prowlarr-save-sync"' in response.text
+            assert 'data-testid="settings-indexers-registry-card"' in response.text
+            assert 'data-testid="settings-indexers-test-all"' in response.text
+            assert 'data-testid="settings-indexers-add-indexer"' in response.text
+            assert 'data-testid="settings-indexers-modal"' in response.text
+            assert 'data-testid="settings-indexers-modal-backdrop"' in response.text
+            assert 'data-testid="settings-indexers-registry-list"' in response.text
+            assert 'data-testid="settings-indexers-priority-card"' in response.text
+            assert 'data-testid="settings-indexers-failure-card"' in response.text
+            assert 'data-testid="settings-indexers-blocklist-card"' in response.text
+            assert "Registry rules" not in response.text
+            assert "Registry snapshot" not in response.text
+            assert "Add another source" not in response.text
+            assert "Before you raise the threshold" not in response.text
+            assert "When this helps most" not in response.text
+            assert "xl:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.7fr)]" not in response.text
+            assert "xl:grid-cols-[minmax(0,1.3fr)_minmax(280px,0.85fr)]" not in response.text
+            assert "Save & Sync" in response.text
+            assert "Save priority" in response.text
+            assert "Save Changes" in response.text
+            assert 'placeholder="NZBgeek"' in response.text
+            assert 'placeholder="https://api.nzbgeek.info"' in response.text
+            assert 'autocomplete="nickname"' in response.text
+            assert 'autocomplete="url"' in response.text
+            assert response.text.count('@click="reset()"') >= 2
+            assert "Mark an indexer unhealthy after this many failed checks." in response.text
+            assert (
+                "Remove blocklist entries after this many days. Use 0 to keep them."
+                in response.text
+            )
+        if tab == "search":
+            assert (
+                "Decide how often Pullbox searches for wanted issues and whether new "
+                "series should search immediately." not in response.text
+            )
+            assert (
+                "Filter out releases that are too small, too large, or too weakly "
+                "scored before ranking gets more detailed." not in response.text
+            )
+            assert (
+                "Set the relative importance of quality factors and the extra bonuses "
+                "or penalties that push a release up or down." not in response.text
+            )
+            assert "Automatic wanted-issue search cadence." in response.text
+            assert "Typical good releases score around 70." in response.text
+            assert "0% = quality only, 100% = confidence only." in response.text
+            assert "Generic fallback routes candidates to intervention." in response.text
+            assert (
+                "Comma-separated and case-insensitive. Any match rejects the release."
+                in response.text
+            )
+            assert "info-panel" not in response.text

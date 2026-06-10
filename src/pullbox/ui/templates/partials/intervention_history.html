@@ -1,0 +1,138 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/search_field.html" import search_field %}
+
+<section data-testid="intervention-history-view" class="downloads-view">
+  <div data-testid="intervention-header" class="downloads-header">
+    <div class="downloads-header-main">
+      <div
+        id="intervention-history-header-metrics"
+        data-testid="intervention-history-header-metrics"
+        class="downloads-header-summary"
+      >
+        {% include "partials/intervention_history_header_metrics.html" %}
+      </div>
+
+      <div data-testid="intervention-header-actions" class="downloads-header-actions">
+        {% include "partials/intervention_tabs.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="intervention-history-panel" class="downloads-panel-stack">
+    <div class="downloads-table-wrap">
+      <form
+        id="intervention-history-filter-form"
+        data-testid="intervention-history-toolbar"
+        class="series-toolbar-frame downloads-history-toolbar"
+        autocomplete="off"
+        action="/intervention"
+        method="get"
+        hx-get="/intervention"
+        hx-target="#intervention-history-results"
+        hx-swap="morph:outerHTML"
+        hx-push-url="true"
+        hx-trigger="submit"
+      >
+        <input type="hidden" name="tab" value="history">
+        <input id="intervention-history-sort-input" type="hidden" name="sort" value="{{ sort }}">
+        <div class="series-toolbar-body">
+          <div class="series-toolbar-browse">
+            <div class="series-toolbar-primary">
+              {{ search_field(
+                name="search",
+                value=search_query,
+                placeholder="Search history...",
+                root_testid="intervention-history-search-field",
+                input_testid="intervention-history-search",
+                clear_testid="intervention-history-search-clear",
+                panel_testid="intervention-history-search-history-panel",
+                mode="remote",
+                history_key="pullbox.searchHistory.interventionHistory",
+                debounce_ms=250,
+                size="sm",
+                class_name="series-registry-search"
+              ) }}
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Outcome</span>
+                {{ dropdown_select(
+                  name="outcome",
+                  value=outcome_filter,
+                  options=outcome_options,
+                  root_testid="intervention-history-filter-outcome",
+                  size="sm",
+                  hx_get="/intervention",
+                  hx_target="#intervention-history-results",
+                  hx_swap="morph:outerHTML",
+                  hx_push_url="true",
+                  hx_include="#intervention-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Confidence</span>
+                {{ dropdown_select(
+                  name="confidence",
+                  value=confidence_filter,
+                  options=[
+                    ("", "All Confidence"),
+                    ("high", "High"),
+                    ("medium", "Medium"),
+                    ("low", "Low"),
+                  ],
+                  root_testid="intervention-history-filter-confidence",
+                  size="sm",
+                  hx_get="/intervention",
+                  hx_target="#intervention-history-results",
+                  hx_swap="morph:outerHTML",
+                  hx_push_url="true",
+                  hx_include="#intervention-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Protocol</span>
+                {{ dropdown_select(
+                  name="protocol",
+                  value=protocol_filter,
+                  options=protocol_options,
+                  root_testid="intervention-history-filter-protocol",
+                  size="sm",
+                  hx_get="/intervention",
+                  hx_target="#intervention-history-results",
+                  hx_swap="morph:outerHTML",
+                  hx_push_url="true",
+                  hx_include="#intervention-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+            </div>
+
+            {% if history_total > 0 %}
+            <div class="series-toolbar-actions">
+              <button
+                type="button"
+                @click="clearHistory($el)"
+                data-testid="intervention-history-clear"
+                class="btn-danger control-size-sm"
+              >
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                </svg>
+                Clear History
+              </button>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </form>
+
+      {% include "partials/intervention_history_results.html" %}
+    </div>
+  </div>
+</section>

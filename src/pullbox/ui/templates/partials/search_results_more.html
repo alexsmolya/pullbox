@@ -1,0 +1,18 @@
+{#- Additional ComicVine search result cards — returned for infinite scroll (offset > 0) -#}
+
+{% for r in results %}
+{% include "partials/search_result_card.html" %}
+{% endfor %}
+
+{#- Next sentinel for continued scrolling -#}
+{% if has_more %}
+<div hx-get="/htmx/series/search?q={{ query|urlencode }}&offset={{ next_offset }}"
+     hx-trigger="intersect once root:#content threshold:0.15"
+     hx-swap="outerHTML"
+     class="flex justify-center py-4">
+  <svg class="w-5 h-5 animate-spin text-pb-interactive" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+  </svg>
+</div>
+{% endif %}

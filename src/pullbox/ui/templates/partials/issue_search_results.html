@@ -1,0 +1,331 @@
+{#- Interactive search results for an issue — loaded via HTMX into search modal. -#}
+{#- Expects: matched (list), rejected (list), issue (obj), search_time_ms (int) -#}
+{% set matched_count = matched|length %}
+{% set rejected_count = rejected|length %}
+{% set search_time_display = search_time_ms|duration_ms %}
+
+<div
+  id="issue-search-modal-stats"
+  data-testid="issue-search-results-summary"
+  class="issue-search-modal-stats"
+  x-show="!searching"
+  x-cloak
+  hx-swap-oob="outerHTML"
+>
+  {% if matched_count or rejected_count %}
+    <span class="pill pill-success"><span class="font-semibold">{{ matched_count }}</span> matched</span>
+    <span class="pill pill-warning"><span class="font-semibold">{{ rejected_count }}</span> rejected</span>
+    <span class="pill pill-neutral">{{ search_time_display }}</span>
+  {% else %}
+    <span class="pill pill-neutral"><span class="font-semibold">0</span> results</span>
+    <span class="pill pill-neutral">{{ search_time_display }}</span>
+  {% endif %}
+</div>
+
+<div
+  id="issue-search-modal-footer-meta"
+  data-testid="issue-search-modal-footer-meta"
+  class="issue-search-modal-footer-meta"
+  hx-swap-oob="outerHTML"
+>
+</div>
+
+{% if matched or rejected %}
+  <div
+    data-testid="issue-search-results"
+    class="issue-search-results-shell"
+    x-data="{
+      sortCol: '',
+      sortAsc: true,
+      sortBy(col) {
+        if (this.sortCol === col) {
+          this.sortAsc = !this.sortAsc;
+        } else {
+          this.sortCol = col;
+          this.sortAsc = col === 'title' || col === 'indexer';
+        }
+        this.applySorting();
+      },
+      applySorting() {
+        const tbody = document.getElementById('issue-search-results-body');
+        if (!tbody) return;
+        const matchedRows = [...tbody.querySelectorAll('tr.matched-row')];
+        const rejectedRows = [...tbody.querySelectorAll('tr.rejected-row')];
+        const sortedRows = this.sortRows(matchedRows);
+        sortedRows.forEach((row) => tbody.appendChild(row));
+        rejectedRows.forEach((row) => tbody.appendChild(row));
+      },
+      sortRows(rows) {
+        const col = this.sortCol;
+        const asc = this.sortAsc;
+        const numericCols = ['confidence', 'category', 'size', 'age', 'seeders', 'score'];
+        return rows.sort((a, b) => {
+          let va = a.dataset[col] || '';
+          let vb = b.dataset[col] || '';
+          if (numericCols.includes(col)) {
+            va = parseFloat(va) || -1;
+            vb = parseFloat(vb) || -1;
+          } else {
+            va = va.toLowerCase();
+            vb = vb.toLowerCase();
+          }
+          if (va < vb) return asc ? -1 : 1;
+          if (va > vb) return asc ? 1 : -1;
+          return 0;
+        });
+      },
+      indicator(col) {
+        if (this.sortCol !== col) return '';
+        return this.sortAsc ? '▲' : '▼';
+      }
+    }"
+  >
+    <div
+      data-testid="issue-search-results-table"
+      class="issue-search-results-table-wrap downloads-table-wrap"
+    >
+      <table class="downloads-table issue-search-results-table">
+        <thead class="sticky top-0 z-10">
+          <tr>
+            <th class="w-[76px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('confidence')">
+              Match <span class="issue-search-sort-indicator" x-text="indicator('confidence')"></span>
+            </th>
+            <th class="cursor-pointer select-none hover:text-pb-text" @click="sortBy('title')">
+              Release <span class="issue-search-sort-indicator" x-text="indicator('title')"></span>
+            </th>
+            <th class="w-[92px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('indexer')">
+              Indexer <span class="issue-search-sort-indicator" x-text="indicator('indexer')"></span>
+            </th>
+            <th class="w-[82px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('category')">
+              Category <span class="issue-search-sort-indicator" x-text="indicator('category')"></span>
+            </th>
+            <th class="w-[72px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('size')">
+              Size <span class="issue-search-sort-indicator" x-text="indicator('size')"></span>
+            </th>
+            <th class="w-[56px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('age')">
+              Age <span class="issue-search-sort-indicator" x-text="indicator('age')"></span>
+            </th>
+            <th class="w-[78px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('seeders')">
+              Peers <span class="issue-search-sort-indicator" x-text="indicator('seeders')"></span>
+            </th>
+            <th class="w-[56px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('score')">
+              Score <span class="issue-search-sort-indicator" x-text="indicator('score')"></span>
+            </th>
+            <th class="is-right w-[118px]">Action</th>
+          </tr>
+        </thead>
+        <tbody id="issue-search-results-body">
+          {% for item in matched %}
+            <tr
+              data-testid="issue-search-results-matched-row"
+              class="matched-row"
+              data-confidence="{% if item.confidence == 'high' %}3{% elif item.confidence == 'medium' %}2{% elif item.confidence == 'low' %}1{% else %}0{% endif %}"
+              data-title="{{ item.title }}"
+              data-indexer="{{ item.indexer_name }}"
+              data-category="{% if '7030' in (item.category or '')|string %}1{% elif '7020' in (item.category or '')|string %}2{% else %}3{% endif %}"
+              data-size="{{ item.size_bytes or 0 }}"
+              data-age="{{ item.age_days if item.age_days is not none else 99999 }}"
+              data-seeders="{{ item.seeders if item.seeders is not none else -1 }}"
+              data-score="{{ item.quality_score }}"
+            >
+              <td>
+                <span class="pill{% if item.confidence == 'high' %} pill-success{% elif item.confidence == 'medium' or item.confidence == 'low' %} pill-warning{% else %} pill-muted{% endif %}">
+                  {{ item.confidence|capitalize }}
+                </span>
+              </td>
+              <td>
+                {% if item.info_url %}
+                  <a
+                    href="{{ item.info_url }}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="issue-search-release-link tooltip-wrap"
+                    data-tooltip-auto
+                    data-tip-size="wide"
+                  >
+                    <span class="issue-search-release-title" data-tooltip-measure>{{ item.title }}</span>
+                  </a>
+                {% else %}
+                  <span class="tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                    <span class="issue-search-release-title" data-tooltip-measure>{{ item.title }}</span>
+                  </span>
+                {% endif %}
+                {% if item.match_details %}
+                  <div class="issue-search-release-match">
+                    {%- set _mt = item.match_details.match_type -%}
+                    {%- if _mt == 'exact' %}Exact match
+                    {%- elif _mt == 'alternate' %}Alternate name match
+                    {%- elif _mt == 'starts_with' %}Starts-with match
+                    {%- elif _mt == 'token_subset' %}Token subset match
+                    {%- elif _mt == 'token_set' %}Token set match
+                    {%- else %}Fuzzy match
+                    {%- endif %}
+                    · {{ (item.match_details.series_similarity * 100)|round|int }}% similarity
+                  </div>
+                {% endif %}
+              </td>
+              <td class="downloads-mono-cell">{{ item.indexer_name }}</td>
+              <td>
+                {%- set cats = (item.category or '')|string -%}
+                {%- set cats_lower = cats|lower -%}
+                {%- if '7030' in cats or 'comic' in cats_lower -%}
+                  <span class="pill pill-success">Comics</span>
+                {%- elif '7020' in cats or 'ebook' in cats_lower or 'e-book' in cats_lower -%}
+                  <span class="pill pill-info">EBook</span>
+                {%- elif '7010' in cats or ('book' in cats_lower and 'audio' not in cats_lower) -%}
+                  <span class="pill pill-info">Book</span>
+                {%- elif 'audio' in cats_lower -%}
+                  <span class="pill pill-warning">Audio</span>
+                {%- elif cats -%}
+                  <span class="pill pill-muted">{{ cats.split('/')[0][:8] }}</span>
+                {%- else -%}
+                  <span class="downloads-mono-dim-cell">—</span>
+                {%- endif -%}
+              </td>
+              <td class="downloads-mono-cell">
+                {% if item.size_bytes %}{{ item.size_bytes|filesize }}{% else %}—{% endif %}
+              </td>
+              <td class="downloads-mono-cell">
+                {% if item.age_days is not none %}{{ item.age_days }}d{% else %}—{% endif %}
+              </td>
+              <td class="downloads-mono-cell">
+                {% if item.is_torrent %}
+                  {% set s = item.seeders %}
+                  {% set l = item.leechers %}
+                  {{ s if s is not none else '-' }} / {{ l if l is not none else '-' }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="downloads-mono-cell">{{ item.quality_score }}</td>
+              <td
+                class="is-right"
+                x-data='window.issueSearchResultActions({
+                  issueId: {{ issue.id }},
+                  seriesId: {{ issue.series_id }},
+                  csrfToken: {{ csrf_token|tojson }},
+                  searchLogId: {{ search_log_id|default(none)|tojson }}
+                })'
+              >
+                <div class="issue-search-action-row">
+                  <button
+                    data-url="{{ item.download_url }}"
+                    data-indexer="{{ item.indexer_name }}"
+                    data-title="{{ item.title }}"
+                    data-torrent="{{ item.is_torrent|lower }}"
+                    data-size="{{ item.size_bytes or 0 }}"
+                    @click="grabRelease($el)"
+                    :class="grabbing ? 'opacity-50 cursor-wait' : (blocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer')"
+                    :disabled="blocked"
+                    class="chip-btn chip-btn-sm chip-btn-info"
+                  >
+                    <svg x-show="!grabbing" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                    </svg>
+                    <svg x-show="grabbing" x-cloak class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                    Grab
+                  </button>
+                  <button
+                    x-show="!blocked"
+                    data-block-title="{{ item.title }}"
+                    @click="blockRelease($el)"
+                    :class="blocking ? 'opacity-50 cursor-wait' : 'cursor-pointer'"
+                    class="chip-btn chip-btn-sm chip-btn-error cursor-pointer"
+                  >
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                    </svg>
+                    Block
+                  </button>
+                  <span x-show="blocked" x-cloak class="pill pill-error opacity-60">Blocked</span>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+
+          {% for item in rejected %}
+            <tr data-testid="issue-search-results-rejected-row" class="rejected-row issue-search-rejected-row">
+              <td><span class="pill pill-muted">Rejected</span></td>
+              <td>
+                <span class="tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                  <span class="issue-search-release-title issue-search-release-title-muted" data-tooltip-measure>{{ item.title }}</span>
+                </span>
+                <div class="issue-search-release-match">{{ item.rejection_reason }}</div>
+              </td>
+              <td class="downloads-mono-cell">{{ item.indexer_name }}</td>
+              <td>
+                {%- set cats = (item.category or '')|string -%}
+                {%- set cats_lower = cats|lower -%}
+                {%- if '7030' in cats or 'comic' in cats_lower -%}
+                  <span class="pill pill-success opacity-60">Comics</span>
+                {%- elif '7020' in cats or 'ebook' in cats_lower or 'e-book' in cats_lower -%}
+                  <span class="pill pill-info opacity-60">EBook</span>
+                {%- elif '7010' in cats or ('book' in cats_lower and 'audio' not in cats_lower) -%}
+                  <span class="pill pill-info opacity-60">Book</span>
+                {%- elif 'audio' in cats_lower -%}
+                  <span class="pill pill-warning opacity-60">Audio</span>
+                {%- elif cats -%}
+                  <span class="pill pill-muted">{{ cats.split('/')[0][:8] }}</span>
+                {%- else -%}
+                  <span class="downloads-mono-cell">—</span>
+                {%- endif -%}
+              </td>
+              <td class="downloads-mono-cell">{% if item.size_bytes %}{{ item.size_bytes|filesize }}{% else %}—{% endif %}</td>
+              <td class="downloads-mono-cell">—</td>
+              <td class="downloads-mono-cell">—</td>
+              <td class="downloads-mono-cell">—</td>
+              <td
+                class="is-right"
+                x-data='window.issueSearchResultActions({
+                  issueId: {{ issue.id }},
+                  seriesId: {{ issue.series_id }},
+                  csrfToken: {{ csrf_token|tojson }},
+                  searchLogId: {{ search_log_id|default(none)|tojson }}
+                })'
+              >
+                <div class="issue-search-action-row">
+                  <button
+                    data-url="{{ item.download_url }}"
+                    data-indexer="{{ item.indexer_name }}"
+                    data-title="{{ item.title }}"
+                    data-torrent="{{ item.is_torrent|lower }}"
+                    data-size="{{ item.size_bytes or 0 }}"
+                    data-rejection-reason="{{ item.rejection_reason }}"
+                    @click="grabRejectedRelease($el)"
+                    :class="grabbing ? 'opacity-50 cursor-wait' : 'cursor-pointer'"
+                    class="chip-btn chip-btn-sm chip-btn-warning"
+                  >
+                    <svg x-show="!grabbing" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.007v.008H12V16.5zM10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    </svg>
+                    <svg x-show="grabbing" x-cloak class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                    Grab anyway
+                  </button>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% else %}
+  <div
+    data-testid="issue-search-results-empty-state"
+    class="issue-search-empty-state"
+  >
+    <svg class="issue-search-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+    </svg>
+    <p class="issue-search-empty-title">No results found</p>
+    <p class="issue-search-empty-copy">
+      No releases matched this issue across configured indexers. Try again later or check your indexer settings.
+    </p>
+  </div>
+{% endif %}

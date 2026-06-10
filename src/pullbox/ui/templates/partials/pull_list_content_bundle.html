@@ -1,0 +1,11 @@
+<input
+  id="pull-list-sort-input"
+  type="hidden"
+  name="sort"
+  value="{{ sort }}"
+  hx-swap-oob="outerHTML"
+>
+<div id="page-footer-dock" data-testid="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/pull_list_footer_dock.html" %}
+</div>
+{% include "partials/pull_list_results_body.html" %}

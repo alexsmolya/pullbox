@@ -1,0 +1,133 @@
+{% from "components/mission_control_table.html" import mission_control_table %}
+{% set active_sort = sort | default("release") %}
+{% set active_sort_field = active_sort[1:] if active_sort.startswith("-") else active_sort %}
+{% set active_sort_desc = active_sort.startswith("-") %}
+
+{% macro empty_results(title, copy) %}
+  <div data-testid="whats-new-filter-empty-state" class="downloads-empty-state is-history">
+    <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.197 5.197a7.5 7.5 0 0 0 10.606 10.606Z"/>
+    </svg>
+    <p class="downloads-empty-title">{{ title }}</p>
+    <p class="downloads-empty-copy">{{ copy }}</p>
+  </div>
+{% endmacro %}
+
+{% macro issue_cell(value) %}
+  {% set normalized = value|string|trim %}
+  {% if value is not none and normalized and normalized|lower != 'none' %}
+    #{{ normalized }}
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+{% macro sort_header(table_testid, field, label, type="text", extra_classes="", width="") %}
+  {% set is_active = active_sort_field == field %}
+  {% if is_active %}
+    {% set next_sort = field if active_sort_desc else ("-" ~ field) %}
+  {% else %}
+    {% set next_sort = field %}
+  {% endif %}
+  {% set sort_sep = "&" if "?" in sort_base_url else "?" %}
+  <th class="{{ extra_classes }} {{ width }}">
+    <button
+      type="button"
+      data-testid="whats-new-sort-{{ field }}"
+      class="downloads-sort-btn"
+      {% if is_active %}aria-sort="{{ 'descending' if active_sort_desc else 'ascending' }}"{% else %}aria-sort="none"{% endif %}
+      {% if is_active %}data-sort-active="true"{% endif %}
+      hx-get="{{ sort_base_url }}{{ sort_sep }}sort={{ next_sort|urlencode }}"
+      hx-target="#whats-new-results-body"
+      hx-swap="outerHTML"
+      hx-sync="#whats-new-results-body:replace"
+      hx-push-url="true"
+    >
+      <span>{{ label }}</span>
+      <svg
+        class="downloads-sort-chevron{% if is_active %} is-active{% endif %}{% if is_active and active_sort_desc %} is-desc{% endif %}"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/>
+      </svg>
+    </button>
+  </th>
+{% endmacro %}
+
+{% macro release_tables(releases, testid_prefix) %}
+  <div data-testid="{{ testid_prefix }}-list-view" class="whats-new-adaptive-view">
+    {% call mission_control_table(testid_prefix ~ "-release-table", table_class="whats-new-release-table whats-new-release-table-adaptive") %}
+      <thead>
+        <tr>
+          {{ sort_header(testid_prefix ~ "-release-table", "release", "Release") }}
+          {{ sort_header(testid_prefix ~ "-release-table", "date", "In Store", width="w-[112px]") }}
+          {{ sort_header(testid_prefix ~ "-release-table", "issue", "Issue", type="number", width="w-[90px]") }}
+          {{ sort_header(testid_prefix ~ "-release-table", "publisher", "Publisher", width="w-[140px]") }}
+          {{ sort_header(testid_prefix ~ "-release-table", "variants", "Variants", type="number", extra_classes="c", width="w-[96px]") }}
+          {{ sort_header(testid_prefix ~ "-release-table", "pulls", "Pulls", type="number", extra_classes="c whats-new-pulls-col", width="w-[96px]") }}
+          {{ sort_header(testid_prefix ~ "-release-table", "rating", "Rating", type="number", extra_classes="c", width="w-[96px]") }}
+          {{ sort_header(testid_prefix ~ "-release-table", "price", "Price", type="number", extra_classes="r", width="w-[96px]") }}
+        </tr>
+      </thead>
+      <tbody>
+        {% for release in releases %}
+          <tr
+            data-testid="whats-new-release-row"
+            data-whats-new-sort-row
+            data-sort-release="{{ release.display_title | default(release.title) }}"
+            data-sort-date="{{ release.store_date.isoformat() if release.store_date else '' }}"
+            data-sort-issue="{{ release.issue_number }}"
+            data-sort-publisher="{{ release.publisher.name }}"
+            data-sort-variants="{{ release.variant_count | default(0) }}"
+            data-sort-pulls="{{ release.community_counts.pull | default(0) }}"
+            data-sort-rating="{{ release.community_rating if release.community_rating is not none else '' }}"
+            data-sort-price="{{ release.price if release.price else '' }}"
+          >
+            <td>
+              <div class="whats-new-release-title-cell flex min-w-0 items-center gap-3">
+                <div class="whats-new-release-cover h-16 w-11 shrink-0 overflow-hidden rounded-md border border-pb-border bg-pb-surface">
+                  {% if release.cover_url %}
+                    <img src="{{ release.cover_url }}" alt="{{ release.display_title | default(release.title) }} cover" class="h-full w-full object-cover" loading="lazy">
+                  {% else %}
+                    <div class="flex h-full w-full items-center justify-center text-[10px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">No cover</div>
+                  {% endif %}
+                </div>
+                <div class="min-w-0">
+                  <a href="{{ release.locg_url }}" target="_blank" rel="noopener noreferrer" class="series-mission-control-name">
+                    {{ release.display_title | default(release.title) }}
+                  </a>
+                  <div class="series-mission-control-publisher">
+                    {{ release.series.title }}
+                    {% if release.series.volume %} &middot; Vol. {{ release.series.volume }}{% endif %}
+                  </div>
+                </div>
+              </div>
+            </td>
+            <td class="table-mono-dim">{{ release.store_date | localtime("%b %d") }}</td>
+            <td class="table-mono-dim">{{ issue_cell(release.issue_number) }}</td>
+            <td>{{ release.publisher.name }}</td>
+            <td class="c">
+              {% if release.variant_count %}
+                <span class="badge badge-muted">{{ release.variant_count }}</span>
+              {% else %}
+                <span class="text-pb-text-dim">&mdash;</span>
+              {% endif %}
+            </td>
+            <td class="c table-mono-dim whats-new-pulls-col">{{ "{:,}".format(release.community_counts.pull | default(0)) }}</td>
+            <td class="c table-mono-dim">
+              {% if release.community_rating is not none %}{{ "%.1f"|format(release.community_rating) }}{% else %}&mdash;{% endif %}
+            </td>
+            <td class="r table-mono-dim">
+              {% if release.price %}{{ "$%.2f"|format(release.price) }}{% else %}&mdash;{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    {% endcall %}
+  </div>
+{% endmacro %}

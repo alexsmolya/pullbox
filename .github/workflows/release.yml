@@ -1,0 +1,187 @@
+---
+# Pullbox Release Pipeline
+# Creates or updates a GitHub Release after the Docker workflow succeeds for a
+# tagged commit.
+#
+# Security: All actions pinned to full SHA.
+# See: docs/development/INFRASTRUCTURE.md
+# Trusted release automation stays on the self-hosted runner alongside the
+# Docker publish workflow.
+#
+# Pre-release detection: v0.x.x or tag containing hyphen (v1.0.0-rc1)
+
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Docker"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha || github.sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: self-hosted
+    if: github.event.workflow_run.conclusion == 'success'
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve release tag
+        id: release
+        run: |
+          TAG=$(git tag --points-at "${{ github.event.workflow_run.head_sha }}" | grep '^v' | head -1 || true)
+          if [ -z "$TAG" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No version tag found at workflow SHA; skipping release creation."
+            exit 0
+          fi
+
+          VERSION="${TAG#v}"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$TAG" == v0.* ]] || [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract version info
+        if: steps.release.outputs.skip != 'true'
+        id: version
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$TAG" == v0.* ]] || [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate changelog from commits
+        if: steps.release.outputs.skip != 'true'
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${{ steps.release.outputs.tag }}$" | head -1)
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+          COMMIT_SUBJECTS=$(git log "$RANGE" --pretty=format:"%s" --no-merges)
+
+          category_notes() {
+            local pattern="$1"
+            local replacement="$2"
+            printf '%s\n' "$COMMIT_SUBJECTS" | grep -E ".+" | grep -E "$pattern" | sed -E "$replacement" || true
+          }
+
+          {
+            echo "## What's Changed"
+            echo ""
+
+            FEATS=$(category_notes '^feat(\(.+\))?: ' 's/^feat(\(.+\))?: /- /')
+            if [ -n "$FEATS" ]; then
+              echo "### ✨ Features"
+              echo "$FEATS"
+              echo ""
+            fi
+
+            FIXES=$(category_notes '^fix(\(.+\))?: ' 's/^fix(\(.+\))?: /- /')
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+
+            TESTS=$(category_notes '^test(\(.+\))?: ' 's/^test(\(.+\))?: /- /')
+            if [ -n "$TESTS" ]; then
+              echo "### 🧪 Testing"
+              echo "$TESTS"
+              echo ""
+            fi
+
+            REFACTORS=$(category_notes '^refactor(\(.+\))?: ' 's/^refactor(\(.+\))?: /- /')
+            if [ -n "$REFACTORS" ]; then
+              echo "### ♻️ Refactors"
+              echo "$REFACTORS"
+              echo ""
+            fi
+
+            DOCS=$(category_notes '^docs(\(.+\))?: ' 's/^docs(\(.+\))?: /- /')
+            if [ -n "$DOCS" ]; then
+              echo "### 📝 Docs"
+              echo "$DOCS"
+              echo ""
+            fi
+
+            CHORES=$(category_notes '^chore(\(.+\))?: ' 's/^chore(\(.+\))?: /- /')
+            if [ -n "$CHORES" ]; then
+              echo "### 🧰 Chores"
+              echo "$CHORES"
+              echo ""
+            fi
+
+            CI_CHANGES=$(category_notes '^ci(\(.+\))?: ' 's/^ci(\(.+\))?: /- /')
+            if [ -n "$CI_CHANGES" ]; then
+              echo "### 🏗️ CI / Build"
+              echo "$CI_CHANGES"
+              echo ""
+            fi
+
+            PERF=$(category_notes '^perf(\(.+\))?: ' 's/^perf(\(.+\))?: /- /')
+            if [ -n "$PERF" ]; then
+              echo "### ⚡ Performance"
+              echo "$PERF"
+              echo ""
+            fi
+
+            STYLES=$(category_notes '^style(\(.+\))?: ' 's/^style(\(.+\))?: /- /')
+            if [ -n "$STYLES" ]; then
+              echo "### 🎨 Style / UI Polish"
+              echo "$STYLES"
+              echo ""
+            fi
+
+            OTHER=$(printf '%s\n' "$COMMIT_SUBJECTS" | grep -E ".+" | grep -Ev "^(feat|fix|test|refactor|docs|chore|ci|perf|style)(\(.+\))?: |^Merge" | sed 's/^/- /' || true)
+            if [ -n "$OTHER" ]; then
+              echo "### 🔧 Other Changes"
+              echo "$OTHER"
+              echo ""
+            fi
+
+            echo "## 🐳 Docker Images"
+            echo ""
+            echo '```bash'
+            echo "docker pull ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
+            echo '```'
+            echo ""
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG:-$(git rev-list --max-parents=0 HEAD | head -1)}...${{ steps.release.outputs.tag }}"
+          } > release_notes.md
+
+      - name: Create GitHub Release
+        if: steps.release.outputs.skip != 'true'
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: "Pullbox ${{ steps.version.outputs.tag }}"
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}

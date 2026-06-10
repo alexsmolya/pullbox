@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}Intervention Queue — {{ instance_name() }}{% endblock %}
+{% block page_title %}Intervention Queue{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+{% include "partials/intervention_content.html" %}
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/intervention_footer_dock.html" %}
+{% endblock %}

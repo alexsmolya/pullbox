@@ -1,0 +1,13 @@
+<div id="series-summary" hx-swap-oob="innerHTML">
+  {% include "partials/series_results_summary.html" %}
+</div>
+<div id="page-footer-dock" hx-swap-oob="innerHTML">
+  {% include "partials/series_pagination_mount.html" %}
+</div>
+<section
+  id="series-results-body"
+  data-testid="series-results-body"
+  class="series-results-body-shell"
+>
+  {% include "partials/series_results_body.html" %}
+</section>

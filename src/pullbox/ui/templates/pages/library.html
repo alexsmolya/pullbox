@@ -1,0 +1,1052 @@
+{% extends "base.html" %}
+{% from "components/settings_shell.html" import field_note, inline_alert, settings_row %}
+
+{% block title %}Library — {{ instance_name() }}{% endblock %}
+{% block page_title %}Library{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{%- macro sort_header(field, label, extra_classes="") -%}
+  {%- set current_field = library_view.browser_sort.lstrip("-") -%}
+  {%- set current_desc = library_view.browser_sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  <th class="{{ extra_classes }}">
+    <a
+      href="{{ library_href(library_view.current_path, next_sort) }}"
+      data-testid="library-browser-sort-{{ field }}"
+      class="downloads-sort-btn{% if current_field == field %} is-active{% endif %}"
+    >
+      <span>{{ label }}</span>
+      <svg class="downloads-sort-chevron{% if current_field == field and not current_desc %} is-desc{% endif %}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </a>
+  </th>
+{%- endmacro -%}
+
+{%- macro render_tree_nodes(nodes, level=0) -%}
+  {% for node in nodes %}
+    <div class="library-browser__tree-item" style="--library-tree-level: {{ level }}">
+      {% if node.has_children %}
+        <div x-data="{ open: {{ 'true' if node.is_open else 'false' }} }" class="library-browser__tree-branch">
+          <div
+            class="library-browser__tree-row"
+            data-entry-name="{{ node.name }}"
+            data-entry-path="{{ node.path }}"
+            data-entry-kind="{{ node.kind }}"
+            data-entry-root-path="{{ node.root_path }}"
+            data-entry-convertible="false"
+            x-on:contextmenu.prevent.stop="openContextMenu($event)"
+            x-bind:class="{ 'library-browser__tree-row--context': isContextTarget($el.dataset.entryPath) }"
+          >
+            <button
+              type="button"
+              class="library-browser__tree-toggle"
+              @click.stop="open = !open"
+              x-bind:aria-expanded="open ? 'true' : 'false'"
+              aria-label="Toggle folder children"
+            >
+              <svg class="library-browser__tree-icon" :class="open && 'library-browser__tree-icon--expanded'" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5.25l6 6-6 6"/>
+              </svg>
+            </button>
+            <a href="{{ node.href }}" class="library-browser__tree-node{% if node.is_active %} library-browser__tree-node--active{% endif %}">
+              <span class="library-browser__tree-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                <span class="block truncate" data-tooltip-measure>{{ node.name }}</span>
+              </span>
+            </a>
+          </div>
+          <div x-show="open" class="library-browser__tree-children">
+            {{ render_tree_nodes(node.children, level + 1) }}
+          </div>
+        </div>
+      {% else %}
+        <div
+          class="library-browser__tree-row"
+          data-entry-name="{{ node.name }}"
+          data-entry-path="{{ node.path }}"
+          data-entry-kind="{{ node.kind }}"
+          data-entry-root-path="{{ node.root_path }}"
+          data-entry-convertible="false"
+          x-on:contextmenu.prevent.stop="openContextMenu($event)"
+          x-bind:class="{ 'library-browser__tree-row--context': isContextTarget($el.dataset.entryPath) }"
+        >
+          <span class="library-browser__tree-leaf" aria-hidden="true">
+            <svg class="library-browser__tree-icon library-browser__tree-icon--folder" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+          </span>
+          <a href="{{ node.href }}" class="library-browser__tree-node{% if node.is_active %} library-browser__tree-node--active{% endif %}">
+            <span class="library-browser__tree-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+              <span class="block truncate" data-tooltip-measure>{{ node.name }}</span>
+            </span>
+          </a>
+        </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+{%- endmacro -%}
+
+{% block content %}
+<div
+  data-testid="library-page"
+  class="dashboard-mission-page library-page-shell"
+  x-data='libraryBrowserPage({
+    csrfToken: "{{ csrf_token }}",
+    renameTemplates: {{ rename_templates|tojson }},
+    utilityTrashFolder: {{ utility_trash_folder|tojson }},
+    currentPath: {{ library_view.current_path|tojson }},
+    rootPath: {{ library_view.root_path|tojson }},
+    rootConfigured: {{ library_view.root_configured|tojson }}
+  })'
+  x-init="init()"
+  x-on:keydown.escape.window="handleEscape()"
+  x-on:click.window="handleWindowClick($event)"
+  x-on:resize.window="closeContextMenu()"
+>
+  {% if library_view.root_configured %}
+    <section class="series-registry-header" data-testid="library-mission-control">
+      <div class="series-registry-header-left">
+        <div class="series-registry-title-block">
+          <h1 class="series-registry-title">LIB<span>RARY</span></h1>
+          <p class="series-registry-subtitle">{{ library_view.subtitle }}</p>
+        </div>
+
+        <div class="series-registry-gauges" data-testid="library-gauges">
+          {% for gauge in library_view.gauges %}
+            {% if gauge.key == 'files' %}
+              {% set gauge_testid = 'library-stat-total-files' %}
+            {% elif gauge.key == 'matched' %}
+              {% set gauge_testid = 'library-stat-matched-files' %}
+            {% elif gauge.key == 'unmatched' %}
+              {% set gauge_testid = 'library-stat-unmatched-files' %}
+            {% else %}
+              {% set gauge_testid = 'library-gauge-' ~ gauge.key %}
+            {% endif %}
+            <div class="series-registry-gauge" data-testid="{{ gauge_testid }}">
+              <div class="series-registry-gauge-ring">
+                <svg viewBox="0 0 56 56" aria-hidden="true">
+                  <circle class="series-registry-gauge-bg" cx="28" cy="28" r="22"></circle>
+                  <circle
+                    class="series-registry-gauge-fill {% if gauge.tone == 'success' %}series-registry-gauge-fill-success{% elif gauge.tone == 'warning' %}series-registry-gauge-fill-warning{% elif gauge.tone == 'danger' %}series-registry-gauge-fill-danger{% elif gauge.tone == 'neutral' %}series-registry-gauge-fill-info opacity-60{% else %}series-registry-gauge-fill-info{% endif %}"
+                    cx="28"
+                    cy="28"
+                    r="22"
+                    stroke-dasharray="138.2"
+                    stroke-dashoffset="{{ gauge.stroke_offset }}"
+                  ></circle>
+                </svg>
+                <span class="series-registry-gauge-value {% if gauge.tone == 'success' %}text-pb-success{% elif gauge.tone == 'warning' %}text-pb-warning{% elif gauge.tone == 'danger' %}text-pb-error{% elif gauge.tone == 'neutral' %}text-pb-text-dim{% else %}text-pb-interactive{% endif %}">
+                  {{ gauge.value_label }}
+                </span>
+              </div>
+              <div class="series-registry-gauge-label">{{ gauge.label }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      {% if library_view.format_pills %}
+        <div class="series-registry-actions library-format-pills" data-testid="library-format-pills">
+          {% for pill in library_view.format_pills %}
+            <span data-testid="library-format-pill-{{ pill.key }}" class="pill pill-{{ pill.tone }}">
+              {{ pill.label }} {{ pill.count }}
+            </span>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </section>
+
+    <section data-testid="library-stats-grid" class="dashboard-scoreboard library-scoreboard">
+      {% for stat in library_view.stats %}
+        {% if stat.href %}
+          <a data-testid="library-stat-{{ stat.key }}" href="{{ stat.href }}" class="dashboard-scoreboard__item library-scoreboard__item library-scoreboard__item--link">
+            <span class="dashboard-scoreboard__label">{{ stat.label }}</span>
+            <span class="dashboard-scoreboard__value{% if stat.tone != 'default' %} library-scoreboard__value--{{ stat.tone }}{% endif %}">{{ stat.value_label }}</span>
+          </a>
+        {% else %}
+          <article data-testid="library-stat-{{ stat.key }}" class="dashboard-scoreboard__item library-scoreboard__item">
+            <span class="dashboard-scoreboard__label">{{ stat.label }}</span>
+            <span class="dashboard-scoreboard__value{% if stat.tone != 'default' %} library-scoreboard__value--{{ stat.tone }}{% endif %}">{{ stat.value_label }}</span>
+          </article>
+        {% endif %}
+      {% endfor %}
+    </section>
+
+    {% if unmatched_files > 0 %}
+      <a href="/library/matching" data-testid="library-matching-banner" class="library-matching-banner">
+        <div class="library-matching-banner__body">
+          <span class="library-matching-banner__title">
+            {{ unmatched_files }} unmatched file{{ "s" if unmatched_files != 1 else "" }}
+          </span>
+          <span class="library-matching-banner__copy">
+            Review the matching queue before they turn into cleanup debt.
+          </span>
+        </div>
+        <span class="count-badge count-badge-warning">{{ unmatched_files }}</span>
+      </a>
+    {% endif %}
+
+    <section data-testid="library-directory-panel" class="library-browser">
+      <aside class="library-browser__tree">
+        <div class="library-browser__tree-header" data-testid="library-tree-header">Library Root</div>
+        <div class="library-browser__tree-list" data-testid="library-tree-list" @scroll.passive="closeContextMenu()">
+          {{ render_tree_nodes(library_view.tree_nodes) }}
+        </div>
+      </aside>
+
+      <div class="library-browser__panel">
+        <div class="library-browser__toolbar" data-testid="library-browser-toolbar">
+          <div class="library-browser__toolbar-main">
+            <a
+              href="{{ library_view.parent_href or '#' }}"
+              class="library-browser__up-btn{% if not library_view.parent_href %} is-disabled{% endif %}"
+              aria-label="Go to parent folder"
+              {% if not library_view.parent_href %}aria-disabled="true"{% endif %}
+              data-testid="library-browser-up"
+            >
+              <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/>
+              </svg>
+            </a>
+            <div class="library-browser__path-block" data-testid="library-browser-breadcrumbs">
+              <p class="library-browser__path" data-testid="library-browser-current-crumb" title="{{ library_view.current_path }}">{{ library_view.current_path }}</p>
+            </div>
+          </div>
+        </div>
+
+        {% if library_view.root_available and library_view.browser_rows %}
+          <div class="library-browser__table-wrap" @scroll.passive="closeContextMenu()">
+            <table class="downloads-table library-browser-table" data-testid="library-browser-table">
+              <thead>
+                <tr>
+                  {{ sort_header("name", "Name") }}
+                  {{ sort_header("items", "Items", "is-right") }}
+                  {{ sort_header("size", "Size", "is-right") }}
+                  {{ sort_header("type", "Type") }}
+                  {{ sort_header("modified", "Modified", "is-right") }}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in library_view.browser_rows %}
+                  <tr
+                    data-testid="library-browser-row-{{ loop.index }}"
+                    data-entry-name="{{ row.name }}"
+                    data-entry-path="{{ row.path }}"
+                    data-entry-kind="{{ row.kind }}"
+                    data-entry-root-path="{{ row.root_path }}"
+                    data-entry-format="{{ row.file_format or '' }}"
+                    data-entry-convertible="{{ 'true' if row.is_convertible else 'false' }}"
+                    x-on:contextmenu.prevent.stop="openContextMenu($event)"
+                    x-bind:class="{ 'library-browser__table-row--context': isContextTarget($el.dataset.entryPath) }"
+                  >
+                    <td>
+                      <div class="library-browser__name">
+                        {% if row.is_folder %}
+                          <svg class="library-browser__name-icon library-browser__name-icon--folder" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+                          </svg>
+                        {% else %}
+                          <svg class="library-browser__name-icon library-browser__name-icon--file" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+                          </svg>
+                        {% endif %}
+                        {% if row.is_folder %}
+                          <a href="{{ row.href }}" class="library-browser__name-label library-browser__name-label--folder">{{ row.name }}</a>
+                        {% else %}
+                          <span class="library-browser__name-label">{{ row.name }}</span>
+                        {% endif %}
+                      </div>
+                    </td>
+                    <td class="is-right"><span class="table-mono-value">{{ row.item_count_label }}</span></td>
+                    <td class="is-right"><span class="table-mono-value">{{ row.size_label }}</span></td>
+                    <td><span class="pill pill-{{ row.type_tone }}">{{ row.type_label }}</span></td>
+                    <td class="is-right"><span class="table-mono-value">{{ row.modified_label }}</span></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div data-testid="library-browser-empty" class="library-browser__empty">
+            <svg class="library-browser__empty-icon" fill="none" stroke="currentColor" stroke-width="1.25" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+            <p class="library-browser__empty-title">{{ library_view.browser_empty_title }}</p>
+            <p class="library-browser__empty-copy">{{ library_view.browser_empty_copy }}</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <div
+      x-cloak
+      x-show="contextMenu.open"
+      x-ref="contextMenu"
+      data-testid="library-context-menu"
+      class="library-context-menu"
+      x-bind:style="contextMenuStyle()"
+    >
+      <button type="button" class="library-context-menu__item" data-testid="library-context-action-properties" x-on:click="openProperties()">
+        <svg class="library-context-menu__icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 00.92.908l.005-.002a.75.75 0 00.525-.908l-.708-2.836a.75.75 0 011.063-.852l.041.02M12 21a9 9 0 100-18 9 9 0 000 18z"/>
+        </svg>
+        <span>Properties</span>
+      </button>
+
+      <template x-if="contextTarget && contextTarget.kind !== 'root'">
+        <div class="library-context-menu__group">
+          <div class="library-context-menu__sep"></div>
+          <button type="button" class="library-context-menu__item" data-testid="library-context-action-rename" x-on:click="openRename()">
+            <svg class="library-context-menu__icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/>
+            </svg>
+            <span>Rename</span>
+          </button>
+          <button type="button" class="library-context-menu__item" data-testid="library-context-action-auto-rename" x-on:click="openAutoRename()">
+            <svg class="library-context-menu__icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
+            </svg>
+            <span>Rename automatically</span>
+          </button>
+          <template x-if="contextTarget && contextTarget.canConvert">
+            <button type="button" class="library-context-menu__item" data-testid="library-context-action-convert" x-on:click="openConvert()">
+              <svg class="library-context-menu__icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3"/>
+              </svg>
+              <span>Convert to CBZ</span>
+            </button>
+          </template>
+          <div class="library-context-menu__sep"></div>
+          <button type="button" class="library-context-menu__item library-context-menu__item--danger" data-testid="library-context-action-delete" x-on:click="openDelete()">
+            <svg class="library-context-menu__icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+            </svg>
+            <span>Delete</span>
+          </button>
+        </div>
+      </template>
+    </div>
+
+    <div x-cloak x-show="modal === 'properties'" class="modal-shell" data-testid="library-properties-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--properties" role="dialog" aria-modal="true" aria-label="Library properties">
+        <header class="modal-header library-browser-modal__header">
+          <div class="library-browser-modal__title-block">
+            <div class="library-browser-modal__icon">
+              <svg x-show="modalEntry.kind === 'file'" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+              </svg>
+              <svg x-show="modalEntry.kind !== 'file'" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+              </svg>
+            </div>
+            <div>
+              <h2 class="library-browser-modal__title" x-text="modalEntry.name || 'Properties'"></h2>
+              <p class="library-browser-modal__subtitle" x-text="modalEntry.kindLabel || 'Loading details…'"></p>
+            </div>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-properties-close" x-on:click="closeModal()" aria-label="Close properties dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body library-browser-modal__body">
+          <template x-if="modalLoading">
+            <div class="library-browser-modal__loading">Loading item details…</div>
+          </template>
+          <template x-if="!modalLoading">
+            <div class="library-browser-modal__content">
+              <section class="library-browser-modal__section">
+                <div class="library-browser-modal__section-label">General</div>
+                <table class="library-browser-modal__details-table">
+                  <tbody>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Name</th>
+                      <td class="library-browser-modal__detail-value" x-text="modalEntry.name || '—'"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Kind</th>
+                      <td class="library-browser-modal__detail-value" x-text="modalEntry.kindLabel || '—'"></td>
+                    </tr>
+                    <template x-if="modalEntry.kind === 'file'">
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Format</th>
+                        <td class="library-browser-modal__detail-value" x-text="fileFormatLabel()"></td>
+                      </tr>
+                    </template>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Size</th>
+                      <td class="library-browser-modal__detail-value" x-text="formatBytesLabel(modalEntry.sizeBytes)"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Items</th>
+                      <td class="library-browser-modal__detail-value" x-text="formatItemCountLabel(modalEntry.itemCount)"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Modified</th>
+                      <td class="library-browser-modal__detail-value" x-text="formatDateTimeLabel(modalEntry.modifiedAt)"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Permissions</th>
+                      <td class="library-browser-modal__detail-value library-browser-modal__detail-value--mono" x-text="modalEntry.permissionsLabel || '—'"></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section class="library-browser-modal__section">
+                <div class="library-browser-modal__section-label">Location</div>
+                <table class="library-browser-modal__details-table">
+                  <tbody>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Path</th>
+                      <td class="library-browser-modal__detail-value library-browser-modal__detail-value--mono" x-text="modalEntry.path || '—'"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Library Root</th>
+                      <td class="library-browser-modal__detail-value" x-text="modalEntry.rootName || '—'"></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </section>
+            </div>
+          </template>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-properties-dismiss" x-on:click="closeModal()">Close</button>
+        </footer>
+      </section>
+    </div>
+
+    <div x-cloak x-show="modal === 'rename'" class="modal-shell" data-testid="library-rename-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form" role="dialog" aria-modal="true" aria-labelledby="library-rename-title">
+        <header class="modal-header library-browser-modal__header">
+          <div>
+            <h2 id="library-rename-title" class="library-browser-modal__title" x-text="renameDialogTitle()"></h2>
+            <p class="library-browser-modal__subtitle" x-text="modalEntry.name || 'Selected item'"></p>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-rename-close" x-ref="renameClose" x-on:click="closeModal()" x-on:keydown.shift.tab.prevent="$refs.renameSubmit.focus()" aria-label="Close rename dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <form id="library-rename-form" data-testid="library-rename-form" class="library-browser-modal__form" x-on:submit.prevent="submitManualRename()">
+          <div class="modal-body library-browser-modal__body">
+            <template x-if="modalLoading">
+              <div class="library-browser-modal__loading">Loading rename details…</div>
+            </template>
+            <template x-if="!modalLoading">
+              <div class="library-browser-modal__content">
+                <div class="library-browser-modal__section-stack">
+                  <div
+                    class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+                    data-testid="library-rename-summary-row"
+                  >
+                    {% call inline_alert(tone="info", icon="check", attrs='data-testid="library-rename-action-note"') %}
+                      <p class="text-sm leading-6 text-pb-text">
+                        Pullbox renames this item immediately.
+                      </p>
+                    {% endcall %}
+                  </div>
+
+                  <section class="library-browser-modal__section-panel">
+                    <div
+                      class="library-browser-modal__section-heading-row"
+                      data-testid="library-rename-name-header"
+                    >
+                      New Name
+                    </div>
+                    <div
+                      class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top"
+                      data-testid="library-rename-name-panel"
+                    >
+                      <div class="library-browser-modal__field">
+                        <label for="library-rename-input" class="sr-only">New Name</label>
+                        <input
+                          id="library-rename-input"
+                          x-ref="renameInput"
+                          data-testid="library-rename-input"
+                          type="text"
+                          name="name"
+                          class="input-pb w-full"
+                          x-model="renameForm.name"
+                          x-bind:disabled="actionSubmitting"
+                          autofocus
+                          x-effect="if (modal === 'rename' && !modalLoading) { $el.focus({ preventScroll: true }); $el.select(); }"
+                          autocomplete="off"
+                        >
+                        <p class="library-browser-modal__helper">
+                          Enter the exact library name Pullbox should use.
+                        </p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="library-browser-modal__section-panel">
+                    <div
+                      class="library-browser-modal__section-heading-row"
+                      data-testid="library-rename-path-header"
+                    >
+                      Final Path
+                    </div>
+                    <div
+                      class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top library-browser-modal__body-inset--roomy-bottom"
+                      data-testid="library-rename-path-panel"
+                    >
+                      <div
+                        class="library-browser-modal__preview-block library-browser-modal__preview-block--mono"
+                        data-testid="library-rename-preview-path"
+                        x-text="renameTargetPreviewPath()"
+                      ></div>
+                    </div>
+                  </section>
+                </div>
+
+                <p class="library-browser-modal__error" x-show="modalError" x-text="modalError"></p>
+              </div>
+            </template>
+          </div>
+          <footer class="modal-footer">
+            <div class="library-browser-modal__actions">
+              <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-rename-cancel" x-on:click="closeModal()">Cancel</button>
+              <button type="submit" class="btn-primary !px-4 !py-2" data-testid="library-rename-submit" x-ref="renameSubmit" x-on:keydown.tab.prevent="$refs.renameClose.focus()" x-bind:disabled="actionSubmitting || modalLoading">Rename</button>
+            </div>
+          </footer>
+        </form>
+      </section>
+    </div>
+
+    <div x-cloak x-show="modal === 'rename-stale'" class="modal-shell" data-testid="library-rename-stale-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form" role="dialog" aria-modal="true" aria-label="Rename blocked by stale database reference">
+        <header class="modal-header library-browser-modal__header">
+          <div class="library-browser-modal__title-block">
+            <div class="library-browser-modal__icon library-browser-modal__icon--warning">
+              <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 3.94l-7.5 13A1.5 1.5 0 004.14 19.5h15.72a1.5 1.5 0 001.3-2.25l-7.5-13a1.5 1.5 0 00-2.6 0z"/>
+              </svg>
+            </div>
+            <div>
+              <h2 class="library-browser-modal__title">Rename Blocked</h2>
+              <p class="library-browser-modal__subtitle" x-text="modalEntry.name || 'Selected item'"></p>
+            </div>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-rename-stale-close" x-on:click="closeModal()" aria-label="Close stale rename dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body library-browser-modal__body">
+          <div class="library-browser-modal__section-stack">
+            <div
+              class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+              data-testid="library-rename-stale-warning-row"
+            >
+              {% call inline_alert(tone="warning", icon="warning", attrs='data-testid="library-rename-stale-reason"') %}
+                <p class="text-sm leading-6 text-pb-text" x-text="renameBlockedMessage()"></p>
+              {% endcall %}
+            </div>
+
+            <section class="library-browser-modal__section-panel">
+              <div
+                class="library-browser-modal__section-heading-row"
+                data-testid="library-rename-stale-repair-header"
+              >
+                Repair Path
+              </div>
+              <div
+                class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top library-browser-modal__body-inset--roomy-bottom"
+                data-testid="library-rename-stale-repair-grid"
+              >
+                <table class="library-browser-modal__details-table library-browser-modal__details-table--flush">
+                  <tbody>
+                    <tr data-testid="library-rename-stale-current-path">
+                      <th class="library-browser-modal__detail-label" scope="row">Current Path</th>
+                      <td class="library-browser-modal__detail-value library-browser-modal__detail-value--mono" x-text="modalEntry.path || '—'"></td>
+                    </tr>
+                    <tr data-testid="library-rename-stale-next-step">
+                      <th class="library-browser-modal__detail-label" scope="row">Next Step</th>
+                      <td class="library-browser-modal__detail-value">Run Database Integrity Check to repair the stored path.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <div class="library-browser-modal__actions">
+            <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-rename-stale-cancel" x-on:click="closeModal()">Cancel</button>
+            <button type="button" class="btn-primary !px-4 !py-2" data-testid="library-rename-stale-open-db-check" x-on:click="openRenameRepairWorkflow()">Open DB Check</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
+    <div x-cloak x-show="modal === 'auto-rename'" class="modal-shell" data-testid="library-auto-rename-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form" role="dialog" aria-modal="true" aria-label="Automatic rename preview">
+        <header class="modal-header library-browser-modal__header">
+          <div>
+            <h2 class="library-browser-modal__title">Rename Automatically</h2>
+            <p class="library-browser-modal__subtitle" x-text="modalEntry.name || 'Selected item'"></p>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-auto-rename-close" x-on:click="closeModal()" aria-label="Close automatic rename dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body library-browser-modal__body">
+          <div class="library-browser-modal__section-stack">
+            <div
+              class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+              data-testid="library-auto-rename-summary-row"
+            >
+              {% call inline_alert(tone="info", icon="check", attrs='data-testid="library-auto-rename-action-note"') %}
+                <p class="text-sm leading-6 text-pb-text">
+                  Uses your current naming settings and renames this item immediately.
+                </p>
+              {% endcall %}
+            </div>
+
+            <template x-if="autoRenamePreviewItem() && autoRenamePreviewItem().reason">
+              <div
+                class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+                data-testid="library-auto-rename-warning-row"
+              >
+                {% call inline_alert(tone="warning", icon="warning", attrs='data-testid="library-auto-rename-reason"') %}
+                  <p class="text-sm leading-6 text-pb-text" x-text="autoRenamePreviewItem().reason"></p>
+                {% endcall %}
+              </div>
+            </template>
+
+            <section class="library-browser-modal__section-panel">
+              <div
+                class="library-browser-modal__section-heading-row"
+                data-testid="library-auto-rename-preview-header"
+              >
+                Preview
+              </div>
+              <div
+                class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top"
+                data-testid="library-auto-rename-preview-grid"
+              >
+                <template x-if="modalLoading">
+                  <div class="library-browser-modal__loading">Building rename preview…</div>
+                </template>
+                <template x-if="!modalLoading && autoRenamePreviewItem()">
+                  <table class="library-browser-modal__details-table library-browser-modal__details-table--flush">
+                    <tbody>
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Current Name</th>
+                        <td class="library-browser-modal__detail-value" x-text="autoRenamePreviewItem().current_name"></td>
+                      </tr>
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Proposed Name</th>
+                        <td class="library-browser-modal__detail-value" x-text="autoRenamePreviewItem().proposed_name"></td>
+                      </tr>
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Template</th>
+                        <td
+                          class="library-browser-modal__detail-value"
+                          x-text="renameTemplateForPreviewItem(autoRenamePreviewItem())"
+                        ></td>
+                      </tr>
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Status</th>
+                        <td class="library-browser-modal__detail-value" x-text="autoRenamePreviewItem().status"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </template>
+                <template x-if="!modalLoading && !autoRenamePreviewItem()">
+                  <p class="library-browser-modal__helper">Preview unavailable.</p>
+                </template>
+              </div>
+            </section>
+          </div>
+
+          <div class="library-browser-modal__body-inset">
+            <p class="library-browser-modal__error" x-show="modalError" x-text="modalError"></p>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <div class="library-browser-modal__actions">
+            <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-auto-rename-cancel" x-on:click="closeModal()">Cancel</button>
+            <button type="button" class="btn-primary !px-4 !py-2" data-testid="library-auto-rename-submit" x-bind:disabled="!canSubmitAutoRename() || actionSubmitting || modalLoading" x-on:click="submitAutoRename()">Rename</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
+    <div x-cloak x-show="modal === 'convert'" class="modal-shell" data-testid="library-convert-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form" role="dialog" aria-modal="true" aria-label="Convert preview">
+        <header class="modal-header library-browser-modal__header">
+          <div>
+            <h2 class="library-browser-modal__title">Convert to CBZ</h2>
+            <p class="library-browser-modal__subtitle" x-text="modalEntry.name || 'Selected file'"></p>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-convert-close" x-on:click="closeModal()" aria-label="Close convert dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body library-browser-modal__body">
+          <div class="library-browser-modal__section-stack">
+            <div
+              class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+              data-testid="library-convert-summary-row"
+            >
+              {% call inline_alert(tone="info", icon="check", attrs='data-testid="library-convert-action-note"') %}
+                <p class="text-sm leading-6 text-pb-text">
+                  Pullbox converts this file now and moves the original file to the Utilities trash folder.
+                </p>
+              {% endcall %}
+            </div>
+
+            <section class="library-browser-modal__section-panel">
+              <div
+                class="library-browser-modal__section-heading-row"
+                data-testid="library-convert-preview-header"
+              >
+                Preview
+              </div>
+              <div
+                class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top library-browser-modal__body-inset--roomy-bottom"
+                data-testid="library-convert-preview-grid"
+              >
+                <template x-if="modalLoading">
+                  <div class="library-browser-modal__loading">Building conversion preview…</div>
+                </template>
+                <template x-if="!modalLoading && convertPreviewItem()">
+                  <table class="library-browser-modal__details-table library-browser-modal__details-table--flush">
+                    <tbody>
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Source</th>
+                        <td class="library-browser-modal__detail-value" x-text="convertPreviewItem().source_name"></td>
+                      </tr>
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Output</th>
+                        <td class="library-browser-modal__detail-value" x-text="convertPreviewItem().output_name"></td>
+                      </tr>
+                      <tr>
+                        <th class="library-browser-modal__detail-label" scope="row">Size</th>
+                        <td class="library-browser-modal__detail-value" x-text="formatBytesLabel(convertPreviewItem().size_bytes)"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </template>
+                <template x-if="!modalLoading && !convertPreviewItem()">
+                  <p class="library-browser-modal__helper">Preview unavailable.</p>
+                </template>
+              </div>
+            </section>
+          </div>
+
+          <div class="library-browser-modal__body-inset">
+            <p class="library-browser-modal__error" x-show="modalError" x-text="modalError"></p>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <div class="library-browser-modal__actions">
+            <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-convert-cancel" x-on:click="closeModal()">Cancel</button>
+            <button type="button" class="btn-primary !px-4 !py-2" data-testid="library-convert-submit" x-bind:disabled="!canSubmitConvert() || actionSubmitting || modalLoading" x-on:click="submitConvert()">Convert</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
+    <div x-cloak x-show="modal === 'delete-file'" class="modal-shell" data-testid="library-delete-file-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form library-delete-modal" role="dialog" aria-modal="true" aria-label="Delete file">
+        <header class="modal-header library-browser-modal__header">
+          <div class="library-browser-modal__title-block">
+            <div class="library-browser-modal__icon library-browser-modal__icon--danger">
+              <svg fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 6.75h18"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75V5.25A1.5 1.5 0 019.75 3.75h4.5a1.5 1.5 0 011.5 1.5v1.5m-9 0v11.25A2.25 2.25 0 009 20.25h6A2.25 2.25 0 0017.25 18V6.75"/>
+              </svg>
+            </div>
+            <div>
+              <p class="library-delete-modal__eyebrow">Danger Zone</p>
+              <h2 class="library-browser-modal__title">Delete File</h2>
+              <p class="library-browser-modal__subtitle" x-text="modalEntry.name || 'Selected file'"></p>
+            </div>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-delete-file-close" x-on:click="closeModal()" aria-label="Close delete file dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body library-browser-modal__body">
+          <div class="library-browser-modal__section-stack library-browser-modal__section-stack--delete">
+            <div
+              class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+              data-testid="library-delete-file-warning-row"
+            >
+              {% call inline_alert(tone="danger", icon="warning", attrs='data-testid="library-delete-file-summary"') %}
+                <p class="text-sm leading-6 text-pb-text" x-text="deleteFileMessage()"></p>
+              {% endcall %}
+            </div>
+
+            <section class="library-browser-modal__section-panel">
+              <div
+                class="library-browser-modal__section-heading-row"
+                data-testid="library-delete-file-impact-header"
+              >
+                Impact
+              </div>
+              <div
+                class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top"
+                data-testid="library-delete-file-impact-grid"
+              >
+                <table class="library-browser-modal__details-table library-browser-modal__details-table--flush">
+                  <tbody>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Path</th>
+                      <td class="library-browser-modal__detail-value library-browser-modal__detail-value--mono" x-text="modalEntry.path || '—'"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Action</th>
+                      <td class="library-browser-modal__detail-value" x-text="deleteDispositionLabel()"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Tracking</th>
+                      <td class="library-browser-modal__detail-value" x-text="deleteFileTrackingLabel()"></td>
+                    </tr>
+                    <tr x-show="deleteHasLinkedIssue()">
+                      <th class="library-browser-modal__detail-label" scope="row">Issue Status</th>
+                      <td class="library-browser-modal__detail-value" x-text="deleteFileIssueStatusLabel()"></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="library-browser-modal__body-inset">
+            <p class="library-browser-modal__error" x-show="modalError" x-text="modalError"></p>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <div class="library-browser-modal__actions">
+            <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-delete-file-cancel" x-on:click="closeModal()">Cancel</button>
+            <button type="button" class="btn-danger !px-4 !py-2" data-testid="library-delete-file-submit" x-bind:disabled="actionSubmitting || modalLoading" x-on:click="submitDelete()">Delete File</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
+    <div x-cloak x-show="modal === 'delete-folder'" class="modal-shell" data-testid="library-delete-folder-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form library-delete-modal" role="dialog" aria-modal="true" aria-label="Delete folder">
+        <header class="modal-header library-browser-modal__header">
+          <div class="library-browser-modal__title-block">
+            <div class="library-browser-modal__icon library-browser-modal__icon--danger">
+              <svg fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 6.75h18"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75V5.25A1.5 1.5 0 019.75 3.75h4.5a1.5 1.5 0 011.5 1.5v1.5m-9 0v11.25A2.25 2.25 0 009 20.25h6A2.25 2.25 0 0017.25 18V6.75"/>
+              </svg>
+            </div>
+            <div>
+              <p class="library-delete-modal__eyebrow">Danger Zone</p>
+              <h2 class="library-browser-modal__title">Delete Folder</h2>
+              <p class="library-browser-modal__subtitle" x-text="modalEntry.name || 'Selected folder'"></p>
+            </div>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-delete-folder-close" x-on:click="closeModal()" aria-label="Close delete folder dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body library-browser-modal__body">
+          <div class="library-browser-modal__section-stack library-browser-modal__section-stack--delete">
+            <div
+              class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+              data-testid="library-delete-folder-warning-row"
+            >
+              {% call inline_alert(tone="danger", icon="warning", attrs='data-testid="library-delete-folder-summary"') %}
+                <p class="text-sm leading-6 text-pb-text" x-text="deleteFolderMessage()"></p>
+              {% endcall %}
+            </div>
+
+            <section class="library-browser-modal__section-panel">
+              <div
+                class="library-browser-modal__section-heading-row"
+                data-testid="library-delete-folder-impact-header"
+              >
+                Impact
+              </div>
+              <div
+                class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top"
+                data-testid="library-delete-folder-impact-grid"
+              >
+                <table class="library-browser-modal__details-table library-browser-modal__details-table--flush">
+                  <tbody>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Path</th>
+                      <td class="library-browser-modal__detail-value library-browser-modal__detail-value--mono" x-text="modalEntry.path || '—'"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Action</th>
+                      <td class="library-browser-modal__detail-value" x-text="deleteDispositionLabel()"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Tracked Files</th>
+                      <td class="library-browser-modal__detail-value" x-text="formatItemCountLabel(deleteTrackedFileCount())"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Tracked Series</th>
+                      <td class="library-browser-modal__detail-value" x-text="formatItemCountLabel(deleteTrackedSeriesCount())"></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="library-browser-modal__body-inset">
+            <p class="library-browser-modal__error" x-show="modalError" x-text="modalError"></p>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <div class="library-browser-modal__actions">
+            <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-delete-folder-cancel" x-on:click="closeModal()">Cancel</button>
+            <button type="button" class="btn-danger !px-4 !py-2" data-testid="library-delete-folder-submit" x-bind:disabled="actionSubmitting || modalLoading" x-on:click="submitDelete()">Delete Folder</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
+    <div x-cloak x-show="modal === 'delete-series'" class="modal-shell" data-testid="library-delete-series-modal">
+      <div class="modal-backdrop" x-on:click="closeModal()"></div>
+      <section class="modal-panel library-browser-modal library-browser-modal--compact library-browser-modal--form library-delete-modal" role="dialog" aria-modal="true" aria-label="Delete series folder">
+        <header class="modal-header library-browser-modal__header">
+          <div class="library-browser-modal__title-block">
+            <div class="library-browser-modal__icon library-browser-modal__icon--danger">
+              <svg fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 6.75h18"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75V5.25A1.5 1.5 0 019.75 3.75h4.5a1.5 1.5 0 011.5 1.5v1.5m-9 0v11.25A2.25 2.25 0 009 20.25h6A2.25 2.25 0 0017.25 18V6.75"/>
+              </svg>
+            </div>
+            <div>
+              <p class="library-delete-modal__eyebrow">Danger Zone</p>
+              <h2 class="library-browser-modal__title">Delete Series Folder</h2>
+              <p class="library-browser-modal__subtitle" x-text="modalEntry.name || 'Selected series folder'"></p>
+            </div>
+          </div>
+          <button type="button" class="library-browser-modal__close shrink-0" data-testid="library-delete-series-close" x-on:click="closeModal()" aria-label="Close delete series dialog">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body library-browser-modal__body">
+          <div class="library-browser-modal__section-stack library-browser-modal__section-stack--delete">
+            <div
+              class="library-browser-modal__body-inset library-browser-modal__body-inset--section"
+              data-testid="library-delete-series-warning-row"
+            >
+              {% call inline_alert(tone="danger", icon="warning", attrs='data-testid="library-delete-series-summary"') %}
+                <p class="text-sm leading-6 text-pb-text" x-text="deleteSeriesModalMessage()"></p>
+              {% endcall %}
+            </div>
+
+            <section class="library-browser-modal__section-panel">
+              <div
+                class="library-browser-modal__section-heading-row"
+                data-testid="library-delete-series-impact-header"
+              >
+                Impact
+              </div>
+              <div
+                class="library-browser-modal__body-inset library-browser-modal__body-inset--section library-browser-modal__body-inset--compact-top"
+                data-testid="library-delete-series-impact-grid"
+              >
+                <table class="library-browser-modal__details-table library-browser-modal__details-table--flush">
+                  <tbody>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Folder</th>
+                      <td class="library-browser-modal__detail-value library-browser-modal__detail-value--mono" x-text="modalEntry.path || '—'"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Action</th>
+                      <td class="library-browser-modal__detail-value" x-text="deleteSeriesDispositionLabel()"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Series</th>
+                      <td class="library-browser-modal__detail-value" x-text="(modalEntry.deleteContext && modalEntry.deleteContext.series_title) || modalEntry.name || '—'"></td>
+                    </tr>
+                    <tr>
+                      <th class="library-browser-modal__detail-label" scope="row">Tracked Files</th>
+                      <td class="library-browser-modal__detail-value" x-text="formatItemCountLabel(deleteSeriesLinkedFileCount())"></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="library-browser-modal__body-inset">
+            <p class="library-browser-modal__error" x-show="modalError" x-text="modalError"></p>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <div class="library-browser-modal__actions">
+            <button type="button" class="btn-ghost !px-4 !py-2" data-testid="library-delete-series-cancel" x-on:click="closeModal()">Cancel</button>
+            <button type="button" class="btn-danger !px-4 !py-2" data-testid="library-delete-series-submit" x-bind:disabled="actionSubmitting || modalLoading" x-on:click="submitDelete()">Delete Folder and Series</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  {% else %}
+    <section data-testid="library-empty-state" class="library-empty-shell">
+      <div class="library-empty-shell__icon-wrap">
+        <svg class="library-empty-shell__icon" fill="none" stroke="currentColor" stroke-width="1.25" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+        </svg>
+      </div>
+      <div class="library-empty-shell__body">
+        <h1 class="series-registry-title">LIB<span>RARY</span></h1>
+        <p class="series-registry-subtitle">No library root configured</p>
+        <p class="library-empty-shell__copy">
+          Comics Directory is not configured yet. Point Pullbox at your long-term library root, then import a collection or let completed downloads land there.
+        </p>
+      </div>
+      <div class="library-empty-shell__actions">
+        <a href="/import" class="btn-primary">Import collection</a>
+        <a href="/settings?tab=media" class="btn-ghost">Open media settings</a>
+      </div>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% from "components/page_dock.html" import status_dock %}
+  <div data-testid="library-footer-strip">
+    {{ status_dock(status_items=[
+      {"label": "ROOT", "value": library_view.root_path or "not configured", "led": none},
+      {"label": "FILES", "value": total_files|string, "led": none},
+      {"label": "MATCHED", "value": matched_files|string, "led": none},
+      {"label": "UNMATCHED", "value": unmatched_files|string, "led": none},
+      {"label": "SIZE", "value": library_view.footer_size_label, "led": none},
+      {"label": "FREE", "value": library_view.footer_free_label, "led": none},
+    ]) }}
+  </div>
+{% endblock %}

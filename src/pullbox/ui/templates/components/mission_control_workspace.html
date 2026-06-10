@@ -1,0 +1,69 @@
+{% macro mission_control_workspace(
+  header_testid,
+  header_left_html="",
+  header_left_id="",
+  header_left_testid="",
+  header_actions_html="",
+  header_actions_testid="",
+  toolbar_id="",
+  toolbar_testid="",
+  toolbar_frame_testid="",
+  toolbar_attrs="",
+  hidden_inputs_html="",
+  browse_toolbar_html="",
+  select_toolbar_html="",
+  results_id="",
+  results_testid="",
+  results_body_id="",
+  results_body_testid="",
+  results_html=""
+) %}
+  <section data-testid="{{ header_testid }}" class="series-registry-header">
+    <div
+      {% if header_left_id %}id="{{ header_left_id }}"{% endif %}
+      {% if header_left_testid %}data-testid="{{ header_left_testid }}"{% endif %}
+      class="series-registry-header-left"
+    >
+      {{ header_left_html | safe }}
+    </div>
+
+    <div
+      {% if header_actions_testid %}data-testid="{{ header_actions_testid }}"{% endif %}
+      class="series-registry-actions"
+    >
+      {{ header_actions_html | safe }}
+    </div>
+  </section>
+
+  <form
+    {% if toolbar_id %}id="{{ toolbar_id }}"{% endif %}
+    {% if toolbar_testid %}data-testid="{{ toolbar_testid }}"{% endif %}
+    class="series-toolbar-shell"
+    {{ toolbar_attrs | safe }}
+  >
+    {{ hidden_inputs_html | safe }}
+    <div
+      {% if toolbar_frame_testid %}data-testid="{{ toolbar_frame_testid }}"{% endif %}
+      class="series-toolbar-frame"
+    >
+      <div class="series-toolbar-body">
+        {{ browse_toolbar_html | safe }}
+        {{ select_toolbar_html | safe }}
+      </div>
+    </div>
+  </form>
+
+  <section
+    {% if results_id %}id="{{ results_id }}"{% endif %}
+    {% if results_testid %}data-testid="{{ results_testid }}"{% endif %}
+    class="series-results-shell"
+  >
+    <section
+      {% if results_body_id %}id="{{ results_body_id }}"{% endif %}
+      {% if results_body_testid %}data-testid="{{ results_body_testid }}"{% endif %}
+      class="series-results-body-shell"
+    >
+      {{ results_html | safe }}
+    </section>
+  </section>
+{% endmacro %}

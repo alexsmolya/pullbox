@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — {{ instance_name() }}{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div data-testid="dashboard-page" class="dashboard-mission-page">
+  {% include "partials/dashboard_briefing.html" %}
+  {% include "partials/dashboard_scoreboard.html" %}
+
+  {% if dashboard_view.all_clear %}
+    <section data-testid="dashboard-quiet-note" class="dashboard-quiet-note">
+      <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+      </svg>
+      <p>All systems nominal. Nothing needs a detour right now.</p>
+    </section>
+  {% else %}
+    {% if dashboard_view.alerts %}
+      {% include "partials/dashboard_priorities.html" %}
+    {% endif %}
+    {% include "partials/dashboard_download_exceptions_panel.html" %}
+  {% endif %}
+
+  {% include "partials/dashboard_recent_activity.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/dashboard_footer_strip.html" %}
+{% endblock %}

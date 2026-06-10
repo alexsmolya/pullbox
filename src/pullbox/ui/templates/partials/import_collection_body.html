@@ -1,0 +1,26 @@
+<section id="import-collection-body" data-testid="import-collection-body" class="space-y-4">
+  <div x-show="step === 1" data-testid="import-collection-step-source">
+    <div id="import-step-source">
+      {% include "partials/import_step_source.html" %}
+    </div>
+  </div>
+
+  <div x-show="step === 2" x-cloak data-testid="import-collection-step-progress">
+    <div id="import-step-progress"></div>
+  </div>
+
+  <div x-show="step === 3" x-cloak data-testid="import-collection-step-review">
+    <div id="import-step-review"></div>
+  </div>
+
+  <div x-show="step === 4" x-cloak data-testid="import-collection-step-execute">
+    <div id="import-step-execute"></div>
+  </div>
+
+  <div x-show="step >= 5" x-cloak data-testid="import-collection-step-results">
+    <div id="import-step-results"></div>
+  </div>
+
+  <div id="cv-search-modal" data-testid="import-collection-modal-host"></div>
+  <div id="import-series-details-modal-host" data-testid="import-collection-series-details-modal-host"></div>
+</section>

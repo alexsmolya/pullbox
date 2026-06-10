@@ -1,0 +1,23 @@
+<div
+  id="series-detail-alternate-names-list"
+  data-testid="series-detail-alternate-names-list"
+  class="series-domain-alt-list"
+>
+  {% for alt in series.alternate_names %}
+  <span class="pill pill-neutral series-domain-alt-pill">
+    {{ alt }}
+    <button
+      hx-delete="/htmx/series/{{ series.id }}/alternate-names/{{ alt|urlencode }}"
+      hx-target="#series-detail-alternate-names-list"
+      hx-swap="outerHTML"
+      class="series-domain-alt-pill-remove"
+      data-tip="Remove alternate name"
+      data-tip-pos="bottom"
+      data-tip-size="narrow"
+    >&times;</button>
+  </span>
+  {% endfor %}
+  {% if not series.alternate_names %}
+  <span class="text-xs italic text-pb-text-dim">None</span>
+  {% endif %}
+</div>

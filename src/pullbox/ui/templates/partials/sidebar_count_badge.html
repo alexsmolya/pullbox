@@ -1,0 +1,13 @@
+{#- Shared sidebar count badge fragment for first paint and HTMX polling. -#}
+{% set _count = count | default(0) %}
+<span
+  data-sidebar-count="{{ _count }}"
+  {% if _count > 0 %}
+  class="count-badge {{ badge_classes }}"
+  {% else %}
+  class="count-badge count-badge-neutral opacity-0"
+  aria-hidden="true"
+  {% endif %}
+>
+  {% if _count > 0 %}{{ _count }}{% endif %}
+</span>

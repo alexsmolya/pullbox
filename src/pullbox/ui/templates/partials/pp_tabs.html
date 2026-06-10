@@ -1,0 +1,32 @@
+{% set _oob = oob|default(false) %}
+<div
+  id="post-processing-tabs"
+  data-testid="post-processing-tabs"
+  class="downloads-tab-rail"
+  {% if _oob %}hx-swap-oob="outerHTML"{% endif %}
+>
+  <a
+    href="/post-processing?tab=queue"
+    data-testid="post-processing-tab-queue"
+    hx-get="/post-processing?tab=queue"
+    hx-target="#post-processing-content"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'queue' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'queue' %} is-active{% endif %}"
+  >
+    Queue
+  </a>
+  <a
+    href="/post-processing?tab=history"
+    data-testid="post-processing-tab-history"
+    hx-get="/post-processing?tab=history"
+    hx-target="#post-processing-content"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'history' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'history' %} is-active{% endif %}"
+  >
+    History
+  </a>
+</div>

@@ -1,0 +1,21 @@
+{% if tab == "history" %}
+  <div
+    id="intervention-page"
+    data-testid="intervention-page"
+    class="downloads-page-shell"
+    x-data="interventionPage({ csrfToken: '{{ csrf_token }}' })"
+  >
+    {% include "partials/intervention_history.html" %}
+  </div>
+{% else %}
+  <div
+    id="intervention-page"
+    data-testid="intervention-page"
+    data-select-toolbar-page="true"
+    :data-toolbar-mode="toolbarMode"
+    class="series-page-shell"
+    x-data="interventionPage({ csrfToken: '{{ csrf_token }}' })"
+  >
+    {% include "partials/intervention_results.html" %}
+  </div>
+{% endif %}

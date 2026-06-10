@@ -1,0 +1,153 @@
+{%- macro sort_header(field, label, extra_classes="", width="") -%}
+  {%- set current_field = sort.lstrip("-") -%}
+  {%- set current_desc = sort.startswith("-") -%}
+  {%- if current_field == field -%}
+    {%- set next_sort = field if current_desc else ("-" ~ field) -%}
+  {%- else -%}
+    {%- set next_sort = "-" ~ field -%}
+  {%- endif -%}
+  {%- set sort_qs = "sort=" ~ next_sort -%}
+  {%- if reason_filter %}{% set sort_qs = sort_qs ~ "&reason=" ~ reason_filter %}{% endif -%}
+  {%- if search_query %}{% set sort_qs = sort_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif -%}
+  <th class="{{ extra_classes }} {{ width }}">
+    <button
+      type="button"
+      data-testid="blocklist-sort-{{ field }}"
+      hx-get="/blocklist?{{ sort_qs }}"
+      hx-target="#blocklist-results-body"
+      hx-swap="outerHTML"
+      hx-push-url="true"
+      class="downloads-sort-btn{% if current_field == field %} is-active{% endif %}"
+    >
+      <span>{{ label }}</span>
+      <svg class="downloads-sort-chevron{% if current_field == field and not current_desc %} is-desc{% endif %}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </th>
+{%- endmacro -%}
+
+<div
+  id="blocklist-results-body"
+  data-testid="blocklist-results-body"
+>
+  {% if entries %}
+    <table data-testid="blocklist-table" class="downloads-table">
+      <thead>
+        <tr>
+          {{ sort_header("title", "Release") }}
+          {{ sort_header("series", "Series", extra_classes="hidden sm:table-cell") }}
+          {{ sort_header("release_group", "Group", extra_classes="hidden lg:table-cell", width="w-[100px]") }}
+          {{ sort_header("reason", "Reason", width="w-[104px]") }}
+          {{ sort_header("created_at", "Added", extra_classes="is-right hidden sm:table-cell", width="w-[128px]") }}
+          <th class="is-right w-[92px]"></th>
+        </tr>
+      </thead>
+      {% for entry in entries %}
+        <tbody
+          x-data="{ expanded: false }"
+          x-bind:data-blocklist-expanded="expanded ? 'true' : 'false'"
+        >
+          <tr id="bl-row-{{ entry.id }}">
+            <td>
+              <div class="min-w-0">
+                <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                  <span class="block truncate" data-tooltip-measure>{{ entry.release_title }}</span>
+                </span>
+                {% if entry.series %}
+                  <a
+                    href="/series/{{ entry.series.id }}"
+                    hx-boost="false"
+                    class="downloads-issue-link sm:hidden"
+                  >
+                    {{ entry.series.title }}
+                  </a>
+                {% endif %}
+              </div>
+            </td>
+            <td class="hidden sm:table-cell">
+              {% if entry.series %}
+                <a
+                  href="/series/{{ entry.series.id }}"
+                  hx-boost="false"
+                  class="downloads-issue-link"
+                >
+                  {{ entry.series.title }}
+                </a>
+              {% else %}
+                <span class="downloads-muted-text">—</span>
+              {% endif %}
+            </td>
+            <td class="downloads-mono-cell hidden lg:table-cell">
+              {{ entry.release_group or "—" }}
+            </td>
+            <td>
+              {% if entry.reason.value == "failed" %}
+                <span class="pill pill-error">Failed</span>
+              {% elif entry.reason.value == "rejected" %}
+                <span class="pill pill-warning">Rejected</span>
+              {% else %}
+                <span class="pill pill-info">Manual</span>
+              {% endif %}
+              <span class="downloads-mono-cell mt-1 block sm:hidden">
+                {{ entry.created_at|localtime if entry.created_at else "—" }}
+              </span>
+            </td>
+            <td class="downloads-mono-cell is-right hidden sm:table-cell">
+              {{ entry.created_at|localtime if entry.created_at else "—" }}
+            </td>
+            <td class="is-right">
+              <div class="downloads-action-group">
+                {% if entry.error_message %}
+                  <button
+                    type="button"
+                    @click="expanded = window.pbToggleLazyTableDetail($el, 'blocklist-error-row-{{ entry.id }}')"
+                    hx-get="/htmx/blocklist/{{ entry.id }}/error-detail"
+                    hx-target="#bl-row-{{ entry.id }}"
+                    hx-swap="afterend"
+                    hx-on::before-request="window.pbCancelSkippedLazyDetailFetch(event)"
+                    data-testid="blocklist-error-toggle-{{ entry.id }}"
+                    class="downloads-action-btn"
+                    data-tip="Error"
+                    data-tip-pos="left"
+                    aria-label="Toggle error details"
+                  >
+                    <svg class="transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                  </button>
+                {% endif %}
+                <button
+                  @click="removeEntry({{ entry.id }}, $el)"
+                  data-testid="blocklist-remove-{{ entry.id }}"
+                  class="downloads-action-btn is-danger"
+                  data-tip="Remove"
+                  data-tip-pos="left"
+                  aria-label="Remove from blocklist"
+                  type="button"
+                >
+                  <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div data-testid="blocklist-empty" class="downloads-empty-state is-history">
+      <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+      </svg>
+      {% if search_query or reason_filter %}
+        <p class="downloads-empty-title">No matching blocked releases</p>
+        <p class="downloads-empty-copy">Try widening the search or clearing one of the active filters.</p>
+      {% else %}
+        <p class="downloads-empty-title">Blocklist is clear</p>
+        <p class="downloads-empty-copy">Failed, rejected, and manually blocked releases will appear here.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

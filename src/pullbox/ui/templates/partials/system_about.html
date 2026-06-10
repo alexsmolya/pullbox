@@ -1,0 +1,409 @@
+{#- System: About tab -#}
+{% from "components/settings_shell.html" import section_card %}
+
+<div class="space-y-6 pt-6" x-data='aboutManager({{ system_about_info | default({}, true) | tojson }})'>
+  <section class="system-version-banner" data-testid="system-about-version-banner" x-data="updateChecker()" x-init="loadCached()">
+    <div class="system-version-banner-main">
+      <div class="system-version-banner-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+          <path d="M4 19V5a2 2 0 012-2h12a2 2 0 012 2v14l-8-4-8 4z"/>
+        </svg>
+      </div>
+        <div class="min-w-0">
+          <div class="system-version-banner-title">
+            <span x-text="info.version ? 'Pullbox ' + info.version : 'Pullbox'"></span>
+          <span
+            x-cloak
+            class="pill"
+            :class="statusPillClass()"
+            >
+              <span x-show="checked" class="pill-dot"></span>
+              <span x-text="statusLabel()"></span>
+            </span>
+          </div>
+        <p class="system-version-banner-meta">
+          Released <span x-text="info.release_date || '—'"></span>
+          &middot;
+          Branch <span x-text="info.branch || '—'"></span>
+          &middot;
+          Commit <span x-text="info.commit || '—'"></span>
+        </p>
+      </div>
+    </div>
+
+    <div class="system-version-banner-actions">
+      <a
+        :href="info.source_url ? info.source_url + '/releases' : '#'"
+        class="btn-ghost btn-sm"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Changelog
+      </a>
+      <a
+        :href="info.source_url"
+        class="btn-ghost btn-sm gap-1.5"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+          <polyline points="15,3 21,3 21,9"/>
+          <line x1="10" y1="14" x2="21" y2="3"/>
+        </svg>
+        GitHub
+      </a>
+    </div>
+  </section>
+
+  {% call section_card(
+    title="Application",
+    eyebrow="Runtime",
+    title_style="plain"
+  ) %}
+    <div class="system-detail-list">
+      <div class="system-detail-row">
+        <span class="system-detail-label">Version</span>
+        <span class="system-detail-value" x-text="info.version || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Python</span>
+        <span class="system-detail-value" x-text="info.python_version || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Database</span>
+        <span class="system-detail-value" x-text="info.database ? info.database + ' · SQLAlchemy ' + (info.sqlalchemy_version || '—') : '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Uptime</span>
+        <span class="system-detail-value system-detail-value-brand" x-text="formatUptime(info.uptime_seconds)"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Start mode</span>
+        <span class="system-detail-value">
+          <span class="pill pill-purple" x-text="info.is_docker ? 'Docker' : 'Local'"></span>
+        </span>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Host",
+    eyebrow="Infrastructure",
+    title_style="plain"
+  ) %}
+    <div class="system-detail-list">
+      <div class="system-detail-row">
+        <span class="system-detail-label">Platform</span>
+        <span class="system-detail-value" x-text="info.platform || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Operating system</span>
+        <span class="system-detail-value" x-text="info.os || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Architecture</span>
+        <span class="system-detail-value" x-text="info.architecture || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Base URL</span>
+        <span class="system-detail-value" x-text="info.base_url || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Hostname</span>
+        <span class="system-detail-value" x-text="info.hostname || '—'"></span>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Paths",
+    eyebrow="Storage",
+    title_style="plain"
+  ) %}
+    <div class="system-detail-list">
+      <div class="system-detail-row">
+        <span class="system-detail-label">Application</span>
+        <span class="system-detail-value" x-text="info.application_path || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Configuration</span>
+        <span class="system-detail-value" x-text="info.config_directory || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Database</span>
+        <span class="system-detail-value" x-text="info.database_path || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Logs</span>
+        <span class="system-detail-value" x-text="info.logs_directory || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Library root</span>
+        <span class="system-detail-value" x-text="info.library_root || '—'"></span>
+      </div>
+      <div class="system-detail-row">
+        <span class="system-detail-label">Backups</span>
+        <span class="system-detail-value" x-text="info.backups_directory || '—'"></span>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Links",
+    eyebrow="Resources",
+    title_style="plain"
+  ) %}
+    <div class="system-links-grid">
+      <a
+        :href="info.source_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/></svg>
+        <span>GitHub</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+      <a
+        :href="info.homepage_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+        <span>Homepage</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+      <a
+        :href="info.issues_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>Bug reports</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+      <a
+        :href="info.discord_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M8 8.5c1.5-1 3-1.5 4-1.5s2.5.5 4 1.5"/><path d="M7 15c1.5 1 3.2 1.5 5 1.5s3.5-.5 5-1.5"/><circle cx="9.5" cy="11.5" r=".75" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11.5" r=".75" fill="currentColor" stroke="none"/><path d="M5.5 8.5c-1 1.5-1.5 3.2-1.5 5 2 1.5 4.7 2.5 8 2.5s6-.9 8-2.5c0-1.8-.5-3.5-1.5-5l-2-.5-1 1.5"/><path d="M8 9 7 7.5 5.5 8.5"/><path d="M16 9l1-1.5 1.5 1"/></svg>
+        <span>Discord</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+      <a
+        :href="info.bsky_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M7 5.5c1.8 1.3 3.7 4 5 5.9 1.3-1.9 3.2-4.6 5-5.9 1.3-.9 3-.2 3 1.3 0 3-1.3 5.6-3.4 7.6-1.5 1.4-3.2 2.3-4.6 1.8-.5-.2-.8-.6-1-1-.2.4-.5.8-1 1-1.4.5-3.1-.4-4.6-1.8C3.3 12.4 2 9.8 2 6.8c0-1.5 1.7-2.2 3-1.3Z"/></svg>
+        <span>Bluesky</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+      <a
+        :href="info.x_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M5 4 19 20"/><path d="m19 4-6 6"/><path d="m11 12-6 8"/><path d="m9 4 10 16"/></svg>
+        <span>X</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+      <a
+        :href="info.mastodon_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M6 18c0 1.7 1.8 3 4 3 1.2 0 2.3-.3 3-.8.7.5 1.8.8 3 .8 2.2 0 4-1.3 4-3V8c0-2.2-1.8-4-4-4h-8C7.8 4 6 5.8 6 8Z"/><path d="M9 10v4"/><path d="M12 10v4"/><path d="M15 10v4"/></svg>
+        <span>Mastodon</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+      <a
+        :href="info.reddit_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="system-link-card"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+        <span>Reddit</span>
+        <svg class="system-link-card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><polyline points="9,18 15,12 9,6"/></svg>
+      </a>
+    </div>
+  {% endcall %}
+
+  {% call section_card(
+    title="Updates",
+    eyebrow="Release status",
+    title_style="plain"
+  ) %}
+    <div x-data="updateChecker()" x-init="loadCached()" class="space-y-3">
+      <div class="rounded-lg border border-pb-border bg-pb-card-hover/20 px-4 py-4">
+        <div x-show="checked && !updateAvailable" x-cloak class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-pb-text">You’re up to date.</p>
+            <p class="mt-1 text-xs leading-5 text-pb-text-dim">
+              Running <span class="font-mono" x-text="currentVersion || info.version || '—'"></span>
+              <span x-show="checkedAt"> · checked <span x-text="checkedAt ? _pb.timeAgo(checkedAt) : ''"></span></span>
+            </p>
+          </div>
+          <button @click="checkNow()" :disabled="checking" class="btn-ghost btn-sm shrink-0">
+            <span x-show="!checking">Check now</span>
+            <span x-show="checking">Checking...</span>
+          </button>
+        </div>
+
+        <div x-show="checked && updateAvailable" x-cloak class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-pb-text">
+              Update available: <span class="font-mono text-pb-interactive" x-text="'v' + latestVersion"></span>
+            </p>
+            <p class="mt-1 text-xs leading-5 text-pb-text-dim">
+              Running <span class="font-mono" x-text="currentVersion || info.version || '—'"></span>
+              <span x-show="releaseDate"> · released <span x-text="releaseDate ? _pb.timeAgo(releaseDate) : ''"></span></span>
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <a
+              x-show="releaseUrl"
+              :href="releaseUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="btn-primary btn-sm"
+            >
+              View release
+            </a>
+            <button @click="checkNow()" :disabled="checking" class="btn-ghost btn-sm">
+              <span x-show="!checking">Recheck</span>
+              <span x-show="checking">Checking...</span>
+            </button>
+          </div>
+        </div>
+
+        <div x-show="!checked" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-pb-text" x-text="checking ? 'Checking for updates...' : 'Update status unknown'"></p>
+            <p class="mt-1 text-xs leading-5 text-pb-text-dim">Checks GitHub releases for newer versions.</p>
+          </div>
+          <button @click="checkNow()" :disabled="checking" class="btn-ghost btn-sm shrink-0">
+            <span x-show="!checking">Check now</span>
+            <span x-show="checking">Checking...</span>
+          </button>
+        </div>
+      </div>
+
+      <div x-show="error" x-cloak class="inline-alert inline-alert-danger" x-text="error"></div>
+
+      <p class="text-xs leading-5 text-pb-text-dim">
+        Docker installs still need a fresh image pull. View published tags on the
+        <a
+          href="https://github.com/pullboxapp/pullbox/pkgs/container/pullbox"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-pb-interactive transition-colors hover:text-pb-interactive-hover"
+        >
+          GitHub Container Registry
+        </a>.
+      </p>
+    </div>
+  {% endcall %}
+</div>
+
+<script>
+function aboutManager(initialInfo) {
+  return {
+    info: initialInfo || {},
+
+    formatUptime(seconds) {
+      if (seconds == null) return '—';
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor((seconds % 86400) / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+
+      const pad = (n) => n.toString().padStart(2, '0');
+
+      if (d > 0) return `${d}d ${pad(h)}:${pad(m)}:${pad(s)}`;
+      return `${pad(h)}:${pad(m)}:${pad(s)}`;
+    },
+
+    formatSize(bytes) {
+      if (bytes == null) return '—';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KiB';
+      if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MiB';
+      return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GiB';
+    },
+  };
+}
+
+function updateChecker() {
+  return {
+    checked: false,
+    checking: false,
+    updateAvailable: false,
+    currentVersion: '',
+    latestVersion: '',
+    releaseUrl: null,
+    releaseDate: null,
+    checkedAt: null,
+    error: null,
+
+    statusLabel() {
+      if (!this.checked) return 'not checked yet';
+      return this.updateAvailable ? 'update available' : 'latest';
+    },
+
+    statusPillClass() {
+      if (!this.checked) return 'pill-neutral';
+      return this.updateAvailable ? 'pill-warning' : 'pill-success';
+    },
+
+    async loadCached() {
+      try {
+        var resp = await fetch('/api/v1/system/updates');
+        if (resp.ok) {
+          var data = await resp.json();
+          if (data.checked) {
+            this._applyResult(data);
+          }
+        }
+      } catch (_) { /* ignore */ }
+    },
+
+    _applyResult(data) {
+      this.checked = !!data.checked;
+      this.updateAvailable = !!data.update_available;
+      this.currentVersion = data.current_version || data.version || '';
+      this.latestVersion = data.latest_version || '';
+      this.releaseUrl = data.release_url || null;
+      this.releaseDate = data.release_date || null;
+      this.checkedAt = data.checked_at || null;
+      this.error = null;
+    },
+
+    async checkNow() {
+      this.checking = true;
+      this.error = null;
+      try {
+        var resp = await fetch('/api/v1/system/updates/check', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+        });
+        if (!resp.ok) throw new Error('Failed to check for updates.');
+        this._applyResult(await resp.json());
+      } catch (err) {
+        this.error = err.message || 'Failed to check for updates.';
+      } finally {
+        this.checking = false;
+      }
+    },
+  };
+}
+</script>

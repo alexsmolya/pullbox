@@ -1,0 +1,288 @@
+{#- Downloads queue view — stable app-owned queue lifecycle. -#}
+{% set queue_subtitle = namespace(text="All quiet - no active downloads") %}
+{% if queue_count > 0 %}
+  {% set queue_subtitle.text = active_count ~ " active · " ~ waiting_count ~ " queued" %}
+  {% if paused_count > 0 %}
+    {% set queue_subtitle.text = queue_subtitle.text ~ " · " ~ paused_count ~ " paused" %}
+  {% endif %}
+  {% if combined_speed_bytes > 0 %}
+    {% set queue_subtitle.text = queue_subtitle.text ~ " · " ~ (combined_speed_bytes|dlspeed) ~ " combined" %}
+  {% endif %}
+{% endif %}
+
+{% set gauge = namespace(active_offset="113.1", queued_offset="113.1") %}
+{% if active_count >= 2 %}
+  {% set gauge.active_offset = "0" %}
+{% elif active_count == 1 %}
+  {% set gauge.active_offset = "56.6" %}
+{% endif %}
+{% if waiting_count >= 2 %}
+  {% set gauge.queued_offset = "0" %}
+{% elif waiting_count == 1 %}
+  {% set gauge.queued_offset = "75.4" %}
+{% endif %}
+
+<section
+  id="downloads-content"
+  data-testid="downloads-content"
+  class="downloads-view"
+  hx-get="/htmx/downloads/queue"
+  hx-trigger="every 2s [window.pullboxLiveUpdatesEnabled()], downloads:refresh from:body"
+  hx-target="#downloads-content"
+  hx-swap="outerHTML"
+>
+  <div data-testid="downloads-header" class="downloads-header">
+    <div class="downloads-header-main">
+      <div class="downloads-header-summary">
+        <div class="downloads-header-copy">
+          <h1 class="downloads-title">DOWNLOAD <span>QUEUE</span></h1>
+          <p class="downloads-subtitle">{{ queue_subtitle.text }}</p>
+        </div>
+
+        <div data-testid="downloads-gauges" class="downloads-gauges">
+          <div class="downloads-gauge">
+            <div class="downloads-gauge-ring">
+              <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+                <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+                <circle
+                  class="downloads-gauge-fill downloads-gauge-fill-success"
+                  cx="24"
+                  cy="24"
+                  r="18"
+                  stroke-dasharray="113.1"
+                  stroke-dashoffset="{{ gauge.active_offset }}"
+                ></circle>
+              </svg>
+              <span class="downloads-gauge-value downloads-gauge-value-success">{{ active_count }}</span>
+            </div>
+            <div class="downloads-gauge-label">Active</div>
+          </div>
+
+          <div class="downloads-gauge">
+            <div class="downloads-gauge-ring">
+              <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+                <circle class="downloads-gauge-bg" cx="24" cy="24" r="18"></circle>
+                <circle
+                  class="downloads-gauge-fill downloads-gauge-fill-info"
+                  cx="24"
+                  cy="24"
+                  r="18"
+                  stroke-dasharray="113.1"
+                  stroke-dashoffset="{{ gauge.queued_offset }}"
+                ></circle>
+              </svg>
+              <span class="downloads-gauge-value downloads-gauge-value-info">{{ waiting_count }}</span>
+            </div>
+            <div class="downloads-gauge-label">Queued</div>
+          </div>
+        </div>
+      </div>
+
+      <div data-testid="downloads-header-actions" class="downloads-header-actions">
+        {% include "partials/downloads_tabs.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="downloads-queue-panel" class="downloads-panel-stack">
+    <section data-testid="downloads-queue-active-section" class="downloads-section">
+      <p class="downloads-section-label">Active Downloads</p>
+      <div class="downloads-table-wrap is-clipped">
+        {% if active_rows %}
+          <table data-testid="downloads-queue-active-table" class="downloads-table">
+            <thead>
+              <tr>
+                <th class="is-center w-[28px]"></th>
+                <th>Release</th>
+                <th>Issue</th>
+                <th class="w-[156px]">Status</th>
+                <th>Client</th>
+                <th class="w-[180px]">Progress</th>
+                <th class="w-[92px]">Speed</th>
+                <th class="w-[72px]">ETA</th>
+                <th class="is-right w-[72px]"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in active_rows %}
+                {% set dl = row.download %}
+                <tr data-testid="downloads-queue-item">
+                  <td class="is-center"><span class="downloads-led downloads-led-green"></span></td>
+                  <td>
+                    <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                      <span class="block truncate" data-tooltip-measure>{{ row.display_title }}</span>
+                    </span>
+                  </td>
+                  <td>
+                    {% if dl.issue and dl.issue.series %}
+                      <a href="/issues/{{ dl.issue.id }}" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+                    {% else %}
+                      <span class="downloads-muted-text">No linked issue</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <span class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight" data-testid="downloads-queue-item-status">
+                      {{ row.primary_phase }}
+                    </span>
+                  </td>
+                  <td class="downloads-mono-cell">{{ row.client_label }}</td>
+                  <td>
+                    <div class="downloads-progress-cell">
+                      <span class="downloads-progress-track">
+                        <span
+                          class="downloads-progress-fill {{ row.progress_tone }}"
+                          style="width: {{ row.progress_pct }}%"
+                        ></span>
+                      </span>
+                      <span class="downloads-progress-pct{% if row.progress_tone == 'is-amber' %} downloads-progress-pct-warning{% endif %}" data-testid="downloads-queue-item-progress-label">{{ row.progress_label }}</span>
+                    </div>
+                  </td>
+                  <td class="downloads-mono-cell">
+                    {% if row.speed_bytes %}
+                      {{ row.speed_bytes|dlspeed }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="downloads-mono-cell" data-testid="downloads-queue-item-eta">
+                    {{ row.eta_text or "—" }}
+                  </td>
+                  <td class="is-right">
+                    <button
+                      @click="cancelDownload({{ dl.id }}, $el)"
+                      data-testid="downloads-queue-cancel-{{ dl.id }}"
+                      class="downloads-action-btn is-danger"
+                      data-tip="Cancel download"
+                      data-tip-pos="left"
+                      aria-label="Cancel download"
+                      type="button"
+                    >
+                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div data-testid="downloads-queue-active-empty" class="downloads-empty-state is-compact">
+            <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/>
+            </svg>
+            <p class="downloads-empty-title">No active downloads</p>
+            <p class="downloads-empty-copy">When a grab starts transferring, live progress will show up here.</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section data-testid="downloads-queue-waiting-section" class="downloads-section">
+      <p class="downloads-section-label">Queued</p>
+      <div class="downloads-table-wrap is-clipped">
+        {% if waiting_rows %}
+          <table data-testid="downloads-queue-waiting-table" class="downloads-table">
+            <thead>
+              <tr>
+                <th class="is-center w-[28px]"></th>
+                <th>Release</th>
+                <th>Issue</th>
+                <th class="w-[156px]">Status</th>
+                <th>Client</th>
+                <th class="w-[180px]">Progress</th>
+                <th class="w-[92px]">Size</th>
+                <th class="w-[90px]">Sent</th>
+                <th class="is-right w-[72px]"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in waiting_rows %}
+                {% set dl = row.download %}
+                {% set waiting_tone = "downloads-led-blue" %}
+                {% if row.primary_phase in ["Paused", "Retry pending"] %}
+                  {% set waiting_tone = "downloads-led-amber" %}
+                {% endif %}
+                <tr data-testid="downloads-queue-item">
+                  <td class="is-center"><span class="downloads-led {{ waiting_tone }}"></span></td>
+                  <td>
+                    <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
+                      <span class="block truncate" data-tooltip-measure>{{ row.display_title }}</span>
+                    </span>
+                  </td>
+                  <td>
+                    {% if dl.issue and dl.issue.series %}
+                      <a href="/issues/{{ dl.issue.id }}" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+                    {% else %}
+                      <span class="downloads-muted-text">No linked issue</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <span class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight" data-testid="downloads-queue-item-status">
+                      {{ row.primary_phase }}
+                    </span>
+                  </td>
+                  <td class="downloads-mono-cell">{{ row.client_label }}</td>
+                  <td>
+                    <div class="downloads-progress-cell">
+                      <span class="downloads-progress-track">
+                        <span
+                          class="downloads-progress-fill {{ row.progress_tone }}"
+                          style="width: {{ row.progress_pct }}%"
+                        ></span>
+                      </span>
+                      <span class="downloads-progress-pct{% if row.progress_tone == 'is-amber' %} downloads-progress-pct-warning{% else %} downloads-progress-pct-muted{% endif %}" data-testid="downloads-queue-item-progress-label">
+                        {{ row.progress_label }}
+                      </span>
+                    </div>
+                  </td>
+                  <td class="downloads-mono-cell">
+                    {% if dl.file_size %}
+                      {{ dl.file_size|filesize }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="downloads-mono-cell">
+                    {% if dl.sent_at %}
+                      {{ dl.sent_at|localtime }}
+                    {% elif dl.state == download_states.PAUSED %}
+                      Paused
+                    {% elif dl.state == download_states.RETRY_PENDING %}
+                      Retry
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="is-right">
+                    <button
+                      @click="cancelDownload({{ dl.id }}, $el)"
+                      data-testid="downloads-queue-cancel-{{ dl.id }}"
+                      class="downloads-action-btn is-danger"
+                      data-tip="Cancel download"
+                      data-tip-pos="left"
+                      aria-label="Cancel download"
+                      type="button"
+                    >
+                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div data-testid="downloads-queue-waiting-empty" class="downloads-empty-state is-compact">
+            <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <p class="downloads-empty-title">No queued downloads</p>
+            <p class="downloads-empty-copy">New grabs will wait here when the client is already busy.</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+</section>

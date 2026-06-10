@@ -1,0 +1,8 @@
+<input
+  id="whats-new-sort-input"
+  type="hidden"
+  name="sort"
+  value="{{ sort }}"
+  data-whats-new-sort-input
+  {% if sort_input_oob|default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>

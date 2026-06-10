@@ -1,0 +1,118 @@
+{#- Shared search field contract.
+
+    Supported modes:
+    - submit: explicit submit only
+    - local: local-only bound filtering
+    - remote: debounced submit through the owning form
+-#}
+
+{% macro search_field(
+  name="",
+  value="",
+  placeholder="Search...",
+  root_testid="",
+  input_testid="",
+  clear_testid="",
+  panel_testid="",
+  mode="submit",
+  model="",
+  history_key="",
+  debounce_ms=300,
+  size="default",
+  class_name="",
+  input_class_name="",
+  root_style=""
+) %}
+{%- set normalized_size = namespace(value=size) -%}
+{%- if normalized_size.value == "default" -%}
+  {%- set normalized_size.value = "md" -%}
+{%- elif normalized_size.value == "compact" -%}
+  {%- set normalized_size.value = "sm" -%}
+{%- endif -%}
+{%- set clear_style = namespace(value="") -%}
+{%- if mode != "local" and not value|default('', true) -%}
+  {%- set clear_style.value = clear_style.value ~ "display:none;" -%}
+{%- endif -%}
+<div
+  {% if root_testid %}data-testid="{{ root_testid }}"{% endif %}
+  data-search-field
+  data-search-field-contract="baseline-v2"
+  data-search-field-mode="{{ mode }}"
+  data-search-field-size="{{ normalized_size.value }}"
+  {% if mode == "remote" %}data-search-field-debounce="{{ debounce_ms }}"{% endif %}
+  {% if history_key %}data-search-history-key="{{ history_key }}"{% endif %}
+  class="search-field control-size-{{ normalized_size.value }} {{ class_name }}"
+  {% if root_style %}style="{{ root_style }}"{% endif %}
+>
+  <svg
+    class="search-field-icon"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
+    <path
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+    />
+  </svg>
+
+  <input
+    type="text"
+    {% if mode != "local" and name %}name="{{ name }}"{% endif %}
+    {% if mode != "local" %}value="{{ value|default('', true) }}"{% endif %}
+    placeholder="{{ placeholder }}"
+    autocomplete="off"
+    autocapitalize="off"
+    autocorrect="off"
+    spellcheck="false"
+    data-search-field-input
+    oninput="syncSearchFieldState(this); handleSearchFieldInput(this)"
+    onkeydown="handleSearchFieldKeydown(event)"
+    onfocus="handleSearchFieldFocus(this)"
+    onclick="handleSearchFieldFocus(this)"
+    onblur="handleSearchFieldBlur(this)"
+    {% if mode == "local" and model %}x-model="{{ model }}"{% endif %}
+    {% if input_testid %}data-testid="{{ input_testid }}"{% endif %}
+    class="search-field-input {{ input_class_name }}"
+  >
+
+  <button
+    type="button"
+    data-search-field-clear
+    onclick="clearSearchField(this)"
+    {% if clear_testid %}data-testid="{{ clear_testid }}"{% endif %}
+    aria-hidden="{{ 'false' if mode == 'local' or value|default('', true) else 'true' }}"
+    class="search-field-clear"
+    {% if clear_style.value %}style="{{ clear_style.value|trim }}"{% endif %}
+  >
+    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+    </svg>
+  </button>
+
+  {% if history_key %}
+  <div
+    data-search-history-panel
+    {% if panel_testid %}data-testid="{{ panel_testid }}"{% endif %}
+    class="search-history-panel"
+    style="display:none"
+    aria-hidden="true"
+  >
+    <div class="search-history-panel-header">
+      <span class="search-history-panel-title">Recent Searches</span>
+      <button
+        type="button"
+        data-search-history-clear
+        class="search-history-panel-clear"
+      >
+        Clear all
+      </button>
+    </div>
+    <ul data-search-history-list class="search-history-list"></ul>
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}

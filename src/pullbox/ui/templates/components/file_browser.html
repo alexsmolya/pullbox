@@ -1,0 +1,292 @@
+{#- Shared file browser modal.
+
+    Usage: Include this template in any page that needs filesystem selection.
+    Requires an Alpine.js component that provides:
+      - fileBrowser.show       (boolean)
+      - fileBrowser.path       (string — current path)
+      - fileBrowser.parent     (string|null — parent path)
+      - fileBrowser.dirs       (array of {name, path})
+      - fileBrowser.quickLinks (array of {label, path, icon})
+      - fileBrowser.loading    (boolean)
+      - fileBrowser.error      (string)
+      - fileBrowser.selectionMode ("directory" | "directories" | "file" | "files")
+      - fileBrowser.title / emptyMessage / confirmLabel
+      - fileBrowser.targetField (string — which form field to populate)
+      - openFileBrowser(fieldName, currentValue, opts)
+        opts.startPath may provide a resolved fallback directory when the
+        current field value is blank or placeholder-based.
+      - navigateTo(path)
+      - selectDirectory()
+      - closeFileBrowser()
+
+    Helpers provided via fileBrowserMixin() below.
+-#}
+
+{# ── File Browser Modal ─────────────────────────────────────────────── #}
+<div x-show="fileBrowser.show" x-cloak
+     data-testid="file-browser-modal"
+     class="fixed inset-0 z-[60] !mt-0"
+     @keydown.escape.window="fileBrowser.show && closeFileBrowser()">
+
+  {# Backdrop #}
+  <div data-testid="file-browser-backdrop"
+       class="absolute inset-0 bg-pb-overlay backdrop-blur-xs"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       @click="closeFileBrowser()"></div>
+
+  <div class="relative flex h-full items-start justify-center p-4 pt-12">
+    <div class="relative w-full max-w-lg rounded-xl bg-pb-card border border-pb-border shadow-2xl flex flex-col max-h-[70vh] overflow-hidden"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+         x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 translate-y-0 scale-100"
+         x-transition:leave-end="opacity-0 translate-y-2 scale-95">
+
+    {# Header #}
+    <div class="flex items-center justify-between px-4 py-3 border-b border-pb-border shrink-0">
+      <div class="flex items-center gap-2">
+        <svg class="w-4 h-4 text-pb-interactive" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+        </svg>
+        <h3 data-testid="file-browser-title"
+            class="text-sm font-semibold text-pb-text"
+            x-text="fileBrowser.title">Browse Directories</h3>
+        {# Selection count badge for multi-select #}
+        <span x-show="fileBrowser.multiSelect && fileBrowser._multiSelected.size > 0" x-cloak
+              class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-semibold
+                     rounded-full bg-pb-interactive text-white"
+              x-text="fileBrowser._multiSelected.size"></span>
+      </div>
+      <button @click="closeFileBrowser()"
+              data-testid="file-browser-close"
+              class="btn-ghost btn-sm !min-h-8 !w-8 !px-0 !py-0 shrink-0">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    {# Quick links bar #}
+    <div x-show="fileBrowser.quickLinks.length > 0"
+         class="flex items-center gap-1 px-4 py-2 bg-pb-surface/60 border-b border-pb-border shrink-0 overflow-x-auto">
+      <template x-for="link in fileBrowser.quickLinks" :key="link.path">
+        <button @click="navigateTo(link.path)"
+                class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium shrink-0 transition-colors"
+                :class="fileBrowser.path === link.path
+                  ? 'bg-pb-interactive-dim text-pb-interactive border border-pb-interactive/25'
+                  : 'text-pb-text-sec hover:bg-pb-card-hover hover:text-pb-text border border-transparent'"
+                :title="link.path">
+          {# Icon based on type #}
+          <template x-if="link.icon === 'home'">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/>
+            </svg>
+          </template>
+          <template x-if="link.icon === 'drive'">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 00-.12-1.03l-2.268-9.64a3.375 3.375 0 00-3.285-2.602H7.923a3.375 3.375 0 00-3.285 2.602l-2.268 9.64a4.5 4.5 0 00-.12 1.03v.228m19.5 0a3 3 0 01-3 3H5.25a3 3 0 01-3-3m19.5 0a3 3 0 00-3-3H5.25a3 3 0 00-3 3m16.5 0h.008v.008h-.008v-.008zm-3 0h.008v.008h-.008v-.008z"/>
+            </svg>
+          </template>
+          <template x-if="link.icon === 'network'">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 013 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"/>
+            </svg>
+          </template>
+          <template x-if="link.icon === 'folder'">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+          </template>
+          <span x-text="link.label"></span>
+        </button>
+      </template>
+    </div>
+
+    {# Current path breadcrumb + up button #}
+    <div class="flex items-center gap-2 px-4 py-2.5 bg-pb-surface/50 border-b border-pb-border shrink-0">
+      <button @click="fileBrowser.parent && navigateTo(fileBrowser.parent)"
+              :disabled="!fileBrowser.parent"
+              class="p-1 rounded text-pb-text-sec hover:text-pb-text hover:bg-pb-card-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+              title="Go to parent directory">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/>
+        </svg>
+      </button>
+      <div class="flex-1 min-w-0 px-2 py-1 rounded bg-pb-card-hover border border-pb-border-hover/50">
+        <p class="text-xs font-mono text-pb-text-sec truncate" x-text="fileBrowser.path" :title="fileBrowser.path"></p>
+      </div>
+    </div>
+
+    {# Directory listing #}
+    <div class="relative flex-1 overflow-y-auto min-h-[200px]" :aria-busy="fileBrowser.loading ? 'true' : 'false'">
+      {# Loading overlay — keep the current listing visible underneath to avoid modal flash #}
+      <div x-show="fileBrowser.loading"
+           x-cloak
+           data-testid="file-browser-loading-overlay"
+           class="absolute inset-0 z-10 flex items-center justify-center bg-pb-overlay/45 backdrop-blur-[1px]">
+        <div class="flex items-center justify-center rounded-full border border-pb-border bg-pb-card/95 p-3 shadow-lg">
+          <svg class="h-5 w-5 text-pb-interactive animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
+      </div>
+
+      {# Error message #}
+      <div x-show="fileBrowser.error" class="px-4 py-6 text-center">
+        <p class="text-xs text-pb-error" x-text="fileBrowser.error"></p>
+      </div>
+
+      {# Directory entries #}
+      <div x-show="!fileBrowser.error">
+        <template x-if="fileBrowser.dirs.length === 0 && (!fileBrowser.files || fileBrowser.files.length === 0)">
+          <div class="px-4 py-8 text-center">
+            <svg class="w-8 h-8 text-pb-text-dim mx-auto mb-2" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+            <p class="text-xs text-pb-text-dim" x-text="fileBrowser.emptyMessage"></p>
+          </div>
+        </template>
+
+        <div class="divide-y divide-pb-border/40">
+          <template x-for="dir in fileBrowser.dirs" :key="dir.path">
+            <div>
+              <template x-if="fileBrowser.selectionMode === 'directories'">
+                <div class="flex items-center gap-2 px-4 py-2 transition-colors"
+                     :class="fileBrowser._multiSelected.has(dir.path) ? 'bg-pb-interactive-dim' : 'hover:bg-pb-card-hover'">
+                  <button type="button"
+                          @click="toggleDirectorySelection(dir.path)"
+                          data-testid="file-browser-directory-toggle"
+                          class="flex min-w-0 flex-1 items-center gap-2.5 text-left group">
+                    <div class="w-4 h-4 rounded border shrink-0 flex items-center justify-center transition-colors"
+                         :class="fileBrowser._multiSelected.has(dir.path)
+                           ? 'bg-pb-interactive border-pb-interactive'
+                           : 'border-pb-border-hover group-hover:border-pb-text-sec'">
+                      <svg x-show="fileBrowser._multiSelected.has(dir.path)" class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+                      </svg>
+                    </div>
+                    <svg class="w-4 h-4 text-pb-warning/70 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M19.5 21a3 3 0 003-3v-4.5a3 3 0 00-3-3h-15a3 3 0 00-3 3V18a3 3 0 003 3h15zM1.5 10.146V6a3 3 0 013-3h5.379a2.25 2.25 0 011.59.659l2.122 2.121c.14.141.331.22.53.22H19.5a3 3 0 013 3v1.146A4.483 4.483 0 0019.5 9h-15a4.483 4.483 0 00-3 1.146z"/>
+                    </svg>
+                    <span class="min-w-0 truncate text-sm"
+                          :class="fileBrowser._multiSelected.has(dir.path)
+                            ? 'text-pb-interactive'
+                            : 'text-pb-text-sec group-hover:text-pb-text'"
+                          x-text="dir.name"></span>
+                  </button>
+                  <button type="button"
+                          @click="navigateTo(dir.path)"
+                          data-testid="file-browser-directory-open"
+                          class="ml-auto rounded p-1 text-pb-text-dim transition-colors hover:bg-pb-card hover:text-pb-text-sec"
+                          aria-label="Open folder">
+                    <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+                    </svg>
+                  </button>
+                </div>
+              </template>
+              <template x-if="fileBrowser.selectionMode !== 'directories'">
+                <button @click="navigateTo(dir.path)"
+                        data-testid="file-browser-directory-entry"
+                        class="w-full flex items-center gap-2.5 px-4 py-2 text-left
+                               hover:bg-pb-card-hover transition-colors group">
+                  <svg class="w-4 h-4 text-pb-warning/70 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M19.5 21a3 3 0 003-3v-4.5a3 3 0 00-3-3h-15a3 3 0 00-3 3V18a3 3 0 003 3h15zM1.5 10.146V6a3 3 0 013-3h5.379a2.25 2.25 0 011.59.659l2.122 2.121c.14.141.331.22.53.22H19.5a3 3 0 013 3v1.146A4.483 4.483 0 0019.5 9h-15a4.483 4.483 0 00-3 1.146z"/>
+                  </svg>
+                  <span class="text-sm text-pb-text-sec group-hover:text-pb-text truncate" x-text="dir.name"></span>
+                  <svg class="w-3 h-3 text-pb-text-dim group-hover:text-pb-text-sec ml-auto shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+                  </svg>
+                </button>
+              </template>
+            </div>
+          </template>
+
+          {#- Multi-select: select all / deselect all bar -#}
+          <div x-show="fileBrowser.multiSelect && ((fileBrowser.selectionMode === 'files' && (fileBrowser.files || []).length > 0) || (fileBrowser.selectionMode === 'directories' && (fileBrowser.dirs || []).length > 0))" x-cloak
+               class="flex items-center gap-2 px-4 py-1.5 bg-pb-surface/40">
+            <button type="button" @click="toggleSelectAllCurrentEntries(true)"
+                    class="text-[11px] text-pb-interactive hover:text-pb-interactive-hover transition-colors">Select all</button>
+            <span class="text-pb-border">|</span>
+            <button type="button" @click="toggleSelectAllCurrentEntries(false)"
+                    class="text-[11px] text-pb-text-dim hover:text-pb-text-sec transition-colors">Deselect all</button>
+          </div>
+
+          {#- File entries (shown in file mode) -#}
+          <template x-for="file in (fileBrowser.files || [])" :key="file.path">
+            <button @click="fileBrowser.multiSelect ? toggleFileSelection(file.path) : selectFile(file)"
+                    data-testid="file-browser-file-entry"
+                    class="w-full flex items-center gap-2.5 px-4 py-2 text-left transition-colors group"
+                    :class="fileBrowser.multiSelect && fileBrowser._multiSelected.has(file.path)
+                      ? 'bg-pb-interactive-dim'
+                      : 'hover:bg-pb-interactive/10'">
+              {# Checkbox for multi-select mode #}
+              <div x-show="fileBrowser.multiSelect" x-cloak
+                   class="w-4 h-4 rounded border shrink-0 flex items-center justify-center transition-colors"
+                   :class="fileBrowser._multiSelected.has(file.path)
+                     ? 'bg-pb-interactive border-pb-interactive'
+                     : 'border-pb-border-hover group-hover:border-pb-text-sec'">
+                <svg x-show="fileBrowser._multiSelected.has(file.path)" class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+                </svg>
+              </div>
+              {# File icon for single-select mode #}
+              <svg x-show="!fileBrowser.multiSelect" class="w-4 h-4 text-pb-text-dim shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+              </svg>
+              <span class="text-sm truncate"
+                    :class="fileBrowser.multiSelect && fileBrowser._multiSelected.has(file.path)
+                      ? 'text-pb-interactive' : 'text-pb-text-sec group-hover:text-pb-text'"
+                    x-text="file.name"></span>
+              <span class="text-[10px] text-pb-text-sec ml-auto shrink-0 tabular-nums"
+                    x-text="file.size ? _pb.formatBytes(file.size) : ''"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    {# Footer — select / cancel #}
+    <div class="shrink-0 border-t border-pb-border px-4 py-3 flex items-center justify-between bg-pb-card">
+      {# Selection count (multi-select only) #}
+      <span x-show="fileBrowser.multiSelect" x-cloak class="text-xs text-pb-text-dim"
+            x-text="fileBrowser._multiSelected.size + ' ' + (fileBrowser.selectionMode === 'directories' ? 'folder' : 'file') + (fileBrowser._multiSelected.size !== 1 ? 's' : '') + ' selected'"></span>
+      <span x-show="!fileBrowser.multiSelect"></span>
+
+      <div class="flex items-center gap-2">
+        <button type="button" @click="closeFileBrowser()"
+                data-testid="file-browser-cancel"
+                class="btn-ghost btn-sm">
+          Cancel
+        </button>
+        {# Directory select button (directory mode) #}
+        <button type="button" @click="selectDirectory()" x-show="fileBrowser.selectionMode === 'directory'"
+                data-testid="file-browser-confirm"
+                class="btn-primary btn-sm">
+          <span x-text="fileBrowser.confirmLabel"></span>
+        </button>
+        {# Done button (multi-select mode) #}
+        <button type="button" @click="confirmMultiSelect()" x-show="fileBrowser.selectionMode === 'files' || fileBrowser.selectionMode === 'directories'" x-cloak
+                data-testid="file-browser-confirm"
+                :disabled="fileBrowser._multiSelected.size === 0"
+                class="btn-primary btn-sm">
+          <span x-text="fileBrowser._multiSelected.size > 0
+            ? 'Add ' + fileBrowser._multiSelected.size + ' ' + (fileBrowser.selectionMode === 'directories' ? 'Folder' : 'File') + (fileBrowser._multiSelected.size !== 1 ? 's' : '')
+            : fileBrowser.confirmLabel"></span>
+        </button>
+      </div>
+    </div>
+
+    </div>
+  </div>
+</div>

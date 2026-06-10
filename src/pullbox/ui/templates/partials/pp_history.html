@@ -1,0 +1,125 @@
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/search_field.html" import search_field %}
+
+<section
+  id="post-processing-content"
+  data-testid="post-processing-content"
+  class="downloads-view"
+>
+  <div data-testid="post-processing-header" class="downloads-header">
+    <div class="downloads-header-main">
+      <div
+        id="pp-history-header-metrics"
+        data-testid="pp-history-header-metrics"
+        class="downloads-header-summary"
+      >
+        {% include "partials/pp_history_header_metrics.html" %}
+      </div>
+
+      <div data-testid="post-processing-header-actions" class="downloads-header-actions">
+        {% include "partials/pp_tabs.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div data-testid="pp-history-panel" class="downloads-panel-stack">
+    <div class="downloads-table-wrap">
+      <form
+        id="pp-history-filter-form"
+        data-testid="pp-history-toolbar"
+        class="series-toolbar-frame downloads-history-toolbar"
+        autocomplete="off"
+        action="/post-processing"
+        method="get"
+        hx-get="/post-processing"
+        hx-target="#pp-history-results"
+        hx-swap="outerHTML"
+        hx-sync="#pp-history-results:replace"
+        hx-push-url="true"
+        hx-trigger="submit"
+      >
+        <input type="hidden" name="tab" value="history">
+        <input type="hidden" id="pp-history-sort-input" name="sort" value="{{ sort }}">
+        <div class="series-toolbar-body">
+          <div class="series-toolbar-browse">
+            <div class="series-toolbar-primary">
+              {{ search_field(
+                name="search",
+                value=search_query,
+                placeholder="Search imports...",
+                input_testid="pp-history-search",
+                clear_testid="pp-history-search-clear",
+                panel_testid="pp-history-search-history-panel",
+                root_testid="pp-history-search-field",
+                mode="remote",
+                history_key="pullbox.searchHistory.postProcessing",
+                debounce_ms=250,
+                size="sm",
+                class_name="series-registry-search"
+              ) }}
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Result</span>
+                {{ dropdown_select(
+                  name="result",
+                  value=result_filter,
+                  size="sm",
+                  options=[
+                    ("all", "All Results"),
+                    ("imported", "Imported"),
+                    ("failed", "Processing Failed"),
+                  ],
+                  root_testid="pp-history-filter-result",
+                  hx_get="/post-processing",
+                  hx_target="#pp-history-results",
+                  hx_swap="outerHTML",
+                  hx_sync="#pp-history-results:replace",
+                  hx_push_url="true",
+                  hx_include="#pp-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Client</span>
+                {{ dropdown_select(
+                  name="client",
+                  value=client_filter,
+                  size="sm",
+                  options=client_options,
+                  root_testid="pp-history-filter-client",
+                  hx_get="/post-processing",
+                  hx_target="#pp-history-results",
+                  hx_swap="outerHTML",
+                  hx_sync="#pp-history-results:replace",
+                  hx_push_url="true",
+                  hx_include="#pp-history-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
+            </div>
+
+            {% if history_total > 0 %}
+              <div class="series-toolbar-actions">
+                <button
+                  type="button"
+                  @click="clearHistory($el)"
+                  data-testid="pp-history-clear"
+                  class="btn-danger control-size-sm"
+                >
+                  <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                  </svg>
+                  Clear History
+                </button>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </form>
+      {% include "partials/pp_history_results.html" %}
+    </div>
+  </div>
+</section>

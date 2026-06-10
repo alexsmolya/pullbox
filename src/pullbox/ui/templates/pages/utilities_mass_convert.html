@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Mass Convert to CBZ — {{ instance_name() }}{% endblock %}
+{% block page_title %}Utilities{% endblock %}
+{% block content_container_classes %}px-4 sm:px-6 pt-4 sm:pt-5{% endblock %}
+
+{% block content %}
+<div
+  data-testid="utilities-mass-convert-page"
+  class="utilities-tool-page space-y-6"
+  x-data='utilitiesMassConvertPage({
+    csrfToken: "{{ csrf_token }}",
+    trashFolder: {{ utility_trash_folder|tojson }},
+    defaultTrashFolder: {{ utility_trash_folder|tojson }},
+    trashFolderBrowsePath: {{ utility_trash_folder_browse_path|tojson }},
+  })'
+>
+  {% include "partials/utilities_mass_convert_header.html" %}
+  {% include "partials/utilities_mass_convert_workspace.html" %}
+
+  {% include "components/file_browser.html" %}
+</div>
+{% endblock %}
+
+{% block footer_dock %}
+  {% include "partials/utilities_mass_convert_footer_dock.html" %}
+{% endblock %}

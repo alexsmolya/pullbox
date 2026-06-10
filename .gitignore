@@ -1,0 +1,116 @@
+# macOS Finder duplicate files (created by conflict resolution or copy/paste)
+*\ 2.*
+*\ 3.*
+*\ 2
+*\ 3
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+*.manifest
+*.spec
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE — VS Code
+.vscode/
+
+# IDE — PyCharm / JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.idea_modules/
+
+# IDE — Vim/Emacs
+*.swp
+*.swo
+*~
+\#*\#
+.#*
+
+# Testing
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+.pytest_cache/
+.tox/
+.nox/
+
+# Mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Environment / Secrets
+.env
+.env.*
+!.env.example
+
+# Database
+*.db
+*.sqlite3
+
+# Backups
+*.bak
+*.bak-*
+backups/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+# macOS Finder copy artifacts ("file 2.py", "file 3.py")
+*\ [0-9].*
+
+# Application data
+/data/
+/data-docker-dev/
+/data-docker-prodtest/
+
+# Docker
+docker/data/
+
+# Logs
+*.log
+logs/
+
+# Temporary
+tmp/
+temp/
+.cache/
+
+# Node.js (Tailwind CSS build)
+node_modules/
+
+# Docs
+/data
+
+# Playwright test artifacts
+test-results/
+.playwright-cli/
+
+# Local security artifacts
+bandit-report.json
+safety-report.json

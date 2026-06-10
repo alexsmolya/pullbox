@@ -1,0 +1,7 @@
+{% set oob = true %}
+{% include "partials/utilities_header.html" %}
+{% include "partials/utilities_tabs.html" %}
+<div id="page-footer-dock" data-testid="page-footer-dock" hx-swap-oob="outerHTML" class="shrink-0 border-t border-pb-border bg-pb-surface">
+  {% include "partials/utilities_footer_dock.html" %}
+</div>
+{% include "partials/utilities_content.html" %}

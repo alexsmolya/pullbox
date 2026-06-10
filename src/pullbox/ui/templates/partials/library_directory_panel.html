@@ -1,0 +1,79 @@
+{% from "components/settings_shell.html" import section_card, ui_icon %}
+
+{% call section_card(
+  title="Keep the library clean, complete, and easy to maintain.",
+  description="Use this overview to confirm where library files live, spot cleanup work early, and jump into the next task without hunting through settings first.",
+  eyebrow="Library overview"
+) %}
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
+    <div class="space-y-4">
+      <div class="info-panel info-panel-muted" data-testid="library-directory-panel">
+        <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Comics Directory</p>
+        {% if comics_directory %}
+          <p data-testid="library-directory-value" class="mt-3 break-all text-sm font-medium text-pb-text font-mono">{{ comics_directory }}</p>
+          <p class="mt-2 text-xs leading-6 text-pb-text-sec">
+            Finalized files are written here after imports, matching, and post-processing finish cleanly.
+          </p>
+        {% else %}
+          <p data-testid="library-directory-empty" class="mt-3 text-sm font-medium text-pb-text">No comics directory is configured yet.</p>
+          <p class="mt-2 text-xs leading-6 text-pb-text-sec">
+            Choose a library root in Media settings before you import files or move completed downloads into the library.
+          </p>
+        {% endif %}
+      </div>
+
+      <div class="grid gap-3 sm:grid-cols-2">
+        <div class="info-panel">
+          <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Matched files</p>
+          <p class="mt-3 text-2xl font-semibold tracking-tight text-pb-text">{{ matched_files }}</p>
+          <p class="mt-2 text-xs leading-6 text-pb-text-sec">These files are already tied to the right issue and accounted for in the library.</p>
+        </div>
+        <div class="info-panel">
+          <p class="text-[11px] font-medium uppercase tracking-[0.14em] text-pb-text-dim">Unmatched</p>
+          <p class="mt-3 text-2xl font-semibold tracking-tight text-pb-warning">{{ unmatched_files }}</p>
+          <p class="mt-2 text-xs leading-6 text-pb-text-sec">Unmatched files are the ones most likely to need a manual decision before the picture is complete.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="space-y-3">
+      <a href="/import" class="action-card">
+        <div class="action-card-icon bg-pb-interactive-dim text-pb-interactive">
+          {{ ui_icon("arrow", "h-5 w-5") }}
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="action-card-title">Import a collection</p>
+          <p class="action-card-copy">Bring in a new batch of files, then review anything that still needs cleanup.</p>
+        </div>
+      </a>
+
+      <a href="/library/matching" class="action-card">
+        <div class="action-card-icon bg-pb-warning-dim text-pb-warning">
+          {{ ui_icon("warning", "h-5 w-5") }}
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="action-card-title">Review the matching queue</p>
+          <p class="action-card-copy">
+            {% if unmatched_files > 0 %}
+              {{ unmatched_files }} file{{ "s are" if unmatched_files != 1 else " is" }} still waiting for a manual issue decision.
+            {% else %}
+              Nothing is waiting right now, but this is where uncertain file matches show up when they need a human pass.
+            {% endif %}
+          </p>
+        </div>
+      </a>
+
+      <a href="/settings?tab=media" class="action-card">
+        <div class="action-card-icon">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+          </svg>
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="action-card-title">Open media settings</p>
+          <p class="action-card-copy">Change the library root, import destinations, and other media paths when your storage layout changes.</p>
+        </div>
+      </a>
+    </div>
+  </div>
+{% endcall %}

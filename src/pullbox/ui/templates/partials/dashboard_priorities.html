@@ -1,0 +1,58 @@
+<section
+  id="dashboard-alerts-region"
+  data-testid="dashboard-alerts"
+  class="dashboard-section"
+  hx-get="/htmx/dashboard/priorities"
+  hx-trigger="every 30s [window.pullboxLiveUpdatesEnabled()], refresh"
+  hx-swap="outerHTML"
+>
+  <p class="dashboard-section__label">
+    Alerts{% if dashboard_view.alerts %} ({{ dashboard_view.alerts|length }}){% endif %}
+  </p>
+  <div class="dashboard-table-wrap">
+    <table class="dashboard-table">
+      <thead>
+        <tr>
+          <th class="c dashboard-table__status-col">SYS</th>
+          <th>Alert</th>
+          <th>Severity</th>
+          <th>When</th>
+          <th class="r">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for alert in dashboard_view.alerts %}
+          <tr data-testid="dashboard-alert-{{ alert.key }}">
+            <td class="c">
+              {% set alert_led_class = "dashboard-led--off" %}
+              {% if alert.led_tone == "green" %}
+                {% set alert_led_class = "dashboard-led--green" %}
+              {% elif alert.led_tone == "amber" %}
+                {% set alert_led_class = "dashboard-led--amber" %}
+              {% elif alert.led_tone == "red" %}
+                {% set alert_led_class = "dashboard-led--red" %}
+              {% elif alert.led_tone == "blue" %}
+                {% set alert_led_class = "dashboard-led--blue" %}
+              {% endif %}
+              <span
+                data-testid="dashboard-alert-sys-led"
+                class="dashboard-led dashboard-led--sys {{ alert_led_class }}"
+              ></span>
+            </td>
+            <td>
+              <span class="dashboard-table__name">{{ alert.title }}</span>
+              <div class="dashboard-table__detail">{{ alert.detail }}</div>
+            </td>
+            <td>
+              <span class="pill {{ dashboard_state_pill_tone(alert.state) }}">{{ alert.state_label }}</span>
+            </td>
+            <td class="dashboard-table__mono">{{ alert.timing_label }}</td>
+            <td class="r">
+              <a href="{{ alert.href }}" class="dashboard-table__link">View →</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
