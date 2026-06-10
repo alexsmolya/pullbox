@@ -1,8 +1,8 @@
 # Pullbox Git Workflow
 
-**Author:** Adam Hernandez  
-**Version:** 1.0  
-**Last Modified:** 2026-05-15  
+**Author:** Adam Hernandez
+**Version:** 1.0
+**Last Modified:** 2026-05-15
 
 ## Purpose
 
@@ -388,7 +388,9 @@ Example PR body:
 - Release tags are signed.
 - Tag pushes trigger:
   - GitHub Release creation
-  - Docker build, Grype scan, smoke test, and GHCR publish
+  - Docker build, Grype scan, smoke test, and GHCR/Docker Hub publish
+- Ordinary untagged `main` merges may run Docker validation, but they must not
+  publish registry images.
 - Pre-release tags are supported.
 
 ### 8.2 Required standard
@@ -483,8 +485,9 @@ Recommended mapping:
   correctly.
 - If `git tag -s` fails, stop and configure a verified GPG or SSH signing key
   before pushing the tag.
-- Docker metadata rules may publish semver-derived aliases. Review GHCR tags
-  after release and delete unwanted aliases deliberately.
+- Docker metadata rules may publish semver-derived aliases during release-tag
+  builds. Review GHCR and Docker Hub tags after release and delete unwanted
+  aliases deliberately.
 - A pre-release tag can be used to test the release pipeline:
 
 ```bash
@@ -501,7 +504,7 @@ git push origin vX.Y.Z-rc1
 - [ ] Release PR targets `main`.
 - [ ] Release tag is signed and verified locally.
 - [ ] Release workflows complete successfully.
-- [ ] GHCR tags are reviewed after publish.
+- [ ] GHCR and Docker Hub tags are reviewed after publish.
 
 ## 9. Post-Release Sync
 

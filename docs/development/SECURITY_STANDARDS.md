@@ -794,14 +794,17 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 - Release guidance lives in `docs/development/GIT_WORKFLOW.md`.
 - Infrastructure and registry guidance lives in
   `docs/development/INFRASTRUCTURE.md`.
-- Container publication uses GHCR.
+- Container publication uses GHCR and Docker Hub.
 - Docker metadata rules may publish semver-derived aliases depending on the
   release event.
+- Untagged `main` merges may run Docker validation, but they do not publish
+  registry images.
 
 **Required standard**
 
 - Release tags should be signed with the documented release process.
-- GHCR package tags should be reviewed after each release.
+- GHCR and Docker Hub package tags should be reviewed after each release.
+- Ordinary untagged `main` merges should not publish registry images.
 - Unwanted registry aliases should be deleted deliberately rather than changing
   metadata behavior without a release-process decision.
 - Release automation must not publish images from untrusted code.
@@ -814,7 +817,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 **Audit checks**
 
 - [ ] Release tag signing process is documented and followed.
-- [ ] GHCR tags are reviewed after publication.
+- [ ] GHCR and Docker Hub tags are reviewed after publication.
 - [ ] Unwanted aliases are removed deliberately.
 - [ ] Release workflows build from trusted refs.
 
