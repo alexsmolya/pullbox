@@ -28,7 +28,8 @@ def main() -> None:
             "127.0.0.1",
             _healthcheck_port(),
             timeout=5,
-            context=ssl._create_unverified_context(),
+            # Local healthcheck may use self-signed HTTPS on loopback.
+            context=ssl._create_unverified_context(),  # nosec B323
         )
     else:
         connection = HTTPConnection("127.0.0.1", _healthcheck_port(), timeout=5)

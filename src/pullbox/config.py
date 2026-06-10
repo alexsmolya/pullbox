@@ -32,6 +32,7 @@ class PullboxSettings(BaseSettings):
         env_prefix="PULLBOX_",
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",
         frozen=True,
     )
 
