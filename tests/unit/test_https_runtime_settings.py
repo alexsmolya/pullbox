@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -106,6 +107,30 @@ class TestHttpsRuntimeResolver:
         assert resolved.enabled is True
         assert resolved.cert_path == "/config/certs/env.crt"
         assert resolved.key_path == "/config/certs/env.key"
+
+    def test_load_https_db_values_reads_only_known_https_keys(self, tmp_path: Path) -> None:
+        from pullbox.core.https_runtime import load_https_db_values
+
+        db_path = tmp_path / "pullbox.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE system_config (key TEXT PRIMARY KEY, value TEXT)")
+            conn.executemany(
+                "INSERT INTO system_config (key, value) VALUES (?, ?)",
+                [
+                    ("https_enabled", "true"),
+                    ("https_cert_path", "/config/certs/server.crt"),
+                    ("https_key_path", "/config/certs/server.key"),
+                    ("unrelated", "ignored"),
+                ],
+            )
+
+        settings = SimpleNamespace(db_url=f"sqlite+aiosqlite:///{db_path}")
+
+        assert load_https_db_values(settings) == {
+            "https_enabled": "true",
+            "https_cert_path": "/config/certs/server.crt",
+            "https_key_path": "/config/certs/server.key",
+        }
 
 
 class TestHttpsValidation:

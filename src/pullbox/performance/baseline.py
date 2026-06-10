@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
@@ -187,6 +188,15 @@ def resolve_endpoint_url(base_url: str, target: str) -> str:
     return f"{base_url.rstrip('/')}/{target.lstrip('/')}"
 
 
+def _validate_http_url(url: str) -> None:
+    """Allow the baseline harness to fetch only HTTP(S) URLs."""
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        msg = f"baseline fetch URLs must use http or https: {url!r}"
+        raise ValueError(msg)
+
+
 def _fetch_url(
     url: str,
     timeout: float,
@@ -196,13 +206,15 @@ def _fetch_url(
 ) -> FetchResult:
     """Fetch one URL using the standard library so the harness stays lightweight."""
 
+    _validate_http_url(url)
     request_headers = {"User-Agent": f"PullboxPerformanceBaseline/{MEASUREMENT_VERSION}"}
     if headers:
         request_headers.update(headers)
     request = urllib.request.Request(url, headers=request_headers)
     started_at = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=ssl_context) as response:
+        # `_validate_http_url` rejects file/custom schemes before this call.
+        with urllib.request.urlopen(request, timeout=timeout, context=ssl_context) as response:  # nosec B310
             body = response.read()
             status_code = response.status
     except urllib.error.HTTPError as exc:
@@ -229,7 +241,8 @@ def create_fetcher(
 ) -> Fetcher:
     """Create a fetcher, optionally allowing local self-signed HTTPS certificates."""
 
-    ssl_context = None if verify_tls else ssl._create_unverified_context()
+    # `verify_tls=False` is an explicit local benchmark option for self-signed HTTPS.
+    ssl_context = None if verify_tls else ssl._create_unverified_context()  # nosec B323
 
     def fetcher(url: str, timeout: float) -> FetchResult:
         return _fetch_url(url, timeout, ssl_context=ssl_context, headers=headers)
@@ -244,6 +257,7 @@ def _fetch_with_opener(
     *,
     headers: dict[str, str] | None = None,
 ) -> FetchResult:
+    _validate_http_url(url)
     request_headers = {"User-Agent": f"PullboxPerformanceBaseline/{MEASUREMENT_VERSION}"}
     if headers:
         request_headers.update(headers)
@@ -276,7 +290,8 @@ def login_and_create_fetcher(
 ) -> Fetcher:
     """Create a session-cookie fetcher by logging into the local Pullbox app."""
 
-    ssl_context = None if verify_tls else ssl._create_unverified_context()
+    # `verify_tls=False` is an explicit local benchmark option for self-signed HTTPS.
+    ssl_context = None if verify_tls else ssl._create_unverified_context()  # nosec B323
     cookie_jar = http.cookiejar.CookieJar()
     handlers: list[urllib.request.BaseHandler] = [urllib.request.HTTPCookieProcessor(cookie_jar)]
     if ssl_context is not None:
@@ -284,6 +299,7 @@ def login_and_create_fetcher(
     opener = urllib.request.build_opener(*handlers)
 
     login_target = resolve_endpoint_url(base_url, login_url)
+    _validate_http_url(login_target)
     payload = json.dumps(
         {"username": username, "password": password},
         separators=(",", ":"),
