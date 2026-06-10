@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import expect
 
 from tests.e2e.pages.library import LibraryPage
 
@@ -548,12 +549,11 @@ class TestLibraryPage:
         assert library.auto_rename_modal.get_by_test_id(
             "library-auto-rename-preview-grid"
         ).is_visible()
-        assert (
+        expect(
             library.auto_rename_modal.locator(
                 "[data-testid='library-auto-rename-preview-grid'] tbody tr"
-            ).count()
-            == 4
-        )
+            )
+        ).to_have_count(4)
         assert library.auto_rename_modal.get_by_text("Queue Rename", exact=True).count() == 0
 
         with authed_page.expect_response(
@@ -628,12 +628,11 @@ class TestLibraryPage:
             .strip()
             == "Preview"
         )
-        assert (
+        expect(
             library.auto_rename_modal.locator(
                 "[data-testid='library-auto-rename-preview-grid'] tbody tr"
-            ).count()
-            == 4
-        )
+            )
+        ).to_have_count(4)
 
     def test_library_delete_action_opens_series_delete_modal_for_tracked_series_folder(
         self,
@@ -841,12 +840,11 @@ class TestLibraryPage:
             assert library.convert_modal.get_by_test_id(
                 "library-convert-preview-header"
             ).is_visible()
-            assert (
+            expect(
                 library.convert_modal.locator(
                     "[data-testid='library-convert-preview-grid'] tbody tr"
-                ).count()
-                == 3
-            )
+                )
+            ).to_have_count(3)
         finally:
             sample_file.unlink(missing_ok=True)
 
