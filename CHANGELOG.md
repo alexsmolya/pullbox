@@ -29,7 +29,7 @@ Patch release to validate dual-registry Docker publishing after the public repos
 
 ### CI / Build
 
-- Docker release publishing now publishes signed release images to both GHCR and Docker Hub.
+- Docker release publishing now publishes versioned release images to both GHCR and Docker Hub.
 - Untagged `main` Docker workflow runs now build, scan, and smoke-test without publishing registry images.
 - Generated GitHub release notes now include both GHCR and Docker Hub pull commands.
 
