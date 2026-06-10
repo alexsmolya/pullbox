@@ -34,7 +34,8 @@ that lock down important behavior.
 - CSP is documented exactly as implemented. It still allows inline script/style
   and app-side `'unsafe-eval'`, so CSP tightening remains a good future
   hardening target.
-- CodeQL is configured for public repositories and remains gated while private.
+- CodeQL is configured for public repositories and can be opt-in while private;
+  it is informational in the required aggregate gate until explicitly promoted.
 
 ## Table of Contents
 
@@ -736,6 +737,8 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 
 - `.github/workflows/security.yml` runs gitleaks, `pip-audit`, Safety, and
   Bandit, plus CodeQL when the repo is public or `PULLBOX_ENABLE_CODEQL=true`.
+  `Security Required` treats CodeQL as informational unless
+  `PULLBOX_REQUIRE_CODEQL=true`.
 - `.github/workflows/docker.yml` runs Grype container scanning before publish.
 - GitHub Actions are SHA-pinned with version comments.
 - Workflows define explicit default permissions and per-job permissions.
@@ -755,14 +758,16 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 - Dependency scanning remains active in CI.
 - Container scanning remains active for Docker artifacts.
 - CodeQL must run on GitHub-hosted runners only.
+- CodeQL should only become merge-blocking after an explicit policy change and
+  backlog triage.
 - Security checks should not silently degrade from blocking to advisory.
 - Safety remains advisory unless a deliberate policy change says otherwise.
 
 **Current repo nuances**
 
 - CodeQL is skipped while the repository is private unless
-  `PULLBOX_ENABLE_CODEQL=true`; it should run automatically after the
-  repository becomes public.
+  `PULLBOX_ENABLE_CODEQL=true`; it runs automatically after the repository
+  becomes public, but remains informational unless `PULLBOX_REQUIRE_CODEQL=true`.
 - Safety's legacy command still needs valid JSON artifact generation while it
   remains advisory.
 - Before public visibility, scan the current tree, full Git history, release
