@@ -198,6 +198,17 @@ def test_create_fetcher_applies_default_headers(monkeypatch) -> None:
     assert captured_headers[0]["Hx-request"] == "true"
 
 
+def test_create_fetcher_rejects_non_http_urls() -> None:
+    fetcher = create_fetcher()
+
+    try:
+        fetcher("file:///etc/passwd", 1.0)
+    except ValueError as exc:
+        assert "http or https" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("expected fetcher to reject non-http URL")
+
+
 def test_login_and_create_fetcher_posts_login_and_reuses_cookie_opener(monkeypatch) -> None:
     opened_requests: list[tuple[str, bytes | None]] = []
 

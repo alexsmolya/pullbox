@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 HTTPS_CONFIG_KEYS = ("https_enabled", "https_cert_path", "https_key_path")
+_HTTPS_CONFIG_QUERY = "SELECT key, value FROM system_config WHERE key IN (?, ?, ?)"
 HTTPS_ENV_KEYS = {
     "https_enabled": "PULLBOX_HTTPS_ENABLED",
     "https_cert_path": "PULLBOX_HTTPS_CERT_PATH",
@@ -89,16 +90,14 @@ def load_https_db_values(settings: PullboxSettings | object | None = None) -> di
     if db_path is None or not db_path.exists():
         return {}
 
-    placeholders = ",".join("?" for _ in HTTPS_CONFIG_KEYS)
     try:
-        query = "SELECT key, value FROM system_config WHERE key IN (" + placeholders + ")"
         with sqlite3.connect(
             f"file:{db_path.as_posix()}?mode=ro",
             uri=True,
             timeout=1.0,
         ) as conn:
             rows = conn.execute(
-                query,
+                _HTTPS_CONFIG_QUERY,
                 HTTPS_CONFIG_KEYS,
             ).fetchall()
     except sqlite3.Error:
