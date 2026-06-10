@@ -453,7 +453,7 @@ Pullbox has two release-note artifacts:
 | Artifact | Source | When Updated | Purpose |
 |---|---|---|---|
 | `CHANGELOG.md` | Curated by maintainers | During release prep PR | Human-readable project history in the repo |
-| GitHub Release notes | Generated from commit subjects by `.github/workflows/release.yml` | After a signed version tag and successful Docker workflow | Detailed release event log and Docker pull command |
+| GitHub Release notes | Generated from commit subjects by `.github/workflows/release.yml` | After a signed version tag and successful Docker workflow | Detailed release event log and Docker pull commands |
 
 `CHANGELOG.md` is not generated automatically. Keep it concise and user-facing:
 summarize the release, do not paste every commit. During release prep, move

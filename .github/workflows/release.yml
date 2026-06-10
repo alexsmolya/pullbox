@@ -171,6 +171,7 @@ jobs:
             echo ""
             echo '```bash'
             echo "docker pull ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
+            echo "docker pull docker.io/pullboxapp/pullbox:${{ steps.version.outputs.version }}"
             echo '```'
             echo ""
             echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG:-$(git rev-list --max-parents=0 HEAD | head -1)}...${{ steps.release.outputs.tag }}"
