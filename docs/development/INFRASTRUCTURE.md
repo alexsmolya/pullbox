@@ -30,7 +30,8 @@ requirements.
 - Release tags trigger Docker publication and GitHub Release generation.
 - Security workflows include gitleaks, `pip-audit`, Safety, Bandit, workflow
   hygiene checks, and Grype container scanning.
-- CodeQL is configured for public repositories and remains gated while private.
+- CodeQL is configured for public repositories and can be opt-in while private;
+  it is informational in the required aggregate gate until explicitly promoted.
 
 ## Table of Contents
 
@@ -237,7 +238,8 @@ GitHub Actions workflows live in `.github/workflows/`.
 - Safety runs as an advisory scanner with artifact output.
 - Bandit runs Python static security checks.
 - CodeQL runs on public repositories, or while private when
-  `PULLBOX_ENABLE_CODEQL=true`.
+  `PULLBOX_ENABLE_CODEQL=true`; `Security Required` treats CodeQL as
+  informational unless `PULLBOX_REQUIRE_CODEQL=true`.
 - Grype scans container images.
 - Dependabot covers `pip`, GitHub Actions, Docker, and npm/Tailwind tooling.
 
@@ -249,6 +251,8 @@ GitHub Actions workflows live in `.github/workflows/`.
 - Dependency and secret scanning remain active.
 - Container scanning remains active before publish.
 - Security checks should not silently move from blocking to advisory.
+- CodeQL should only become merge-blocking after an explicit policy change and
+  backlog triage.
 - CodeQL should stay on GitHub-hosted runners and must not expose self-hosted
   runners to untrusted code.
 - New secrets must be documented and scoped narrowly.

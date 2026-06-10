@@ -14,10 +14,14 @@ Contributor-facing implementation standards live in
 Please report security vulnerabilities privately.
 
 1. Do not open a public GitHub issue for a security vulnerability.
-2. Email `security@pullbox.app` with a short description, reproduction steps,
-   affected version or commit when known, and any relevant logs or screenshots.
-3. Reports are acknowledged within 48 hours.
-4. The issue will be reviewed, fixed, and disclosed publicly only after a safe
+2. Use GitHub private vulnerability reporting from the repository Security tab
+   when possible. This keeps triage in GitHub's advisory workflow.
+3. If you cannot use GitHub private reporting, or if you need to coordinate
+   outside GitHub, email `security@pullbox.app` with a short description,
+   reproduction steps, affected version or commit when known, and any relevant
+   logs or screenshots.
+4. Reports are acknowledged within 48 hours.
+5. The issue will be reviewed, fixed, and disclosed publicly only after a safe
    remediation path is available.
 
 Helpful reports usually include:

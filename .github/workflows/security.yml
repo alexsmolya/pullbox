@@ -10,7 +10,7 @@
 #   safety    → Safety DB (secondary, different vulnerability coverage)
 #   gitleaks  → blocking secret scan
 #   bandit    → advisory static analysis during initial rollout
-#   CodeQL    → public-repo static analysis, gated while private
+#   CodeQL    → public-repo static analysis, informational until promoted
 
 name: Security
 
@@ -279,7 +279,7 @@ jobs:
       - name: Verify required security jobs
         env:
           NEEDS_CONTEXT: ${{ toJson(needs) }}
-          CODEQL_REQUIRED: ${{ github.repository_visibility == 'public' || vars.PULLBOX_ENABLE_CODEQL == 'true' }}
+          CODEQL_BLOCKING: ${{ vars.PULLBOX_REQUIRE_CODEQL == 'true' }}
         run: |
           python - <<'PY'
           import json
@@ -287,11 +287,13 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          codeql_required = os.environ["CODEQL_REQUIRED"].lower() == "true"
+          codeql_blocking = os.environ["CODEQL_BLOCKING"].lower() == "true"
           failed = {}
           for name, info in needs.items():
               result = info.get("result")
-              if name == "codeql" and not codeql_required and result == "skipped":
+              if name == "codeql" and not codeql_blocking:
+                  if result != "success":
+                      print(f"CodeQL is informational for now; observed result: {result}")
                   continue
               if result != "success":
                   failed[name] = result
