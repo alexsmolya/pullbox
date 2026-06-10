@@ -1,16 +1,15 @@
 ---
 # Pullbox Docker Build & Push Pipeline
-# Builds multi-arch images, scans with Grype, runs smoke tests, then pushes to GHCR.
+# Builds images, scans with Grype, runs smoke tests, and publishes registry
+# images only for release tags or explicit manual dispatches.
 #
-# Registry: GHCR only (private, inherits visibility from repo).
-# Docker Hub will be added at v1.0 launch when the repo goes public.
-# To add Docker Hub: add login step, add DOCKERHUB_IMAGE env, add to metadata images.
+# Registries: GHCR and Docker Hub.
 #
 # Security: All actions pinned to full SHA. Container scanned before push.
 # See: docs/development/INFRASTRUCTURE.md
 #
 # Trigger rules:
-#   workflow_run → runs after CI passes on main for untagged SHAs
+#   workflow_run → validates Docker after CI passes on main for untagged SHAs
 #   push tags    → builds semver release images for tagged commits
 #   dispatch     → manual builds from any branch (tagged as "edge")
 # Trusted Docker publish stays on the self-hosted runner. This workflow is not
@@ -19,6 +18,7 @@
 # Tag strategy:
 #   v* tag       → 1.2.3, 1.2, 1, latest, sha-xxxxx
 #   manual       → edge (or custom), sha-xxxxx
+#   untagged main workflow_run → build/scan/smoke only; no registry publish
 #
 # Versioning:
 #   Version is read from pullbox/__init__.py (__version__).
@@ -51,6 +51,7 @@ permissions:
 
 env:
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
+  DOCKERHUB_IMAGE: docker.io/pullboxapp/pullbox
   PYTHON_DEFAULT: "3.14"
 
 concurrency:
@@ -135,6 +136,7 @@ jobs:
       image-labels: ${{ steps.meta.outputs.labels }}
       image-version: ${{ steps.version.outputs.version }}
       build-sha: ${{ needs.gate.outputs.build-sha }}
+      is-release: ${{ steps.resolve-tag.outputs.is_release }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -188,6 +190,7 @@ jobs:
         with:
           images: |
             ${{ env.GHCR_IMAGE }}
+            ${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=semver,pattern={{version}},value=${{ steps.resolve-tag.outputs.tag }},enable=${{ steps.resolve-tag.outputs.is_release }}
             type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release }}
@@ -383,12 +386,13 @@ jobs:
         run: docker rm -f pullbox-smoke || true
 
   # ──────────────────────────────────────────────
-  # Job 4: Push to GHCR (after scan + smoke)
+  # Job 4: Push to registries (after scan + smoke)
   # ──────────────────────────────────────────────
   push:
-    name: Push to GHCR
+    name: Push to Registries
     runs-on: self-hosted
     needs: [build, scan, smoke-test]
+    if: needs.build.outputs.is-release == 'true' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 60
     permissions:
       contents: read
@@ -445,12 +449,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # TODO: Add Docker Hub login at v1.0 launch when repo goes public
-      # - name: Log in to Docker Hub
-      #   uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-      #   with:
-      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
-      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Validate Docker Hub authentication
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets are required to publish release images to Docker Hub."
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker metadata
         id: meta
@@ -458,6 +471,7 @@ jobs:
         with:
           images: |
             ${{ env.GHCR_IMAGE }}
+            ${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=semver,pattern={{version}},value=${{ steps.resolve-tag.outputs.tag }},enable=${{ steps.resolve-tag.outputs.is_release }}
             type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release }}
@@ -501,7 +515,7 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "## Docker Image Published 🐳"
+            echo "## Docker Images Published 🐳"
             echo ""
             echo "**Tags:**"
             echo '```'
