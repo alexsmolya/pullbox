@@ -1,0 +1,59 @@
+---
+# Pullbox CodeQL Branch Probe
+# Fast feedback for trusted security-cleanup branches without waiting for a
+# default-branch merge to refresh the Security and quality dashboard.
+#
+# Security: All actions pinned to full SHA. No pull_request_target.
+# This workflow intentionally does not run on pull_request.
+
+name: CodeQL Branch Probe
+
+on:
+  push:
+    branches:
+      - develop
+      - feature/code-scanning-*
+      - feature/codeql-*
+      - feature/security-*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-branch-probe-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  codeql-branch-probe:
+    name: CodeQL Branch Probe
+    if: github.repository_visibility == 'public' || vars.PULLBOX_ENABLE_CODEQL == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          languages: python
+          queries: +security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          category: "/language:python"
+
+      - name: Summarize CodeQL alerts for refs/heads/<branch>
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PULLBOX_CODEQL_PROBE_REF: ${{ github.ref }}
+          PULLBOX_CODEQL_PROBE_SHA: ${{ github.sha }}
+          PULLBOX_CODEQL_BRANCH_PROBE_FAIL_ON_OPEN: ${{ vars.PULLBOX_CODEQL_BRANCH_PROBE_FAIL_ON_OPEN }}
+        run: python .github/scripts/codeql-alert-summary.py
