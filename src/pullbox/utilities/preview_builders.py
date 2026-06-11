@@ -14,6 +14,7 @@ from pullbox.core.exceptions import ValidationError
 from pullbox.core.filesystem_scan import iter_supported_files
 from pullbox.core.library_naming import build_series_folder_name, compute_target_filename
 from pullbox.core.library_policy import load_library_naming_policy
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.core.naming import (
     issue_type_uses_collection_template,
     normalize_issue_type_for_naming,
@@ -68,10 +69,17 @@ def build_convert_preview_response(body: ConvertPreviewRequest) -> ConvertPrevie
 
 def _is_relative_to(path: Path, other: Path) -> bool:
     try:
-        path.relative_to(other)
+        path.expanduser().resolve(strict=False).relative_to(
+            other.expanduser().resolve(strict=False)
+        )
         return True
     except ValueError:
         return False
+
+
+async def _load_enabled_library_root_paths(session: Any) -> list[Path]:
+    result = await session.execute(select(LibraryRoot.path).where(LibraryRoot.enabled.is_(True)))
+    return [Path(row[0]) for row in result.all()]
 
 
 def _infer_mass_convert_source_format(path: Path) -> str:
@@ -116,22 +124,34 @@ async def build_mass_convert_preview(
         if load_trash_context is None:
             raise ValidationError("trash_folder is required for this preview scope.")
         trash_dir, _ = await load_trash_context(session)
+    trash_dir = trash_dir.expanduser().resolve(strict=False)
+
+    library_roots: list[Path] = []
+    if scope in {"manual", "folder"}:
+        if session is None:
+            raise ValidationError("A database session is required for this preview scope.")
+        library_roots = await _load_enabled_library_root_paths(session)
+        if not library_roots:
+            raise ValidationError("No enabled library roots are available for this preview.")
 
     candidate_paths: list[Path] = []
 
     if scope == "manual":
         for path_str in body.file_paths:
-            path = Path(path_str)
-            if (
-                path.exists()
-                and path.is_file()
-                and path.suffix.lower() in _MASS_CONVERT_SUPPORTED_EXTS
-                and not _is_relative_to(path, trash_dir)
+            try:
+                path = resolve_path_inside_roots(path_str, library_roots, require_file=True)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from None
+            if path.suffix.lower() in _MASS_CONVERT_SUPPORTED_EXTS and not _is_relative_to(
+                path, trash_dir
             ):
                 candidate_paths.append(path)
     elif scope == "folder":
         for root_path in body.file_paths:
-            root = Path(root_path)
+            try:
+                root = resolve_path_inside_roots(root_path, library_roots, require_dir=True)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from None
             for path in iter_supported_files(root, _MASS_CONVERT_SUPPORTED_EXTS):
                 if _is_relative_to(path, trash_dir):
                     continue

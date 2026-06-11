@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
@@ -249,15 +251,14 @@ def library_clamp_browse_path(
 
     candidate = fallback_root
     if requested_path:
-        with contextlib.suppress(OSError, RuntimeError):
-            requested = Path(requested_path).expanduser().resolve()
-            if requested.exists() and requested.is_dir():
-                matching_root = next(
-                    (root for root in roots if requested == root or root in requested.parents),
-                    None,
-                )
-                if matching_root is not None:
-                    return requested, matching_root
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
+            requested = resolve_path_inside_roots(requested_path, roots, require_dir=True)
+            matching_root = next(
+                (root for root in roots if requested == root or requested.is_relative_to(root)),
+                None,
+            )
+            if matching_root is not None:
+                return requested, matching_root
 
     return candidate, fallback_root
 

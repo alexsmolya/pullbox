@@ -14,6 +14,8 @@ from pullbox.models.library import LibraryRoot
 from pullbox.models.series import Series
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -75,6 +77,33 @@ def path_is_inside_root(path: Path, root: LibraryRoot) -> bool:
     root_path = Path(root.path).expanduser().resolve(strict=False)
     candidate = path.expanduser().resolve(strict=False)
     return candidate == root_path or candidate.is_relative_to(root_path)
+
+
+def resolve_path_inside_roots(
+    path: str | Path,
+    roots: Iterable[str | Path],
+    *,
+    require_exists: bool = False,
+    require_file: bool = False,
+    require_dir: bool = False,
+) -> Path:
+    """Resolve a path and require it to stay inside one of the supplied roots."""
+    root_paths = tuple(Path(root).expanduser().resolve(strict=False) for root in roots)
+    if not root_paths:
+        raise ValueError("No allowed roots are configured.")
+
+    candidate = Path(path).expanduser().resolve(strict=False)
+    if not any(candidate == root or candidate.is_relative_to(root) for root in root_paths):
+        raise ValueError(f"Selected path is outside enabled library roots: {path}")
+
+    if require_exists and not candidate.exists():
+        raise ValueError(f"Selected path does not exist: {path}")
+    if require_file and not candidate.is_file():
+        raise ValueError(f"Selected path is not a file: {path}")
+    if require_dir and not candidate.is_dir():
+        raise ValueError(f"Selected path is not a directory: {path}")
+
+    return candidate
 
 
 def materialize_series_path(series: object, series_folder: Path, root: LibraryRoot) -> None:

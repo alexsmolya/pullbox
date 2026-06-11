@@ -22,6 +22,7 @@ from pullbox.core.library_permissions import (
     format_mode,
     parse_permission_mode,
 )
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.models.library import LibraryRoot
 from pullbox.utilities.base_executor import (
     ApplyResult,
@@ -384,18 +385,15 @@ def _selected_roots(
                 return [path]
         raise ValueError(f"Library root not found: {root_id}")
     if scope == "folder":
-        selected = Path(str(job_config.get("selected_path", "") or ""))
-        if selected.is_symlink():
+        selected_raw = Path(str(job_config.get("selected_path", "") or ""))
+        if selected_raw.is_symlink():
             raise ValueError("Selected folder cannot be a symlink")
-        if not selected.is_dir():
-            raise ValueError(f"Selected folder does not exist: {selected}")
-        _assert_inside_library_roots(selected, roots)
+        selected = resolve_path_inside_roots(selected_raw, roots, require_dir=True)
         return [selected]
     if scope == "paths":
         paths = []
         for path_value in job_config.get("file_paths", []):
-            path = Path(str(path_value))
-            _assert_inside_library_roots(path, roots)
+            path = resolve_path_inside_roots(str(path_value), roots)
             paths.append(path)
         return paths
     return []
@@ -416,16 +414,15 @@ def _scoped_capability_roots(
                 return [path]
         raise ValueError(f"Library root not found: {root_id}")
     if scope == "folder":
-        selected = Path(str(job_config.get("selected_path", "") or ""))
-        if selected.is_symlink():
+        selected_raw = Path(str(job_config.get("selected_path", "") or ""))
+        if selected_raw.is_symlink():
             raise ValueError("Selected folder cannot be a symlink")
-        if not selected.is_dir():
-            raise ValueError(f"Selected folder does not exist: {selected}")
+        selected = resolve_path_inside_roots(selected_raw, roots, require_dir=True)
         return [_containing_library_root(selected, roots)]
     if scope == "paths":
         scoped_roots: list[Path] = []
         for path_value in job_config.get("file_paths", []):
-            path = Path(str(path_value))
+            path = resolve_path_inside_roots(str(path_value), roots)
             root = _containing_library_root(path, roots)
             if root not in scoped_roots:
                 scoped_roots.append(root)
@@ -438,7 +435,7 @@ def _assert_inside_library_roots(path: Path, roots: list[Path]) -> None:
 
 
 def _containing_library_root(path: Path, roots: list[Path]) -> Path:
-    resolved_path = path.resolve(strict=False)
+    resolved_path = resolve_path_inside_roots(path, roots)
     for root in roots:
         resolved_root = root.resolve(strict=False)
         if resolved_path == resolved_root or resolved_path.is_relative_to(resolved_root):
