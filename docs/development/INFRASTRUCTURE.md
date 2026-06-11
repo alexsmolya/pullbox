@@ -26,7 +26,7 @@ requirements.
 - Python 3.14 is the production container runtime.
 - The production Docker image uses Docker Hardened Images.
 - The runtime image is non-root and intentionally minimal.
-- GHCR is the current container registry.
+- GHCR and Docker Hub are the current container registries.
 - Release tags trigger Docker publication and GitHub Release generation.
 - Security workflows include gitleaks, `pip-audit`, Safety, Bandit, workflow
   hygiene checks, and Grype container scanning.
@@ -174,7 +174,7 @@ GitHub Actions workflows live in `.github/workflows/`.
 |---|---|---|
 | `ci.yml` | Push to `main`, PR to `main` or `develop`, merge queue | Lint, format, typecheck, tests, migration check, accessibility, E2E, `CI Required` aggregate |
 | `docker-pr.yml` | Docker-relevant PR changes | Production Docker build validation before merge |
-| `docker.yml` | CI success on `main`, tag push, manual dispatch | Multi-arch Docker build, Grype scan, smoke test, GHCR publish |
+| `docker.yml` | CI success on `main`, tag push, manual dispatch | Docker build validation, Grype scan, smoke test, and registry publish only for release tags or manual dispatch |
 | `security.yml` | Push to `main`, PR to `main` or `develop`, merge queue, schedule, manual dispatch | gitleaks, `pip-audit`, Safety, Bandit, public-gated CodeQL, `Security Required` aggregate |
 | `workflow-hygiene.yml` | Push to `main`, PR to `main` or `develop`, merge queue, manual dispatch | actionlint, workflow expression validation, `Workflow Hygiene Required` aggregate |
 | `clean-room.yml` | Schedule, manual dispatch | Fresh install validation outside runner-local cache |
@@ -194,6 +194,9 @@ GitHub Actions workflows live in `.github/workflows/`.
 
 ### 3.3 Current repo nuances
 
+- Docker validation runs after successful `main` CI for untagged commits, but
+  registry publication happens only for release tags or explicit manual
+  dispatches.
 - Docker publication depends on trusted refs and release tags.
 - DHI credentials are required for Docker builds that pull `dhi.io` base images.
 - Forked or Dependabot PRs may not have repository secrets. PR workflows should
@@ -542,13 +545,15 @@ Development dependency categories:
 ### 8.1 Current Pullbox implementation
 
 - Version tags trigger release and Docker automation.
-- `docker.yml` builds, scans, smoke-tests, and publishes container images.
+- `docker.yml` builds, scans, and smoke-tests container images after successful
+  `main` CI. It publishes to GHCR and Docker Hub only for release tags or
+  explicit manual dispatches.
 - `release.yml` creates or updates GitHub Releases for tagged commits after the
   Docker workflow succeeds.
 - GitHub Release notes are generated from conventional commit prefixes.
 - The root `CHANGELOG.md` is curated manually during release prep.
 - Release tags are expected to be signed.
-- GHCR is the current image registry.
+- GHCR and Docker Hub are the current image registries.
 
 ### 8.2 Required standard
 
@@ -556,15 +561,16 @@ Development dependency categories:
 - Release tags should be signed and verified locally before push.
 - Curated `CHANGELOG.md` entries should be moved from Unreleased into the
   release section before the release PR.
-- Docker publication should happen only from trusted refs.
+- Docker publication should happen only from trusted refs and should not publish
+  ordinary untagged `main` merges.
 - Release images should pass Grype and smoke tests before publication.
-- GHCR tags should be reviewed after release.
+- GHCR and Docker Hub tags should be reviewed after release.
 - Unwanted tag aliases should be deleted deliberately, not ignored.
 
 ### 8.3 Current repo nuances
 
 - Docker metadata rules may publish semver aliases in addition to exact version
-  and SHA tags.
+  and SHA tags during release-tag builds.
 - Pre-release tags can exercise the full pipeline before a stable release.
 - If Docker publish succeeds but registry tags look wrong, treat that as release
   hygiene work before moving on.
@@ -574,8 +580,8 @@ Development dependency categories:
 - [ ] Release tag is signed.
 - [ ] Docker workflow succeeds.
 - [ ] GitHub Release points at the expected tag.
-- [ ] GHCR exact version and SHA tags exist.
-- [ ] Unwanted GHCR aliases are reviewed and cleaned up.
+- [ ] GHCR and Docker Hub exact version and SHA tags exist.
+- [ ] Unwanted GHCR and Docker Hub aliases are reviewed and cleaned up.
 
 ## 9. Operational Support
 
@@ -669,6 +675,6 @@ dependencies:
 - [ ] Grype scans run before image publish.
 - [ ] Docker smoke tests verify startup and `/ping`.
 - [ ] Release tags are signed.
-- [ ] GHCR tags are reviewed after publish.
+- [ ] GHCR and Docker Hub tags are reviewed after publish.
 - [ ] New dependencies are justified and validated.
 - [ ] Operator deployment docs match the actual runtime contract.
