@@ -27,6 +27,8 @@ async def _reset_password(username: str, candidate_secret: str) -> None:
     """Validate password, update the user's hash, and invalidate all sessions."""
     violations = validate_password(candidate_secret)
     if violations:
+        # These are static policy requirement strings; candidate_secret is never printed.
+        # codeql[py/clear-text-logging-sensitive-data]
         print("Password does not meet requirements:", file=sys.stderr)
         for v in violations:
             print(f"  - {v}", file=sys.stderr)
