@@ -17,6 +17,7 @@ from sqlalchemy.orm import joinedload
 from pullbox.api.deps import AuthenticatedUser, DbSession  # noqa: TC001
 from pullbox.config import get_settings
 from pullbox.core.exceptions import NotFoundError
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.models.issue import Issue
 from pullbox.models.series import Series
 from pullbox.services.cover_cache_service import cache_series_cover, resolve_series_cover_file
@@ -31,6 +32,7 @@ _CACHE_HEADERS = {"Cache-Control": "private, no-cache, max-age=0, must-revalidat
 
 def _serve_image(path: Path) -> FileResponse:
     """Return a FileResponse for an image with caching headers."""
+    path = path.expanduser().resolve(strict=True)
     # Infer media type from extension
     suffix = path.suffix.lower()
     media_type = {
@@ -49,8 +51,12 @@ def _serve_image(path: Path) -> FileResponse:
 
 def _find_cover_file(directory: Path, stem: str) -> Path | None:
     """Look for a cover file with any common image extension."""
+    root = directory.expanduser().resolve(strict=False)
     for ext in (".jpg", ".jpeg", ".png", ".webp"):
-        candidate = directory / f"{stem}{ext}"
+        try:
+            candidate = resolve_path_inside_roots(root / f"{stem}{ext}", [root], require_file=True)
+        except ValueError:
+            continue
         if candidate.is_file():
             return candidate
     return None

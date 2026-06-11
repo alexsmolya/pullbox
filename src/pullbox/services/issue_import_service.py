@@ -93,17 +93,19 @@ async def prepare_manual_issue_import(
             detail="Invalid file path: contains null bytes",
         )
 
-    source_path = Path(file_path)
+    source_path = Path(file_path).expanduser()
     if not source_path.is_absolute():
         raise ManualIssueImportError(
             status_code=400,
             detail="File path must be absolute",
         )
-    if not source_path.exists():
+    try:
+        source_path = source_path.resolve(strict=True)
+    except (OSError, RuntimeError):
         raise ManualIssueImportError(
             status_code=400,
             detail="File not found on disk",
-        )
+        ) from None
     if not source_path.is_file():
         raise ManualIssueImportError(
             status_code=400,

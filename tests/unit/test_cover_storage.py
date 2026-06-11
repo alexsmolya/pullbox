@@ -52,6 +52,14 @@ class TestFindCoverFile:
         (tmp_path / "issue_001.jpg").write_text("img")
         assert _find_cover_file(tmp_path, "issue_001") == tmp_path / "issue_001.jpg"
 
+    def test_rejects_stem_path_traversal(self, tmp_path: Path) -> None:
+        cover_dir = tmp_path / "covers"
+        cover_dir.mkdir()
+        outside = tmp_path / "outside.jpg"
+        outside.write_text("img")
+
+        assert _find_cover_file(cover_dir, "../outside") is None
+
 
 class TestResolveCoversDir:
     """Cover directory resolution prefers {comics_dir}/.covers/ over legacy path."""

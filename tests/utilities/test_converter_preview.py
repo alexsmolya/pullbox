@@ -134,6 +134,23 @@ class TestPreviewLogic:
         assert len(result.files) == 1
         assert result.files[0].output_path.endswith(".cbz")
 
+    def test_preview_reports_resolved_paths(self, tmp_path: Path) -> None:
+        from pullbox.utilities.executors.file_converter import build_convert_preview
+
+        source_dir = tmp_path / "comics"
+        f1 = _create_test_cb7(source_dir / "batman_001.cb7")
+
+        result = build_convert_preview(
+            source_format="cb7",
+            target_format="cbz",
+            scope="manual",
+            file_paths=[str(source_dir / ".." / "comics" / f1.name)],
+        )
+
+        assert result.total_count == 1
+        assert result.files[0].path == str(f1.resolve())
+        assert result.files[0].output_path == str(f1.resolve().with_suffix(".cbz"))
+
     def test_preview_truncated_at_100(self, tmp_path: Path) -> None:
         """Large file list truncated to 100 in response, total_count accurate."""
         from pullbox.utilities.executors.file_converter import build_convert_preview

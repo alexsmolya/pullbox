@@ -565,17 +565,21 @@ def build_convert_preview(
 
     if scope == "manual" and file_paths:
         for path_str in file_paths:
-            path = Path(path_str)
-            if path.exists() and path.is_file():
-                size = path.stat().st_size
-                total_size += size
-                matching_files.append(
-                    ConvertPreviewFileInfo(
-                        path=str(path),
-                        output_path=str(path.with_suffix(f".{target_format}")),
-                        size_bytes=size,
-                    )
+            try:
+                path = Path(path_str).expanduser().resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+            total_size += size
+            matching_files.append(
+                ConvertPreviewFileInfo(
+                    path=str(path),
+                    output_path=str(path.with_suffix(f".{target_format}")),
+                    size_bytes=size,
                 )
+            )
 
     total_count = len(matching_files)
     # Truncate file list to 100 for response, keep accurate total_count
