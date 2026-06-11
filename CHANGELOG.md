@@ -23,6 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.3] - 2026-06-10
+
+Corrective release for Docker Hub publication.
+
+### CI / Build
+
+- Docker Hub release publishing now targets the `docker.io/pullbox/pullbox` namespace.
+- Generated GitHub release notes now show the corrected Docker Hub pull command.
+
+## [0.9.2] - 2026-06-10
+
+Patch release to validate dual-registry Docker publishing after the public repository relaunch.
+
+### CI / Build
+
+- Docker release publishing now publishes versioned release images to both GHCR and Docker Hub.
+- Untagged `main` Docker workflow runs now build, scan, and smoke-test without publishing registry images.
+- Generated GitHub release notes now include both GHCR and Docker Hub pull commands.
+
+### Documentation
+
+- Registry and release-process documentation now reflects the dual-registry publishing contract.
+
 ## [0.9.1] - 2026-06-10
 
 First clean public release from the relaunched `pullboxapp/pullbox` repository.
