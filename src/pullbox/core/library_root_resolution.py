@@ -92,6 +92,9 @@ def resolve_path_inside_roots(
     if not root_paths:
         raise ValueError("No allowed roots are configured.")
 
+    # This is the central path validator; the candidate is immediately checked
+    # against enabled library roots before any caller can use the result.
+    # codeql[py/path-injection]
     candidate = Path(path).expanduser().resolve(strict=False)
     if not any(candidate == root or candidate.is_relative_to(root) for root in root_paths):
         raise ValueError(f"Selected path is outside enabled library roots: {path}")

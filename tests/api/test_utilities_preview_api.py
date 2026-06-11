@@ -344,6 +344,33 @@ async def test_convert_preview_returns_output_paths_with_target_extension(
 
 
 @pytest.mark.asyncio
+async def test_convert_preview_rejects_files_outside_library_roots(
+    authenticated_client,
+    preview_paths: dict[str, str],
+    tmp_path: Path,
+) -> None:  # type: ignore[no-untyped-def]
+    assert preview_paths["library_root"]
+    outside = tmp_path / "outside-import.cbr"
+    outside.write_text("outside")
+
+    response = await authenticated_client.post(
+        "/api/v1/utilities/convert/preview",
+        json={
+            "source_format": "cbr",
+            "target_format": "cbz",
+            "scope": "manual",
+            "file_paths": [str(outside)],
+        },
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_count"] == 0
+    assert data["files"] == []
+
+
+@pytest.mark.asyncio
 async def test_mass_rename_preview_returns_folder_and_file_proposals(
     authenticated_client,
     preview_paths: dict[str, str],

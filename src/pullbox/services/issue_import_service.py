@@ -93,6 +93,9 @@ async def prepare_manual_issue_import(
             detail="Invalid file path: contains null bytes",
         )
 
+    # Manual imports intentionally accept operator-selected absolute files; the path is
+    # resolved strictly and extension-validated before any library mutation happens.
+    # codeql[py/path-injection]
     source_path = Path(file_path).expanduser()
     if not source_path.is_absolute():
         raise ManualIssueImportError(

@@ -85,16 +85,22 @@ _background_tasks: set[asyncio.Task[None]] = set()
 
 async def _resolve_enabled_library_scan_root(session: DbSession, raw_path: str) -> Path:
     """Resolve a requested utility scan root under enabled library roots."""
+    roots = await _load_enabled_library_roots(session)
+    try:
+        return resolve_path_inside_roots(raw_path, roots, require_dir=True)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from None
+
+
+async def _load_enabled_library_roots(session: DbSession) -> list[Path]:
+    """Load enabled library roots for utility path validation."""
     roots_result = await session.execute(
         select(LibraryRoot.path).where(LibraryRoot.enabled.is_(True))
     )
     roots = [Path(row[0]) for row in roots_result.all() if row[0]]
     if not roots:
         raise ValidationError("No enabled library roots are available.")
-    try:
-        return resolve_path_inside_roots(raw_path, roots, require_dir=True)
-    except ValueError as exc:
-        raise ValidationError(str(exc)) from None
+    return roots
 
 
 def set_queue_manager(mgr: JobQueueManager) -> None:
@@ -486,9 +492,13 @@ async def get_queue_status(
 async def convert_preview(
     body: ConvertPreviewRequest,
     _user: InteractiveOperatorUser,
+    session: DbSession,
 ) -> ConvertPreviewResponse:
     """Preview files that would be converted without submitting a job."""
-    return build_convert_preview_response(body)
+    return build_convert_preview_response(
+        body,
+        allowed_roots=await _load_enabled_library_roots(session),
+    )
 
 
 @router.post("/mass-convert/preview", response_model=MassConvertPreviewResponse)

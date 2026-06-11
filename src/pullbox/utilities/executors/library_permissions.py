@@ -386,9 +386,12 @@ def _selected_roots(
         raise ValueError(f"Library root not found: {root_id}")
     if scope == "folder":
         selected_raw = Path(str(job_config.get("selected_path", "") or ""))
+        selected = resolve_path_inside_roots(selected_raw, roots, require_dir=True)
+        # The raw path has been constrained to enabled library roots above; this
+        # preserves the no-selected-symlink policy without probing arbitrary paths.
+        # codeql[py/path-injection]
         if selected_raw.is_symlink():
             raise ValueError("Selected folder cannot be a symlink")
-        selected = resolve_path_inside_roots(selected_raw, roots, require_dir=True)
         return [selected]
     if scope == "paths":
         paths = []
@@ -415,9 +418,12 @@ def _scoped_capability_roots(
         raise ValueError(f"Library root not found: {root_id}")
     if scope == "folder":
         selected_raw = Path(str(job_config.get("selected_path", "") or ""))
+        selected = resolve_path_inside_roots(selected_raw, roots, require_dir=True)
+        # The raw path has been constrained to enabled library roots above; this
+        # preserves the no-selected-symlink policy without probing arbitrary paths.
+        # codeql[py/path-injection]
         if selected_raw.is_symlink():
             raise ValueError("Selected folder cannot be a symlink")
-        selected = resolve_path_inside_roots(selected_raw, roots, require_dir=True)
         return [_containing_library_root(selected, roots)]
     if scope == "paths":
         scoped_roots: list[Path] = []

@@ -51,7 +51,11 @@ _MASS_CONVERT_SUPPORTED_FORMATS = {
 }
 
 
-def build_convert_preview_response(body: ConvertPreviewRequest) -> ConvertPreviewResponse:
+def build_convert_preview_response(
+    body: ConvertPreviewRequest,
+    *,
+    allowed_roots: Sequence[str | Path] | None = None,
+) -> ConvertPreviewResponse:
     """Preview files that would be converted without submitting a job."""
     from pullbox.utilities.executors.file_converter import build_convert_preview
 
@@ -61,6 +65,7 @@ def build_convert_preview_response(body: ConvertPreviewRequest) -> ConvertPrevie
             target_format=body.target_format,
             scope=body.scope,
             file_paths=body.file_paths,
+            allowed_roots=allowed_roots,
         )
         return result
     except ValueError as exc:
