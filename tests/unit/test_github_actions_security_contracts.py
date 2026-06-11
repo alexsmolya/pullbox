@@ -11,6 +11,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DEPENDABOT_CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
+CODEQL_CONFIG = REPO_ROOT / ".github" / "codeql" / "codeql-config.yml"
 
 ACTION_REF_RE = re.compile(
     r"""
@@ -125,6 +126,22 @@ def test_security_workflow_keeps_required_scanners_and_schedule() -> None:
     ]
     for marker in required_markers:
         assert marker in text
+
+
+def test_codeql_analysis_uses_product_scope_config() -> None:
+    security_workflow = WORKFLOW_DIR / "security.yml"
+    workflow_text = security_workflow.read_text(encoding="utf-8")
+    config = _load_yaml(CODEQL_CONFIG)
+
+    assert "config-file: ./.github/codeql/codeql-config.yml" in workflow_text
+    assert config.get("name") == "pullbox-product-runtime"
+    assert config.get("paths") == ["src/pullbox"]
+    assert {
+        "tests/**",
+        "scripts/**",
+        "docs/**",
+        "performance-sprint/**",
+    } <= set(config.get("paths-ignore", []))
 
 
 def test_local_security_script_writes_valid_safety_json_artifact() -> None:

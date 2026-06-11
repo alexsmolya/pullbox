@@ -1,0 +1,15 @@
+---
+name: pullbox-product-runtime
+
+# CodeQL should represent the shipped Pullbox runtime attack surface. Tests,
+# benchmark helpers, docs, and development scripts have their own quality gates
+# and should not inflate public code-scanning security findings.
+paths:
+  - src/pullbox
+
+paths-ignore:
+  - tests/**
+  - scripts/**
+  - docs/**
+  - performance-sprint/**
+  - pullbox-dev/**
