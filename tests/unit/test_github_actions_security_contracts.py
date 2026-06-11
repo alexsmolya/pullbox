@@ -134,6 +134,8 @@ def test_codeql_analysis_uses_product_scope_config() -> None:
     config = _load_yaml(CODEQL_CONFIG)
 
     assert "config-file: ./.github/codeql/codeql-config.yml" in workflow_text
+    assert "queries: +security-extended" in workflow_text
+    assert "security-and-quality" not in workflow_text
     assert config.get("name") == "pullbox-product-runtime"
     assert config.get("paths") == ["src/pullbox"]
     assert {
