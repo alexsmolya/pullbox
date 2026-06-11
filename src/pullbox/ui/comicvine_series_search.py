@@ -48,11 +48,6 @@ def wrap_comicvine_provider_for_ui_cache(provider: Any, request: object) -> Any:
     return PersistentComicVineCacheProvider(provider, session_factory)
 
 
-_TRAILING_YEAR_HINT_RE = re.compile(
-    r"^(?P<title>.+?)(?:\s+|\s*[\(\[])(?P<year>\d{4})(?:[\)\]])?\s*$"
-)
-
-
 @dataclass(frozen=True, slots=True)
 class ComicVineSeriesSearchQuery:
     """Parsed UI search text with an optional ComicVine volume start-year hint."""
@@ -67,16 +62,37 @@ def _is_plausible_start_year(year: int) -> bool:
     return 1900 <= year <= current_year + 1
 
 
+def _split_trailing_year_hint(raw_query: str) -> tuple[str, int] | None:
+    if len(raw_query) < 6:
+        return None
+
+    if raw_query[-1] in ")]":
+        opener = "(" if raw_query[-1] == ")" else "["
+        open_index = raw_query.rfind(opener)
+        if open_index > 0:
+            year_text = raw_query[open_index + 1 : -1].strip()
+            title_query = raw_query[:open_index].strip().rstrip(" -_:,;")
+            if len(year_text) == 4 and year_text.isdigit() and title_query:
+                return title_query, int(year_text)
+
+    parts = raw_query.rsplit(maxsplit=1)
+    if len(parts) != 2:
+        return None
+    title_query, year_text = parts[0].strip().rstrip(" -_:,;"), parts[1]
+    if len(year_text) == 4 and year_text.isdigit() and title_query:
+        return title_query, int(year_text)
+    return None
+
+
 def parse_comicvine_series_query(query: str | None) -> ComicVineSeriesSearchQuery:
     """Split a trailing start-year hint from a ComicVine series search query."""
     raw_query = (query or "").strip()
     if not raw_query:
         return ComicVineSeriesSearchQuery(raw_query="", title_query="")
 
-    match = _TRAILING_YEAR_HINT_RE.match(raw_query)
-    if match:
-        year = int(match.group("year"))
-        title_query = match.group("title").strip().rstrip(" -_:,;")
+    split_hint = _split_trailing_year_hint(raw_query)
+    if split_hint is not None:
+        title_query, year = split_hint
         if title_query and _is_plausible_start_year(year):
             return ComicVineSeriesSearchQuery(
                 raw_query=raw_query,

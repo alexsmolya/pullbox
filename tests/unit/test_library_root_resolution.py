@@ -11,6 +11,7 @@ from pullbox.core.library_root_resolution import (
     materialize_series_path,
     path_is_inside_root,
     resolve_library_root,
+    resolve_path_inside_roots,
 )
 from pullbox.models.config import SystemConfig
 from pullbox.models.library import LibraryRoot
@@ -99,3 +100,43 @@ def test_path_is_inside_root_and_materialize_series_path(tmp_path: Path) -> None
 
     assert series.path == str(series_path)
     assert series.library_root_id == root.id
+
+
+def test_resolve_path_inside_roots_returns_resolved_child(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    nested = root / "Series"
+    nested.mkdir(parents=True)
+
+    resolved = resolve_path_inside_roots(nested / ".." / "Series", [root], require_dir=True)
+
+    assert resolved == nested.resolve()
+
+
+def test_resolve_path_inside_roots_rejects_prefix_sibling(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    sibling = tmp_path / "library-other"
+    root.mkdir()
+    sibling.mkdir()
+
+    with pytest.raises(ValueError, match="outside"):
+        resolve_path_inside_roots(sibling, [root], require_dir=True)
+
+
+def test_resolve_path_inside_roots_rejects_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    escape = root / "escape"
+    escape.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="outside"):
+        resolve_path_inside_roots(escape, [root], require_dir=True)
+
+
+def test_resolve_path_inside_roots_enforces_file_requirement(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+
+    with pytest.raises(ValueError, match="file"):
+        resolve_path_inside_roots(root, [root], require_file=True)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -275,3 +276,33 @@ class TestSaveComicVineKey:
             headers=_csrf_header_for(client),
         )
         assert resp.status_code in (400, 422)
+
+
+class TestComicVineKeyValidation:
+    """POST /api/v1/config/comicvine/test response safety tests."""
+
+    @pytest.mark.asyncio
+    async def test_test_key_hides_unexpected_exception_details(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        with patch(
+            "pullbox.providers.metadata.comicvine.ComicVineProvider.test_connection",
+            new=AsyncMock(
+                side_effect=RuntimeError(
+                    "boom reading /config/certs/server.key from https://internal.example"
+                )
+            ),
+        ):
+            resp = await client.post(
+                "/api/v1/config/comicvine/test",
+                json={"api_key": "pullbox-test-comicvine-key-1234"},
+                headers=_csrf_header_for(client),
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {
+            "healthy": False,
+            "message": "Connection failed. Check Pullbox logs for details.",
+        }

@@ -364,8 +364,11 @@ class MassConvertPipelineExecutor(JobExecutor):
         try:
             if not source.exists():
                 raise FileNotFoundError(f"Source file not found: {source}")
+            if 1 not in steps:
+                raise ValueError("Step 1 (convert to CBZ) is required for mass conversion")
 
             current_path = source
+            target_path = source.with_suffix(".cbz")
 
             # ── Step 1: Convert to CBZ ─────────────────────────
             if 1 in steps:
@@ -373,7 +376,6 @@ class MassConvertPipelineExecutor(JobExecutor):
                     _convert_sync,
                 )
 
-                target_path = source.with_suffix(".cbz")
                 log_entries.append(
                     (
                         "DEBUG",

@@ -88,6 +88,36 @@ _COLON_REPLACEMENTS = {
     "smart": " \u2014",  # em-dash
 }
 
+
+def _collapse_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _replace_slash_separators(value: str) -> str:
+    """Replace slash-like title separators without regex backtracking."""
+    output: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char in {"/", "\\"}:
+            while output and output[-1].isspace():
+                output.pop()
+            if output and output[-1] != " ":
+                output.append(" ")
+            output.extend(("-", " "))
+            index += 1
+            while index < len(value) and value[index].isspace():
+                index += 1
+            continue
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
+def _strip_trailing_separators(value: str) -> str:
+    return value.rstrip(" \t\r\n\f\v-")
+
+
 _NAMING_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "issue": "",
     "standard": "",
@@ -372,13 +402,13 @@ def sanitize_for_filesystem(
         name = name.replace(":", colon_repl)
 
         # Slash-like separators are illegal on disk but meaningful in comic titles.
-        name = re.sub(r"\s*[\\/]\s*", " - ", name)
+        name = _replace_slash_separators(name)
 
         # Remove remaining illegal characters
         name = _ILLEGAL_CHARS.sub("", name)
 
     # Collapse multiple spaces
-    name = re.sub(r"\s{2,}", " ", name).strip()
+    name = _collapse_whitespace(name)
 
     # Strip trailing dots and spaces (Windows restriction)
     name = name.rstrip(". ")
@@ -471,7 +501,7 @@ def format_series_folder(
     # Clean up empty parens/brackets from missing tokens (e.g. [{Type}] when standard)
     name = re.sub(r"\(\s*\)", "", name)
     name = re.sub(r"\[\s*\]", "", name)
-    name = re.sub(r"\s{2,}", " ", name).strip()
+    name = _collapse_whitespace(name)
 
     # Final sanitization pass on the assembled result
     return sanitize_for_filesystem(
@@ -636,12 +666,12 @@ def format_comic_file(
         name = name.replace("v{Volume}", "").replace("{Volume}", "")
 
     # Clean up double spaces from missing optional tokens
-    name = re.sub(r"\s{2,}", " ", name).strip()
+    name = _collapse_whitespace(name)
     # Clean up empty parens/brackets from missing tokens
     name = re.sub(r"\(\s*\)", "", name).strip()
     name = re.sub(r"\[\s*\]", "", name).strip()
     # Clean up trailing separators
-    name = re.sub(r"[\s\-]+$", "", name).strip()
+    name = _strip_trailing_separators(name).strip()
 
     safe_name = sanitize_for_filesystem(
         name,

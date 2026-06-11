@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from inspect import Parameter, Signature
+from typing import Any, ClassVar
 
 import pytest
 
@@ -35,6 +36,25 @@ class ModernWorkerPool:
 class LegacyWorkerPool:
     def __init__(self, *, max_workers: int) -> None:
         self.max_workers = max_workers
+
+
+class RecordingLegacyWorkerPool:
+    __signature__ = Signature(
+        [
+            Parameter(
+                "max_workers",
+                Parameter.KEYWORD_ONLY,
+                annotation=int,
+            )
+        ]
+    )
+    calls: ClassVar[list[dict[str, Any]]] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.__class__.calls.append(kwargs)
+        if "execution_mode" in kwargs:
+            raise TypeError("execution_mode is not supported")
+        self.max_workers = kwargs["max_workers"]
 
 
 class StreamExecutor(ModeExecutor):
@@ -96,6 +116,21 @@ def test_build_worker_runtime_preserves_legacy_worker_pool_fallback() -> None:
     assert runtime.execution_mode == ExecutionMode.PROCESS
     assert runtime.batch_size == 2
     assert runtime.worker_pool.max_workers == 2
+
+
+def test_build_worker_runtime_does_not_probe_legacy_pool_with_unsupported_kwargs() -> None:
+    RecordingLegacyWorkerPool.calls = []
+
+    runtime = build_worker_runtime(
+        executor=ModeExecutor(ExecutionMode.PROCESS),
+        config={},
+        job_context=None,
+        worker_count=2,
+        worker_pool_factory=RecordingLegacyWorkerPool,
+    )
+
+    assert runtime.worker_pool.max_workers == 2
+    assert RecordingLegacyWorkerPool.calls == [{"max_workers": 2}]
 
 
 @pytest.mark.asyncio

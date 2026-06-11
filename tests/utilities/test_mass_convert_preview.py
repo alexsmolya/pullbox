@@ -2,15 +2,32 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from pullbox.core.exceptions import ValidationError
 from pullbox.utilities.preview_builders import build_mass_convert_preview
 from pullbox.utilities.schemas import MassConvertPreviewRequest
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+class _SessionResult:
+    def __init__(self, rows: list[tuple[str]]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[tuple[str]]:
+        return self._rows
+
+
+class _FakeSession:
+    def __init__(self, root_path: Path) -> None:
+        self.root_path = root_path
+
+    async def execute(self, _stmt: Any) -> _SessionResult:
+        return _SessionResult([(str(self.root_path),)])
 
 
 @pytest.mark.asyncio
@@ -33,7 +50,7 @@ async def test_mass_convert_preview_folder_scope_excludes_trash_folder(
             file_paths=[str(library)],
             trash_folder=str(trash),
         ),
-        session=None,
+        session=_FakeSession(library),
         load_trash_context=None,
     )
 
@@ -49,9 +66,11 @@ async def test_mass_convert_preview_folder_scope_excludes_trash_folder(
 async def test_mass_convert_preview_manual_scope_infers_supported_formats(
     tmp_path: Path,
 ) -> None:
-    pdf = tmp_path / "Annual.pdf"
-    cb7 = tmp_path / "Special.cb7"
-    ignored = tmp_path / "notes.txt"
+    library = tmp_path / "library"
+    library.mkdir()
+    pdf = library / "Annual.pdf"
+    cb7 = library / "Special.cb7"
+    ignored = library / "notes.txt"
     pdf.write_bytes(b"pdf")
     cb7.write_bytes(b"cb7")
     ignored.write_bytes(b"text")
@@ -62,7 +81,7 @@ async def test_mass_convert_preview_manual_scope_infers_supported_formats(
             file_paths=[str(pdf), str(cb7), str(ignored)],
             trash_folder=str(tmp_path / ".trash"),
         ),
-        session=None,
+        session=_FakeSession(library),
         load_trash_context=None,
     )
 
@@ -71,3 +90,26 @@ async def test_mass_convert_preview_manual_scope_infers_supported_formats(
         ("Annual.pdf", "PDF"),
         ("Special.cb7", "CB7"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_mass_convert_preview_rejects_paths_outside_library_roots(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    outside = tmp_path / "outside"
+    library.mkdir()
+    outside.mkdir()
+    pdf = outside / "Annual.pdf"
+    pdf.write_bytes(b"pdf")
+
+    with pytest.raises(ValidationError, match="outside"):
+        await build_mass_convert_preview(
+            MassConvertPreviewRequest(
+                scope="manual",
+                file_paths=[str(pdf)],
+                trash_folder=str(tmp_path / ".trash"),
+            ),
+            session=_FakeSession(library),
+            load_trash_context=None,
+        )

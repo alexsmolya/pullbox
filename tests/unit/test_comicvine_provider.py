@@ -94,6 +94,46 @@ async def test_search_series_globally_reuses_short_lived_cache() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_series_globally_cache_is_not_namespaced_by_api_key() -> None:
+    first_provider = ComicVineProvider(api_key="first-cache-key", rate_limit=999_999)
+    second_provider = ComicVineProvider(api_key="second-cache-key", rate_limit=999_999)
+    first_request = AsyncMock(
+        return_value={
+            "number_of_total_results": 1,
+            "results": [_volume_item(3500, "Shared Cache Test", 2026)],
+        }
+    )
+    second_request = AsyncMock(
+        return_value={
+            "number_of_total_results": 1,
+            "results": [_volume_item(3501, "Shared Cache Test", 2026)],
+        }
+    )
+    first_provider._request = first_request  # type: ignore[method-assign]
+    second_provider._request = second_request  # type: ignore[method-assign]
+
+    try:
+        first, first_total = await first_provider.search_series_globally(
+            "Shared Cache Test",
+            max_results=10,
+        )
+        second, second_total = await second_provider.search_series_globally(
+            "Shared Cache Test",
+            max_results=10,
+        )
+    finally:
+        await first_provider._client.aclose()
+        await second_provider._client.aclose()
+
+    assert first_total == 1
+    assert second_total == 1
+    assert [result.provider_id for result in first] == ["3500"]
+    assert [result.provider_id for result in second] == ["3500"]
+    first_request.assert_awaited_once()
+    second_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_search_series_globally_collapses_concurrent_identical_requests() -> None:
     provider = ComicVineProvider(api_key="single-flight-test-key", rate_limit=999_999)
     request_started = asyncio.Event()

@@ -71,6 +71,21 @@ class TestSetComicsDirectory:
         assert row.value_type == "string"
 
     @pytest.mark.asyncio
+    async def test_stores_resolved_directory_path(
+        self, db_session: AsyncSession, tmp_path: Path
+    ) -> None:
+        comics_dir = tmp_path / "comics"
+        comics_dir.mkdir()
+        spelled_with_parent = comics_dir / ".." / "comics"
+
+        root = await set_comics_directory(db_session, spelled_with_parent)
+
+        row = await db_session.get(SystemConfig, "comics_directory")
+        assert row is not None
+        assert row.value == str(comics_dir.resolve())
+        assert root.path == str(comics_dir.resolve())
+
+    @pytest.mark.asyncio
     async def test_creates_library_root_for_new_path(
         self, db_session: AsyncSession, tmp_path: Path
     ) -> None:

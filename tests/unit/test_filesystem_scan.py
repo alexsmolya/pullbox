@@ -70,3 +70,22 @@ class TestIterSupportedFiles:
                 "error": f"[Errno 13] Permission denied: '{root / 'secret'}'",
             }
         ]
+
+    def test_skips_walk_entries_outside_resolved_root(self, tmp_path: Path, monkeypatch) -> None:
+        from pullbox.core import filesystem_scan as fs_mod
+
+        outside = tmp_path.parent / "outside"
+        outside.mkdir(exist_ok=True)
+        escaped = outside / "escaped.cbz"
+        escaped.write_text("escaped")
+
+        def fake_walk(
+            _root: Path,
+            onerror,
+        ):
+            assert onerror is not None
+            yield (os.fspath(outside), [], [escaped.name])
+
+        monkeypatch.setattr(fs_mod.os, "walk", fake_walk)
+
+        assert list(iter_supported_files(tmp_path, frozenset({".cbz"}))) == []

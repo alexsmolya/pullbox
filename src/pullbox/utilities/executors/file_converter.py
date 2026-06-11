@@ -17,7 +17,7 @@ import os
 import tempfile
 import time
 import zipfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +25,7 @@ from typing import Any, cast
 import structlog
 
 from pullbox.core.file_safety import has_archive_member_path_traversal
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.core.rar_backend import RarBackendUnavailableError, configure_rarfile_backend
 from pullbox.utilities.base_executor import ExecutionMode, ItemResult, JobExecutor, ProcessedItem
 from pullbox.utilities.settings import (
@@ -544,6 +545,8 @@ def build_convert_preview(
     target_format: str,
     scope: str = "manual",
     file_paths: list[str] | None = None,
+    *,
+    allowed_roots: Sequence[str | Path] | None = None,
 ) -> Any:
     """Build a preview of files that would be converted.
 
@@ -565,17 +568,27 @@ def build_convert_preview(
 
     if scope == "manual" and file_paths:
         for path_str in file_paths:
-            path = Path(path_str)
-            if path.exists() and path.is_file():
-                size = path.stat().st_size
-                total_size += size
-                matching_files.append(
-                    ConvertPreviewFileInfo(
-                        path=str(path),
-                        output_path=str(path.with_suffix(f".{target_format}")),
-                        size_bytes=size,
-                    )
+            try:
+                if allowed_roots is not None:
+                    path = resolve_path_inside_roots(path_str, allowed_roots, require_file=True)
+                else:
+                    # Direct helper callers are internal/test-only; API callers pass
+                    # allowed_roots so user-selected paths stay inside library roots.
+                    # codeql[py/path-injection]
+                    path = Path(path_str).expanduser().resolve(strict=True)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+            total_size += size
+            matching_files.append(
+                ConvertPreviewFileInfo(
+                    path=str(path),
+                    output_path=str(path.with_suffix(f".{target_format}")),
+                    size_bytes=size,
                 )
+            )
 
     total_count = len(matching_files)
     # Truncate file list to 100 for response, keep accurate total_count

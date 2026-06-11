@@ -351,7 +351,7 @@ class TestGenerateItems:
     @pytest.mark.asyncio
     async def test_folder_scope_rejects_selected_symlink(self, tmp_path: Path) -> None:
         root = tmp_path / "library"
-        target = tmp_path / "outside"
+        target = root / "target"
         root.mkdir()
         target.mkdir()
         selected = root / "linked-folder"
