@@ -795,6 +795,10 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 - Infrastructure and registry guidance lives in
   `docs/development/INFRASTRUCTURE.md`.
 - Container publication uses GHCR and Docker Hub.
+- Published container images are signed with keyless Sigstore/Cosign using
+  GitHub Actions OIDC after registry publication.
+- The Docker workflow publishes SBOM/provenance attestations and verifies GHCR
+  and Docker Hub signatures before reporting success.
 - Docker metadata rules may publish semver-derived aliases depending on the
   release event.
 - Untagged `main` merges may run Docker validation, but they do not publish
@@ -803,6 +807,9 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 **Required standard**
 
 - Release tags should be signed with the documented release process.
+- Release images should be signed with keyless Sigstore/Cosign and verified
+  against the Docker workflow identity before the publish workflow succeeds.
+- Release images should include SBOM/provenance attestations.
 - GHCR and Docker Hub package tags should be reviewed after each release.
 - Ordinary untagged `main` merges should not publish registry images.
 - Unwanted registry aliases should be deleted deliberately rather than changing
@@ -817,6 +824,8 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 **Audit checks**
 
 - [ ] Release tag signing process is documented and followed.
+- [ ] GHCR and Docker Hub image signatures verify with Cosign.
+- [ ] Release images publish SBOM/provenance attestations.
 - [ ] GHCR and Docker Hub tags are reviewed after publication.
 - [ ] Unwanted aliases are removed deliberately.
 - [ ] Release workflows build from trusted refs.

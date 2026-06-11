@@ -158,3 +158,51 @@ def test_docker_workflow_runs_grype_before_publish() -> None:
     assert "anchore/scan-action@" in docker_workflow
     assert "config: .grype.yaml" in docker_workflow
     assert push_job.get("needs") == ["build", "scan", "smoke-test"]
+
+
+def test_docker_workflow_signs_and_verifies_published_images() -> None:
+    docker_workflow_path = WORKFLOW_DIR / "docker.yml"
+    docker_workflow = docker_workflow_path.read_text(encoding="utf-8")
+    data = _load_yaml(docker_workflow_path)
+    jobs = data.get("jobs")
+    assert isinstance(jobs, dict)
+    push_job = jobs.get("push")
+    assert isinstance(push_job, dict)
+
+    permissions = push_job.get("permissions")
+    assert isinstance(permissions, dict)
+    assert permissions.get("packages") == "write"
+    assert permissions.get("id-token") == "write"
+
+    steps = push_job.get("steps")
+    assert isinstance(steps, list)
+    build_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "Build and push multi-arch"
+    ]
+    assert len(build_steps) == 1
+    build_step = build_steps[0]
+    assert build_step.get("id") == "push-image"
+    build_with = build_step.get("with")
+    assert isinstance(build_with, dict)
+    assert build_with.get("provenance") == "mode=max"
+    assert build_with.get("sbom") is True
+
+    assert "sigstore/cosign-installer@" in docker_workflow
+    assert "cosign sign --yes" in docker_workflow
+    assert "steps.push-image.outputs.digest" in docker_workflow
+    assert "cosign verify" in docker_workflow
+    assert "--certificate-identity-regexp" in docker_workflow
+    assert "--certificate-oidc-issuer" in docker_workflow
+
+
+def test_release_notes_include_image_signature_verification() -> None:
+    release_workflow = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
+
+    assert "## 🔐 Image Verification" in release_workflow
+    assert "cosign verify" in release_workflow
+    assert "https://token.actions.githubusercontent.com" in release_workflow
+    expected_ghcr_image = "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
+    assert expected_ghcr_image in release_workflow
+    assert "docker.io/pullbox/pullbox:${{ steps.version.outputs.version }}" in release_workflow
