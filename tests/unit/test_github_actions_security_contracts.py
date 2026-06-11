@@ -11,6 +11,8 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DEPENDABOT_CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
+CODEQL_CONFIG = REPO_ROOT / ".github" / "codeql" / "codeql-config.yml"
+GRYPE_CONFIG = REPO_ROOT / ".grype.yaml"
 
 ACTION_REF_RE = re.compile(
     r"""
@@ -127,6 +129,24 @@ def test_security_workflow_keeps_required_scanners_and_schedule() -> None:
         assert marker in text
 
 
+def test_codeql_analysis_uses_product_scope_config() -> None:
+    security_workflow = WORKFLOW_DIR / "security.yml"
+    workflow_text = security_workflow.read_text(encoding="utf-8")
+    config = _load_yaml(CODEQL_CONFIG)
+
+    assert "config-file: ./.github/codeql/codeql-config.yml" in workflow_text
+    assert "queries: +security-extended" in workflow_text
+    assert "security-and-quality" not in workflow_text
+    assert config.get("name") == "pullbox-product-runtime"
+    assert config.get("paths") == ["src/pullbox"]
+    assert {
+        "tests/**",
+        "scripts/**",
+        "docs/**",
+        "performance-sprint/**",
+    } <= set(config.get("paths-ignore", []))
+
+
 def test_local_security_script_writes_valid_safety_json_artifact() -> None:
     script = (REPO_ROOT / "scripts" / "security_check.sh").read_text(encoding="utf-8")
 
@@ -158,6 +178,17 @@ def test_docker_workflow_runs_grype_before_publish() -> None:
     assert "anchore/scan-action@" in docker_workflow
     assert "config: .grype.yaml" in docker_workflow
     assert push_job.get("needs") == ["build", "scan", "smoke-test"]
+
+
+def test_grype_config_tracks_current_dhi_runtime() -> None:
+    config_text = GRYPE_CONFIG.read_text(encoding="utf-8")
+    config = _load_yaml(GRYPE_CONFIG)
+
+    assert "Docker Hardened Images Python 3.14 on Debian 13" in config_text
+    assert "python:3.13-slim" not in config_text
+    assert "CVE-2026-7210" in config_text
+    assert "3.14.6" in config_text
+    assert config.get("ignore")
 
 
 def test_docker_workflow_signs_and_verifies_published_images() -> None:

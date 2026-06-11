@@ -23,6 +23,12 @@ def _default_onerror(root: Path, exc: OSError) -> None:
     )
 
 
+def _is_within_root(path: Path, root: Path) -> bool:
+    resolved_path = path.expanduser().resolve(strict=False)
+    resolved_root = root.expanduser().resolve(strict=False)
+    return resolved_path == resolved_root or resolved_path.is_relative_to(resolved_root)
+
+
 def iter_supported_files(root: Path, allowed_extensions: frozenset[str]) -> Iterator[Path]:
     """Yield supported files recursively in deterministic order.
 
@@ -31,14 +37,18 @@ def iter_supported_files(root: Path, allowed_extensions: frozenset[str]) -> Iter
     """
     if not root.exists() or not root.is_dir():
         return
+    resolved_root = root.expanduser().resolve(strict=False)
 
     def _onerror(exc: OSError) -> None:
-        _default_onerror(root, exc)
+        _default_onerror(resolved_root, exc)
 
     for current_root, dir_names, file_names in os.walk(root, onerror=_onerror):
         dir_names.sort()
         file_names.sort()
         current_root_path = Path(current_root)
+        if not _is_within_root(current_root_path, resolved_root):
+            dir_names.clear()
+            continue
         for file_name in file_names:
             file_path = current_root_path / file_name
             if file_path.suffix.lower() in allowed_extensions:
@@ -53,14 +63,18 @@ def iter_supported_files_with_handler(
     """Yield supported files recursively using a caller-provided error handler."""
     if not root.exists() or not root.is_dir():
         return
+    resolved_root = root.expanduser().resolve(strict=False)
 
     def _onerror(exc: OSError) -> None:
-        on_error(root, exc)
+        on_error(resolved_root, exc)
 
     for current_root, dir_names, file_names in os.walk(root, onerror=_onerror):
         dir_names.sort()
         file_names.sort()
         current_root_path = Path(current_root)
+        if not _is_within_root(current_root_path, resolved_root):
+            dir_names.clear()
+            continue
         for file_name in file_names:
             file_path = current_root_path / file_name
             if file_path.suffix.lower() in allowed_extensions:

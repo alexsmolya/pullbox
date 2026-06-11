@@ -80,6 +80,12 @@ class TestSanitizeForFilesystem:
             == "Batman - Superman - World's Finest"
         )
 
+    def test_many_slashes_are_replaced_linearly(self) -> None:
+        result = sanitize_for_filesystem("Batman" + " /" * 25 + " Superman")
+
+        assert result.startswith("Batman -")
+        assert result.endswith("Superman")
+
     def test_colon_replacement_dash(self) -> None:
         assert (
             sanitize_for_filesystem("Batman: Year One", colon_replacement="dash")

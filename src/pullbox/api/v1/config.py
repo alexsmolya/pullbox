@@ -653,7 +653,11 @@ async def test_comicvine_key(
             "response_time_ms": result.response_time_ms,
         }
     except Exception as exc:
-        return {"healthy": False, "message": f"Connection failed: {exc}"}
+        logger.warning("comicvine_key_test_failed", exc_info=exc)
+        return {
+            "healthy": False,
+            "message": "Connection failed. Check Pullbox logs for details.",
+        }
     finally:
         await provider.close()
 

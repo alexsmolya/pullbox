@@ -14,8 +14,9 @@ from sqlalchemy import func as sa_func
 
 from pullbox.api.deps import DbSession, InteractiveOperatorUser  # noqa: TC001
 from pullbox.core.exceptions import NotFoundError, ValidationError
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.models.config import DEFAULT_SYSTEM_CONFIG, SystemConfig
-from pullbox.models.library import LibraryFile
+from pullbox.models.library import LibraryFile, LibraryRoot
 from pullbox.utilities.import_guards import (
     ensure_no_active_import_file_mutation,
     ensure_utility_job_allowed_during_import,
@@ -80,6 +81,26 @@ router = APIRouter(prefix="/utilities", tags=["utilities"], include_in_schema=Fa
 # Module-level reference — set during app startup
 _queue_manager: JobQueueManager | None = None
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _resolve_enabled_library_scan_root(session: DbSession, raw_path: str) -> Path:
+    """Resolve a requested utility scan root under enabled library roots."""
+    roots = await _load_enabled_library_roots(session)
+    try:
+        return resolve_path_inside_roots(raw_path, roots, require_dir=True)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from None
+
+
+async def _load_enabled_library_roots(session: DbSession) -> list[Path]:
+    """Load enabled library roots for utility path validation."""
+    roots_result = await session.execute(
+        select(LibraryRoot.path).where(LibraryRoot.enabled.is_(True))
+    )
+    roots = [Path(row[0]) for row in roots_result.all() if row[0]]
+    if not roots:
+        raise ValidationError("No enabled library roots are available.")
+    return roots
 
 
 def set_queue_manager(mgr: JobQueueManager) -> None:
@@ -471,9 +492,13 @@ async def get_queue_status(
 async def convert_preview(
     body: ConvertPreviewRequest,
     _user: InteractiveOperatorUser,
+    session: DbSession,
 ) -> ConvertPreviewResponse:
     """Preview files that would be converted without submitting a job."""
-    return build_convert_preview_response(body)
+    return build_convert_preview_response(
+        body,
+        allowed_roots=await _load_enabled_library_roots(session),
+    )
 
 
 @router.post("/mass-convert/preview", response_model=MassConvertPreviewResponse)
@@ -570,7 +595,8 @@ async def db_check_preview(
     if "stale" in checks and body.library_root:
         known_paths_result = await session.execute(select(LibraryFile.file_path))
         known_paths = {row[0] for row in known_paths_result.all()}
-        stale_files = detect_stale_files(Path(body.library_root), known_paths)
+        scan_root = await _resolve_enabled_library_scan_root(session, body.library_root)
+        stale_files = detect_stale_files(scan_root, known_paths)
         for idx, stale in enumerate(stale_files, start=1):
             file_path = str(stale.get("path") or "")
             findings.append(

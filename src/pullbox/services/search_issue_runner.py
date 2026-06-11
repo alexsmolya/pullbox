@@ -19,9 +19,8 @@ if TYPE_CHECKING:
     from pullbox.models.issue import IssueType
     from pullbox.providers.base import ReleaseResult, SearchQuery
     from pullbox.services.release_validator import ReleaseValidator, ValidationResult
-    from pullbox.services.search_query_helpers import IssueSearchMode
     from pullbox.services.search_targets import IssueSearchTarget
-    from pullbox.services.search_types import SearchEvalKwargs, ValidatorKwargs
+    from pullbox.services.search_types import IssueSearchMode, SearchEvalKwargs, ValidatorKwargs
 
     RunQueryBatchFunc = Callable[
         [list[SearchQuery]],

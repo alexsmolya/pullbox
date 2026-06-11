@@ -20,6 +20,7 @@ from pullbox.api.deps import (  # noqa: TC001
 )
 from pullbox.config import get_settings
 from pullbox.core.exceptions import ValidationError
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.models.config import SystemConfig
 from pullbox.models.library import LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.series import Series
@@ -96,12 +97,19 @@ def _resolve_library_target(
     if not raw_path:
         raise ValidationError("A library path is required.")
 
-    candidate = Path(raw_path).expanduser()
-    resolved = candidate.resolve(strict=False)
-    if require_exists and not resolved.exists():
-        raise ValidationError("Selected library item no longer exists on disk.")
-
     root_map = {root.id: _enabled_root_path(root) for root in roots}
+    try:
+        resolved = resolve_path_inside_roots(
+            raw_path,
+            root_map.values(),
+            require_exists=require_exists,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if "does not exist" in message:
+            raise ValidationError("Selected library item no longer exists on disk.") from None
+        raise ValidationError("Selected path is outside the enabled library roots.") from None
+
     matching_root = next(
         (
             root

@@ -68,9 +68,8 @@ If you are locked out of the web UI, reset a user's password through the
 installed management CLI inside the container:
 
 ```bash
-docker exec pullbox python -m pullbox.cli reset-password \
-  --user admin \
-  --password 'NewPass1!'
+printf '%s\n' 'NewPass1!' | docker exec -i pullbox \
+  python -m pullbox.cli reset-password --user admin --password-stdin
 ```
 
 Replace `pullbox` with your container name if you changed it. The new password

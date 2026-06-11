@@ -19,8 +19,7 @@ if TYPE_CHECKING:
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.base import ReleaseResult
     from pullbox.services.release_validator import ValidationResult
-    from pullbox.services.search_query_helpers import IssueSearchMode
-    from pullbox.services.search_types import SearchEvalKwargs, ValidatorKwargs
+    from pullbox.services.search_types import IssueSearchMode, SearchEvalKwargs, ValidatorKwargs
 
 
 @dataclass(frozen=True)

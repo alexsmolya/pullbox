@@ -14,6 +14,7 @@ from pullbox.core.exceptions import ValidationError
 from pullbox.core.filesystem_scan import iter_supported_files
 from pullbox.core.library_naming import build_series_folder_name, compute_target_filename
 from pullbox.core.library_policy import load_library_naming_policy
+from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.core.naming import (
     issue_type_uses_collection_template,
     normalize_issue_type_for_naming,
@@ -50,7 +51,11 @@ _MASS_CONVERT_SUPPORTED_FORMATS = {
 }
 
 
-def build_convert_preview_response(body: ConvertPreviewRequest) -> ConvertPreviewResponse:
+def build_convert_preview_response(
+    body: ConvertPreviewRequest,
+    *,
+    allowed_roots: Sequence[str | Path] | None = None,
+) -> ConvertPreviewResponse:
     """Preview files that would be converted without submitting a job."""
     from pullbox.utilities.executors.file_converter import build_convert_preview
 
@@ -60,6 +65,7 @@ def build_convert_preview_response(body: ConvertPreviewRequest) -> ConvertPrevie
             target_format=body.target_format,
             scope=body.scope,
             file_paths=body.file_paths,
+            allowed_roots=allowed_roots,
         )
         return result
     except ValueError as exc:
@@ -68,10 +74,17 @@ def build_convert_preview_response(body: ConvertPreviewRequest) -> ConvertPrevie
 
 def _is_relative_to(path: Path, other: Path) -> bool:
     try:
-        path.relative_to(other)
+        path.expanduser().resolve(strict=False).relative_to(
+            other.expanduser().resolve(strict=False)
+        )
         return True
     except ValueError:
         return False
+
+
+async def _load_enabled_library_root_paths(session: Any) -> list[Path]:
+    result = await session.execute(select(LibraryRoot.path).where(LibraryRoot.enabled.is_(True)))
+    return [Path(row[0]) for row in result.all()]
 
 
 def _infer_mass_convert_source_format(path: Path) -> str:
@@ -116,22 +129,34 @@ async def build_mass_convert_preview(
         if load_trash_context is None:
             raise ValidationError("trash_folder is required for this preview scope.")
         trash_dir, _ = await load_trash_context(session)
+    trash_dir = trash_dir.expanduser().resolve(strict=False)
+
+    library_roots: list[Path] = []
+    if scope in {"manual", "folder"}:
+        if session is None:
+            raise ValidationError("A database session is required for this preview scope.")
+        library_roots = await _load_enabled_library_root_paths(session)
+        if not library_roots:
+            raise ValidationError("No enabled library roots are available for this preview.")
 
     candidate_paths: list[Path] = []
 
     if scope == "manual":
         for path_str in body.file_paths:
-            path = Path(path_str)
-            if (
-                path.exists()
-                and path.is_file()
-                and path.suffix.lower() in _MASS_CONVERT_SUPPORTED_EXTS
-                and not _is_relative_to(path, trash_dir)
+            try:
+                path = resolve_path_inside_roots(path_str, library_roots, require_file=True)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from None
+            if path.suffix.lower() in _MASS_CONVERT_SUPPORTED_EXTS and not _is_relative_to(
+                path, trash_dir
             ):
                 candidate_paths.append(path)
     elif scope == "folder":
         for root_path in body.file_paths:
-            root = Path(root_path)
+            try:
+                root = resolve_path_inside_roots(root_path, library_roots, require_dir=True)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from None
             for path in iter_supported_files(root, _MASS_CONVERT_SUPPORTED_EXTS):
                 if _is_relative_to(path, trash_dir):
                     continue
@@ -301,6 +326,27 @@ async def build_mass_rename_preview(
     if scope == "folder" and not body.file_paths:
         raise ValidationError("Choose at least one folder to preview this scope.")
 
+    request_paths = list(body.file_paths)
+    if scope != "library":
+        library_roots = await _load_enabled_library_root_paths(session)
+        if not library_roots:
+            raise ValidationError("No enabled library roots are available for this preview.")
+        require_dir = scope == "folder" or target == "folders"
+        require_file = target == "files" and scope == "manual"
+        resolved_paths: list[str] = []
+        for path_str in request_paths:
+            try:
+                resolved = resolve_path_inside_roots(
+                    path_str,
+                    library_roots,
+                    require_dir=require_dir,
+                    require_file=require_file,
+                )
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from None
+            resolved_paths.append(str(resolved))
+        request_paths = resolved_paths
+
     naming_config = await _load_naming_config(session)
 
     preview_items: list[MassRenamePreviewItem] = []
@@ -316,13 +362,13 @@ async def build_mass_rename_preview(
         elif scope == "folder":
             folder_filters = [
                 LibraryFile.file_path.like(f"{folder_path.rstrip('/')}/%")
-                for folder_path in body.file_paths
+                for folder_path in request_paths
             ]
             query = query.where(or_(*folder_filters)).order_by(LibraryFile.file_path.asc())
             selected_paths = []
         else:
-            query = query.where(LibraryFile.file_path.in_(body.file_paths))
-            selected_paths = list(body.file_paths)
+            query = query.where(LibraryFile.file_path.in_(request_paths))
+            selected_paths = list(request_paths)
 
         result = await session.execute(query)
         matched_files = list(result.scalars().all())
@@ -444,15 +490,15 @@ async def build_mass_rename_preview(
                     Series.path == folder_path.rstrip("/"),
                     Series.path.like(f"{folder_path.rstrip('/')}/%"),
                 )
-                for folder_path in body.file_paths
+                for folder_path in request_paths
             ]
             series_query = series_query.where(or_(*series_folder_filters)).order_by(
                 Series.path.asc()
             )
             selected_paths = []
         else:
-            series_query = series_query.where(Series.path.in_(body.file_paths))
-            selected_paths = list(body.file_paths)
+            series_query = series_query.where(Series.path.in_(request_paths))
+            selected_paths = list(request_paths)
 
         series_result = await session.execute(series_query)
         all_series: Sequence[Series] = series_result.scalars().all()

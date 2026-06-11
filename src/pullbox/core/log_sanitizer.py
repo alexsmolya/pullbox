@@ -56,9 +56,6 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Credentials embedded in a URL or DSN, e.g. postgres://user:pass@host/db
-_URL_AUTH_RE = re.compile(r"([a-z][a-z0-9+.\-]*://)([^/\s@]+)@", re.IGNORECASE)
-
 # Bearer tokens in header values
 _BEARER_RE = re.compile(r"(Bearer\s+)\S+", re.IGNORECASE)
 
@@ -73,11 +70,53 @@ def _is_sensitive_key(key: str) -> bool:
     return any(pat in lower for pat in _SENSITIVE_KEY_PATTERNS)
 
 
+def _scheme_start(value: str, scheme_end: int) -> int | None:
+    start = scheme_end - 1
+    while start >= 0 and (value[start].isalnum() or value[start] in {"+", ".", "-"}):
+        start -= 1
+    start += 1
+    if start >= scheme_end or not value[start].isalpha():
+        return None
+    return start
+
+
+def _redact_url_basic_auth(value: str) -> str:
+    """Redact credentials embedded in URLs without regex backtracking."""
+    pieces: list[str] = []
+    cursor = 0
+    while True:
+        scheme_end = value.find("://", cursor)
+        if scheme_end == -1:
+            pieces.append(value[cursor:])
+            break
+
+        scheme_start = _scheme_start(value, scheme_end)
+        auth_start = scheme_end + 3
+        if scheme_start is None:
+            pieces.append(value[cursor:auth_start])
+            cursor = auth_start
+            continue
+
+        boundary = auth_start
+        while boundary < len(value) and value[boundary] not in {"/", " ", "\t", "\r", "\n"}:
+            boundary += 1
+        at_index = value.find("@", auth_start, boundary)
+        if at_index == -1 or at_index == auth_start:
+            pieces.append(value[cursor:auth_start])
+            cursor = auth_start
+            continue
+
+        pieces.append(value[cursor:auth_start])
+        pieces.append(_REDACTED)
+        pieces.append("@")
+        cursor = at_index + 1
+
+    return "".join(pieces)
+
+
 def _sanitize_value(value: str) -> str:
     """Redact sensitive patterns found inside a string value."""
-    result = value
-    if _URL_AUTH_RE.search(result):
-        result = _URL_AUTH_RE.sub(rf"\1{_REDACTED}@", result)
+    result = _redact_url_basic_auth(value)
     if _URL_PARAM_RE.search(result):
         result = _URL_PARAM_RE.sub(rf"\1\2={_REDACTED}", result)
     if _SENSITIVE_ASSIGNMENT_RE.search(result):
@@ -127,7 +166,7 @@ def sanitize_log_value(
             )
         return cleaned
 
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         if depth >= _MAX_SANITIZE_DEPTH:
             return list(value)
         return [sanitize_log_value(item, depth=depth + 1) for item in value]

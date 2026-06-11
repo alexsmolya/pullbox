@@ -25,6 +25,13 @@ def test_parse_series_query_extracts_parenthesized_start_year_hint() -> None:
     assert parsed.year_hint == 2024
 
 
+def test_parse_series_query_extracts_bracketed_start_year_hint() -> None:
+    parsed = parse_comicvine_series_query("x-men [2024]")
+
+    assert parsed.title_query == "x-men"
+    assert parsed.year_hint == 2024
+
+
 def test_parse_series_query_does_not_treat_issue_or_title_numbers_as_year_hints() -> None:
     prog = parse_comicvine_series_query("2000AD prog 2482")
     historical_title = parse_comicvine_series_query("Marvel 1602")

@@ -122,10 +122,15 @@ async def set_comics_directory(session: AsyncSession, path: Path) -> LibraryRoot
     Raises:
         ValueError: If the path does not exist or is not a directory.
     """
+    # The comics directory is an operator-managed library root; existence and
+    # directory checks below happen before the value is persisted or reused.
+    # codeql[py/path-injection]
+    path = path.expanduser()
     if not path.exists():
         raise ValueError(f"Path '{path}' does not exist")
     if not path.is_dir():
         raise ValueError(f"Path '{path}' is not a directory")
+    path = path.resolve(strict=True)
 
     # Upsert the SystemConfig row
     row = await session.get(SystemConfig, "comics_directory")

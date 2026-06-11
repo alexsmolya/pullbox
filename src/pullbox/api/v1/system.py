@@ -614,8 +614,8 @@ async def set_comics_dir(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    logger.info("comics_directory_set", path=body.path, library_root_id=root.id)
-    return ComicsDirectoryResponse(path=body.path, library_root_id=root.id)
+    logger.info("comics_directory_set", path=root.path, library_root_id=root.id)
+    return ComicsDirectoryResponse(path=root.path, library_root_id=root.id)
 
 
 @router.get("/comics-directory")
