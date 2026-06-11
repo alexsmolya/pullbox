@@ -1,49 +1,224 @@
 # Grype vulnerability ignore list for the Pullbox release image.
 #
 # Scope:
-# - Debian/CPython CVEs reported from the python:3.13-slim base image
-# - only vulnerabilities with no stable fix currently available
-# - Python package vulnerabilities are not suppressed here; pip-audit covers
-#   those separately in the security workflow
+# - Docker Hardened Images Python 3.14 on Debian 13
+# - Debian package findings with no fixed package or Debian "won't fix" state
+# - CPython binary findings where Grype reports no stable Python 3.14 fix
 #
-# Reviewed against pullbox:grype-debug-313 on 2026-05-12.
-# Re-audit after each base-image refresh and remove entries when fixed builds
-# become available upstream.
+# Python package vulnerabilities are not suppressed here; pip-audit covers
+# those separately in the security workflow.
+#
+# Reviewed against pullbox:ci-scan on 2026-06-10 using the local Grype DB.
+# Re-audit after each DHI base-image refresh and remove entries when fixed
+# stable Python 3.14 or Debian 13 packages become available upstream.
 
 ignore:
-  # CPython 3.13.13 binary CVEs reported from the upstream python:3.13-slim
-  # base image. No stable fixed runtime is available in the current image line.
-  - vulnerability: CVE-2026-6100
+  # CPython 3.14.6 binary findings. Grype reports either no fixed version or a
+  # fix only in Python 3.15 alpha/beta, not in the stable 3.14 runtime line.
+  - vulnerability: CVE-2025-12781
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2025-15366
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2025-15367
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2026-1502
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
   - vulnerability: CVE-2026-3298
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2026-3276
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
   - vulnerability: CVE-2026-4786
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2026-6019
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2026-6100
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2026-7210
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2026-7774
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
+  - vulnerability: CVE-2026-9669
+    package:
+      name: python
+      version: 3.14.6
+      type: binary
 
-  # Debian trixie libraries with no published fixed package in the current
-  # python:3.13-slim image lineage.
-  - vulnerability: CVE-2026-42010
-  - vulnerability: CVE-2026-3833
-  - vulnerability: CVE-2026-33846
-  - vulnerability: CVE-2026-33845
-  - vulnerability: CVE-2026-6732
-  - vulnerability: CVE-2026-6772
-  - vulnerability: CVE-2026-6766
-  - vulnerability: CVE-2026-27135
-
-  # Debian trixie packages marked won't-fix / not-fixable in current security
-  # metadata as of the review date above.
-  - vulnerability: CVE-2025-69720
-  - vulnerability: CVE-2025-13151
-  - vulnerability: CVE-2026-5121
-  - vulnerability: CVE-2026-4424
-  - vulnerability: CVE-2026-4111
-  - vulnerability: CVE-2026-4046
-  - vulnerability: CVE-2026-5450
-  - vulnerability: CVE-2026-4437
-  - vulnerability: CVE-2025-59375
-  - vulnerability: CVE-2026-5928
+  # Debian 13 runtime packages. These are currently reported by Grype as
+  # negligible/medium, no-fix, or won't-fix findings in the DHI Debian 13 base.
+  - vulnerability: CVE-2010-4756
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2018-20796
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2019-1010022
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2019-1010023
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2019-1010024
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2019-1010025
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2019-9192
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2026-6238
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
   - vulnerability: CVE-2026-5435
-  - vulnerability: CVE-2026-41080
-  - vulnerability: CVE-2026-42011
-  - vulnerability: CVE-2026-4878
-  - vulnerability: CVE-2026-24882
-  - vulnerability: CVE-2026-25210
-  - vulnerability: CVE-2026-3805
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2026-5450
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+  - vulnerability: CVE-2026-5928
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+      type: deb
+
+  - vulnerability: CVE-2021-45346
+    package:
+      name: libsqlite3-0
+      version: 3.46.1-7+deb13u1
+      type: deb
+  - vulnerability: CVE-2025-70873
+    package:
+      name: libsqlite3-0
+      version: 3.46.1-7+deb13u1
+      type: deb
+
+  - vulnerability: CVE-2022-0563
+    package:
+      name: libuuid1
+      version: 2.41-5
+      type: deb
+  - vulnerability: CVE-2025-14104
+    package:
+      name: libuuid1
+      version: 2.41-5
+      type: deb
+  - vulnerability: CVE-2026-27456
+    package:
+      name: libuuid1
+      version: 2.41-5
+      type: deb
+  - vulnerability: CVE-2026-3184
+    package:
+      name: libuuid1
+      version: 2.41-5
+      type: deb
+
+  - vulnerability: CVE-2025-6141
+    package:
+      name: libncursesw6
+      version: 6.5+20250216-2
+      type: deb
+  - vulnerability: CVE-2025-6141
+    package:
+      name: libtinfo6
+      version: 6.5+20250216-2
+      type: deb
+  - vulnerability: CVE-2025-6141
+    package:
+      name: ncurses-base
+      version: 6.5+20250216-2
+      type: deb
+  - vulnerability: CVE-2025-6141
+    package:
+      name: ncurses-bin
+      version: 6.5+20250216-2
+      type: deb
+  - vulnerability: CVE-2025-69720
+    package:
+      name: libncursesw6
+      version: 6.5+20250216-2
+      type: deb
+  - vulnerability: CVE-2025-69720
+    package:
+      name: libtinfo6
+      version: 6.5+20250216-2
+      type: deb
+  - vulnerability: CVE-2025-69720
+    package:
+      name: ncurses-base
+      version: 6.5+20250216-2
+      type: deb
+  - vulnerability: CVE-2025-69720
+    package:
+      name: ncurses-bin
+      version: 6.5+20250216-2
+      type: deb
+
+  - vulnerability: CVE-2026-27171
+    package:
+      name: zlib1g
+      version: 1:1.3.dfsg+really1.3.1-1+b1
+      type: deb
+  - vulnerability: CVE-2026-34743
+    package:
+      name: liblzma5
+      version: 5.8.1-1
+      type: deb
+  - vulnerability: CVE-2026-42250
+    package:
+      name: libbz2-1.0
+      version: 1.0.8-6
+      type: deb
