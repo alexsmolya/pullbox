@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any
 
 from pullbox.utilities.base_executor import ExecutionMode
@@ -34,12 +35,16 @@ def build_worker_runtime(
     """Build the worker pool and batch size for one utility dispatch run."""
     execution_mode = executor.get_execution_mode(config, job_context)
     batch_size = 1 if execution_mode == ExecutionMode.SERIAL else worker_count
-    try:
+    factory_signature = signature(worker_pool_factory)
+    accepts_execution_mode = "execution_mode" in factory_signature.parameters or any(
+        param.kind == Parameter.VAR_KEYWORD for param in factory_signature.parameters.values()
+    )
+    if accepts_execution_mode:
         worker_pool = worker_pool_factory(
             execution_mode=execution_mode,
             max_workers=worker_count,
         )
-    except TypeError:
+    else:
         worker_pool = worker_pool_factory(max_workers=worker_count)
     return WorkerRuntime(
         execution_mode=execution_mode,

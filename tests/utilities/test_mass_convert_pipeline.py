@@ -132,6 +132,30 @@ class TestValidateConfig:
         errors = executor.validate_config({"steps": [2, 4]})
         assert any("step 1" in e.lower() or "convert" in e.lower() for e in errors)
 
+    def test_process_item_fails_safely_when_step_1_is_missing(self, tmp_path: Path) -> None:
+        """Direct executor calls should not mutate files when config validation is bypassed."""
+        source = _create_test_cbz(tmp_path / "already.cbz")
+        trash_dir = tmp_path / ".trash"
+
+        executor = MassConvertPipelineExecutor()
+        result = executor.process_item(
+            item_data={
+                "id": "invalid-steps",
+                "file_path": str(source),
+                "operation": "pipeline",
+                "metadata": {"Series": "Already"},
+            },
+            job_config={
+                "steps": [2],
+                "trash_folder": str(trash_dir),
+            },
+        )
+
+        assert result.result == ItemResult.FAILED
+        assert "step 1" in (result.error_message or "").lower()
+        assert source.exists()
+        assert not trash_dir.exists()
+
     def test_valid_full_pipeline(self) -> None:
         executor = MassConvertPipelineExecutor()
         errors = executor.validate_config(

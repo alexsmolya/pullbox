@@ -7,7 +7,8 @@ Local source-tree usage:
     PULLBOX_SECRET_KEY=test python scripts/reset_password.py <username> <new_password>
 
 Production Docker usage:
-    docker exec pullbox python -m pullbox.cli reset-password --user admin --password "NewPass1!"
+    printf '%s\n' 'NewPass1!' | docker exec -i pullbox \
+        python -m pullbox.cli reset-password --user admin --password-stdin
 """
 
 import asyncio

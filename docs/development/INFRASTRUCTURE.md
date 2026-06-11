@@ -635,9 +635,8 @@ docker run --rm \
 Reset a user's password from a production or production-like container:
 
 ```bash
-docker exec pullbox python -m pullbox.cli reset-password \
-  --user admin \
-  --password 'NewPass1!'
+printf '%s\n' 'NewPass1!' | docker exec -i pullbox \
+  python -m pullbox.cli reset-password --user admin --password-stdin
 ```
 
 Use the actual container name for non-default stacks, such as
