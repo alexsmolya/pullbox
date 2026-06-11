@@ -548,6 +548,9 @@ Development dependency categories:
 - `docker.yml` builds, scans, and smoke-tests container images after successful
   `main` CI. It publishes to GHCR and Docker Hub only for release tags or
   explicit manual dispatches.
+- Published container images are signed with keyless Sigstore/Cosign using
+  GitHub Actions OIDC after the registry push completes. The workflow verifies
+  GHCR and Docker Hub signatures before reporting success.
 - `release.yml` creates or updates GitHub Releases for tagged commits after the
   Docker workflow succeeds.
 - GitHub Release notes are generated from conventional commit prefixes.
@@ -564,6 +567,8 @@ Development dependency categories:
 - Docker publication should happen only from trusted refs and should not publish
   ordinary untagged `main` merges.
 - Release images should pass Grype and smoke tests before publication.
+- Release images should publish SBOM/provenance attestations and pass Cosign
+  signature verification before the Docker workflow succeeds.
 - GHCR and Docker Hub tags should be reviewed after release.
 - Unwanted tag aliases should be deleted deliberately, not ignored.
 
@@ -581,6 +586,7 @@ Development dependency categories:
 - [ ] Docker workflow succeeds.
 - [ ] GitHub Release points at the expected tag.
 - [ ] GHCR and Docker Hub exact version and SHA tags exist.
+- [ ] GHCR and Docker Hub release image signatures verify with Cosign.
 - [ ] Unwanted GHCR and Docker Hub aliases are reviewed and cleaned up.
 
 ## 9. Operational Support
@@ -675,6 +681,7 @@ dependencies:
 - [ ] Grype scans run before image publish.
 - [ ] Docker smoke tests verify startup and `/ping`.
 - [ ] Release tags are signed.
+- [ ] Release image signatures verify for GHCR and Docker Hub.
 - [ ] GHCR and Docker Hub tags are reviewed after publish.
 - [ ] New dependencies are justified and validated.
 - [ ] Operator deployment docs match the actual runtime contract.

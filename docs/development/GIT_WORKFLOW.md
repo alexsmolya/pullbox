@@ -453,7 +453,7 @@ Pullbox has two release-note artifacts:
 | Artifact | Source | When Updated | Purpose |
 |---|---|---|---|
 | `CHANGELOG.md` | Curated by maintainers | During release prep PR | Human-readable project history in the repo |
-| GitHub Release notes | Generated from commit subjects by `.github/workflows/release.yml` | After a signed version tag and successful Docker workflow | Detailed release event log and Docker pull commands |
+| GitHub Release notes | Generated from commit subjects by `.github/workflows/release.yml` | After a signed version tag and successful Docker workflow | Detailed release event log, Docker pull commands, and image signature verification commands |
 
 `CHANGELOG.md` is not generated automatically. Keep it concise and user-facing:
 summarize the release, do not paste every commit. During release prep, move
@@ -483,6 +483,9 @@ Recommended mapping:
 
 - Signed tags let GitHub show verified tag provenance when signing is configured
   correctly.
+- Release images are signed separately from Git tags. The Docker workflow uses
+  keyless Sigstore/Cosign with GitHub Actions OIDC, then verifies GHCR and
+  Docker Hub signatures before the workflow succeeds.
 - If `git tag -s` fails, stop and configure a verified GPG or SSH signing key
   before pushing the tag.
 - Docker metadata rules may publish semver-derived aliases during release-tag
@@ -504,6 +507,7 @@ git push origin vX.Y.Z-rc1
 - [ ] Release PR targets `main`.
 - [ ] Release tag is signed and verified locally.
 - [ ] Release workflows complete successfully.
+- [ ] GHCR and Docker Hub image signatures verify with Cosign.
 - [ ] GHCR and Docker Hub tags are reviewed after publish.
 
 ## 9. Post-Release Sync
