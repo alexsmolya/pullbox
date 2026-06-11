@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.3] - 2026-06-10
+
+Corrective release for Docker Hub publication.
+
+### CI / Build
+
+- Docker Hub release publishing now targets the `docker.io/pullbox/pullbox` namespace.
+- Generated GitHub release notes now show the corrected Docker Hub pull command.
+
 ## [0.9.2] - 2026-06-10
 
 Patch release to validate dual-registry Docker publishing after the public repository relaunch.
