@@ -202,7 +202,7 @@ def test_release_notes_include_image_signature_verification() -> None:
 
     assert "## 🔐 Image Verification" in release_workflow
     assert "cosign verify" in release_workflow
-    assert "https://token.actions.githubusercontent.com" in release_workflow
+    assert release_workflow.count("--certificate-oidc-issuer") == 2
     expected_ghcr_image = "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
     assert expected_ghcr_image in release_workflow
     assert "docker.io/pullbox/pullbox:${{ steps.version.outputs.version }}" in release_workflow
