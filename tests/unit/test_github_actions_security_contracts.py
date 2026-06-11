@@ -147,6 +147,43 @@ def test_codeql_analysis_uses_product_scope_config() -> None:
     } <= set(config.get("paths-ignore", []))
 
 
+def test_codeql_branch_probe_scans_trusted_push_refs_with_summary() -> None:
+    workflow_path = WORKFLOW_DIR / "codeql-branch-probe.yml"
+    data = _load_yaml(workflow_path)
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+
+    # PyYAML follows YAML 1.1 and parses the key "on" as True.
+    triggers = data.get(True, data.get("on"))
+    assert isinstance(triggers, dict)
+    assert "pull_request" not in triggers
+
+    push = triggers.get("push")
+    assert isinstance(push, dict)
+    assert push.get("branches") == [
+        "develop",
+        "feature/code-scanning-*",
+        "feature/codeql-*",
+        "feature/security-*",
+    ]
+
+    jobs = data.get("jobs")
+    assert isinstance(jobs, dict)
+    codeql_job = jobs.get("codeql-branch-probe")
+    assert isinstance(codeql_job, dict)
+    assert codeql_job.get("runs-on") == "ubuntu-latest"
+
+    permissions = codeql_job.get("permissions")
+    assert isinstance(permissions, dict)
+    assert permissions.get("contents") == "read"
+    assert permissions.get("actions") == "read"
+    assert permissions.get("security-events") == "write"
+
+    assert "config-file: ./.github/codeql/codeql-config.yml" in workflow_text
+    assert "queries: +security-extended" in workflow_text
+    assert "python .github/scripts/codeql-alert-summary.py" in workflow_text
+    assert "refs/heads/<branch>" in workflow_text
+
+
 def test_local_security_script_writes_valid_safety_json_artifact() -> None:
     script = (REPO_ROOT / "scripts" / "security_check.sh").read_text(encoding="utf-8")
 
