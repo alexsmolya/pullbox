@@ -11,7 +11,6 @@ ComicVine terminology mapping: "volume" → "series" in Pullbox.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import html
 import re
 import time
@@ -47,14 +46,14 @@ _GLOBAL_SERIES_SEARCH_BATCH_SIZE = 100
 _GLOBAL_SERIES_SEARCH_MAX_RESULTS = 1000
 _GLOBAL_SERIES_SEARCH_CACHE_TTL_SECONDS = 300.0
 _GLOBAL_SERIES_SEARCH_CACHE: dict[
-    tuple[str, str, int, int],
+    tuple[str, int, int],
     tuple[float, tuple[SeriesSearchResult, ...], int],
 ] = {}
 _GLOBAL_SERIES_SEARCH_INFLIGHT: dict[
-    tuple[str, str, int, int, bool],
+    tuple[str, int, int, bool],
     asyncio.Task[tuple[tuple[SeriesSearchResult, ...], int]],
 ] = {}
-_GlobalSeriesSearchInflightKey = tuple[str, str, int, int, bool]
+_GlobalSeriesSearchInflightKey = tuple[str, int, int, bool]
 
 
 # ---------------------------------------------------------------------------
@@ -430,12 +429,7 @@ class ComicVineProvider:
         if not filter_value:
             return [], 0
 
-        cache_key = (
-            hashlib.sha256(self._api_key.encode()).hexdigest()[:12],
-            normalized_query.casefold(),
-            normalized_max,
-            normalized_batch,
-        )
+        cache_key = (normalized_query.casefold(), normalized_max, normalized_batch)
         now = time.monotonic()
         cached = _GLOBAL_SERIES_SEARCH_CACHE.get(cache_key)
         if cached is not None and now - cached[0] <= _GLOBAL_SERIES_SEARCH_CACHE_TTL_SECONDS:
@@ -486,7 +480,7 @@ class ComicVineProvider:
         filter_value: str,
         normalized_max: int,
         normalized_batch: int,
-        cache_key: tuple[str, str, int, int],
+        cache_key: tuple[str, int, int],
         *,
         suppress_errors: bool,
     ) -> tuple[tuple[SeriesSearchResult, ...], int]:
