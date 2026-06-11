@@ -321,6 +321,27 @@ async def build_mass_rename_preview(
     if scope == "folder" and not body.file_paths:
         raise ValidationError("Choose at least one folder to preview this scope.")
 
+    request_paths = list(body.file_paths)
+    if scope != "library":
+        library_roots = await _load_enabled_library_root_paths(session)
+        if not library_roots:
+            raise ValidationError("No enabled library roots are available for this preview.")
+        require_dir = scope == "folder" or target == "folders"
+        require_file = target == "files" and scope == "manual"
+        resolved_paths: list[str] = []
+        for path_str in request_paths:
+            try:
+                resolved = resolve_path_inside_roots(
+                    path_str,
+                    library_roots,
+                    require_dir=require_dir,
+                    require_file=require_file,
+                )
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from None
+            resolved_paths.append(str(resolved))
+        request_paths = resolved_paths
+
     naming_config = await _load_naming_config(session)
 
     preview_items: list[MassRenamePreviewItem] = []
@@ -336,13 +357,13 @@ async def build_mass_rename_preview(
         elif scope == "folder":
             folder_filters = [
                 LibraryFile.file_path.like(f"{folder_path.rstrip('/')}/%")
-                for folder_path in body.file_paths
+                for folder_path in request_paths
             ]
             query = query.where(or_(*folder_filters)).order_by(LibraryFile.file_path.asc())
             selected_paths = []
         else:
-            query = query.where(LibraryFile.file_path.in_(body.file_paths))
-            selected_paths = list(body.file_paths)
+            query = query.where(LibraryFile.file_path.in_(request_paths))
+            selected_paths = list(request_paths)
 
         result = await session.execute(query)
         matched_files = list(result.scalars().all())
@@ -464,15 +485,15 @@ async def build_mass_rename_preview(
                     Series.path == folder_path.rstrip("/"),
                     Series.path.like(f"{folder_path.rstrip('/')}/%"),
                 )
-                for folder_path in body.file_paths
+                for folder_path in request_paths
             ]
             series_query = series_query.where(or_(*series_folder_filters)).order_by(
                 Series.path.asc()
             )
             selected_paths = []
         else:
-            series_query = series_query.where(Series.path.in_(body.file_paths))
-            selected_paths = list(body.file_paths)
+            series_query = series_query.where(Series.path.in_(request_paths))
+            selected_paths = list(request_paths)
 
         series_result = await session.execute(series_query)
         all_series: Sequence[Series] = series_result.scalars().all()

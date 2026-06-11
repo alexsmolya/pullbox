@@ -565,6 +565,26 @@ async def test_mass_rename_preview_supports_library_and_folder_scopes(
 
 
 @pytest.mark.asyncio
+async def test_mass_rename_preview_rejects_manual_paths_outside_library_roots(
+    authenticated_client,
+    preview_paths: dict[str, str],
+    tmp_path: Path,
+) -> None:  # type: ignore[no-untyped-def]
+    assert preview_paths["library_root"]
+    outside_file = tmp_path / "outside.cbz"
+    outside_file.write_text("outside")
+
+    response = await authenticated_client.post(
+        "/api/v1/utilities/rename/preview",
+        json={"target": "files", "scope": "manual", "file_paths": [str(outside_file)]},
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert response.status_code == 422
+    assert "outside enabled library roots" in response.text
+
+
+@pytest.mark.asyncio
 async def test_db_check_preview_returns_orphan_and_stale_findings(
     authenticated_client,
     preview_paths: dict[str, str],
@@ -603,6 +623,30 @@ async def test_db_check_preview_returns_orphan_and_stale_findings(
         for finding in data["findings"]
         if finding["check_type"] == "stale"
     )
+
+
+@pytest.mark.asyncio
+async def test_db_check_preview_rejects_stale_scan_outside_library_roots(
+    authenticated_client,
+    preview_paths: dict[str, str],
+    tmp_path: Path,
+) -> None:  # type: ignore[no-untyped-def]
+    assert preview_paths["library_root"]
+    outside_root = tmp_path / "outside"
+    outside_root.mkdir()
+    (outside_root / "stray.cbz").write_text("stray")
+
+    response = await authenticated_client.post(
+        "/api/v1/utilities/db-check/preview",
+        json={
+            "checks": ["stale"],
+            "library_root": str(outside_root),
+        },
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert response.status_code == 422
+    assert "outside enabled library roots" in response.text
 
 
 @pytest.mark.asyncio
