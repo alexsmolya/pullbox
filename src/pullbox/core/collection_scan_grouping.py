@@ -9,9 +9,16 @@ from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.issue import IssueType
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
+    from typing import Protocol
 
-    from pullbox.core.collection_scanner import DiscoveredFile
+    class DiscoveredFileLike(Protocol):
+        parsed_issue_number: float | None
+        comicvine_issue_id: int | None
+        comicvine_series_id: int | None
+        has_comicinfo: bool
+        issue_type: IssueType
 
 
 _LOW_SIGNAL_GROUPING_TOKENS: frozenset[str] = frozenset(
@@ -88,7 +95,7 @@ def _is_low_signal_file_series_name(parsed_series: str) -> bool:
     return bool(_GENERIC_FILE_SERIES_RE.match(normalized))
 
 
-def _has_strong_file_identity(discovered_file: DiscoveredFile) -> bool:
+def _has_strong_file_identity(discovered_file: DiscoveredFileLike) -> bool:
     """Return true when a parsed file has enough identity to stand on its own."""
     return any(
         (
@@ -137,7 +144,7 @@ def _is_scan_candidate_file(path: Path, extensions: frozenset[str]) -> bool:
     return path.suffix.lower() in extensions and not _is_obvious_non_comic_document(path)
 
 
-def _source_issue_type_for_group(files: list[DiscoveredFile]) -> IssueType | None:
+def _source_issue_type_for_group(files: Sequence[DiscoveredFileLike]) -> IssueType | None:
     """Return a safe group-level issue type without letting mixed rows over-specialize."""
     issue_types = {discovered_file.issue_type for discovered_file in files}
     if len(issue_types) == 1:

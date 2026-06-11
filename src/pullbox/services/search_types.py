@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
+
+IssueSearchMode = Literal["deep", "fast"]
 
 
 class SearchEvalKwargs(TypedDict, total=False):

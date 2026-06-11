@@ -11,7 +11,20 @@ from pullbox.models.issue import IssueType
 from pullbox.models.series import SeriesType
 
 if TYPE_CHECKING:
-    from pullbox.services.semantic_matching import WorkflowPolicy
+    from typing import Protocol
+
+    class WorkflowPolicyLike(Protocol):
+        @property
+        def allow_collection_issue_match_fallback(self) -> bool: ...
+
+        @property
+        def allow_standard_collection_inference(self) -> bool: ...
+
+        @property
+        def allow_issue_like_standard_compatibility(self) -> bool: ...
+
+        @property
+        def allow_issue_like_issue_inference(self) -> bool: ...
 
 
 class TypeFamily(enum.StrEnum):
@@ -151,7 +164,7 @@ def issue_type_compatibility(
     *,
     parsed_type: IssueType,
     wanted_type: IssueType,
-    policy: WorkflowPolicy,
+    policy: WorkflowPolicyLike,
 ) -> TypeCompatibility:
     """Resolve parsed-vs-target issue type compatibility for a workflow policy."""
     parsed_family = issue_type_family(parsed_type)

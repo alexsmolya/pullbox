@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from pullbox.models.issue import IssueType
 from pullbox.providers.base import SearchQuery
@@ -11,6 +11,7 @@ from pullbox.providers.base import SearchQuery
 if TYPE_CHECKING:
     from pullbox.providers.base import ReleaseResult
     from pullbox.services.search_targets import IssueSearchTarget
+    from pullbox.services.search_types import IssueSearchMode
 
 # Default Newznab/Torznab categories for comic searches.
 # 7020 = EBook, 7030 = Comics. The parent 7000 is intentionally excluded.
@@ -47,8 +48,6 @@ _TYPE_QUERY_KEYWORDS: dict[str, list[str]] = {
     "compendium": ["Compendium"],
     "volume": ["Vol", "Volume"],
 }
-
-IssueSearchMode = Literal["deep", "fast"]
 
 
 def _is_better_release(new: ReleaseResult, existing: ReleaseResult) -> bool:

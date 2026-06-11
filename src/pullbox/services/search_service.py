@@ -18,6 +18,7 @@ from pullbox.services import search_query_helpers as _search_query_helpers
 from pullbox.services import search_runtime as _search_runtime
 from pullbox.services import search_scoring as _search_scoring
 from pullbox.services import search_targets as _search_targets
+from pullbox.services import search_types as _search_types
 from pullbox.services.release_validator import (
     ReleaseValidator,
     ValidationResult,
@@ -142,7 +143,7 @@ def log_type_detection(
     )
 
 
-IssueSearchMode = _search_query_helpers.IssueSearchMode
+IssueSearchMode = _search_types.IssueSearchMode
 
 
 DEFAULT_TYPE_THRESHOLDS = _search_runtime.DEFAULT_TYPE_THRESHOLDS
