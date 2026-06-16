@@ -66,7 +66,7 @@ class TestSystemRouteContracts:
             in response.text
         )
         assert (
-            "https://discord.com/channels/1484661929657106644/1484662608022732810" in response.text
+            "https://discord.gg/mg6GQkATaA" in response.text
         )
         assert "https://bsky.app/profile/pullboxapp.bsky.social" in response.text
         assert "https://x.com/PullboxApp" in response.text
@@ -188,7 +188,7 @@ class TestSystemRouteContracts:
         assert "Health check results" in response.text
         assert "Import job history" in response.text
         assert (
-            "https://discord.com/channels/1484661929657106644/1484662608022732810" in response.text
+            "https://discord.gg/mg6GQkATaA" in response.text
         )
         assert 'class="flex flex-col gap-3 border-t border-pb-border pt-4' in response.text
         assert "Privacy safe - keys, passwords &amp; tokens stripped" in response.text
