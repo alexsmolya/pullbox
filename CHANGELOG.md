@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - GitHub Release notes now start from the curated `CHANGELOG.md` release section
   before appending generated commit details.
+- GitHub Release image verification commands now use the exact published image
+  digest from the Docker workflow.
 
 ### Internal
 

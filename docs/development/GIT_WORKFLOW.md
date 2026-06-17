@@ -490,8 +490,9 @@ Recommended mapping:
 - Signed tags let GitHub show verified tag provenance when signing is configured
   correctly.
 - Release images are signed separately from Git tags. The Docker workflow uses
-  keyless Sigstore/Cosign with GitHub Actions OIDC, then verifies GHCR and
-  Docker Hub signatures before the workflow succeeds.
+  keyless Sigstore/Cosign with GitHub Actions OIDC, verifies GHCR and Docker
+  Hub signatures by digest before the workflow succeeds, and uploads that digest
+  for the GitHub Release notes.
 - If `git tag -s` fails, stop and configure a verified GPG or SSH signing key
   before pushing the tag.
 - Docker metadata rules may publish semver-derived aliases during release-tag
@@ -514,7 +515,7 @@ git push origin vX.Y.Z-rc1
 - [ ] Release PR targets `main`.
 - [ ] Release tag is signed and verified locally.
 - [ ] Release workflows complete successfully.
-- [ ] GHCR and Docker Hub image signatures verify with Cosign.
+- [ ] GHCR and Docker Hub image signatures verify with Cosign by digest.
 - [ ] GHCR and Docker Hub tags are reviewed after publish.
 
 ## 9. Post-Release Sync
