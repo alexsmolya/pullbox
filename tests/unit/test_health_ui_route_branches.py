@@ -147,29 +147,42 @@ def route_request() -> SimpleNamespace:
 
 def test_configure_health_routes_sets_runtime_dependencies() -> None:
     templates = RecordingTemplates()
+    originals = {
+        "_get_templates": health_routes._get_templates,
+        "_build_context": health_routes._build_context,
+        "_dashboard_gauge_offset_impl": health_routes._dashboard_gauge_offset_impl,
+        "_dashboard_relative_time_label_impl": health_routes._dashboard_relative_time_label_impl,
+        "_download_client_type_label_impl": health_routes._download_client_type_label_impl,
+        "_sidebar_badge_response_impl": health_routes._sidebar_badge_response_impl,
+        "_load_sidebar_health_counts_impl": health_routes._load_sidebar_health_counts_impl,
+    }
 
     async def _counts(_session: object) -> tuple[int, int]:
         return 0, 0
 
-    health_routes.configure_health_routes(
-        get_templates=lambda: templates,
-        build_context=lambda request, user=None, **kwargs: {
-            "request": request,
-            "user": user,
-            **kwargs,
-        },
-        dashboard_gauge_offset=lambda value: value + 1,
-        dashboard_relative_time_label=lambda _value, _reference: "relative",
-        download_client_type_label=lambda value: value.title(),
-        sidebar_badge_response=lambda _request, _user, **kwargs: SimpleNamespace(**kwargs),
-        load_sidebar_health_counts=_counts,
-    )
+    try:
+        health_routes.configure_health_routes(
+            get_templates=lambda: templates,
+            build_context=lambda request, user=None, **kwargs: {
+                "request": request,
+                "user": user,
+                **kwargs,
+            },
+            dashboard_gauge_offset=lambda value: value + 1,
+            dashboard_relative_time_label=lambda _value, _reference: "relative",
+            download_client_type_label=lambda value: value.title(),
+            sidebar_badge_response=lambda _request, _user, **kwargs: SimpleNamespace(**kwargs),
+            load_sidebar_health_counts=_counts,
+        )
 
-    assert health_routes._templates() is templates
-    assert health_routes._dashboard_gauge_offset(2) == 3
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    assert health_routes._dashboard_relative_time_label(now, now) == "relative"
-    assert health_routes._download_client_type_label("sabnzbd") == "Sabnzbd"
+        assert health_routes._templates() is templates
+        assert health_routes._dashboard_gauge_offset(2) == 3
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        assert health_routes._dashboard_relative_time_label(now, now) == "relative"
+        assert health_routes._download_client_type_label("sabnzbd") == "Sabnzbd"
+    finally:
+        for name, value in originals.items():
+            setattr(health_routes, name, value)
 
 
 @pytest.mark.parametrize(
