@@ -14,15 +14,24 @@ import hashlib
 from typing import TYPE_CHECKING
 
 import pytest
+from fastapi import HTTPException
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from pullbox.api.v1 import blocklist as blocklist_api
+from pullbox.core.exceptions import NotFoundError
 from pullbox.models import Base
 from pullbox.models.blocklist import BlocklistEntry, BlocklistReason, normalize_release_title
+from pullbox.models.config import SystemConfig
 from pullbox.models.user import APIKey, User
+from pullbox.schemas.blocklist import (
+    BlocklistAddRequest,
+    BlocklistBulkDeleteRequest,
+    ReleaseGroupListRequest,
+)
 from pullbox.services.auth_service import AuthService
 
 pytestmark = pytest.mark.slow
@@ -308,6 +317,101 @@ class TestCount:
         resp = await client.get("/api/v1/blocklist/count")
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
+
+
+class TestBlocklistRouteFunctions:
+    """Direct route-function coverage for blocklist contracts."""
+
+    async def test_route_functions_cover_crud_filters_groups_and_errors(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        async with _db_factory() as session:
+            empty_count = await blocklist_api.get_count(object(), session)  # type: ignore[arg-type]
+            empty_groups = await blocklist_api.get_release_groups(object(), session)  # type: ignore[arg-type]
+
+            groups = await blocklist_api.update_release_groups(
+                ReleaseGroupListRequest(groups=[" Empire ", "empire", "", "DCP"]),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+            updated_groups = await blocklist_api.update_release_groups(
+                ReleaseGroupListRequest(groups=["Pyrate", "DCP"]),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+            group_row = await session.get(SystemConfig, "blocklist.release_groups")
+
+            first = await blocklist_api.add_entry(
+                BlocklistAddRequest(
+                    release_title="Batman.019.2026.Digital",
+                    reason=BlocklistReason.MANUAL,
+                    download_url="https://example.com/batman.nzb",
+                ),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+            second = await blocklist_api.add_entry(
+                BlocklistAddRequest(
+                    release_title="Saga.073.2026.Digital",
+                    reason=BlocklistReason.FAILED,
+                ),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+
+            with pytest.raises(HTTPException) as duplicate:
+                await blocklist_api.add_entry(
+                    BlocklistAddRequest(release_title="Batman.019.2026.Digital"),
+                    object(),  # type: ignore[arg-type]
+                    session,
+                )
+
+            listed = await blocklist_api.list_entries(
+                object(),  # type: ignore[arg-type]
+                session,
+                page=1,
+                page_size=10,
+                reason=BlocklistReason.MANUAL,
+                search="batman",
+            )
+            fetched = await blocklist_api.get_entry(first.id, object(), session)  # type: ignore[arg-type]
+            count_after_add = await blocklist_api.get_count(object(), session)  # type: ignore[arg-type]
+
+            await blocklist_api.delete_entry(first.id, object(), session)  # type: ignore[arg-type]
+            bulk = await blocklist_api.bulk_delete(
+                BlocklistBulkDeleteRequest(ids=[second.id]),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+            clear_seed = await blocklist_api.add_entry(
+                BlocklistAddRequest(release_title="Clear.Me.001"),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+            cleared = await blocklist_api.clear_entries(object(), session)  # type: ignore[arg-type]
+
+            with pytest.raises(NotFoundError):
+                await blocklist_api.get_entry(999_001, object(), session)  # type: ignore[arg-type]
+            with pytest.raises(NotFoundError):
+                await blocklist_api.delete_entry(999_002, object(), session)  # type: ignore[arg-type]
+
+        assert empty_count.count == 0
+        assert empty_groups.groups == []
+        assert groups.groups == ["Empire", "DCP"]
+        assert updated_groups.groups == ["Pyrate", "DCP"]
+        assert group_row is not None
+        assert group_row.value == "Pyrate,DCP"
+        assert first.release_title == "Batman.019.2026.Digital"
+        assert first.download_url == "https://example.com/batman.nzb"
+        assert duplicate.value.status_code == 409
+        assert listed.total == 1
+        assert listed.entries[0].id == first.id
+        assert fetched.id == first.id
+        assert count_after_add.count == 2
+        assert bulk.removed == 1
+        assert clear_seed.id > 0
+        assert cleared.removed == 1
 
 
 # ── Auth tests ────────────────────────────────────────────────────────
