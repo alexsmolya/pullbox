@@ -20,9 +20,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from pullbox.core.comicvine_key import obfuscate_api_key
+from pullbox.config import get_settings
+from pullbox.core.comicvine_key import (
+    get_comicvine_api_key,
+    obfuscate_api_key,
+    save_comicvine_api_key,
+)
+from pullbox.core.encryption import decrypt_secret, encrypt_secret
 from pullbox.models import Base
 from pullbox.models.config import SystemConfig
 from pullbox.services.auth_service import SESSION_COOKIE_NAME, AuthService
@@ -143,6 +150,157 @@ class TestObfuscateApiKey:
         assert result == "x"
 
 
+# ── Unit: resolver and storage behavior ──────────────────────────────
+
+
+class TestComicVineApiKeyResolver:
+    """Direct resolver/storage tests for encrypted DB and env fallback behavior."""
+
+    @pytest.mark.asyncio
+    async def test_get_prefers_decrypted_database_value_over_env(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("PULLBOX_COMICVINE_API_KEY", "env-key")
+        get_settings.cache_clear()
+        async with _db_factory() as session:
+            session.add(
+                SystemConfig(
+                    key="comicvine_api_key",
+                    value=encrypt_secret("db-key"),
+                    value_type="secret",
+                )
+            )
+            await session.commit()
+
+            assert await get_comicvine_api_key(session) == "db-key"
+
+        get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_get_falls_back_to_env_when_database_missing(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("PULLBOX_COMICVINE_API_KEY", "env-only-key")
+        get_settings.cache_clear()
+        async with _db_factory() as session:
+            assert await get_comicvine_api_key(session) == "env-only-key"
+
+        get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_get_falls_back_to_env_when_database_secret_is_invalid(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("PULLBOX_COMICVINE_API_KEY", "fallback-key")
+        get_settings.cache_clear()
+        async with _db_factory() as session:
+            session.add(
+                SystemConfig(
+                    key="comicvine_api_key",
+                    value="enc:not-a-valid-encrypted-secret",
+                    value_type="secret",
+                )
+            )
+            await session.commit()
+
+            assert await get_comicvine_api_key(session) == "fallback-key"
+
+        get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_get_returns_empty_string_when_no_key_configured(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("PULLBOX_COMICVINE_API_KEY", raising=False)
+        get_settings.cache_clear()
+        async with _db_factory() as session:
+            assert await get_comicvine_api_key(session) == ""
+
+        get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_save_creates_encrypted_secret_row(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("PULLBOX_COMICVINE_API_KEY", raising=False)
+        get_settings.cache_clear()
+        async with _db_factory() as session:
+            await save_comicvine_api_key(session, "stored-key")
+            await session.commit()
+
+            config = (
+                await session.execute(
+                    select(SystemConfig).where(SystemConfig.key == "comicvine_api_key")
+                )
+            ).scalar_one()
+            assert config.value_type == "secret"
+            assert config.value != "stored-key"
+            assert decrypt_secret(config.value) == "stored-key"
+            assert await get_comicvine_api_key(session) == "stored-key"
+
+        get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_save_updates_existing_secret_row(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        async with _db_factory() as session:
+            session.add(
+                SystemConfig(
+                    key="comicvine_api_key",
+                    value=encrypt_secret("old-key"),
+                    value_type="secret",
+                )
+            )
+            await session.commit()
+
+            await save_comicvine_api_key(session, "new-key")
+            await session.commit()
+
+            config = await session.get(SystemConfig, "comicvine_api_key")
+            assert config is not None
+            assert decrypt_secret(config.value) == "new-key"
+
+    @pytest.mark.asyncio
+    async def test_save_blank_key_clears_existing_secret(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("PULLBOX_COMICVINE_API_KEY", raising=False)
+        get_settings.cache_clear()
+        async with _db_factory() as session:
+            session.add(
+                SystemConfig(
+                    key="comicvine_api_key",
+                    value=encrypt_secret("old-key"),
+                    value_type="secret",
+                )
+            )
+            await session.commit()
+
+            await save_comicvine_api_key(session, "")
+            await session.commit()
+
+            config = await session.get(SystemConfig, "comicvine_api_key")
+            assert config is not None
+            assert config.value == ""
+            assert await get_comicvine_api_key(session) == ""
+
+        get_settings.cache_clear()
+
+
 # ── API: GET config never leaks secrets ──────────────────────────────
 
 
@@ -156,8 +314,6 @@ class TestGetConfigObfuscation:
         _db_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         """Secret-type config values are replaced with obfuscated text."""
-        from pullbox.core.encryption import encrypt_secret
-
         async with _db_factory() as session:
             session.add(
                 SystemConfig(
