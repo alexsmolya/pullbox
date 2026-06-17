@@ -114,7 +114,7 @@ def test_application_secret_fallback_accepts_strong_runtime_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Strong runtime secrets remain valid before config.xml provider init."""
-    secret = "0123456789abcdef" * 4
+    secret = "correct-horse-battery-staple-for-pullbox-tests-2026"
 
     def _uninitialized_provider() -> object:
         raise RuntimeError("provider not initialized")
