@@ -38,6 +38,20 @@ def test_validate_application_secret_rejects_weak_values(
         validate_application_secret(secret)
 
 
+def test_validate_application_secret_rejects_known_weak_long_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    weak_long_value = "known-weak-secret-value-with-enough-length"
+    monkeypatch.delenv("PULLBOX_ALLOW_WEAK_SECRET_FOR_TESTS", raising=False)
+    monkeypatch.setattr(
+        "pullbox.core.secret_validation._WEAK_APPLICATION_SECRETS",
+        frozenset({weak_long_value}),
+    )
+
+    with pytest.raises(WeakApplicationSecretError, match="known weak value"):
+        validate_application_secret(weak_long_value.upper())
+
+
 def test_config_provider_rejects_weak_bootstrap_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
