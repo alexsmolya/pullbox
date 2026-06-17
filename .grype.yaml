@@ -8,7 +8,7 @@
 # Python package vulnerabilities are not suppressed here; pip-audit covers
 # those separately in the security workflow.
 #
-# Reviewed against pullbox:ci-scan on 2026-06-10 using the local Grype DB.
+# Reviewed against pullbox:ci-scan on 2026-06-17 using the local Grype DB.
 # Re-audit after each DHI base-image refresh and remove entries when fixed
 # stable Python 3.14 or Debian 13 packages become available upstream.
 
@@ -140,6 +140,19 @@ ignore:
       version: 3.46.1-7+deb13u1
       type: deb
   - vulnerability: CVE-2025-70873
+    package:
+      name: libsqlite3-0
+      version: 3.46.1-7+deb13u1
+      type: deb
+
+  # Debian trixie marks these SQLite FTS5 findings as no-dsa/minor while the
+  # fixed 3.53.2 package is only available in unstable.
+  - vulnerability: CVE-2026-11822
+    package:
+      name: libsqlite3-0
+      version: 3.46.1-7+deb13u1
+      type: deb
+  - vulnerability: CVE-2026-11824
     package:
       name: libsqlite3-0
       version: 3.46.1-7+deb13u1

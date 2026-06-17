@@ -21,10 +21,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### CI / Build
 
+### Internal
+
+## [0.9.6] - 2026-06-17
+
+Corrective patch release for signed Docker image publication after `0.9.5`
+published registry images but failed during the Cosign signing step.
+
+### CI / Build
+
+- Docker image signing and verification now run on a GitHub-hosted runner using
+  GitHub Actions OIDC, while image build and registry publication remain on the
+  trusted self-hosted runner.
+- Release image digest artifacts are now produced after signing succeeds so the
+  GitHub Release workflow can publish digest-specific Cosign verification
+  instructions.
+
+## [0.9.5] - 2026-06-17
+
+Corrective patch release for the unpublished `0.9.4` image publication.
+
+### Fixed
+
+- The release container scan now triages the current Debian 13 SQLite findings
+  from the Docker Hardened Images base while no stable trixie package fix is
+  available.
+
+### CI / Build
+
+- Release image publishing can proceed after the current Grype baseline passes
+  the documented DHI base-image triage.
+
+## [0.9.4] - 2026-06-17
+
+Patch release for pre-sprint cleanup, dependency maintenance, and release
+pipeline hardening.
+
+### Added
+
+- System support links now include the Pullbox documentation site.
+
+### Fixed
+
+- The Discord support link now points to the current invite.
+- Search settings now consistently use the 750 MB issue-size warning default.
+- The Starlette dependency floor now includes the current security patch level.
+
+### Testing
+
+- Route and utility E2E contracts now have stronger regression coverage.
+
+### Documentation
+
+- Development examples now use the corrected paths.
+
+### CI / Build
+
 - GitHub Release notes now start from the curated `CHANGELOG.md` release section
   before appending generated commit details.
 - GitHub Release image verification commands now use the exact published image
   digest from the Docker workflow.
+- Updated npm development dependencies: `axe-core` 4.12.1, `tailwindcss` 4.3.1,
+  and `@tailwindcss/cli` 4.3.1.
 
 ### Internal
 

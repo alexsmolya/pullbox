@@ -396,8 +396,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write
       packages: write
+    outputs:
+      image-digest: ${{ steps.push-image.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -514,15 +515,74 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Validate pushed image digest
+        env:
+          DIGEST: ${{ steps.push-image.outputs.digest }}
+        run: |
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected pushed image digest format: ${DIGEST}"
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "## Docker Images Published"
+            echo ""
+            echo "**Digest:** \`${{ steps.push-image.outputs.digest }}\`"
+            echo ""
+            echo "**Tags:**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────
+  # Job 5: Sign published image digests
+  # ──────────────────────────────────────────────
+  sign:
+    name: Sign Published Images
+    runs-on: ubuntu-latest
+    needs: [build, push]
+    if: needs.build.outputs.is-release == 'true' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate Docker Hub authentication
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets are required to sign release images on Docker Hub."
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign published image digests
         env:
-          DIGEST: ${{ steps.push-image.outputs.digest }}
+          DIGEST: ${{ needs.push.outputs.image-digest }}
         run: |
           if [ -z "${DIGEST}" ]; then
-            echo "::error::docker/build-push-action did not return a digest to sign."
+            echo "::error::Push job did not return a digest to sign."
             exit 1
           fi
 
@@ -532,7 +592,7 @@ jobs:
 
       - name: Verify published image signatures
         env:
-          DIGEST: ${{ steps.push-image.outputs.digest }}
+          DIGEST: ${{ needs.push.outputs.image-digest }}
           CERTIFICATE_IDENTITY_REGEXP: ^https://github.com/${{ github.repository }}/\.github/workflows/docker\.yml@refs/(tags/v.*|heads/.*)$
           CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
@@ -548,7 +608,7 @@ jobs:
 
       - name: Write release image digest artifact
         env:
-          DIGEST: ${{ steps.push-image.outputs.digest }}
+          DIGEST: ${{ needs.push.outputs.image-digest }}
         run: |
           if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::Unexpected release image digest format: ${DIGEST}"
@@ -568,14 +628,9 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "## Docker Images Published 🐳"
+            echo "## Docker Images Signed"
             echo ""
-            echo "**Digest:** \`${{ steps.push-image.outputs.digest }}\`"
+            echo "**Digest:** \`${{ needs.push.outputs.image-digest }}\`"
             echo ""
             echo "**Signing:** Keyless Sigstore/Cosign signatures verified for GHCR and Docker Hub."
-            echo ""
-            echo "**Tags:**"
-            echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
