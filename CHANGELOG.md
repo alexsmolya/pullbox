@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.5] - 2026-06-17
+
+Corrective patch release for the unpublished `0.9.4` image publication.
+
+### Fixed
+
+- The release container scan now triages the current Debian 13 SQLite findings
+  from the Docker Hardened Images base while no stable trixie package fix is
+  available.
+
+### CI / Build
+
+- Release image publishing can proceed after the current Grype baseline passes
+  the documented DHI base-image triage.
+
 ## [0.9.4] - 2026-06-17
 
 Patch release for pre-sprint cleanup, dependency maintenance, and release
