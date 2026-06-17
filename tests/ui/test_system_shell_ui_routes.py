@@ -65,9 +65,7 @@ class TestSystemRouteContracts:
         assert "https://pullbox.app/docs/reference/troubleshooting" in response.text
         assert ':href="info.docs_url"' in response.text
         assert ">Docs<" in response.text
-        assert (
-            "https://discord.gg/mg6GQkATaA" in response.text
-        )
+        assert "https://discord.gg/mg6GQkATaA" in response.text
         assert "https://bsky.app/profile/pullboxapp.bsky.social" in response.text
         assert "https://x.com/PullboxApp" in response.text
         assert "https://mastodon.social/@PullboxApp" in response.text
@@ -200,9 +198,7 @@ class TestSystemRouteContracts:
         assert "Scheduler and disk status" in response.text
         assert "Health check results" in response.text
         assert "Import job history" in response.text
-        assert (
-            "https://discord.gg/mg6GQkATaA" in response.text
-        )
+        assert "https://discord.gg/mg6GQkATaA" in response.text
         assert 'class="flex flex-col gap-3 border-t border-pb-border pt-4' in response.text
         assert "Privacy safe - keys, passwords &amp; tokens stripped" in response.text
 
