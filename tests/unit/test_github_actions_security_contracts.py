@@ -300,6 +300,27 @@ def test_release_notes_include_image_signature_verification() -> None:
     assert "docker.io/pullbox/pullbox@${{ steps.image-digest.outputs.digest }}" in release_workflow
 
 
+def test_release_workflow_only_runs_for_tag_push_docker_publish() -> None:
+    release_workflow_path = WORKFLOW_DIR / "release.yml"
+    data = _load_yaml(release_workflow_path)
+
+    concurrency = data.get("concurrency")
+    assert isinstance(concurrency, dict)
+    group = concurrency.get("group")
+    assert isinstance(group, str)
+    assert "github.event.workflow_run.event" in group
+    assert "github.event.workflow_run.head_sha" in group
+
+    jobs = data.get("jobs")
+    assert isinstance(jobs, dict)
+    release_job = jobs.get("create-release")
+    assert isinstance(release_job, dict)
+    release_if = release_job.get("if")
+    assert isinstance(release_if, str)
+    assert "github.event.workflow_run.conclusion == 'success'" in release_if
+    assert "github.event.workflow_run.event == 'push'" in release_if
+
+
 def test_release_notes_use_curated_changelog_before_commit_details() -> None:
     release_workflow = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
 
