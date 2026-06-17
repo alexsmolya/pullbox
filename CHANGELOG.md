@@ -23,6 +23,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.4] - 2026-06-17
+
+Patch release for pre-sprint cleanup, dependency maintenance, and release
+pipeline hardening.
+
+### Added
+
+- System support links now include the Pullbox documentation site.
+
+### Fixed
+
+- The Discord support link now points to the current invite.
+- Search settings now consistently use the 750 MB issue-size warning default.
+- The Starlette dependency floor now includes the current security patch level.
+
+### Testing
+
+- Route and utility E2E contracts now have stronger regression coverage.
+
+### Documentation
+
+- Development examples now use the corrected paths.
+
+### CI / Build
+
+- GitHub Release notes now start from the curated `CHANGELOG.md` release section
+  before appending generated commit details.
+- GitHub Release image verification commands now use the exact published image
+  digest from the Docker workflow.
+- Updated npm development dependencies: `axe-core` 4.12.1, `tailwindcss` 4.3.1,
+  and `@tailwindcss/cli` 4.3.1.
+
+### Internal
+
 ## [0.9.3] - 2026-06-10
 
 Corrective release for Docker Hub publication.
