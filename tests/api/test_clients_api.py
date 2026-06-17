@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 
 from pullbox.api.v1 import clients as clients_api
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
-from pullbox.core.exceptions import NotFoundError, ValidationError
+from pullbox.core.exceptions import NotFoundError, ProviderError, ValidationError
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.download import DownloadClientType
 from pullbox.providers.base import ProviderHealthResult
@@ -661,6 +662,22 @@ class TestClientRouteFunctions:
         assert "could not be decrypted" in str(decrypt_result["message"]).lower()
         assert sab_result["healthy"] is True
 
+    async def test_inline_test_route_rejects_unknown_defensive_client_type(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+    ) -> None:
+        body = _create_model(name="Unknown", client_type="sabnzbd").model_copy(
+            update={"client_type": "rtorrent"}
+        )
+
+        async with sec_db() as session:
+            with pytest.raises(ProviderError, match="Unknown client type: rtorrent"):
+                await clients_api.test_client_inline(
+                    body,
+                    object(),  # type: ignore[arg-type]
+                    session,
+                )
+
     @pytest.mark.parametrize(
         ("client_type", "patch_target", "config_kwargs"),
         [
@@ -800,3 +817,19 @@ class TestClientRouteFunctions:
         assert decrypt_result["healthy"] is False
         assert broken.last_failure_at is not None
         assert "could not be decrypted" in str(broken.last_error).lower()
+
+    async def test_saved_client_test_route_rejects_unknown_defensive_client_type(self) -> None:
+        class _Session:
+            async def get(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+                return SimpleNamespace(
+                    client_type="rtorrent",
+                    url="http://localhost:9999",
+                    category=None,
+                )
+
+        with pytest.raises(ProviderError, match="Unknown client type: rtorrent"):
+            await clients_api.test_client(
+                123,
+                object(),  # type: ignore[arg-type]
+                _Session(),  # type: ignore[arg-type]
+            )
