@@ -238,11 +238,17 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert isinstance(jobs, dict)
     push_job = jobs.get("push")
     assert isinstance(push_job, dict)
+    sign_job = jobs.get("sign")
+    assert isinstance(sign_job, dict)
 
-    permissions = push_job.get("permissions")
-    assert isinstance(permissions, dict)
-    assert permissions.get("packages") == "write"
-    assert permissions.get("id-token") == "write"
+    push_permissions = push_job.get("permissions")
+    assert isinstance(push_permissions, dict)
+    assert push_permissions.get("packages") == "write"
+    assert "id-token" not in push_permissions
+
+    push_outputs = push_job.get("outputs")
+    assert isinstance(push_outputs, dict)
+    assert push_outputs.get("image-digest") == "${{ steps.push-image.outputs.digest }}"
 
     steps = push_job.get("steps")
     assert isinstance(steps, list)
@@ -259,9 +265,30 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert build_with.get("provenance") == "mode=max"
     assert build_with.get("sbom") is True
 
+    assert sign_job.get("runs-on") == "ubuntu-latest"
+    assert sign_job.get("needs") == ["build", "push"]
+    sign_permissions = sign_job.get("permissions")
+    assert isinstance(sign_permissions, dict)
+    assert sign_permissions.get("packages") == "write"
+    assert sign_permissions.get("id-token") == "write"
+
+    sign_steps = sign_job.get("steps")
+    assert isinstance(sign_steps, list)
+    sign_step_names = {step.get("name") for step in sign_steps if isinstance(step, dict)}
+    assert {
+        "Log in to GHCR",
+        "Validate Docker Hub authentication",
+        "Log in to Docker Hub",
+        "Install Cosign",
+        "Sign published image digests",
+        "Verify published image signatures",
+        "Write release image digest artifact",
+        "Upload release image digest artifact",
+    } <= sign_step_names
+
     assert "sigstore/cosign-installer@" in docker_workflow
     assert "cosign sign --yes" in docker_workflow
-    assert "steps.push-image.outputs.digest" in docker_workflow
+    assert "needs.push.outputs.image-digest" in docker_workflow
     assert "release-image-digest" in docker_workflow
     assert "digest.txt" in docker_workflow
     assert "actions/upload-artifact@" in docker_workflow
