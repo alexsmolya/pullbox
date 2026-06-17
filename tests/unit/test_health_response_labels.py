@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pullbox.core.duration_format import replace_duration_ms_tokens
+from pullbox.core.duration_format import format_duration_ms_label, replace_duration_ms_tokens
 from pullbox.ui.routes import (
     _health_check_response_label,
     _health_parenthetical_next_line,
@@ -45,6 +45,14 @@ class TestReplaceDurationMsTokens:
         assert replace_duration_ms_tokens("Prowlarr responded in 450ms") == (
             "Prowlarr responded in 450ms"
         )
+
+
+class TestFormatDurationMsLabel:
+    def test_formats_numeric_values(self) -> None:
+        assert format_duration_ms_label(1500) == "1.5s"
+
+    def test_returns_fallback_for_non_numeric_values(self) -> None:
+        assert format_duration_ms_label("unknown", fallback="pending") == "pending"
 
 
 class TestHealthParentheticalNextLine:
