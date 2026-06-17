@@ -65,7 +65,7 @@ async def build_import_service(
     persisted_rate_value: str | None = None
     if persisted_rate_config is not None:
         candidate_value = getattr(persisted_rate_config, "value", None)
-        if isinstance(candidate_value, (str, int, float)):
+        if isinstance(candidate_value, str | int | float):
             persisted_rate_value = str(candidate_value).strip()
 
     if persisted_rate_value:

@@ -30,18 +30,16 @@ from pullbox.models.base import Base
 from pullbox.models.blocklist import BlocklistEntry, BlocklistReason, normalize_release_title
 from pullbox.models.import_job import (
     ImportedFile,
+    ImportedFileStatus,
     ImportedSeries,
     ImportJob,
     ImportJobLog,
     ImportJobStatus,
-    ImportSeriesStatus,
-    ImportSourceType,
-    ImportedFileStatus,
 )
+from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.matching_suggestion import MatchingSuggestion, SuggestionStatus
 from pullbox.models.series import Series
-from pullbox.models.issue import Issue, IssueStatus
 from pullbox.utilities.models import (
     ItemState,
     JobState,
@@ -62,10 +60,12 @@ def _ago(days: int = 0, hours: int = 0, minutes: int = 0) -> datetime:
 
 def _make_minimal_png() -> bytes:
     sig = b"\x89PNG\r\n\x1a\n"
+
     def _chunk(t: bytes, d: bytes) -> bytes:
         raw = t + d
         crc = struct.pack(">I", zlib.crc32(raw) & 0xFFFFFFFF)
         return struct.pack(">I", len(d)) + raw + crc
+
     ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
     idat = _chunk(b"IDAT", zlib.compress(b"\x00\x33\x33\x33"))
     iend = _chunk(b"IEND", b"")
@@ -95,13 +95,27 @@ async def _seed_extra_blocklist(session: AsyncSession) -> int:
     indexer_ids = []
     try:
         from pullbox.models.indexer import IndexerConfig
-        indexer_ids = [r[0] for r in (await session.execute(select(IndexerConfig.id).limit(5))).all()]
+
+        indexer_ids = [
+            r[0] for r in (await session.execute(select(IndexerConfig.id).limit(5))).all()
+        ]
     except Exception:
         pass
 
-    groups = ["Sketchy-Scans", "Low-Res-Rips", "Fakeout-Group", "Corrupt-Archive",
-              "Wrong-Issue-Rls", "Bad-OCR-Crew", "Watermarked-Scans", "Duplicate-Upload",
-              "Missing-Pages", "Re-encoded-Junk", "Troll-Upload", "Wrong-Series"]
+    groups = [
+        "Sketchy-Scans",
+        "Low-Res-Rips",
+        "Fakeout-Group",
+        "Corrupt-Archive",
+        "Wrong-Issue-Rls",
+        "Bad-OCR-Crew",
+        "Watermarked-Scans",
+        "Duplicate-Upload",
+        "Missing-Pages",
+        "Re-encoded-Junk",
+        "Troll-Upload",
+        "Wrong-Series",
+    ]
     reasons = [BlocklistReason.FAILED, BlocklistReason.REJECTED, BlocklistReason.MANUAL]
     errors = [
         "Extraction failed: archive corrupted (CRC mismatch)",
@@ -163,13 +177,22 @@ async def _seed_matching_suggestions(session: AsyncSession) -> int:
         return 0
 
     # Need library_file_ids and series_ids
-    lib_file_ids = [r[0] for r in (await session.execute(
-        select(LibraryFile.id).where(LibraryFile.match_confidence == MatchConfidence.UNMATCHED).limit(50)
-    )).all()]
+    lib_file_ids = [
+        r[0]
+        for r in (
+            await session.execute(
+                select(LibraryFile.id)
+                .where(LibraryFile.match_confidence == MatchConfidence.UNMATCHED)
+                .limit(50)
+            )
+        ).all()
+    ]
 
     # If not enough unmatched files, use any files
     if len(lib_file_ids) < 30:
-        lib_file_ids = [r[0] for r in (await session.execute(select(LibraryFile.id).limit(50))).all()]
+        lib_file_ids = [
+            r[0] for r in (await session.execute(select(LibraryFile.id).limit(50))).all()
+        ]
 
     if not lib_file_ids:
         print("  Matching suggestions: no library files to link to, skipping.")
@@ -257,8 +280,14 @@ async def _seed_utility_jobs(session: AsyncSession) -> int:
         (JobType.DB_CHECK_CLEANUP, "Database Check & Cleanup"),
         (JobType.EXPORT_LIBRARY, "Export Library"),
     ]
-    states = [JobState.COMPLETED, JobState.COMPLETED, JobState.COMPLETED,
-              JobState.FAILED, JobState.COMPLETED, JobState.CANCELLED]
+    states = [
+        JobState.COMPLETED,
+        JobState.COMPLETED,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.COMPLETED,
+        JobState.CANCELLED,
+    ]
 
     added = 0
     for i in range(35):
@@ -267,10 +296,18 @@ async def _seed_utility_jobs(session: AsyncSession) -> int:
         job_id = str(uuid.uuid4())
         created = (now - timedelta(days=35 - i, hours=i % 8)).isoformat()
         started = (now - timedelta(days=35 - i, hours=i % 8) + timedelta(seconds=2)).isoformat()
-        completed = (now - timedelta(days=35 - i, hours=i % 8) + timedelta(minutes=2 + i % 5)).isoformat() if state != JobState.CANCELLED else None
+        completed = (
+            (now - timedelta(days=35 - i, hours=i % 8) + timedelta(minutes=2 + i % 5)).isoformat()
+            if state != JobState.CANCELLED
+            else None
+        )
 
         total = 20 + (i * 7) % 80
-        completed_items = total if state == JobState.COMPLETED else (total // 3 if state == JobState.CANCELLED else total - 2)
+        completed_items = (
+            total
+            if state == JobState.COMPLETED
+            else (total // 3 if state == JobState.CANCELLED else total - 2)
+        )
         failed_items = 0 if state == JobState.COMPLETED else (2 if state == JobState.FAILED else 0)
         skipped_items = i % 5
 
@@ -288,7 +325,9 @@ async def _seed_utility_jobs(session: AsyncSession) -> int:
             created_at=created,
             started_at=started,
             completed_at=completed,
-            error_message="Worker process crashed: out of memory" if state == JobState.FAILED else None,
+            error_message="Worker process crashed: out of memory"
+            if state == JobState.FAILED
+            else None,
             created_by="admin",
         )
         session.add(job)
@@ -297,7 +336,11 @@ async def _seed_utility_jobs(session: AsyncSession) -> int:
         item_count = min(8, total)
         for j in range(item_count):
             item_id = str(uuid.uuid4())
-            item_state = ItemState.COMPLETED if j < item_count - 1 else (ItemState.FAILED if state == JobState.FAILED else ItemState.COMPLETED)
+            item_state = (
+                ItemState.COMPLETED
+                if j < item_count - 1
+                else (ItemState.FAILED if state == JobState.FAILED else ItemState.COMPLETED)
+            )
             item = UtilityJobItem(
                 id=item_id,
                 job_id=job_id,
@@ -306,11 +349,21 @@ async def _seed_utility_jobs(session: AsyncSession) -> int:
                 file_path=f"/comics/Series {i}/{display.split()[0]} #{j + 1:03d}.cbz",
                 operation=jtype.split("_")[0] if "_" in jtype else jtype,
                 before_state=json.dumps({"format": "cbr", "size": 15000000 + j * 1000}),
-                after_state=json.dumps({"format": "cbz", "size": 14000000 + j * 900}) if item_state == ItemState.COMPLETED else "{}",
-                started_at=(now - timedelta(days=35 - i) + timedelta(seconds=10 + j * 30)).isoformat(),
-                completed_at=(now - timedelta(days=35 - i) + timedelta(seconds=40 + j * 30)).isoformat() if item_state == ItemState.COMPLETED else None,
+                after_state=json.dumps({"format": "cbz", "size": 14000000 + j * 900})
+                if item_state == ItemState.COMPLETED
+                else "{}",
+                started_at=(
+                    now - timedelta(days=35 - i) + timedelta(seconds=10 + j * 30)
+                ).isoformat(),
+                completed_at=(
+                    now - timedelta(days=35 - i) + timedelta(seconds=40 + j * 30)
+                ).isoformat()
+                if item_state == ItemState.COMPLETED
+                else None,
                 duration_ms=(25000 + j * 3000) if item_state == ItemState.COMPLETED else None,
-                error_message="Failed to read archive: permission denied" if item_state == ItemState.FAILED else None,
+                error_message="Failed to read archive: permission denied"
+                if item_state == ItemState.FAILED
+                else None,
             )
             session.add(item)
 
@@ -319,13 +372,23 @@ async def _seed_utility_jobs(session: AsyncSession) -> int:
             log = UtilityJobLog(
                 job_id=job_id,
                 timestamp=(now - timedelta(days=35 - i) + timedelta(seconds=j * 15)).isoformat(),
-                level=[LogLevel.INFO, LogLevel.INFO, LogLevel.WARNING, LogLevel.INFO, LogLevel.INFO][j],
+                level=[
+                    LogLevel.INFO,
+                    LogLevel.INFO,
+                    LogLevel.WARNING,
+                    LogLevel.INFO,
+                    LogLevel.INFO,
+                ][j],
                 message=[
                     f"Job started: processing {total} files",
                     "Scanning directory: /comics",
                     f"Skipped {skipped_items} files (already processed)",
                     f"Processed {completed_items}/{total} files",
-                    f"Job {'completed successfully' if state == JobState.COMPLETED else 'finished with errors'}",
+                    (
+                        "Job completed successfully"
+                        if state == JobState.COMPLETED
+                        else "Job finished with errors"
+                    ),
                 ][j],
                 file_path=f"/comics/Series {i}/" if j == 1 else None,
             )
@@ -342,15 +405,23 @@ async def _seed_utility_jobs(session: AsyncSession) -> int:
 
 
 async def _seed_import_files_and_logs(session: AsyncSession) -> int:
-    file_count = (await session.execute(select(func.count()).select_from(ImportedFile))).scalar_one()
+    file_count = (
+        await session.execute(select(func.count()).select_from(ImportedFile))
+    ).scalar_one()
     if file_count > 0:
         print(f"  Import files: already has {file_count}, skipping.")
         return 0
 
     # Get completed import jobs with imported series
-    jobs = (await session.execute(
-        select(ImportJob).where(ImportJob.status == ImportJobStatus.COMPLETED).limit(10)
-    )).scalars().all()
+    jobs = (
+        (
+            await session.execute(
+                select(ImportJob).where(ImportJob.status == ImportJobStatus.COMPLETED).limit(10)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     if not jobs:
         print("  Import files: no completed jobs found, skipping.")
@@ -358,9 +429,15 @@ async def _seed_import_files_and_logs(session: AsyncSession) -> int:
 
     # Get imported series linked to these jobs
     job_ids = [j.id for j in jobs]
-    imp_series = (await session.execute(
-        select(ImportedSeries).where(ImportedSeries.import_job_id.in_(job_ids)).limit(30)
-    )).scalars().all()
+    imp_series = (
+        (
+            await session.execute(
+                select(ImportedSeries).where(ImportedSeries.import_job_id.in_(job_ids)).limit(30)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     now = datetime.now(UTC)
     added_files = 0
@@ -370,8 +447,14 @@ async def _seed_import_files_and_logs(session: AsyncSession) -> int:
         # Add 3-5 files per imported series
         n_files = 3 + (series.id % 3)
         for j in range(n_files):
-            status = ImportedFileStatus.IMPORTED if j < n_files - 1 else (
-                ImportedFileStatus.NO_MATCH if series.id % 4 == 0 else ImportedFileStatus.IMPORTED
+            status = (
+                ImportedFileStatus.IMPORTED
+                if j < n_files - 1
+                else (
+                    ImportedFileStatus.NO_MATCH
+                    if series.id % 4 == 0
+                    else ImportedFileStatus.IMPORTED
+                )
             )
             f = ImportedFile(
                 import_job_id=series.import_job_id,
@@ -392,13 +475,21 @@ async def _seed_import_files_and_logs(session: AsyncSession) -> int:
     for job in jobs:
         log_messages = [
             ("info", "scan_started", f"Scanning {job.source_path}"),
-            ("info", "scan_complete", f"Found {job.scan_total_files} files in {job.scan_total_dirs} directories"),
+            (
+                "info",
+                "scan_complete",
+                f"Found {job.scan_total_files} files in {job.scan_total_dirs} directories",
+            ),
             ("info", "match_started", "Starting ComicVine matching"),
             ("warning", "match_low_confidence", "3 series matched with confidence below 70%"),
             ("info", "match_complete", f"Matched {job.series_matched}/{job.series_found} series"),
             ("info", "import_started", "Beginning file import to library"),
             ("info", "import_progress", f"Imported {job.total_files_imported} files"),
-            ("info", "import_complete", f"Import finished: {job.series_imported} series, {job.total_files_imported} files"),
+            (
+                "info",
+                "import_complete",
+                f"Import finished: {job.series_imported} series, {job.total_files_imported} files",
+            ),
         ]
         for k, (level, event, msg) in enumerate(log_messages):
             log = ImportJobLog(
@@ -428,13 +519,15 @@ async def _seed_extra_comic_files(session: AsyncSession) -> int:
         return 0
 
     # Find series that have owned issues but no library files
-    series_with_files = (await session.execute(
-        select(LibraryFile.parsed_series).distinct()
-    )).scalars().all()
+    series_with_files = (
+        (await session.execute(select(LibraryFile.parsed_series).distinct())).scalars().all()
+    )
 
-    all_series = (await session.execute(
-        select(Series).where(Series.publisher_id.isnot(None))
-    )).scalars().all()
+    all_series = (
+        (await session.execute(select(Series).where(Series.publisher_id.isnot(None))))
+        .scalars()
+        .all()
+    )
 
     cbz_data = _make_dummy_cbz(page_count=3)
     now = datetime.now(UTC)
@@ -453,9 +546,17 @@ async def _seed_extra_comic_files(session: AsyncSession) -> int:
         series.library_root_id = root.id
 
         # Get owned issues
-        owned = (await session.execute(
-            select(Issue).where(Issue.series_id == series.id, Issue.status == IssueStatus.OWNED)
-        )).scalars().all()
+        owned = (
+            (
+                await session.execute(
+                    select(Issue).where(
+                        Issue.series_id == series.id, Issue.status == IssueStatus.OWNED
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
 
         for issue in owned:
             num = issue.issue_number
@@ -468,9 +569,11 @@ async def _seed_extra_comic_files(session: AsyncSession) -> int:
                 file_path.write_bytes(cbz_data)
 
             # Check if LibraryFile already exists for this path
-            existing_lf = (await session.execute(
-                select(LibraryFile.id).where(LibraryFile.file_path == str(file_path))
-            )).scalar_one_or_none()
+            existing_lf = (
+                await session.execute(
+                    select(LibraryFile.id).where(LibraryFile.file_path == str(file_path))
+                )
+            ).scalar_one_or_none()
             if existing_lf:
                 continue
 
@@ -527,7 +630,10 @@ async def main() -> None:
         if total == 0:
             print("All pagination gaps already filled.")
         else:
-            print(f"Done: {bl} blocklist, {ms} suggestions, {uj} utility jobs, {ifl} import files/logs, {cf} extra comic files")
+            print(
+                f"Done: {bl} blocklist, {ms} suggestions, {uj} utility jobs, "
+                f"{ifl} import files/logs, {cf} extra comic files"
+            )
         print()
 
     await engine.dispose()

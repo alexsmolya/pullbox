@@ -93,10 +93,7 @@ class FakeIndexer:
         if self._delay_ms > 0:
             await asyncio.sleep(self._delay_ms / 1000)
 
-        return [
-            self._release(query, index)
-            for index in range(max(self._result_count, 0))
-        ]
+        return [self._release(query, index) for index in range(max(self._result_count, 0))]
 
     async def get_capabilities(self) -> IndexerCapabilities:
         return IndexerCapabilities(categories=["7030"], search_params=["q"])
@@ -107,10 +104,7 @@ class FakeIndexer:
     def _release(self, query: SearchQuery, index: int) -> ReleaseResult:
         issue = int(self._issue_number)
         if index == 0:
-            title = (
-                f"{self._series_title} {issue:03d} "
-                f"({self._year}) (Digital) ({self._name}).cbz"
-            )
+            title = f"{self._series_title} {issue:03d} ({self._year}) (Digital) ({self._name}).cbz"
         else:
             title = (
                 f"Unrelated Benchmark Series {index:03d} "

@@ -33,7 +33,9 @@ def upgrade() -> None:
     op.drop_column("series", "search_on_add")
 
     # Replace monitor_type with monitored on import_jobs
-    op.add_column("import_jobs", sa.Column("monitored", sa.Boolean(), nullable=False, server_default="0"))
+    op.add_column(
+        "import_jobs", sa.Column("monitored", sa.Boolean(), nullable=False, server_default="0")
+    )
     op.drop_column("import_jobs", "monitor_type")
 
 

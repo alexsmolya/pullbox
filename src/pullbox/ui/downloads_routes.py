@@ -302,7 +302,7 @@ def snapshot_value(snapshot: object | None, attr: str) -> object | None:
 def snapshot_progress(snapshot: object | None) -> float:
     """Return a safe fractional progress value from a snapshot-like object."""
     value = snapshot_value(snapshot, "progress")
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return max(0.0, min(float(value), 1.0))
     return 0.0
 
@@ -312,7 +312,7 @@ def build_live_progress_snapshot(existing_snapshot: object | None, status: objec
     from pullbox.tasks.download_task import ProgressSnapshot
 
     raw_progress = getattr(status, "progress", 0.0)
-    progress = float(raw_progress) if isinstance(raw_progress, (int, float)) else 0.0
+    progress = float(raw_progress) if isinstance(raw_progress, int | float) else 0.0
     progress = max(progress, snapshot_progress(existing_snapshot))
 
     client_state = normalize_download_queue_client_state(getattr(status, "client_state", None))

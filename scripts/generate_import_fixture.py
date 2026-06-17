@@ -23,7 +23,6 @@ Usage:
 
 import io
 import struct
-import sys
 import zipfile
 import zlib
 from pathlib import Path
@@ -37,10 +36,12 @@ _OUTPUT_DIR = _PROJECT_ROOT / "data" / "test-import"
 def _make_minimal_png() -> bytes:
     """1x1 dark gray PNG."""
     sig = b"\x89PNG\r\n\x1a\n"
+
     def _chunk(t: bytes, d: bytes) -> bytes:
         raw = t + d
         crc = struct.pack(">I", zlib.crc32(raw) & 0xFFFFFFFF)
         return struct.pack(">I", len(d)) + raw + crc
+
     ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
     idat = _chunk(b"IDAT", zlib.compress(b"\x00\x33\x33\x33"))
     iend = _chunk(b"IEND", b"")
@@ -96,26 +97,44 @@ def generate() -> None:
     # ────────────────────────────────────────────────────────────
     # Use real ComicVine volume IDs that exist in the API
     cv_series = [
-        ("Green Lantern (2005)", 2005, "DC Comics", 18216, [
-            ("Green Lantern (2005) #001.cbz", "1", 140812),
-            ("Green Lantern (2005) #002.cbz", "2", 140813),
-            ("Green Lantern (2005) #003.cbz", "3", 140814),
-            ("Green Lantern (2005) #004.cbz", "4", 140815),
-        ]),
-        ("Daredevil (2011)", 2011, "Marvel", 41388, [
-            ("Daredevil (2011) #001.cbz", "1", 310432),
-            ("Daredevil (2011) #002.cbz", "2", 313567),
-            ("Daredevil (2011) #003.cbz", "3", 316789),
-        ]),
-        ("East of West (2013)", 2013, "Image Comics", 55227, [
-            ("East of West (2013) #001.cbz", "1", 387654),
-            ("East of West (2013) #002.cbz", "2", 392100),
-            ("East of West (2013) #003.cbz", "3", 396500),
-            ("East of West (2013) #004.cbz", "4", 401200),
-            ("East of West (2013) #005.cbz", "5", 405800),
-        ]),
+        (
+            "Green Lantern (2005)",
+            2005,
+            "DC Comics",
+            18216,
+            [
+                ("Green Lantern (2005) #001.cbz", "1", 140812),
+                ("Green Lantern (2005) #002.cbz", "2", 140813),
+                ("Green Lantern (2005) #003.cbz", "3", 140814),
+                ("Green Lantern (2005) #004.cbz", "4", 140815),
+            ],
+        ),
+        (
+            "Daredevil (2011)",
+            2011,
+            "Marvel",
+            41388,
+            [
+                ("Daredevil (2011) #001.cbz", "1", 310432),
+                ("Daredevil (2011) #002.cbz", "2", 313567),
+                ("Daredevil (2011) #003.cbz", "3", 316789),
+            ],
+        ),
+        (
+            "East of West (2013)",
+            2013,
+            "Image Comics",
+            55227,
+            [
+                ("East of West (2013) #001.cbz", "1", 387654),
+                ("East of West (2013) #002.cbz", "2", 392100),
+                ("East of West (2013) #003.cbz", "3", 396500),
+                ("East of West (2013) #004.cbz", "4", 401200),
+                ("East of West (2013) #005.cbz", "5", 405800),
+            ],
+        ),
     ]
-    for folder, year, pub, vol_cvid, issues in cv_series:
+    for folder, year, pub, _vol_cvid, issues in cv_series:
         for fname, num, issue_cvid in issues:
             ci = _make_comicinfo_xml(
                 series=folder.split(" (")[0],
@@ -144,24 +163,39 @@ def generate() -> None:
     # Case 3: Series folders with good names, no CV ID
     # ────────────────────────────────────────────────────────────
     name_match_series = [
-        ("Planetary (1998)", 1998, "Wildstorm", [
-            ("Planetary (1998) #001.cbz", "1"),
-            ("Planetary (1998) #002.cbz", "2"),
-            ("Planetary (1998) #003.cbz", "3"),
-            ("Planetary (1998) #004.cbz", "4"),
-        ]),
-        ("Preacher (1995)", 1995, "Vertigo", [
-            ("Preacher (1995) #001.cbz", "1"),
-            ("Preacher (1995) #002.cbz", "2"),
-            ("Preacher (1995) #003.cbz", "3"),
-        ]),
-        ("Fables (2002)", 2002, "Vertigo", [
-            ("Fables (2002) #001.cbz", "1"),
-            ("Fables (2002) #002.cbz", "2"),
-            ("Fables (2002) #003.cbz", "3"),
-            ("Fables (2002) #004.cbz", "4"),
-            ("Fables (2002) #005.cbz", "5"),
-        ]),
+        (
+            "Planetary (1998)",
+            1998,
+            "Wildstorm",
+            [
+                ("Planetary (1998) #001.cbz", "1"),
+                ("Planetary (1998) #002.cbz", "2"),
+                ("Planetary (1998) #003.cbz", "3"),
+                ("Planetary (1998) #004.cbz", "4"),
+            ],
+        ),
+        (
+            "Preacher (1995)",
+            1995,
+            "Vertigo",
+            [
+                ("Preacher (1995) #001.cbz", "1"),
+                ("Preacher (1995) #002.cbz", "2"),
+                ("Preacher (1995) #003.cbz", "3"),
+            ],
+        ),
+        (
+            "Fables (2002)",
+            2002,
+            "Vertigo",
+            [
+                ("Fables (2002) #001.cbz", "1"),
+                ("Fables (2002) #002.cbz", "2"),
+                ("Fables (2002) #003.cbz", "3"),
+                ("Fables (2002) #004.cbz", "4"),
+                ("Fables (2002) #005.cbz", "5"),
+            ],
+        ),
     ]
     for folder, year, pub, issues in name_match_series:
         for fname, num in issues:
@@ -192,15 +226,25 @@ def generate() -> None:
     # ────────────────────────────────────────────────────────────
     # Batman and Saga are in the seed data. These should trigger dedup detection.
     conflict_series = [
-        ("Batman (2016)", 2016, "DC Comics", [
-            ("Batman (2016) #001.cbz", "1"),
-            ("Batman (2016) #002.cbz", "2"),
-            ("Batman (2016) #010.cbz", "10"),
-        ]),
-        ("Saga (2012)", 2012, "Image Comics", [
-            ("Saga (2012) #001.cbz", "1"),
-            ("Saga (2012) #005.cbz", "5"),
-        ]),
+        (
+            "Batman (2016)",
+            2016,
+            "DC Comics",
+            [
+                ("Batman (2016) #001.cbz", "1"),
+                ("Batman (2016) #002.cbz", "2"),
+                ("Batman (2016) #010.cbz", "10"),
+            ],
+        ),
+        (
+            "Saga (2012)",
+            2012,
+            "Image Comics",
+            [
+                ("Saga (2012) #001.cbz", "1"),
+                ("Saga (2012) #005.cbz", "5"),
+            ],
+        ),
     ]
     for folder, year, pub, issues in conflict_series:
         for fname, num in issues:
@@ -216,10 +260,14 @@ def generate() -> None:
     # Case 6: Mixed folder — good name, parseable + junk files
     # ────────────────────────────────────────────────────────────
     files["Hellboy (1993)/Hellboy (1993) #001.cbz"] = _make_cbz(
-        comicinfo=_make_comicinfo_xml(series="Hellboy", number="1", volume=1993, publisher="Dark Horse")
+        comicinfo=_make_comicinfo_xml(
+            series="Hellboy", number="1", volume=1993, publisher="Dark Horse"
+        )
     )
     files["Hellboy (1993)/Hellboy (1993) #002.cbz"] = _make_cbz(
-        comicinfo=_make_comicinfo_xml(series="Hellboy", number="2", volume=1993, publisher="Dark Horse")
+        comicinfo=_make_comicinfo_xml(
+            series="Hellboy", number="2", volume=1993, publisher="Dark Horse"
+        )
     )
     files["Hellboy (1993)/extras/cover_scan.cbz"] = _make_cbz(page_count=1)
     files["Hellboy (1993)/extras/promo_art.cbz"] = _make_cbz(page_count=1)
@@ -246,10 +294,14 @@ def generate() -> None:
 
     # TPB files (loose)
     files["Saga Vol 01 TPB (2012).cbz"] = _make_cbz(
-        comicinfo=_make_comicinfo_xml(series="Saga", number="1", volume=2012, publisher="Image Comics")
+        comicinfo=_make_comicinfo_xml(
+            series="Saga", number="1", volume=2012, publisher="Image Comics"
+        )
     )
     files["Saga Vol 02 TPB (2012).cbz"] = _make_cbz(
-        comicinfo=_make_comicinfo_xml(series="Saga", number="2", volume=2012, publisher="Image Comics")
+        comicinfo=_make_comicinfo_xml(
+            series="Saga", number="2", volume=2012, publisher="Image Comics"
+        )
     )
 
     # Graphic novel
@@ -314,6 +366,7 @@ def generate() -> None:
     # ── Also extract to directory for direct import ─────────────
     if _OUTPUT_DIR.exists():
         import shutil
+
         shutil.rmtree(_OUTPUT_DIR)
     _OUTPUT_DIR.mkdir(parents=True)
     with zipfile.ZipFile(_OUTPUT_ZIP, "r") as zf:
@@ -322,7 +375,9 @@ def generate() -> None:
     print(f"Extracted to: {_OUTPUT_DIR}")
     print()
     print("Test scenarios:")
-    print("  1. Direct CV match:   Green Lantern, Daredevil, East of West (folder + ComicInfo CV IDs)")
+    print(
+        "  1. Direct CV match:   Green Lantern, Daredevil, East of West (folder + ComicInfo CV IDs)"
+    )
     print("  2. Loose + CV:        Chew, Locke & Key (loose files with ComicInfo CV IDs)")
     print("  3. Name match:        Planetary, Preacher, Fables (folder + good names, no CV ID)")
     print("  4. Loose name match:  Y The Last Man, 100 Bullets (loose files, good names)")

@@ -454,7 +454,7 @@ def _map_torrent(torrent_hash: str, data: dict[str, Any]) -> DownloadStatus:
 
     # ETA: 0, negative, or very large values mean unknown
     eta = data.get("eta", 0.0)
-    if isinstance(eta, (int, float)) and eta > 0:
+    if isinstance(eta, int | float) and eta > 0:
         eta_seconds: int | None = int(eta)
     else:
         eta_seconds = None
