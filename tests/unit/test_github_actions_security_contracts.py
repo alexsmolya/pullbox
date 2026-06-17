@@ -224,6 +224,8 @@ def test_grype_config_tracks_current_dhi_runtime() -> None:
     assert "Docker Hardened Images Python 3.14 on Debian 13" in config_text
     assert "python:3.13-slim" not in config_text
     assert "CVE-2026-7210" in config_text
+    assert "CVE-2026-11822" in config_text
+    assert "CVE-2026-11824" in config_text
     assert "3.14.6" in config_text
     assert config.get("ignore")
 
