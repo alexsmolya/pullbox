@@ -12,16 +12,27 @@ from __future__ import annotations
 import csv
 import io
 import json
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import pytest
+
+from pullbox.models.issue import Issue, IssueStatus, IssueType
+from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
+from pullbox.models.publisher import Publisher
+from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.utilities.base_executor import ItemResult
+from pullbox.utilities.executors import export_library
 from pullbox.utilities.executors.export_library import (
     ExportLibraryExecutor,
     export_records_csv,
     export_records_json,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 # ── Test Data ──────────────────────────────────────────────────
 
@@ -359,6 +370,237 @@ class TestProcessItem:
         output_path = Path(result.after_state.get("path", ""))
         assert output_path.exists()
         assert output_path.parent == data_dir / "exports"
+
+    def test_process_item_uses_job_context_records(self, tmp_path: Path) -> None:
+        executor = ExportLibraryExecutor()
+        result = executor.process_item(
+            item_data={
+                "id": "item-004",
+                "operation": "export",
+                "records": [{"series_name": "ignored"}],
+            },
+            job_config={
+                "format": "json",
+                "fields": ["series_name"],
+                "export_folder": str(tmp_path),
+            },
+            job_context={"records": [{"series_name": "from context"}]},
+        )
+
+        output_path = Path(result.after_state.get("path", ""))
+        data = json.loads(output_path.read_text(encoding="utf-8"))
+        assert result.result == ItemResult.COMPLETED
+        assert data == [{"series_name": "from context"}]
+
+    def test_process_item_reports_export_failures(self, monkeypatch) -> None:
+        executor = ExportLibraryExecutor()
+        monkeypatch.setattr(
+            export_library,
+            "resolve_export_directory",
+            lambda _folder: (_ for _ in ()).throw(OSError("exports unavailable")),
+        )
+
+        result = executor.process_item(
+            item_data={"id": "item-fail", "operation": "export", "records": SAMPLE_RECORDS},
+            job_config={"format": "csv", "fields": ["series_name"]},
+        )
+
+        assert result.item_id == "item-fail"
+        assert result.result == ItemResult.FAILED
+        assert result.error_message == "exports unavailable"
+        assert result.log_entries[0][0] == "ERROR"
+
+
+class TestRollbackItem:
+    """Verify export rollback behavior."""
+
+    def test_rollback_deletes_export_file_from_dict_after_state(self, tmp_path: Path) -> None:
+        output_path = tmp_path / "export.csv"
+        output_path.write_text("data", encoding="utf-8")
+        executor = ExportLibraryExecutor()
+
+        result = executor.rollback_item(
+            item_data={"id": "rollback-001", "after_state": {"path": str(output_path)}},
+            job_config={},
+        )
+
+        assert result.result == ItemResult.COMPLETED
+        assert not output_path.exists()
+        assert "Deleted export file" in result.log_entries[0][1]
+
+    def test_rollback_accepts_json_encoded_after_state(self, tmp_path: Path) -> None:
+        output_path = tmp_path / "export.json"
+        output_path.write_text("[]", encoding="utf-8")
+        executor = ExportLibraryExecutor()
+
+        result = executor.rollback_item(
+            item_data={"id": "rollback-002", "after_state": json.dumps({"path": str(output_path)})},
+            job_config={},
+        )
+
+        assert result.result == ItemResult.COMPLETED
+        assert not output_path.exists()
+
+    def test_rollback_reports_invalid_after_state_json(self) -> None:
+        executor = ExportLibraryExecutor()
+
+        result = executor.rollback_item(
+            item_data={"id": "rollback-fail", "after_state": "not-json"},
+            job_config={},
+        )
+
+        assert result.result == ItemResult.FAILED
+        assert result.error_message is not None
+        assert result.error_message.startswith("Rollback failed:")
+
+
+@pytest.mark.asyncio
+async def test_generate_items_returns_single_export_item() -> None:
+    items = await ExportLibraryExecutor().generate_items({"format": "csv"})
+
+    assert items == [{"operation": "export", "file_path": None}]
+
+
+@pytest.mark.asyncio
+async def test_build_job_context_fetches_export_records(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    root = LibraryRoot(name="Library", path=str(tmp_path), enabled=True)
+    publisher = Publisher(name="DC Comics", comicvine_id=10)
+    db_session.add_all([root, publisher])
+    await db_session.flush()
+    series = Series(
+        title="Batman",
+        sort_title="batman",
+        year_start=2016,
+        year_end=2026,
+        status=SeriesStatus.CONTINUING,
+        description="Dark Knight",
+        comicvine_id=1234,
+        comicvine_url="https://comicvine.test/batman",
+        monitored=True,
+        path=str(tmp_path / "Batman"),
+        series_type=SeriesType.STANDARD,
+        publisher_id=publisher.id,
+        library_root_id=root.id,
+    )
+    db_session.add(series)
+    await db_session.flush()
+    issue = Issue(
+        series_id=series.id,
+        issue_number=1.0,
+        title="I Am Gotham",
+        issue_type=IssueType.ISSUE,
+        status=IssueStatus.OWNED,
+        release_date=date(2016, 6, 15),
+        store_date=date(2016, 6, 14),
+        page_count=32,
+        comicvine_id=5678,
+        comicvine_url="https://comicvine.test/batman-1",
+    )
+    db_session.add(issue)
+    await db_session.flush()
+    library_file = LibraryFile(
+        issue_id=issue.id,
+        library_root_id=root.id,
+        file_path=str(tmp_path / "Batman" / "Batman 001.cbz"),
+        file_name="Batman 001.cbz",
+        file_size=123456,
+        file_format=FileFormat.CBZ,
+        file_hash="abc123",
+        file_modified_at=datetime.now(tz=UTC),
+        match_confidence=MatchConfidence.HIGH,
+    )
+    db_session.add(library_file)
+    await db_session.flush()
+
+    fields = [
+        "series_title",
+        "series_sort_title",
+        "series_year_start",
+        "series_year_end",
+        "series_status",
+        "series_type",
+        "series_description",
+        "series_comicvine_id",
+        "series_comicvine_url",
+        "series_monitored",
+        "series_path",
+        "issue_number",
+        "issue_title",
+        "issue_type",
+        "issue_status",
+        "release_date",
+        "store_date",
+        "page_count",
+        "issue_comicvine_id",
+        "issue_comicvine_url",
+        "file_path",
+        "file_name",
+        "file_size",
+        "file_format",
+        "file_hash",
+        "publisher",
+        "publisher_comicvine_id",
+    ]
+
+    context = await ExportLibraryExecutor().build_job_context(
+        db_session,
+        {"fields": fields},
+    )
+
+    assert context["records"] == [
+        {
+            "series_title": "Batman",
+            "series_sort_title": "batman",
+            "series_year_start": 2016,
+            "series_year_end": 2026,
+            "series_status": "continuing",
+            "series_type": "standard",
+            "series_description": "Dark Knight",
+            "series_comicvine_id": 1234,
+            "series_comicvine_url": "https://comicvine.test/batman",
+            "series_monitored": True,
+            "series_path": str(tmp_path / "Batman"),
+            "issue_number": 1.0,
+            "issue_title": "I Am Gotham",
+            "issue_type": "issue",
+            "issue_status": "owned",
+            "release_date": "2016-06-15",
+            "store_date": "2016-06-14",
+            "page_count": 32,
+            "issue_comicvine_id": 5678,
+            "issue_comicvine_url": "https://comicvine.test/batman-1",
+            "file_path": str(tmp_path / "Batman" / "Batman 001.cbz"),
+            "file_name": "Batman 001.cbz",
+            "file_size": 123456,
+            "file_format": "cbz",
+            "file_hash": "abc123",
+            "publisher": "DC Comics",
+            "publisher_comicvine_id": 10,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_export_records_handles_empty_library(db_session: AsyncSession) -> None:
+    assert await ExportLibraryExecutor._fetch_export_records(db_session, ["series_title"]) == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_export_records_returns_series_only_rows(
+    db_session: AsyncSession,
+) -> None:
+    db_session.add(Series(title="No Issues", sort_title="no issues"))
+    await db_session.flush()
+
+    records = await ExportLibraryExecutor._fetch_export_records(
+        db_session,
+        ["series_title", "publisher"],
+    )
+
+    assert records == [{"series_title": "No Issues"}]
 
 
 # ── Additional Export Edge Cases ───────────────────────────────
