@@ -8,8 +8,10 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from fastapi import BackgroundTasks
 
 from pullbox.api.v1 import whats_new as whats_new_api
+from pullbox.core.exceptions import PullboxError
 from pullbox.models.whats_new import WhatsNewCacheKind, WhatsNewReleaseCache
 from pullbox.services.auth_service import SESSION_COOKIE_NAME, AuthService
 from pullbox.services.whats_new_refresh_queue import RefreshQueueResult, RefreshQueueStatus
@@ -339,6 +341,180 @@ async def test_whats_new_refresh_returns_conflict_when_already_running(
             "message": "What's New refresh is already in progress.",
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_whats_new_direct_current_week_empty_cache_raises_pullbox_error(
+    sec_db: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sec_db() as session:
+        with pytest.raises(PullboxError) as exc:
+            await whats_new_api.get_whats_new(
+                session,
+                object(),  # type: ignore[arg-type]
+                store_date=date(2026, 3, 11),
+            )
+
+    assert exc.value.code == "WHATS_NEW_CACHE_EMPTY"
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_whats_new_direct_current_week_success_without_date(
+    sec_db: async_sessionmaker[AsyncSession],
+) -> None:
+    fetched_at = datetime.now(UTC)
+    async with sec_db() as session:
+        session.add(
+            WhatsNewReleaseCache(
+                cache_key="current-week:2026-03-11",
+                cache_kind=WhatsNewCacheKind.CURRENT_WEEK,
+                store_date=date(2026, 3, 11),
+                payload={
+                    "store_date": "2026-03-11",
+                    "count": 1,
+                    "last_updated": "2026-03-10T12:15:00+00:00",
+                    "issues": [_issue_summary(store_date="2026-03-11")],
+                },
+                fetched_at=fetched_at,
+                last_successful_refresh_at=fetched_at,
+            )
+        )
+        await session.flush()
+
+        response = await whats_new_api.get_whats_new(
+            session,
+            object(),  # type: ignore[arg-type]
+        )
+
+    assert response.store_date == date(2026, 3, 11)
+    assert response.count == 1
+
+
+@pytest.mark.asyncio
+async def test_whats_new_direct_upcoming_falls_back_to_unscoped_publisher_filter(
+    sec_db: async_sessionmaker[AsyncSession],
+) -> None:
+    fetched_at = datetime.now(UTC)
+    async with sec_db() as session:
+        session.add(
+            WhatsNewReleaseCache(
+                cache_key="upcoming:all",
+                cache_kind=WhatsNewCacheKind.UPCOMING,
+                payload={
+                    "weeks": [
+                        {
+                            "store_date": "2026-03-25",
+                            "count": 3,
+                            "issues": [
+                                _issue_summary(publisher_name="dc comics"),
+                                _issue_summary(
+                                    title="Image Future #1",
+                                    publisher_name="Image Comics",
+                                ),
+                                "not-an-issue",
+                            ],
+                        },
+                        "not-a-week",
+                        {"store_date": "2026-04-01", "issues": "not-a-list"},
+                    ],
+                    "lookahead_weeks": 2,
+                },
+                fetched_at=fetched_at,
+                last_successful_refresh_at=fetched_at,
+            )
+        )
+        await session.flush()
+
+        response = await whats_new_api.get_whats_new(
+            session,
+            object(),  # type: ignore[arg-type]
+            publisher=" DC Comics ",
+            upcoming=True,
+        )
+
+    assert response.lookahead_weeks == 2
+    assert len(response.weeks) == 1
+    assert response.weeks[0].count == 1
+    assert response.weeks[0].issues[0].publisher.name == "dc comics"
+    assert response.cache.fetched_at == fetched_at
+
+
+@pytest.mark.asyncio
+async def test_whats_new_direct_upcoming_empty_cache_raises_pullbox_error(
+    sec_db: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sec_db() as session:
+        with pytest.raises(PullboxError) as exc:
+            await whats_new_api.get_whats_new(
+                session,
+                object(),  # type: ignore[arg-type]
+                publisher="DC Comics",
+                upcoming=True,
+            )
+
+    assert exc.value.code == "WHATS_NEW_CACHE_EMPTY"
+
+
+def test_filter_upcoming_payload_handles_malformed_weeks_and_publishers() -> None:
+    assert whats_new_api._filter_upcoming_payload_by_publisher(
+        {"weeks": "not-a-list"},
+        "DC Comics",
+    ) == {"weeks": []}
+
+    filtered = whats_new_api._filter_upcoming_payload_by_publisher(
+        {
+            "weeks": [
+                {
+                    "store_date": "2026-03-25",
+                    "issues": [
+                        {"publisher": "DC Comics"},
+                        {"publisher": {"name": None}},
+                        {"publisher": {"name": " DC Comics "}},
+                    ],
+                }
+            ]
+        },
+        "dc comics",
+    )
+
+    assert filtered["weeks"][0]["count"] == 1
+    assert filtered["weeks"][0]["issues"] == [{"publisher": {"name": " DC Comics "}}]
+
+
+@pytest.mark.asyncio
+async def test_whats_new_refresh_direct_success_and_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class QueuedCoordinator:
+        async def queue_refresh(self, _background_tasks: object) -> RefreshQueueResult:
+            return RefreshQueueResult(
+                status=RefreshQueueStatus.QUEUED,
+                message="queued",
+            )
+
+    class BusyCoordinator:
+        async def queue_refresh(self, _background_tasks: object) -> RefreshQueueResult:
+            return RefreshQueueResult(
+                status=RefreshQueueStatus.ALREADY_RUNNING,
+                message="busy",
+            )
+
+    monkeypatch.setattr(whats_new_api, "refresh_coordinator", QueuedCoordinator())
+    queued = await whats_new_api.refresh_whats_new(
+        BackgroundTasks(),
+        object(),  # type: ignore[arg-type]
+    )
+    assert queued == {"status": "queued", "message": "queued"}
+
+    monkeypatch.setattr(whats_new_api, "refresh_coordinator", BusyCoordinator())
+    with pytest.raises(PullboxError) as exc:
+        await whats_new_api.refresh_whats_new(
+            BackgroundTasks(),
+            object(),  # type: ignore[arg-type]
+        )
+
+    assert exc.value.code == "WHATS_NEW_REFRESH_IN_PROGRESS"
 
 
 def _issue_summary(
