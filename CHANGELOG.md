@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.6] - 2026-06-17
+
+Corrective patch release for signed Docker image publication after `0.9.5`
+published registry images but failed during the Cosign signing step.
+
+### CI / Build
+
+- Docker image signing and verification now run on a GitHub-hosted runner using
+  GitHub Actions OIDC, while image build and registry publication remain on the
+  trusted self-hosted runner.
+- Release image digest artifacts are now produced after signing succeeds so the
+  GitHub Release workflow can publish digest-specific Cosign verification
+  instructions.
+
 ## [0.9.5] - 2026-06-17
 
 Corrective patch release for the unpublished `0.9.4` image publication.
