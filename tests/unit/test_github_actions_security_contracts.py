@@ -274,3 +274,12 @@ def test_release_notes_include_image_signature_verification() -> None:
     expected_ghcr_image = "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
     assert expected_ghcr_image in release_workflow
     assert "docker.io/pullbox/pullbox:${{ steps.version.outputs.version }}" in release_workflow
+
+
+def test_release_notes_use_curated_changelog_before_commit_details() -> None:
+    release_workflow = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
+
+    assert "scripts/extract_changelog_section.py" in release_workflow
+    assert "--output curated_changelog.md" in release_workflow
+    assert "cat curated_changelog.md" in release_workflow
+    assert "## Commit Details" in release_workflow

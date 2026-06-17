@@ -553,7 +553,8 @@ Development dependency categories:
   GHCR and Docker Hub signatures before reporting success.
 - `release.yml` creates or updates GitHub Releases for tagged commits after the
   Docker workflow succeeds.
-- GitHub Release notes are generated from conventional commit prefixes.
+- GitHub Release notes start with the curated `CHANGELOG.md` release section,
+  then append generated commit details grouped by conventional commit prefixes.
 - The root `CHANGELOG.md` is curated manually during release prep.
 - Release tags are expected to be signed.
 - GHCR and Docker Hub are the current image registries.
@@ -564,6 +565,8 @@ Development dependency categories:
 - Release tags should be signed and verified locally before push.
 - Curated `CHANGELOG.md` entries should be moved from Unreleased into the
   release section before the release PR.
+- `make release-changelog-check VERSION=X.Y.Z` should pass before a release tag
+  is pushed.
 - Docker publication should happen only from trusted refs and should not publish
   ordinary untagged `main` merges.
 - Release images should pass Grype and smoke tests before publication.

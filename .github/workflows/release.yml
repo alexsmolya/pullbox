@@ -75,7 +75,14 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate changelog from commits
+      - name: Extract curated changelog section
+        if: steps.release.outputs.skip != 'true'
+        run: |
+          python3 scripts/extract_changelog_section.py \
+            --version "${{ steps.release.outputs.version }}" \
+            --output curated_changelog.md
+
+      - name: Generate release notes
         if: steps.release.outputs.skip != 'true'
         id: changelog
         run: |
@@ -95,6 +102,10 @@ jobs:
 
           {
             echo "## What's Changed"
+            echo ""
+            cat curated_changelog.md
+            echo ""
+            echo "## Commit Details"
             echo ""
 
             FEATS=$(category_notes '^feat(\(.+\))?: ' 's/^feat(\(.+\))?: /- /')
