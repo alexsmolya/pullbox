@@ -566,6 +566,8 @@ async def get_about(
         "log_level": app_config.get("log_level", "info"),
         # Links
         "homepage_url": "https://pullbox.app",
+        "docs_url": "https://pullbox.app/docs",
+        "troubleshooting_url": "https://pullbox.app/docs/reference/troubleshooting",
         "source_url": "https://github.com/pullboxapp/pullbox",
         "issues_url": "https://github.com/pullboxapp/pullbox/issues/new?template=bug_report.yml",
         "discord_url": "https://discord.gg/mg6GQkATaA",

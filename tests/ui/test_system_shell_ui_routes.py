@@ -61,10 +61,10 @@ class TestSystemRouteContracts:
         assert "Database size" not in response.text
         assert 'class="pill pill-purple"' in response.text
         assert "aboutManager(" in response.text
-        assert (
-            "https://github.com/pullboxapp/pullbox/issues/new?template=bug_report.yml"
-            in response.text
-        )
+        assert "https://pullbox.app/docs" in response.text
+        assert "https://pullbox.app/docs/reference/troubleshooting" in response.text
+        assert ':href="info.docs_url"' in response.text
+        assert ">Docs<" in response.text
         assert (
             "https://discord.gg/mg6GQkATaA" in response.text
         )
@@ -76,6 +76,19 @@ class TestSystemRouteContracts:
         assert ">Bluesky<" in response.text
         assert ">Mastodon<" in response.text
         assert ">Reddit<" in response.text
+
+    async def test_system_support_links_to_docs(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/htmx/system/support")
+
+        assert response.status_code == 200
+        assert ">Documentation<" in response.text
+        assert "https://pullbox.app/docs/reference/troubleshooting" in response.text
+        assert "https://pullbox.app/docs" in response.text
+        assert ">Troubleshooting guide<" in response.text
+        assert ">Browse all docs<" in response.text
 
     async def test_system_htmx_tab_returns_body_bundle(
         self,
