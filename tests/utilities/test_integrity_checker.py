@@ -10,14 +10,18 @@ Run:
 from __future__ import annotations
 
 import io
+import sys
 import tarfile
+import types
 import zipfile
 from pathlib import Path
+from typing import ClassVar
 
 import py7zr
 import pytest
 
 from pullbox.utilities.base_executor import ItemResult
+from pullbox.utilities.executors import integrity_checks
 from pullbox.utilities.executors.integrity_checker import (
     IntegrityCheckerExecutor,
     IntegrityResult,
@@ -493,3 +497,371 @@ class TestIntegrityEdgeCases:
         result = await check_file_integrity(cbz, deep=False)
         assert result.status == "healthy"
         assert result.page_count == 5  # ComicInfo.xml NOT counted
+
+
+# ── Standalone Checker Branch Coverage ─────────────────────────
+
+
+class TestStandaloneIntegrityBranches:
+    """Cover defensive branches in the standalone integrity helpers."""
+
+    def test_relative_path_helper(self, tmp_path: Path) -> None:
+        root = tmp_path / "root"
+        child = root / "child"
+
+        assert integrity_checks._is_relative_to(child, root) is True
+        assert integrity_checks._is_relative_to(root, child) is False
+
+    def test_unknown_archive_suffix_uses_zip_checker(self, tmp_path: Path) -> None:
+        path = _create_valid_cbz(tmp_path / "unknown.ext", page_count=1)
+
+        result = integrity_checks._check_sync(path, deep=False)
+
+        assert result.status == "healthy"
+        assert result.page_count == 1
+        assert result.file_hash
+
+    def test_pdf_suffix_uses_pdf_checker(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "comic.pdf"
+        path.write_bytes(b"%PDF")
+        monkeypatch.setattr(
+            integrity_checks,
+            "_check_pdf",
+            lambda path, deep, warnings, errors: integrity_checks.IntegrityResult(
+                status="healthy",
+                page_count=3,
+            ),
+        )
+
+        result = integrity_checks._check_sync(path, deep=True)
+
+        assert result.status == "healthy"
+        assert result.page_count == 3
+        assert result.file_hash
+
+    def test_zip_bad_entry_is_corrupt(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "bad-entry.cbz"
+        path.write_bytes(b"zip")
+
+        class FakeZip:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def __enter__(self) -> FakeZip:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def testzip(self) -> str:
+                return "page_001.jpg"
+
+        monkeypatch.setattr(integrity_checks.zipfile, "ZipFile", FakeZip)
+
+        result = integrity_checks._check_zip(path, False, [], [])
+
+        assert result.status == "corrupt"
+        assert result.errors == ["Corrupt entry: page_001.jpg"]
+
+    def test_zip_deep_verification_errors_are_corrupt(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = _create_valid_cbz(tmp_path / "deep-error.cbz", page_count=1)
+        monkeypatch.setattr(
+            integrity_checks,
+            "_deep_verify_zip_images",
+            lambda archive, image_names, warnings: ["page failed"],
+        )
+
+        result = integrity_checks._check_zip(path, True, [], [])
+
+        assert result.status == "corrupt"
+        assert result.page_count == 1
+        assert result.errors == ["page failed"]
+
+    def test_deep_zip_warns_when_pillow_missing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = _create_valid_cbz(tmp_path / "missing-pillow.cbz", page_count=1)
+        warnings: list[str] = []
+        original_import = __import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "PIL":
+                raise ImportError("no pillow")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", fake_import)
+        with zipfile.ZipFile(path, "r") as archive:
+            errors = integrity_checks._deep_verify_zip_images(archive, ["page_000.jpg"], warnings)
+
+        assert errors == []
+        assert warnings == ["Pillow not available for deep image verification"]
+
+    def test_7z_branches(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        path = tmp_path / "archive.cb7"
+        path.write_bytes(b"7z")
+
+        class FakeSevenZip:
+            names: ClassVar[list[str]] = ["page_001.jpg"]
+
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def __enter__(self) -> FakeSevenZip:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def getnames(self) -> list[str]:
+                return self.names
+
+            def extract(self, *, path: str, targets: list[str]) -> None:
+                _ = path, targets
+
+        monkeypatch.setattr(py7zr, "SevenZipFile", FakeSevenZip)
+        result = integrity_checks._check_7z(path, False, [], [])
+        assert result.status == "healthy"
+        assert result.page_count == 1
+
+        FakeSevenZip.names = ["readme.txt"]
+        assert integrity_checks._check_7z(path, False, [], []).status == "corrupt"
+
+        FakeSevenZip.names = ["../escaped.jpg"]
+        unsafe = integrity_checks._check_7z(path, False, [], [])
+        assert unsafe.status == "corrupt"
+        assert unsafe.errors == ["Unsafe archive member path: ../escaped.jpg"]
+
+        FakeSevenZip.names = ["page_001.jpg"]
+        monkeypatch.setattr(
+            integrity_checks,
+            "_deep_verify_extracted_images",
+            lambda extract_dir, image_names, warnings: ["bad extracted image"],
+        )
+        deep = integrity_checks._check_7z(path, True, [], [])
+        assert deep.status == "corrupt"
+        assert deep.errors == ["bad extracted image"]
+
+        monkeypatch.setattr(
+            py7zr,
+            "SevenZipFile",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cannot open")),
+        )
+        failed = integrity_checks._check_7z(path, False, [], [])
+        assert failed.status == "corrupt"
+        assert failed.errors == ["Cannot open 7z archive: cannot open"]
+
+    def test_rar_branches(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import rarfile
+
+        path = tmp_path / "archive.cbr"
+        path.write_bytes(b"rar")
+
+        class FakeRar:
+            names: ClassVar[list[str]] = ["page_001.jpg"]
+
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def __enter__(self) -> FakeRar:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def namelist(self) -> list[str]:
+                return self.names
+
+            def extract(self, image_name: str, path: str) -> None:
+                destination = Path(path) / image_name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(_valid_jpeg_bytes())
+
+        monkeypatch.setattr(integrity_checks, "configure_rarfile_backend", lambda: None)
+        monkeypatch.setattr(rarfile, "RarFile", FakeRar)
+        assert integrity_checks._check_rar(path, False, [], []).status == "healthy"
+
+        FakeRar.names = ["readme.txt"]
+        assert integrity_checks._check_rar(path, False, [], []).errors == [
+            "No valid images found in archive"
+        ]
+
+        FakeRar.names = ["../escaped.jpg"]
+        unsafe = integrity_checks._check_rar(path, False, [], [])
+        assert unsafe.errors == ["Unsafe archive member path: ../escaped.jpg"]
+
+        FakeRar.names = ["page_001.jpg"]
+        monkeypatch.setattr(
+            integrity_checks,
+            "_deep_verify_extracted_images",
+            lambda extract_dir, image_names, warnings: ["bad rar image"],
+        )
+        deep = integrity_checks._check_rar(path, True, [], [])
+        assert deep.status == "corrupt"
+        assert deep.errors == ["bad rar image"]
+
+        monkeypatch.setattr(
+            rarfile,
+            "RarFile",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("rar boom")),
+        )
+        failed = integrity_checks._check_rar(path, False, [], [])
+        assert failed.errors == ["Cannot open RAR archive: rar boom"]
+
+    def test_tar_error_and_deep_error_branches(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        no_images = tmp_path / "no-images.cbt"
+        with tarfile.open(no_images, "w") as archive:
+            data = b"hello"
+            info = tarfile.TarInfo(name="readme.txt")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+        assert integrity_checks._check_tar(no_images, False, [], []).errors == [
+            "No valid images found in archive"
+        ]
+
+        valid = _create_valid_cbt(tmp_path / "deep.cbt", page_count=1)
+        monkeypatch.setattr(
+            integrity_checks,
+            "_deep_verify_extracted_images",
+            lambda extract_dir, image_names, warnings: ["bad tar image"],
+        )
+        deep = integrity_checks._check_tar(valid, True, [], [])
+        assert deep.status == "corrupt"
+        assert deep.errors == ["bad tar image"]
+
+        invalid = tmp_path / "invalid.cbt"
+        invalid.write_bytes(b"not tar")
+        failed = integrity_checks._check_tar(invalid, False, [], [])
+        assert failed.status == "corrupt"
+        assert failed.errors[0].startswith("Cannot open TAR archive:")
+
+    def test_safe_extract_tar_members_rejects_missing_sources(self, tmp_path: Path) -> None:
+        class FakeArchive:
+            def extractfile(self, _member: tarfile.TarInfo) -> None:
+                return None
+
+        member = tarfile.TarInfo(name="page_001.jpg")
+        member.size = 1
+
+        with pytest.raises(tarfile.TarError, match="Cannot extract archive member"):
+            integrity_checks._safe_extract_tar_members(FakeArchive(), [member], tmp_path)
+
+    def test_safe_extract_tar_members_rejects_unsafe_paths(self, tmp_path: Path) -> None:
+        class FakeArchive:
+            def extractfile(self, _member: tarfile.TarInfo) -> io.BytesIO:
+                return io.BytesIO(b"data")
+
+        traversal = tarfile.TarInfo(name="../escaped.jpg")
+        traversal.size = 4
+        absolute_escape = tarfile.TarInfo(name="/tmp/escaped.jpg")
+        absolute_escape.size = 4
+
+        with pytest.raises(tarfile.TarError, match="Unsafe archive member path"):
+            integrity_checks._safe_extract_tar_members(FakeArchive(), [traversal], tmp_path)
+        with pytest.raises(tarfile.TarError, match="Unsafe archive member path"):
+            integrity_checks._safe_extract_tar_members(FakeArchive(), [absolute_escape], tmp_path)
+
+    def test_pdf_branches(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        pdf = tmp_path / "comic.pdf"
+        pdf.write_bytes(b"%PDF")
+
+        module = types.ModuleType("pdf2image")
+        module.pdfinfo_from_path = lambda _path: {"Pages": 0}
+        module.convert_from_path = lambda *_args, **_kwargs: []
+        monkeypatch.setitem(sys.modules, "pdf2image", module)
+        no_pages = integrity_checks._check_pdf(pdf, False, [], [])
+        assert no_pages.status == "corrupt"
+        assert no_pages.errors == ["PDF has no pages"]
+
+        module.pdfinfo_from_path = lambda _path: {"Pages": 2}
+        module.convert_from_path = lambda *_args, **_kwargs: [object()]
+        warning = integrity_checks._check_pdf(pdf, True, [], [])
+        assert warning.status == "warning"
+        assert warning.warnings == ["Expected 2 pages but rendered 1"]
+
+        module.convert_from_path = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("render boom")
+        )
+        render_failed = integrity_checks._check_pdf(pdf, True, [], [])
+        assert render_failed.status == "corrupt"
+        assert render_failed.errors == ["PDF page rendering failed: render boom"]
+
+        module.pdfinfo_from_path = lambda _path: (_ for _ in ()).throw(RuntimeError("info boom"))
+        read_failed = integrity_checks._check_pdf(pdf, False, [], [])
+        assert read_failed.status == "corrupt"
+        assert read_failed.errors == ["Cannot read PDF: info boom"]
+
+    def test_pdf_reports_missing_pdf2image(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pdf = tmp_path / "comic.pdf"
+        pdf.write_bytes(b"%PDF")
+        original_import = __import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "pdf2image":
+                raise ImportError("missing")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", fake_import)
+
+        result = integrity_checks._check_pdf(pdf, False, [], [])
+
+        assert result.status == "corrupt"
+        assert result.errors == ["pdf2image not available for PDF verification"]
+
+    def test_deep_verify_extracted_images_reports_missing_pillow(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        warnings: list[str] = []
+        original_import = __import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "PIL":
+                raise ImportError("no pillow")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", fake_import)
+        assert (
+            integrity_checks._deep_verify_extracted_images(
+                tmp_path,
+                ["missing.jpg"],
+                warnings,
+            )
+            == []
+        )
+        assert warnings == ["Pillow not available for deep image verification"]
+
+    def test_deep_verify_extracted_images_reports_file_errors(self, tmp_path: Path) -> None:
+        warnings: list[str] = []
+        bad_image = tmp_path / "bad.jpg"
+        bad_image.write_bytes(b"not an image")
+        errors = integrity_checks._deep_verify_extracted_images(
+            tmp_path,
+            ["missing.jpg", "bad.jpg"],
+            warnings,
+        )
+
+        assert errors[0] == "missing.jpg: extracted file not found"
+        assert errors[1].startswith("bad.jpg: image verification failed")
