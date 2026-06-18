@@ -96,6 +96,7 @@ pullbox = [
     "ui/static/fonts/*.ttf",
     "ui/static/fonts/*.woff2",
     "ui/static/img/*.svg",
+    "ui/static/img/donations/*.png",
     "ui/static/js/*.js",
 ]
 
