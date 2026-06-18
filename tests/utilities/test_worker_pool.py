@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from pullbox.utilities.base_executor import ItemResult, JobExecutor, ProcessedItem
+from pullbox.utilities.base_executor import ExecutionMode, ItemResult, JobExecutor, ProcessedItem
 from pullbox.utilities.worker_pool import WorkerPool
 
 # ── Test Executors (must be module-level for pickling) ─────────
@@ -244,7 +244,7 @@ class TestMixedTiming:
 
     @pytest.mark.asyncio
     async def test_iter_batch_results_yields_before_slowest_item_finishes(self) -> None:
-        pool = WorkerPool(max_workers=2)
+        pool = WorkerPool(execution_mode=ExecutionMode.THREAD, max_workers=2)
         try:
             items = [
                 {"id": "fast-1", "delay": 0},
