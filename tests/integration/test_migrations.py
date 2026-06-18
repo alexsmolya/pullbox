@@ -10,10 +10,10 @@ import os
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
 from alembic import command
-from alembic.config import Config
 
 # Path to the alembic directory (relative to this test file)
 _ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"

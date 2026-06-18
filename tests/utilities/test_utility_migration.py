@@ -15,11 +15,11 @@ import os
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
-from alembic.config import Config
 
 _ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"
 _UTILITY_TABLES_REV = "a9eff3b660f5"  # The migration under test
