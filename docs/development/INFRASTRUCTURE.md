@@ -197,6 +197,10 @@ GitHub Actions workflows live in `.github/workflows/`.
 
 - PR and merge queue checks are the authoritative correctness gate. Ordinary
   `main` merges should not rerun full CI or publish container images.
+- Post-release `main` to `develop` sync PRs may use the release-sync fast path
+  only when they are same-repository, version-only `feature/sync-develop-*`
+  PRs that carry `origin/main` forward and bump `src/pullbox/__init__.py` from
+  the released version to the next patch `-dev` version.
 - Docker validation is a PR/manual workflow. It never logs in to publish
   registries and never pushes images.
 - Docker publication depends on trusted refs and release tags.
