@@ -41,6 +41,15 @@ def test_auto_detect_mylar3_path_map_returns_none_for_empty_comics_table(
     assert auto_detect_mylar3_path_map(db_path) is None
 
 
+def test_auto_detect_mylar3_path_map_returns_none_for_single_segment_location(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "mylar.db"
+    _create_mylar_db(db_path, "comics")
+
+    assert auto_detect_mylar3_path_map(db_path) is None
+
+
 def test_auto_detect_mylar3_path_map_returns_none_for_invalid_database(
     tmp_path: Path,
 ) -> None:

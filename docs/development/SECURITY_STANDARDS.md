@@ -739,7 +739,10 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
   Bandit, plus CodeQL when the repo is public or `PULLBOX_ENABLE_CODEQL=true`.
   `Security Required` treats CodeQL as informational unless
   `PULLBOX_REQUIRE_CODEQL=true`.
-- `.github/workflows/docker.yml` runs Grype container scanning before publish.
+- `.github/workflows/docker-validate.yml` runs PR/manual container validation
+  without publishing.
+- `.github/workflows/docker-release.yml` runs Grype container scanning before
+  release image publication.
 - GitHub Actions are SHA-pinned with version comments.
 - Workflows define explicit default permissions and per-job permissions.
 - `.github/dependabot.yml` covers `pip`, `github-actions`, `docker`, and `npm`.
@@ -797,18 +800,20 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 - Container publication uses GHCR and Docker Hub.
 - Published container images are signed with keyless Sigstore/Cosign using
   GitHub Actions OIDC after registry publication.
-- The Docker workflow publishes SBOM/provenance attestations and verifies GHCR
-  and Docker Hub signatures by digest before reporting success.
+- The Docker Release workflow publishes SBOM/provenance attestations and
+  verifies GHCR and Docker Hub signatures by digest before reporting success.
 - Docker metadata rules may publish semver-derived aliases depending on the
   release event.
-- Untagged `main` merges may run Docker validation, but they do not publish
+- Untagged `main` merges do not run release publishing and do not publish
   registry images.
+- GHCR may display SBOM/provenance attestation manifests as `unknown/unknown`.
+  Those entries are expected supply-chain metadata, not runnable Pullbox images.
 
 **Required standard**
 
 - Release tags should be signed with the documented release process.
 - Release images should be signed with keyless Sigstore/Cosign and verified by
-  digest against the Docker workflow identity before the publish workflow
+  digest against the Docker Release workflow identity before the publish workflow
   succeeds.
 - Release images should include SBOM/provenance attestations.
 - GHCR and Docker Hub package tags should be reviewed after each release.
