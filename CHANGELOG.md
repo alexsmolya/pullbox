@@ -23,6 +23,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.8] - 2026-06-18
+
+Release-pipeline hardening focused on making release automation predictable,
+signed, and easier to debug ahead of the v1 release candidate path.
+
+### Testing
+
+- Expanded workflow contract coverage for runner routing, publishing triggers,
+  release metadata, signing requirements, Docker validation, and CI artifacts.
+- Broadened accessibility regression coverage across the app shell, modal,
+  dropdown, import, search, settings, and file-browser flows.
+
+### CI / Build
+
+- Split Docker validation and Docker release publishing into separate
+  workflows so PR validation can never publish registry images.
+- Docker release publishing now runs only from version tags or explicit release
+  dispatches, then signs and verifies GHCR and Docker Hub images with Cosign.
+- Release images now keep SBOM/provenance attestations and include OCI
+  annotations for clearer package metadata.
+- GitHub Release creation now depends on the successful Docker release workflow
+  and validates the signed release digest artifact before publishing notes.
+- Normal `main` merges no longer rerun full CI or publish Docker images after
+  required PR and merge-queue checks have already passed.
+- CI now uploads coverage XML artifacts for every tested Python version, and
+  coverage stays safely above the 90% gate instead of relying on rounded output.
+
 ## [0.9.7] - 2026-06-17
 
 Testing and coverage sprint release focused on hardening Pullbox ahead of the
