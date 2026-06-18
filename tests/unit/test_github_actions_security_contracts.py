@@ -300,6 +300,9 @@ def test_docker_validation_workflow_never_publishes_images() -> None:
     assert isinstance(triggers, dict)
     assert "pull_request" in triggers
     assert "push" not in triggers
+    pull_request = triggers.get("pull_request")
+    assert isinstance(pull_request, dict)
+    assert ".grype.yaml" in pull_request.get("paths", [])
 
     assert "push: true" not in docker_validate
     assert "packages: write" not in docker_validate

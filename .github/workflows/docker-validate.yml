@@ -19,6 +19,7 @@ on:
       - "pyproject.toml"
       - "package.json"
       - "package-lock.json"
+      - ".grype.yaml"
       - ".github/workflows/docker-release.yml"
       - ".github/workflows/docker-validate.yml"
       - ".github/workflows/release.yml"
