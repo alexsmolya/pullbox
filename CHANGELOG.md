@@ -23,6 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.10] - 2026-06-18
+
+Corrective release for the `0.9.9` release workflow, which pushed registry
+images but failed while validating the OCI index package description.
+
+### CI / Build
+
+- Docker release metadata validation now checks the full index-level package
+  description that is actually published to GHCR and Docker Hub.
+- Workflow contract tests now guard against release image label and index
+  annotation validation drift.
+
 ## [0.9.9] - 2026-06-18
 
 Corrective release for the `0.9.8` release workflow, which pushed registry
