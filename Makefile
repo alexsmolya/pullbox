@@ -239,7 +239,7 @@ ci-local: ## Run exactly what CI runs (lint + format + typecheck + migrate-check
 	$(SECRET) PULLBOX_DB_URL="sqlite+aiosqlite:///test_boot.db" $(PYTHON) scripts/run_with_timeout.py 10 $(PYTHON) -c "from pullbox.app import create_app; create_app(); print('App factory created successfully')"
 	rm -f test_boot.db
 	@echo "\033[36m──── Tests (unit + integration + API + providers + utilities + UI) ────\033[0m"
-	$(SECRET) $(VENV)/bin/pytest tests/ --ignore=tests/e2e -n auto --cov=pullbox --cov-report=term-missing --cov-fail-under=60 -v
+	$(SECRET) $(VENV)/bin/pytest tests/ --ignore=tests/e2e -n auto --cov=pullbox --cov-report=term-missing --cov-fail-under=90 -v
 	@echo "\033[36m──── Accessibility Checks (contrast + Playwright WCAG) ────\033[0m"
 	$(SECRET) $(PYTHON) scripts/check_ui_contrast.py
 	$(SECRET) $(VENV)/bin/pytest tests/e2e/ -v -m accessibility --browser chromium

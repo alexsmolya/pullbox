@@ -134,7 +134,7 @@ jobs:
             --cov=pullbox \
             --cov-report=xml \
             --cov-report=term-missing \
-            --cov-fail-under=60 \
+            --cov-fail-under=90 \
             --junitxml=test-results.xml \
             -v
         env:
