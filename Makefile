@@ -102,7 +102,7 @@ prod-test-shell: ## Open a Python REPL in the shell-less local production-image 
 # ─── CSS Build (Tailwind) ───────────────────────────────
 
 css-build: ## Compile Tailwind CSS (minified)
-	BROWSERSLIST_IGNORE_OLD_DATA=1 npx @tailwindcss/cli -i src/pullbox/ui/static/css/input.css -o src/pullbox/ui/static/css/tailwind.css --minify
+	npm run css:build
 
 css-watch: ## Watch and recompile Tailwind CSS on changes
 	BROWSERSLIST_IGNORE_OLD_DATA=1 npx @tailwindcss/cli -i src/pullbox/ui/static/css/input.css -o src/pullbox/ui/static/css/tailwind.css --watch
@@ -219,7 +219,7 @@ ci-local: ## Run exactly what CI runs (lint + format + typecheck + migrate-check
 	@echo "\033[36m──── Node Dependencies ────\033[0m"
 	npm ci
 	@echo "\033[36m──── CSS Build ────\033[0m"
-	BROWSERSLIST_IGNORE_OLD_DATA=1 npx @tailwindcss/cli -i src/pullbox/ui/static/css/input.css -o src/pullbox/ui/static/css/tailwind.css --minify
+	npm run css:build
 	@echo "\033[36m──── Tailwind Drift Check ────\033[0m"
 	@git diff --exit-code src/pullbox/ui/static/css/tailwind.css || \
 		(echo "\033[31m❌ Tailwind CSS output is stale. Run 'make css-build' and commit.\033[0m" && exit 1)
@@ -239,7 +239,7 @@ ci-local: ## Run exactly what CI runs (lint + format + typecheck + migrate-check
 	$(SECRET) PULLBOX_DB_URL="sqlite+aiosqlite:///test_boot.db" $(PYTHON) scripts/run_with_timeout.py 10 $(PYTHON) -c "from pullbox.app import create_app; create_app(); print('App factory created successfully')"
 	rm -f test_boot.db
 	@echo "\033[36m──── Tests (unit + integration + API + providers + utilities + UI) ────\033[0m"
-	$(SECRET) $(VENV)/bin/pytest tests/ --ignore=tests/e2e -n auto --cov=pullbox --cov-report=term-missing --cov-fail-under=60 -v
+	$(SECRET) $(VENV)/bin/pytest tests/ --ignore=tests/e2e -n auto --cov=pullbox --cov-report=term-missing --cov-fail-under=90 -v
 	@echo "\033[36m──── Accessibility Checks (contrast + Playwright WCAG) ────\033[0m"
 	$(SECRET) $(PYTHON) scripts/check_ui_contrast.py
 	$(SECRET) $(VENV)/bin/pytest tests/e2e/ -v -m accessibility --browser chromium

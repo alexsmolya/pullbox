@@ -61,9 +61,7 @@ def upgrade() -> None:
         latest_release = bind.execute(
             sa.select(
                 sa.func.max(sa.func.coalesce(issues.c.release_date, issues.c.store_date))
-            ).where(
-                issues.c.series_id == row.id
-            )
+            ).where(issues.c.series_id == row.id)
         ).scalar()
         resolved_year_end = _coerce_year(latest_release) or row.year_start
         bind.execute(

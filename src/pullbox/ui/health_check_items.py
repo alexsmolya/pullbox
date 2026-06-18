@@ -32,7 +32,7 @@ def build_health_checks_from_details(details: object) -> tuple[HealthCheckItemVi
                 message=message,
                 response_label=(
                     _health_response_label(response_ms)
-                    if isinstance(response_ms, (int, float))
+                    if isinstance(response_ms, int | float)
                     else _health_check_response_label(raw_message)
                 ),
             )

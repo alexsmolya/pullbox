@@ -12,10 +12,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from pullbox.api.v1 import audit as audit_api
+from pullbox.models.audit_log import AuditEventType, AuditLog
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-audit-tests")
 
@@ -66,3 +70,45 @@ class TestAuditEndpoint:
         data = resp.json()
         assert data["page"] == 1
         assert data["total_pages"] >= 1
+
+    async def test_direct_handler_maps_events_and_total_pages(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Direct handler coverage for non-empty event response serialization."""
+        async with sec_db() as session:
+            session.add_all(
+                [
+                    AuditLog(
+                        event_type=AuditEventType.LOGIN_SUCCESS.value,
+                        source_ip="127.0.0.1",
+                        user_id=None,
+                        username="admin",
+                        detail="Logged in",
+                    ),
+                    AuditLog(
+                        event_type=AuditEventType.LOGIN_SUCCESS.value,
+                        source_ip="127.0.0.2",
+                        user_id=None,
+                        username="admin",
+                        detail="Logged in again",
+                    ),
+                ]
+            )
+            await session.flush()
+
+            result = await audit_api.list_audit_events(
+                object(),  # type: ignore[arg-type]
+                session,
+                event_type=AuditEventType.LOGIN_SUCCESS.value,
+                since=None,
+                until=None,
+                page=1,
+                per_page=1,
+            )
+
+        assert result["total"] == 2
+        assert result["page"] == 1
+        assert result["total_pages"] == 2
+        assert len(result["events"]) == 1
+        assert result["events"][0]["event_type"] == AuditEventType.LOGIN_SUCCESS.value

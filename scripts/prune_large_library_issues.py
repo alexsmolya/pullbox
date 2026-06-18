@@ -81,10 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--db-url",
         default=os.getenv("PULLBOX_DB_URL", DEFAULT_DB_URL),
-        help=(
-            "SQLAlchemy database URL. Defaults to PULLBOX_DB_URL or "
-            f"{DEFAULT_DB_URL!r}."
-        ),
+        help=(f"SQLAlchemy database URL. Defaults to PULLBOX_DB_URL or {DEFAULT_DB_URL!r}."),
     )
     parser.add_argument(
         "--threshold-mib",
@@ -258,10 +255,7 @@ async def collect_candidates(
 def print_candidates(candidates: list[PruneCandidate], threshold_bytes: int, execute: bool) -> None:
     mode = "EXECUTE" if execute else "DRY RUN"
     total_bytes = sum(candidate.effective_size for candidate in candidates)
-    print(
-        f"{mode}: found {len(candidates)} imported issue(s) over "
-        f"{format_size(threshold_bytes)}."
-    )
+    print(f"{mode}: found {len(candidates)} imported issue(s) over {format_size(threshold_bytes)}.")
     print(f"Estimated removable size: {format_size(total_bytes)}")
     if not candidates:
         return

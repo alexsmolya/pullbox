@@ -1,8 +1,8 @@
 # Pullbox UI Copy Style Standards
 
-**Author:** Adam Hernandez  
-**Version:** 1.0  
-**Last Modified:** 2026-05-15  
+**Author:** Adam Hernandez
+**Version:** 1.0
+**Last Modified:** 2026-05-15
 
 ## Purpose
 

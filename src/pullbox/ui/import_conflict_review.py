@@ -132,7 +132,7 @@ async def _load_import_conflict_review_context(
         value = group.get("display_issue_number")
         if value is None:
             return (1, 0.0, "")
-        if isinstance(value, (int, float)):
+        if isinstance(value, int | float):
             return (0, float(value), str(value))
         if isinstance(value, str):
             try:

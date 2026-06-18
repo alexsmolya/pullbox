@@ -264,7 +264,7 @@ def _scheduler_stuck_threshold(task_info: Mapping[str, object]) -> timedelta:
     """Return a conservative stuck-task threshold for a running scheduler job."""
     base = timedelta(minutes=_SCHEDULER_STUCK_MINUTES)
     last_duration_raw = task_info.get("last_duration_seconds")
-    if isinstance(last_duration_raw, (int, float)) and last_duration_raw > 0:
+    if isinstance(last_duration_raw, int | float) and last_duration_raw > 0:
         base = max(base, timedelta(seconds=float(last_duration_raw) * 5))
     return base
 

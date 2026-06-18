@@ -13,7 +13,11 @@ Run:
 
 from __future__ import annotations
 
+import runpy
+import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -59,6 +63,26 @@ class TestResolveDbPath:
         from pullbox.__main__ import _resolve_db_path
 
         result = _resolve_db_path("")
+        assert result is None
+
+    def test_sqlite_double_slash_path(self) -> None:
+        from pathlib import Path as StdPath
+
+        from pullbox.__main__ import _resolve_db_path
+
+        result = _resolve_db_path("sqlite+aiosqlite://relative.db")
+        assert result == StdPath("relative.db")
+
+    def test_sqlite_without_url_separator_returns_none(self) -> None:
+        from pullbox.__main__ import _resolve_db_path
+
+        result = _resolve_db_path("sqlite")
+        assert result is None
+
+    def test_sqlite_empty_path_returns_none(self) -> None:
+        from pullbox.__main__ import _resolve_db_path
+
+        result = _resolve_db_path("sqlite+aiosqlite:///")
         assert result is None
 
 
@@ -149,4 +173,38 @@ class TestMainRuntimeSettings:
             factory=True,
             ssl_certfile=str(cert),
             ssl_keyfile=str(key),
+        )
+
+    def test_module_entrypoint_runs_main_path(self, tmp_path: Path, monkeypatch) -> None:
+        import uvicorn
+
+        import pullbox.config as pullbox_config
+        import pullbox.core.https_runtime as https_runtime
+
+        settings = SimpleNamespace(
+            db_url="sqlite+aiosqlite:////data/pullbox.db",
+            data_dir=tmp_path,
+            bind_address="127.0.0.1",
+            port=8585,
+        )
+        https_settings = SimpleNamespace(enabled=False)
+        monkeypatch.delitem(sys.modules, "pullbox.__main__", raising=False)
+        monkeypatch.setattr(pullbox_config, "get_settings", lambda: settings)
+        monkeypatch.setattr(
+            https_runtime,
+            "resolve_https_runtime_settings",
+            lambda *, settings: https_settings,
+        )
+        monkeypatch.setattr(https_runtime, "validate_https_runtime_settings", lambda _: None)
+        monkeypatch.setattr(https_runtime, "uvicorn_ssl_kwargs", lambda _: {})
+
+        with patch.object(uvicorn, "run") as uvicorn_run:
+            runpy.run_module("pullbox.__main__", run_name="__main__")
+
+        assert (tmp_path / "config.xml").exists()
+        uvicorn_run.assert_called_once_with(
+            "pullbox.app:create_app",
+            host="127.0.0.1",
+            port=8585,
+            factory=True,
         )

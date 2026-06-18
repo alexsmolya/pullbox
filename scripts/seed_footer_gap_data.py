@@ -155,9 +155,7 @@ async def _get_or_create_seed_issues(session: AsyncSession, *, minimum: int = 12
     existing = list(
         (
             await session.execute(
-                select(Issue)
-                .where(Issue.series_id == series.id)
-                .order_by(Issue.issue_number.asc())
+                select(Issue).where(Issue.series_id == series.id).order_by(Issue.issue_number.asc())
             )
         )
         .scalars()
@@ -183,9 +181,7 @@ async def _get_or_create_seed_issues(session: AsyncSession, *, minimum: int = 12
     return list(
         (
             await session.execute(
-                select(Issue)
-                .where(Issue.series_id == series.id)
-                .order_by(Issue.issue_number.asc())
+                select(Issue).where(Issue.series_id == series.id).order_by(Issue.issue_number.asc())
             )
         )
         .scalars()
@@ -212,9 +208,7 @@ async def _seed_download_queue(session: AsyncSession, issues: list[Issue], run_i
     existing_seed_rows = list(
         (
             await session.execute(
-                select(DownloadHistory)
-                .where(seed_queue_clause)
-                .order_by(DownloadHistory.id.asc())
+                select(DownloadHistory).where(seed_queue_clause).order_by(DownloadHistory.id.asc())
             )
         )
         .scalars()
@@ -264,9 +258,7 @@ async def _seed_download_queue(session: AsyncSession, issues: list[Issue], run_i
             row.external_id = None
             row.sent_at = None
             row.next_retry_at = (
-                fresh_now + timedelta(hours=2)
-                if row.state == DownloadState.RETRY_PENDING
-                else None
+                fresh_now + timedelta(hours=2) if row.state == DownloadState.RETRY_PENDING else None
             )
             row.error_message = (
                 "Synthetic retry-pending row for footer clearance testing"
@@ -274,8 +266,7 @@ async def _seed_download_queue(session: AsyncSession, issues: list[Issue], run_i
                 else None
             )
             row.title = (
-                f"{SEED_PREFIX} Queued Download "
-                f"{index - DOWNLOAD_ACTIVE_TARGET_ROWS + 1:03d}"
+                f"{SEED_PREFIX} Queued Download {index - DOWNLOAD_ACTIVE_TARGET_ROWS + 1:03d}"
             )
         else:
             row.state = DownloadState.PAUSED
@@ -286,9 +277,7 @@ async def _seed_download_queue(session: AsyncSession, issues: list[Issue], run_i
     existing_seed_rows = list(
         (
             await session.execute(
-                select(DownloadHistory)
-                .where(seed_queue_clause)
-                .order_by(DownloadHistory.id.asc())
+                select(DownloadHistory).where(seed_queue_clause).order_by(DownloadHistory.id.asc())
             )
         )
         .scalars()
@@ -329,9 +318,7 @@ async def _seed_download_history(session: AsyncSession, issues: list[Issue], run
             issue_id=issue.id,
             title=f"{SEED_PREFIX} Download History {index + 1:03d}",
             download_url=f"https://seed.pullbox.local/download-history/{run_id}/{index}",
-            download_client=DownloadClientType.NZBGET
-            if index % 2
-            else DownloadClientType.SABNZBD,
+            download_client=DownloadClientType.NZBGET if index % 2 else DownloadClientType.SABNZBD,
             external_id=f"footer-gap-dh-{run_id}-{index}",
             state=DownloadState.COMPLETED if completed else DownloadState.FAILED,
             file_size=48_000_000 + index * 850_000,

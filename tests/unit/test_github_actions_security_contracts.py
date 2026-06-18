@@ -184,6 +184,26 @@ def test_codeql_branch_probe_scans_trusted_push_refs_with_summary() -> None:
     assert "refs/heads/<branch>" in workflow_text
 
 
+def test_ci_and_local_full_ci_enforce_v1_coverage_gate() -> None:
+    ci_workflow = (WORKFLOW_DIR / "ci.yml").read_text(encoding="utf-8")
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    ci_local_match = re.search(r"^ci-local:.*?(?=^\S|\Z)", makefile, re.MULTILINE | re.DOTALL)
+
+    assert "--cov-fail-under=90" in ci_workflow
+    assert "--cov-fail-under=60" not in ci_workflow
+    assert ci_local_match is not None
+    assert "--cov-fail-under=90 -v" in ci_local_match.group(0)
+    assert "--cov-fail-under=60" not in ci_local_match.group(0)
+
+
+def test_ci_uses_shared_tailwind_build_script() -> None:
+    ci_workflow = (WORKFLOW_DIR / "ci.yml").read_text(encoding="utf-8")
+    package_json = (REPO_ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "npm run css:build" in ci_workflow
+    assert "ensure-final-newline.mjs src/pullbox/ui/static/css/tailwind.css" in package_json
+
+
 def test_local_security_script_writes_valid_safety_json_artifact() -> None:
     script = (REPO_ROOT / "scripts" / "security_check.sh").read_text(encoding="utf-8")
 

@@ -59,6 +59,79 @@ async def test_enable_debug_logging_response_preserves_base_level(
 
 
 @pytest.mark.asyncio
+async def test_enable_debug_logging_response_updates_existing_override_with_default_base(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Existing override rows should be updated and default to info without a base level."""
+    db_session.add_all(
+        [
+            SystemConfig(key="log_level_override", value="warning", value_type="string"),
+            SystemConfig(
+                key="log_level_override_expires",
+                value=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+                value_type="string",
+            ),
+            SystemConfig(key="log_level_base", value="notice", value_type="string"),
+        ]
+    )
+    await db_session.commit()
+    reconfigured: list[str] = []
+    monkeypatch.setattr(
+        "pullbox.logging.reconfigure_logging_runtime",
+        lambda *, log_level: reconfigured.append(log_level),
+    )
+
+    response = await enable_debug_logging_response(
+        DebugLoggingRequest(duration_minutes=15, level="debug"),
+        db_session,
+    )
+
+    assert response.active is True
+    assert response.level == "debug"
+    assert response.base_level == "notice"
+    assert reconfigured == ["debug"]
+    assert (await db_session.get(SystemConfig, "log_level_override")).value == "debug"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_enable_debug_logging_response_defaults_base_level_to_info(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no runtime log level exists, debug override should revert to info."""
+    reconfigured: list[str] = []
+    monkeypatch.setattr(
+        "pullbox.logging.reconfigure_logging_runtime",
+        lambda *, log_level: reconfigured.append(log_level),
+    )
+
+    response = await enable_debug_logging_response(
+        DebugLoggingRequest(duration_minutes=15, level="debug"),
+        db_session,
+    )
+
+    assert response.base_level == "info"
+    assert reconfigured == ["debug"]
+
+
+@pytest.mark.asyncio
+async def test_get_debug_logging_status_response_reports_inactive_base_level(
+    db_session: AsyncSession,
+) -> None:
+    """Inactive status should expose the configured base runtime level."""
+    db_session.add(SystemConfig(key="log_level", value="warning", value_type="string"))
+    await db_session.commit()
+
+    response = await get_debug_logging_status_response(db_session)
+
+    assert response.active is False
+    assert response.base_level == "warning"
+    assert response.level is None
+    assert response.remaining_minutes is None
+
+
+@pytest.mark.asyncio
 async def test_get_debug_logging_status_response_reports_active_override(
     db_session: AsyncSession,
 ) -> None:

@@ -25,33 +25,33 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Ensure the project root is on sys.path so pullbox is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from pullbox.config import get_settings  # noqa: E402
-from pullbox.models.audit_log import AuditEventType, AuditLog  # noqa: E402
-from pullbox.models.base import Base  # noqa: E402
-from pullbox.models.blocklist import (  # noqa: E402
+# Import and run the minimal seed first
+from seed_dev_data import seed as seed_minimal
+
+from pullbox.config import get_settings
+from pullbox.models.audit_log import AuditEventType, AuditLog
+from pullbox.models.base import Base
+from pullbox.models.blocklist import (
     BlocklistEntry,
     BlocklistReason,
     normalize_release_title,
 )
-from pullbox.models.config import SystemConfig  # noqa: E402
-from pullbox.models.download import (  # noqa: E402
+from pullbox.models.config import SystemConfig
+from pullbox.models.download import (
     DownloadClientType,
     DownloadHistory,
     DownloadState,
 )
-from pullbox.models.issue import Issue, IssueStatus  # noqa: E402
-from pullbox.models.library import (  # noqa: E402
+from pullbox.models.issue import Issue, IssueStatus
+from pullbox.models.library import (
     FileFormat,
     LibraryFile,
     LibraryRoot,
     MatchConfidence,
 )
-from pullbox.models.pending_match import PendingMatch, PendingMatchStatus  # noqa: E402
-from pullbox.models.search_log import SearchLog, SearchType  # noqa: E402
-from pullbox.models.series import Series  # noqa: E402
-
-# Import and run the minimal seed first
-from seed_dev_data import seed as seed_minimal  # noqa: E402
+from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
+from pullbox.models.search_log import SearchLog, SearchType
+from pullbox.models.series import Series
 
 # Resolve paths relative to project root.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -145,7 +145,9 @@ async def _seed_download_history(session: AsyncSession) -> int:
             state=DownloadState.IMPORTED,
             file_size=162_000_000,
             downloaded_path="/data/tmp/asm-001.cbz",
-            final_path="/comics/The Amazing Spider-Man (2022)/The Amazing Spider-Man (2022) #001.cbz",
+            final_path=(
+                "/comics/The Amazing Spider-Man (2022)/The Amazing Spider-Man (2022) #001.cbz"
+            ),
             sent_at=_ago(days=3, hours=6),
             completed_at=_ago(days=3, hours=4),
             imported_at=_ago(days=3, hours=3, minutes=59),
@@ -314,58 +316,95 @@ async def _seed_search_logs(session: AsyncSession) -> int:
 
     logs = [
         SearchLog(
-            issue_id=issues["Batman #3.0"], series_title="Batman", issue_number=3.0,
-            search_type=SearchType.AUTOMATED, results_found=8, results_grabbed=1,
-            results_rejected=2, results_blocklisted=1, best_confidence="high",
+            issue_id=issues["Batman #3.0"],
+            series_title="Batman",
+            issue_number=3.0,
+            search_type=SearchType.AUTOMATED,
+            results_found=8,
+            results_grabbed=1,
+            results_rejected=2,
+            results_blocklisted=1,
+            best_confidence="high",
             details={"indexers_queried": ["NZBgeek"], "duration_ms": 1250},
             created_at=_ago(hours=6),
         ),
         SearchLog(
             issue_id=issues["The Amazing Spider-Man #3.0"],
-            series_title="The Amazing Spider-Man", issue_number=3.0,
-            search_type=SearchType.AUTOMATED, results_found=12, results_grabbed=0,
-            results_queued=2, results_rejected=6, best_confidence="medium",
+            series_title="The Amazing Spider-Man",
+            issue_number=3.0,
+            search_type=SearchType.AUTOMATED,
+            results_found=12,
+            results_grabbed=0,
+            results_queued=2,
+            results_rejected=6,
+            best_confidence="medium",
             details={"indexers_queried": ["NZBgeek", "DrunkenSlug"], "duration_ms": 2100},
             created_at=_ago(hours=6),
         ),
         SearchLog(
-            issue_id=issues["Saga #55.0"], series_title="Saga", issue_number=55.0,
-            search_type=SearchType.AUTOMATED, results_found=3, results_grabbed=0,
-            results_rejected=3, best_confidence="low",
+            issue_id=issues["Saga #55.0"],
+            series_title="Saga",
+            issue_number=55.0,
+            search_type=SearchType.AUTOMATED,
+            results_found=3,
+            results_grabbed=0,
+            results_rejected=3,
+            best_confidence="low",
             details={"indexers_queried": ["NZBgeek"], "duration_ms": 890},
             created_at=_ago(hours=6),
         ),
         SearchLog(
-            issue_id=issues["X-Men #10.0"], series_title="X-Men", issue_number=10.0,
-            search_type=SearchType.AUTOMATED, results_found=0,
+            issue_id=issues["X-Men #10.0"],
+            series_title="X-Men",
+            issue_number=10.0,
+            search_type=SearchType.AUTOMATED,
+            results_found=0,
             details={"indexers_queried": ["NZBgeek"], "duration_ms": 750},
             created_at=_ago(hours=6),
         ),
         SearchLog(
-            issue_id=issues["Batman #50.0"], series_title="Batman", issue_number=50.0,
-            search_type=SearchType.MANUAL, results_found=15, results_grabbed=1,
-            results_rejected=4, results_blocklisted=2, best_confidence="high",
+            issue_id=issues["Batman #50.0"],
+            series_title="Batman",
+            issue_number=50.0,
+            search_type=SearchType.MANUAL,
+            results_found=15,
+            results_grabbed=1,
+            results_rejected=4,
+            results_blocklisted=2,
+            best_confidence="high",
             details={"indexers_queried": ["NZBgeek", "DrunkenSlug"], "duration_ms": 1800},
             created_at=_ago(days=2, hours=3),
         ),
         SearchLog(
-            issue_id=issues["Saga #1.0"], series_title="Saga", issue_number=1.0,
-            search_type=SearchType.MANUAL, results_found=22, results_grabbed=1,
-            results_rejected=8, best_confidence="high",
+            issue_id=issues["Saga #1.0"],
+            series_title="Saga",
+            issue_number=1.0,
+            search_type=SearchType.MANUAL,
+            results_found=22,
+            results_grabbed=1,
+            results_rejected=8,
+            best_confidence="high",
             details={"indexers_queried": ["NZBgeek"], "duration_ms": 1500},
             created_at=_ago(days=3, hours=1),
         ),
         SearchLog(
             issue_id=issues["The Amazing Spider-Man #25.0"],
-            series_title="The Amazing Spider-Man", issue_number=25.0,
-            search_type=SearchType.BULK, results_found=6, results_grabbed=1,
-            results_queued=1, best_confidence="high",
+            series_title="The Amazing Spider-Man",
+            issue_number=25.0,
+            search_type=SearchType.BULK,
+            results_found=6,
+            results_grabbed=1,
+            results_queued=1,
+            best_confidence="high",
             details={"indexers_queried": ["NZBgeek"], "duration_ms": 980, "bulk_total": 5},
             created_at=_ago(days=1),
         ),
         SearchLog(
-            issue_id=issues["X-Men #35.0"], series_title="X-Men", issue_number=35.0,
-            search_type=SearchType.AUTOMATED, results_found=0,
+            issue_id=issues["X-Men #35.0"],
+            series_title="X-Men",
+            issue_number=35.0,
+            search_type=SearchType.AUTOMATED,
+            results_found=0,
             details={"indexers_queried": ["NZBgeek"], "duration_ms": 620},
             created_at=_ago(hours=1),
         ),
@@ -396,10 +435,14 @@ async def _seed_pending_matches(session: AsyncSession) -> int:
             issue_id=issues["The Amazing Spider-Man #3.0"],
             release_title="Amazing Spider-Man 003 (2022) (Digital) (Zone-Empire).cbz",
             download_url="https://indexer.example.com/dl/asm-003-zone",
-            is_torrent=False, file_size=155_000_000, confidence="medium",
+            is_torrent=False,
+            file_size=155_000_000,
+            confidence="medium",
             match_details={
-                "parsed_series": "Amazing Spider-Man", "parsed_issue": 3.0,
-                "parsed_year": 2022, "series_similarity": 0.92,
+                "parsed_series": "Amazing Spider-Man",
+                "parsed_issue": 3.0,
+                "parsed_year": 2022,
+                "series_similarity": 0.92,
                 "reason": "Series title similarity below high threshold (0.92 < 0.95)",
             },
             status=PendingMatchStatus.PENDING,
@@ -408,10 +451,14 @@ async def _seed_pending_matches(session: AsyncSession) -> int:
             issue_id=issues["The Amazing Spider-Man #3.0"],
             release_title="Amazing Spider-Man v6 003 (2022) (Webrip) (Shan-Empire).cbz",
             download_url="https://indexer.example.com/dl/asm-003-shan",
-            is_torrent=True, file_size=142_000_000, confidence="medium",
+            is_torrent=True,
+            file_size=142_000_000,
+            confidence="medium",
             match_details={
-                "parsed_series": "Amazing Spider-Man v6", "parsed_issue": 3.0,
-                "parsed_year": 2022, "series_similarity": 0.88,
+                "parsed_series": "Amazing Spider-Man v6",
+                "parsed_issue": 3.0,
+                "parsed_year": 2022,
+                "series_similarity": 0.88,
                 "reason": "Volume suffix 'v6' not in series title",
             },
             status=PendingMatchStatus.PENDING,
@@ -420,9 +467,13 @@ async def _seed_pending_matches(session: AsyncSession) -> int:
             issue_id=issues["Saga #55.0"],
             release_title="Saga 055 (2022) (Digital-Empire).cbz",
             download_url="https://indexer.example.com/dl/saga-055-dig",
-            is_torrent=False, file_size=89_000_000, confidence="low",
+            is_torrent=False,
+            file_size=89_000_000,
+            confidence="low",
             match_details={
-                "parsed_series": "Saga", "parsed_issue": 55.0, "parsed_year": 2022,
+                "parsed_series": "Saga",
+                "parsed_issue": 55.0,
+                "parsed_year": 2022,
                 "series_similarity": 1.0,
                 "reason": "File size unusually small for this series (avg 140MB)",
             },
@@ -432,9 +483,13 @@ async def _seed_pending_matches(session: AsyncSession) -> int:
             issue_id=issues["X-Men #10.0"],
             release_title="X-Men 010 (2022) (Digital) (Minutemen-Midas).cbz",
             download_url="https://indexer.example.com/dl/xmen-010-mm",
-            is_torrent=False, file_size=175_000_000, confidence="medium",
+            is_torrent=False,
+            file_size=175_000_000,
+            confidence="medium",
             match_details={
-                "parsed_series": "X-Men", "parsed_issue": 10.0, "parsed_year": 2022,
+                "parsed_series": "X-Men",
+                "parsed_issue": 10.0,
+                "parsed_year": 2022,
                 "series_similarity": 1.0,
                 "reason": "Year 2022 is outside series year range (2021)",
             },
@@ -462,41 +517,60 @@ async def _seed_audit_logs(session: AsyncSession) -> int:
 
     logs = [
         AuditLog(
-            event_type=AuditEventType.LOGIN_SUCCESS, timestamp=_ago(hours=1),
-            source_ip="192.168.1.100", user_id=1, username="admin",
+            event_type=AuditEventType.LOGIN_SUCCESS,
+            timestamp=_ago(hours=1),
+            source_ip="192.168.1.100",
+            user_id=1,
+            username="admin",
             detail="Successful login",
         ),
         AuditLog(
-            event_type=AuditEventType.LOGIN_FAILURE, timestamp=_ago(days=1, hours=5),
-            source_ip="192.168.1.105", username="admin",
+            event_type=AuditEventType.LOGIN_FAILURE,
+            timestamp=_ago(days=1, hours=5),
+            source_ip="192.168.1.105",
+            username="admin",
             detail="Invalid password (attempt 1/5)",
         ),
         AuditLog(
-            event_type=AuditEventType.LOGIN_FAILURE, timestamp=_ago(days=1, hours=5),
-            source_ip="192.168.1.105", username="admin",
+            event_type=AuditEventType.LOGIN_FAILURE,
+            timestamp=_ago(days=1, hours=5),
+            source_ip="192.168.1.105",
+            username="admin",
             detail="Invalid password (attempt 2/5)",
         ),
         AuditLog(
-            event_type=AuditEventType.LOGIN_SUCCESS, timestamp=_ago(days=1, hours=4),
-            source_ip="192.168.1.105", user_id=1, username="admin",
+            event_type=AuditEventType.LOGIN_SUCCESS,
+            timestamp=_ago(days=1, hours=4),
+            source_ip="192.168.1.105",
+            user_id=1,
+            username="admin",
             detail="Successful login after 2 failed attempts",
         ),
         AuditLog(
-            event_type=AuditEventType.PASSWORD_CHANGED, timestamp=_ago(days=3),
-            source_ip="192.168.1.100", user_id=1, username="admin",
+            event_type=AuditEventType.PASSWORD_CHANGED,
+            timestamp=_ago(days=3),
+            source_ip="192.168.1.100",
+            user_id=1,
+            username="admin",
             detail="Password changed successfully",
         ),
         AuditLog(
-            event_type=AuditEventType.SECURITY_CONFIG_CHANGED, timestamp=_ago(days=5),
-            source_ip="192.168.1.100", user_id=1, username="admin",
+            event_type=AuditEventType.SECURITY_CONFIG_CHANGED,
+            timestamp=_ago(days=5),
+            source_ip="192.168.1.100",
+            user_id=1,
+            username="admin",
             detail="Changed session_lifetime_hours from 24 to 48",
             metadata_json=json.dumps(
                 {"key": "session_lifetime_hours", "old_value": "24", "new_value": "48"}
             ),
         ),
         AuditLog(
-            event_type=AuditEventType.LOGIN_SUCCESS, timestamp=_ago(days=7),
-            source_ip="10.0.0.50", user_id=1, username="admin",
+            event_type=AuditEventType.LOGIN_SUCCESS,
+            timestamp=_ago(days=7),
+            source_ip="10.0.0.50",
+            user_id=1,
+            username="admin",
             detail="Successful login (Tailscale)",
         ),
     ]
@@ -581,9 +655,7 @@ async def _seed_comic_files(session: AsyncSession) -> int:
     await session.flush()
 
     # Get all series with publishers (= from the seed, not empty orphans)
-    result = await session.execute(
-        select(Series).where(Series.publisher_id.isnot(None))
-    )
+    result = await session.execute(select(Series).where(Series.publisher_id.isnot(None)))
     all_series = list(result.scalars().all())
 
     cbz_data = _make_dummy_cbz(page_count=3)
@@ -731,7 +803,7 @@ async def seed_full(session: AsyncSession) -> None:
     print("Login credentials: admin / pullbox")
     print("Dev server: make run  →  http://localhost:8585")
     print()
-    print("ℹ️  ComicVine: To fetch real metadata + covers, set PULLBOX_COMICVINE_API_KEY")
+    print("Info: ComicVine: To fetch real metadata + covers, set PULLBOX_COMICVINE_API_KEY")
     print("   in your .env file, then trigger a metadata refresh from the UI.")
 
 
