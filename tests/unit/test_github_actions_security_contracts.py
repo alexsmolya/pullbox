@@ -422,6 +422,10 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert (
         "org.opencontainers.image.description=Modern comic book management and acquisition platform"
     ) in metadata_with.get("labels", "")
+    assert (
+        "org.opencontainers.image.description=Modern comic book management and "
+        "acquisition platform for self-hosted environments"
+    ) in metadata_with.get("annotations", "")
     assert "expected_description = (" in docker_workflow
     assert "Modern comic book management and acquisition platform for " in docker_workflow
     assert "self-hosted environments" in docker_workflow
