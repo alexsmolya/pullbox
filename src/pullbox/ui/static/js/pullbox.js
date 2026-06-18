@@ -10042,11 +10042,21 @@ function appShell() {
     openDonationsModal: function () {
       var self = this;
       self.donationsOpen = true;
-      requestAnimationFrame(function () {
-        if (self.$refs && self.$refs.donationsCloseButton) {
-          self.$refs.donationsCloseButton.focus();
+      var focusCloseButton = function () {
+        var closeButton =
+          (self.$refs && self.$refs.donationsCloseButton) ||
+          document.querySelector("[data-testid='donations-modal-close']");
+        if (closeButton && typeof closeButton.focus === "function") {
+          closeButton.focus({ preventScroll: true });
         }
-      });
+      };
+      if (window.Alpine && typeof window.Alpine.nextTick === "function") {
+        window.Alpine.nextTick(function () {
+          requestAnimationFrame(focusCloseButton);
+        });
+        return;
+      }
+      requestAnimationFrame(focusCloseButton);
     },
 
     closeDonationsModal: function () {

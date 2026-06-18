@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from pullbox.core.secret_validation import MIN_APPLICATION_SECRET_LENGTH
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DEPENDABOT_CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
@@ -160,7 +162,9 @@ def test_codeql_branch_probe_scans_trusted_push_refs_with_summary() -> None:
     push = triggers.get("push")
     assert isinstance(push, dict)
     assert push.get("branches") == [
+        "main",
         "develop",
+        "feature/ci-cd-*",
         "feature/code-scanning-*",
         "feature/codeql-*",
         "feature/security-*",
@@ -196,6 +200,71 @@ def test_ci_and_local_full_ci_enforce_v1_coverage_gate() -> None:
     assert "--cov-fail-under=60" not in ci_local_match.group(0)
 
 
+def test_ci_uploads_coverage_for_each_python_matrix_version() -> None:
+    """Coverage artifacts should be inspectable for every tested Python version."""
+    ci_workflow = _load_yaml(WORKFLOW_DIR / "ci.yml")
+    jobs = ci_workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    test_job = jobs.get("test")
+    assert isinstance(test_job, dict)
+
+    upload_steps = [
+        step
+        for step in test_job.get("steps", [])
+        if isinstance(step, dict) and step.get("name") == "Upload coverage report"
+    ]
+    assert len(upload_steps) == 1
+    upload_step = upload_steps[0]
+
+    assert upload_step.get("if") == "always()"
+    upload_with = upload_step.get("with")
+    assert isinstance(upload_with, dict)
+    assert upload_with.get("name") == "coverage-report-py${{ matrix.python-version }}"
+
+
+def test_required_gate_workflows_do_not_rerun_on_main_push() -> None:
+    """PRs and merge queue are the correctness gate; main merges stay quiet."""
+    for workflow_name in ["ci.yml", "security.yml", "workflow-hygiene.yml"]:
+        data = _load_yaml(WORKFLOW_DIR / workflow_name)
+        triggers = data.get(True, data.get("on"))
+        assert isinstance(triggers, dict)
+        assert "push" not in triggers
+
+
+def test_trusted_jobs_use_explicit_self_hosted_runner_labels() -> None:
+    """Avoid generic self-hosted routing so untrusted code cannot drift onto runners."""
+    failures: list[str] = []
+    for workflow in _workflow_files():
+        data = _load_yaml(workflow)
+        jobs = data.get("jobs")
+        assert isinstance(jobs, dict)
+        for job_name, job_config in jobs.items():
+            assert isinstance(job_config, dict)
+            runs_on = job_config.get("runs-on")
+            if runs_on == "self-hosted":
+                failures.append(f"{workflow.name}:{job_name}")
+    assert failures == []
+
+
+def test_browser_smoke_and_accessibility_artifacts_survive_failures_and_cancels() -> None:
+    ci_workflow = (WORKFLOW_DIR / "ci.yml").read_text(encoding="utf-8")
+    docker_validate = (WORKFLOW_DIR / "docker-validate.yml").read_text(encoding="utf-8")
+    docker_release = (WORKFLOW_DIR / "docker-release.yml").read_text(encoding="utf-8")
+
+    assert "Upload accessibility failure artifacts" in ci_workflow
+    assert "Upload Playwright failure artifacts" in ci_workflow
+    assert "if: failure() || cancelled()" in ci_workflow
+    assert "if-no-files-found: ignore" in ci_workflow
+
+    assert "Upload Docker validation failure artifacts" in docker_validate
+    assert "if: failure() || cancelled()" in docker_validate
+    assert "if-no-files-found: ignore" in docker_validate
+
+    assert "Upload smoke traces" in docker_release
+    assert "if: failure() || cancelled()" in docker_release
+    assert "if-no-files-found: ignore" in docker_release
+
+
 def test_ci_uses_shared_tailwind_build_script() -> None:
     ci_workflow = (WORKFLOW_DIR / "ci.yml").read_text(encoding="utf-8")
     package_json = (REPO_ROOT / "package.json").read_text(encoding="utf-8")
@@ -223,10 +292,60 @@ def test_environment_bootstrap_uses_current_packaging_tool_floor() -> None:
     assert '$(PIP) install --upgrade "pip>=26.0" wheel' in makefile
 
 
-def test_docker_workflow_runs_grype_before_publish() -> None:
-    docker_workflow_path = WORKFLOW_DIR / "docker.yml"
+def test_docker_validation_workflow_never_publishes_images() -> None:
+    docker_validate_path = WORKFLOW_DIR / "docker-validate.yml"
+    docker_validate = docker_validate_path.read_text(encoding="utf-8")
+    data = _load_yaml(docker_validate_path)
+    triggers = data.get(True, data.get("on"))
+    assert isinstance(triggers, dict)
+    assert "pull_request" in triggers
+    assert "push" not in triggers
+    pull_request = triggers.get("pull_request")
+    assert isinstance(pull_request, dict)
+    assert ".grype.yaml" in pull_request.get("paths", [])
+
+    assert "push: true" not in docker_validate
+    assert "packages: write" not in docker_validate
+    assert "ghcr.io/${{ github.repository }}" not in docker_validate
+    assert "docker.io/pullbox/pullbox" not in docker_validate
+    assert "github.actor == 'dependabot[bot]'" in docker_validate
+    assert "Docker Sanity (untrusted PR)" in docker_validate
+
+    jobs = data.get("jobs")
+    assert isinstance(jobs, dict)
+    assert jobs["untrusted-sanity"].get("runs-on") == "ubuntu-latest"
+    assert jobs["trusted-production-validate"].get("runs-on") == [
+        "self-hosted",
+        "Linux",
+        "X64",
+        "docker",
+    ]
+
+
+def test_docker_smoke_workflows_use_valid_application_secrets() -> None:
+    """Docker smoke checks should not fail before startup due to weak test secrets."""
+    failures: list[str] = []
+    secret_re = re.compile(r"PULLBOX_SECRET_KEY=([^\\\n\"' ]+)")
+
+    for workflow_name in ["docker-validate.yml", "docker-release.yml"]:
+        workflow_text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+        for secret in secret_re.findall(workflow_text):
+            if len(secret) < MIN_APPLICATION_SECRET_LENGTH:
+                failures.append(f"{workflow_name}: {secret}")
+
+    assert failures == []
+
+
+def test_docker_release_workflow_runs_grype_before_publish() -> None:
+    docker_workflow_path = WORKFLOW_DIR / "docker-release.yml"
     docker_workflow = docker_workflow_path.read_text(encoding="utf-8")
     data = _load_yaml(docker_workflow_path)
+    triggers = data.get(True, data.get("on"))
+    assert isinstance(triggers, dict)
+    assert triggers.get("push", {}).get("tags") == ["v*"]
+    assert "pull_request" not in triggers
+    assert "workflow_run" not in triggers
+
     jobs = data.get("jobs")
     assert isinstance(jobs, dict)
     push_job = jobs.get("push")
@@ -235,6 +354,7 @@ def test_docker_workflow_runs_grype_before_publish() -> None:
     assert "anchore/scan-action@" in docker_workflow
     assert "config: .grype.yaml" in docker_workflow
     assert push_job.get("needs") == ["build", "scan", "smoke-test"]
+    assert push_job.get("runs-on") == ["self-hosted", "Linux", "X64", "docker"]
 
 
 def test_grype_config_tracks_current_dhi_runtime() -> None:
@@ -251,9 +371,13 @@ def test_grype_config_tracks_current_dhi_runtime() -> None:
 
 
 def test_docker_workflow_signs_and_verifies_published_images() -> None:
-    docker_workflow_path = WORKFLOW_DIR / "docker.yml"
+    docker_workflow_path = WORKFLOW_DIR / "docker-release.yml"
     docker_workflow = docker_workflow_path.read_text(encoding="utf-8")
     data = _load_yaml(docker_workflow_path)
+    concurrency = data.get("concurrency")
+    assert isinstance(concurrency, dict)
+    assert concurrency.get("cancel-in-progress") is False
+
     jobs = data.get("jobs")
     assert isinstance(jobs, dict)
     push_job = jobs.get("push")
@@ -284,6 +408,15 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert isinstance(build_with, dict)
     assert build_with.get("provenance") == "mode=max"
     assert build_with.get("sbom") is True
+    assert build_with.get("annotations") == "${{ steps.meta.outputs.annotations }}"
+
+    metadata_steps = [
+        step for step in steps if isinstance(step, dict) and step.get("name") == "Docker metadata"
+    ]
+    assert len(metadata_steps) == 1
+    metadata_env = metadata_steps[0].get("env")
+    assert isinstance(metadata_env, dict)
+    assert metadata_env.get("DOCKER_METADATA_ANNOTATIONS_LEVELS") == "manifest,index"
 
     assert sign_job.get("runs-on") == "ubuntu-latest"
     assert sign_job.get("needs") == ["build", "push"]
@@ -312,10 +445,14 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert "release-image-digest" in docker_workflow
     assert "digest.txt" in docker_workflow
     assert "actions/upload-artifact@" in docker_workflow
+    assert "Validate pushed image metadata" in docker_workflow
+    assert "org.opencontainers.image.description" in docker_workflow
+    assert "attestation-manifest" in docker_workflow
     assert "cosign verify" in docker_workflow
     assert "verify_image_signature()" in docker_workflow
     assert "Signature for ${label} was not discoverable yet" in docker_workflow
     assert "--certificate-identity-regexp" in docker_workflow
+    assert "docker-release\\.yml" in docker_workflow
     assert "--certificate-oidc-issuer" in docker_workflow
 
 
@@ -354,9 +491,15 @@ def test_release_notes_include_image_signature_verification() -> None:
 def test_release_workflow_only_runs_for_tag_push_docker_publish() -> None:
     release_workflow_path = WORKFLOW_DIR / "release.yml"
     data = _load_yaml(release_workflow_path)
+    triggers = data.get(True, data.get("on"))
+    assert isinstance(triggers, dict)
+    workflow_run = triggers.get("workflow_run")
+    assert isinstance(workflow_run, dict)
+    assert workflow_run.get("workflows") == ["Docker Release"]
 
     concurrency = data.get("concurrency")
     assert isinstance(concurrency, dict)
+    assert concurrency.get("cancel-in-progress") is False
     group = concurrency.get("group")
     assert isinstance(group, str)
     assert "github.event.workflow_run.event" in group

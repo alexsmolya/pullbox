@@ -388,9 +388,9 @@ Example PR body:
 - Release tags are signed.
 - Tag pushes trigger:
   - GitHub Release creation
-  - Docker build, Grype scan, smoke test, and GHCR/Docker Hub publish
-- Ordinary untagged `main` merges may run Docker validation, but they must not
-  publish registry images.
+  - Docker Release build, Grype scan, smoke test, GHCR/Docker Hub publish,
+    Cosign signing, signature verification, and digest artifact upload
+- Ordinary untagged `main` merges must not publish registry images.
 - Pre-release tags are supported.
 
 ### 8.2 Required standard
@@ -454,7 +454,7 @@ Pullbox has two release-note artifacts:
 | Artifact | Source | When Updated | Purpose |
 |---|---|---|---|
 | `CHANGELOG.md` | Curated by maintainers | During release prep PR | Human-readable project history in the repo |
-| GitHub Release notes | Curated `CHANGELOG.md` release section plus generated commit details from `.github/workflows/release.yml` | After a signed version tag and successful Docker workflow | Public release summary, detailed release event log, Docker pull commands, and image signature verification commands |
+| GitHub Release notes | Curated `CHANGELOG.md` release section plus generated commit details from `.github/workflows/release.yml` | After a signed version tag and successful Docker Release workflow | Public release summary, detailed release event log, Docker pull commands, and image signature verification commands |
 
 `CHANGELOG.md` is not generated automatically. Keep it concise and user-facing:
 summarize the release, do not paste every commit. During release prep, move
@@ -489,7 +489,7 @@ Recommended mapping:
 
 - Signed tags let GitHub show verified tag provenance when signing is configured
   correctly.
-- Release images are signed separately from Git tags. The Docker workflow uses
+- Release images are signed separately from Git tags. Docker Release uses
   keyless Sigstore/Cosign with GitHub Actions OIDC, verifies GHCR and Docker
   Hub signatures by digest before the workflow succeeds, and uploads that digest
   for the GitHub Release notes.
@@ -498,6 +498,9 @@ Recommended mapping:
 - Docker metadata rules may publish semver-derived aliases during release-tag
   builds. Review GHCR and Docker Hub tags after release and delete unwanted
   aliases deliberately.
+- GHCR may show extra `unknown/unknown` entries for SBOM/provenance attestation
+  manifests. Keep them; they are supply-chain metadata, not runnable Pullbox
+  images.
 - A pre-release tag can be used to test the release pipeline:
 
 ```bash

@@ -20,7 +20,7 @@ concurrency:
 jobs:
   fresh-install:
     name: Fresh Install Verification
-    runs-on: ${{ vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON(vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 45
     permissions:
       contents: read

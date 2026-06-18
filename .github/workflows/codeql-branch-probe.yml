@@ -11,7 +11,9 @@ name: CodeQL Branch Probe
 on:
   push:
     branches:
+      - main
       - develop
+      - feature/ci-cd-*
       - feature/code-scanning-*
       - feature/codeql-*
       - feature/security-*

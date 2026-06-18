@@ -58,7 +58,7 @@ def run_axe(
                   type: 'tag',
                   values: tags,
                 },
-                resultTypes: ['violations'],
+                resultTypes: ['violations', 'incomplete'],
               }
             );
         }""",
@@ -79,6 +79,12 @@ def assert_no_axe_violations(
 ) -> None:
     results = run_axe(page, include=include, exclude=exclude)
     violations = results.get("violations", [])
+    incomplete = results.get("incomplete", [])
+    if incomplete:
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        incomplete_path = ARTIFACTS_DIR / f"{_slugify(name)}-incomplete.json"
+        incomplete_path.write_text(json.dumps(incomplete, indent=2))
+
     if not violations:
         return
 

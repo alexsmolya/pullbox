@@ -172,13 +172,14 @@ GitHub Actions workflows live in `.github/workflows/`.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | Push to `main`, PR to `main` or `develop`, merge queue | Lint, format, typecheck, tests, migration check, accessibility, E2E, `CI Required` aggregate |
-| `docker-pr.yml` | Docker-relevant PR changes | Production Docker build validation before merge |
-| `docker.yml` | CI success on `main`, tag push, manual dispatch | Docker build validation, Grype scan, smoke test, and registry publish only for release tags or manual dispatch |
-| `security.yml` | Push to `main`, PR to `main` or `develop`, merge queue, schedule, manual dispatch | gitleaks, `pip-audit`, Safety, Bandit, public-gated CodeQL, `Security Required` aggregate |
-| `workflow-hygiene.yml` | Push to `main`, PR to `main` or `develop`, merge queue, manual dispatch | actionlint, workflow expression validation, `Workflow Hygiene Required` aggregate |
+| `ci.yml` | PR to `main` or `develop`, merge queue, manual dispatch | Lint, format, typecheck, tests, migration check, accessibility, E2E, `CI Required` aggregate |
+| `docker-validate.yml` | Docker-relevant PR changes, manual dispatch | Trusted production Docker build, Grype scan, and smoke validation; reduced no-secrets sanity build for untrusted PRs |
+| `docker-release.yml` | Version tag push, manual dispatch | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and digest artifact upload |
+| `security.yml` | PR to `main` or `develop`, merge queue, schedule, manual dispatch | gitleaks, `pip-audit`, Safety, Bandit, public-gated CodeQL, `Security Required` aggregate |
+| `workflow-hygiene.yml` | PR to `main` or `develop`, merge queue, manual dispatch | actionlint, workflow expression validation, `Workflow Hygiene Required` aggregate |
+| `codeql-branch-probe.yml` | Trusted branch push, manual dispatch | Lightweight CodeQL-only branch/default-branch feedback and dashboard refresh |
 | `clean-room.yml` | Schedule, manual dispatch | Fresh install validation outside runner-local cache |
-| `release.yml` | Docker success for tagged commits | Changelog and GitHub Release creation |
+| `release.yml` | Docker Release success for tagged commits | Changelog and GitHub Release creation |
 
 ### 3.2 Required standard
 
@@ -194,9 +195,10 @@ GitHub Actions workflows live in `.github/workflows/`.
 
 ### 3.3 Current repo nuances
 
-- Docker validation runs after successful `main` CI for untagged commits, but
-  registry publication happens only for release tags or explicit manual
-  dispatches.
+- PR and merge queue checks are the authoritative correctness gate. Ordinary
+  `main` merges should not rerun full CI or publish container images.
+- Docker validation is a PR/manual workflow. It never logs in to publish
+  registries and never pushes images.
 - Docker publication depends on trusted refs and release tags.
 - DHI credentials are required for Docker builds that pull `dhi.io` base images.
 - Forked or Dependabot PRs may not have repository secrets. PR workflows should
@@ -208,12 +210,14 @@ GitHub Actions workflows live in `.github/workflows/`.
   - `github-hosted` moves trusted checks to `ubuntu-latest`
 - Fork and Dependabot pull requests always run ordinary checks on
   `ubuntu-latest`, regardless of `PULLBOX_CHECKS_RUNNER`.
-- Trusted Docker validation, Docker publish, and release automation stay on the
-  self-hosted runner by design. They are not governed by
+- Trusted ordinary jobs use the explicit self-hosted `ci` runner label when
+  `PULLBOX_CHECKS_RUNNER` is not `github-hosted`.
+- Trusted Docker validation and Docker release jobs use the explicit
+  self-hosted `docker` runner label by design. They are not governed by
   `PULLBOX_CHECKS_RUNNER`.
 - Untrusted Docker PRs run a reduced public sanity check (`Dockerfile.dev`
   build) instead of the full DHI-backed production build.
-- `Docker PR Build` stays active for Docker-sensitive changes, but it is not a
+- `Docker Validate` stays active for Docker-sensitive changes, but it is not a
   required ruleset check because path-filtered workflows may be absent on
   unrelated pull requests.
 - The public-readiness ruleset targets both `main` and `develop`, blocks branch
@@ -545,19 +549,21 @@ Development dependency categories:
 ### 8.1 Current Pullbox implementation
 
 - Version tags trigger release and Docker automation.
-- `docker.yml` builds, scans, and smoke-tests container images after successful
-  `main` CI. It publishes to GHCR and Docker Hub only for release tags or
-  explicit manual dispatches.
+- `docker-release.yml` builds, scans, smoke-tests, publishes, signs, and verifies
+  release images only for version tags or explicit release dispatches.
+- `docker-validate.yml` validates Docker-sensitive PR changes without publishing.
 - Published container images are signed with keyless Sigstore/Cosign using
-  GitHub Actions OIDC after the registry push completes. The workflow verifies
-  GHCR and Docker Hub signatures by digest before reporting success.
+  GitHub Actions OIDC after the registry push completes. `Docker Release`
+  verifies GHCR and Docker Hub signatures by digest before reporting success.
 - `release.yml` creates or updates GitHub Releases for tagged commits after the
-  Docker workflow succeeds.
+  Docker Release workflow succeeds.
 - GitHub Release notes start with the curated `CHANGELOG.md` release section,
   then append generated commit details grouped by conventional commit prefixes.
 - The root `CHANGELOG.md` is curated manually during release prep.
 - Release tags are expected to be signed.
 - GHCR and Docker Hub are the current image registries.
+- GHCR may display SBOM/provenance attestation manifests as `unknown/unknown`.
+  Those entries are expected supply-chain metadata, not runnable Pullbox images.
 
 ### 8.2 Required standard
 
@@ -571,7 +577,7 @@ Development dependency categories:
   ordinary untagged `main` merges.
 - Release images should pass Grype and smoke tests before publication.
 - Release images should publish SBOM/provenance attestations and pass Cosign
-  digest signature verification before the Docker workflow succeeds.
+  digest signature verification before Docker Release succeeds.
 - GHCR and Docker Hub tags should be reviewed after release.
 - Unwanted tag aliases should be deleted deliberately, not ignored.
 
@@ -586,9 +592,13 @@ Development dependency categories:
 ### 8.4 Audit checks
 
 - [ ] Release tag is signed.
-- [ ] Docker workflow succeeds.
+- [ ] Docker Release workflow succeeds.
 - [ ] GitHub Release points at the expected tag.
 - [ ] GHCR and Docker Hub exact version and SHA tags exist.
+- [ ] GHCR package metadata includes the Pullbox description from OCI index
+      annotations.
+- [ ] Multi-arch manifests include `linux/amd64`, `linux/arm64`, and
+      SBOM/provenance attestation manifests.
 - [ ] GHCR and Docker Hub release image signatures verify with Cosign by digest.
 - [ ] Unwanted GHCR and Docker Hub aliases are reviewed and cleaned up.
 

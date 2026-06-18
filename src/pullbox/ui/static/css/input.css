@@ -6511,7 +6511,7 @@
   .donation-option-eyebrow {
     letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: var(--pb-text-dim);
+    color: var(--pb-text-sec);
     font-family: "JetBrains Mono", monospace;
     font-size: 0.64rem;
     font-weight: 700;
@@ -6562,8 +6562,11 @@
   }
   .donation-option-button--liberapay {
     background: var(--pb-success);
-    color: var(--pb-text-inverse);
+    color: #f7f1e8;
     box-shadow: 0 10px 20px color-mix(in srgb, var(--pb-success) 20%, transparent);
+  }
+  [data-theme="dark"] .donation-option-button--liberapay {
+    color: #16130a;
   }
   .donation-qr-frame {
     display: grid;

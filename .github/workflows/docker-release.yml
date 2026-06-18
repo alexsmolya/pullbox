@@ -1,7 +1,8 @@
 ---
-# Pullbox Docker Build & Push Pipeline
-# Builds images, scans with Grype, runs smoke tests, and publishes registry
-# images only for release tags or explicit manual dispatches.
+# Pullbox Docker Release Pipeline
+# Builds images, scans with Grype, runs smoke tests, publishes registry images,
+# signs them with Cosign, and verifies signatures only for release tags or
+# explicit release dispatches.
 #
 # Registries: GHCR and Docker Hub.
 #
@@ -9,16 +10,14 @@
 # See: docs/development/INFRASTRUCTURE.md
 #
 # Trigger rules:
-#   workflow_run → validates Docker after CI passes on main for untagged SHAs
 #   push tags    → builds semver release images for tagged commits
-#   dispatch     → manual builds from any branch (tagged as "edge")
+#   dispatch     → manual release image builds from the selected ref
 # Trusted Docker publish stays on the self-hosted runner. This workflow is not
 # governed by the general checks-runner toggle.
 #
 # Tag strategy:
 #   v* tag       → 1.2.3, 1.2, 1, latest, sha-xxxxx
 #   manual       → edge (or custom), sha-xxxxx
-#   untagged main workflow_run → build/scan/smoke only; no registry publish
 #
 # Versioning:
 #   Version is read from pullbox/__init__.py (__version__).
@@ -26,16 +25,9 @@
 #   At release: "1.0.0-rc1" → "1.0.0" (git tag triggers release workflow).
 #   See CICD_SPRINT_GUIDE.md for the full versioning plan.
 
-name: Docker
+name: Docker Release
 
 on:
-  # Build Docker images after CI passes on main (includes tag pushes merged to main).
-  # workflow_run uses the correct SHA from the triggering workflow, not HEAD.
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
-
   push:
     tags: ["v*"]
 
@@ -55,8 +47,8 @@ env:
   PYTHON_DEFAULT: "3.14"
 
 concurrency:
-  group: docker-${{ github.event_name }}-${{ github.event.workflow_run.head_sha || github.sha }}
-  cancel-in-progress: true
+  group: docker-release-${{ github.ref || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   # ──────────────────────────────────────────────
@@ -64,7 +56,7 @@ jobs:
   # ──────────────────────────────────────────────
   gate:
     name: Resolve Docker Trigger
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, docker]
     permissions:
       contents: read
     outputs:
@@ -74,26 +66,9 @@ jobs:
       - name: Resolve correct SHA
         id: resolve-sha
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip unsuccessful workflow_run invocations
-        id: workflow-run-status
-        if: github.event_name == 'workflow_run'
-        run: |
-          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "CI conclusion was '${{ github.event.workflow_run.conclusion }}'; skipping Docker build."
-            exit 0
-          fi
-
-          echo "should_run=undecided" >> "$GITHUB_OUTPUT"
+          echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        if: steps.workflow-run-status.outputs.should_run != 'false'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ steps.resolve-sha.outputs.sha }}
@@ -102,30 +77,16 @@ jobs:
 
       - name: Decide whether to run Docker jobs
         id: decide
-        if: steps.workflow-run-status.outputs.should_run != 'false'
         run: |
-          if [ "${{ github.event_name }}" != "workflow_run" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Direct tag/manual trigger; running Docker workflow."
-            exit 0
-          fi
-
-          TAG=$(git tag --points-at "${{ steps.resolve-sha.outputs.sha }}" | grep '^v' | head -1 || true)
-          if [ -n "$TAG" ]; then
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "SHA already has release tag ${TAG}; skipping duplicate workflow_run build."
-            exit 0
-          fi
-
           echo "should_run=true" >> "$GITHUB_OUTPUT"
-          echo "Untagged main SHA after successful CI; running Docker workflow."
+          echo "Release tag/manual trigger; running Docker release workflow."
 
   # ──────────────────────────────────────────────
   # Job 1: Build multi-arch image
   # ──────────────────────────────────────────────
   build:
     name: Build Multi-Arch Image
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, docker]
     needs: [gate]
     timeout-minutes: 45
     if: needs.gate.outputs.should-run == 'true'
@@ -187,6 +148,8 @@ jobs:
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: |
             ${{ env.GHCR_IMAGE }}
@@ -247,7 +210,7 @@ jobs:
   # ──────────────────────────────────────────────
   scan:
     name: Container Scan (Grype)
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, docker]
     needs: [build]
     timeout-minutes: 20
     permissions:
@@ -291,7 +254,7 @@ jobs:
   # ──────────────────────────────────────────────
   smoke-test:
     name: Docker Smoke Test
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, docker]
     needs: [build]
     timeout-minutes: 25
     permissions:
@@ -370,15 +333,16 @@ jobs:
           PULLBOX_SMOKE_TEST: "true"
 
       - name: Upload smoke traces
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: smoke-test-traces
           path: test-results/smoke/
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Container logs on failure
-        if: failure()
+        if: failure() || cancelled()
         run: docker logs pullbox-smoke
 
       - name: Cleanup
@@ -390,7 +354,7 @@ jobs:
   # ──────────────────────────────────────────────
   push:
     name: Push to Registries
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, docker]
     needs: [build, scan, smoke-test]
     if: needs.build.outputs.is-release == 'true' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 60
@@ -470,6 +434,8 @@ jobs:
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: |
             ${{ env.GHCR_IMAGE }}
@@ -482,8 +448,11 @@ jobs:
           labels: |
             org.opencontainers.image.title=Pullbox
             org.opencontainers.image.description=Modern comic book management and acquisition platform
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.build.outputs.build-sha }}
             org.opencontainers.image.licenses=GPL-3.0-or-later
+            org.opencontainers.image.version=${{ needs.build.outputs.image-version }}
 
       - name: Extract version
         id: version
@@ -505,6 +474,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           build-args: |
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             GIT_SHA=${{ needs.build.outputs.build-sha }}
@@ -523,6 +493,47 @@ jobs:
             echo "::error::Unexpected pushed image digest format: ${DIGEST}"
             exit 1
           fi
+
+      - name: Validate pushed image metadata
+        env:
+          DIGEST: ${{ steps.push-image.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "${GHCR_IMAGE}@${DIGEST}" --raw > image-index.json
+          python - <<'PY'
+          import json
+          import sys
+
+          with open("image-index.json", encoding="utf-8") as handle:
+              index = json.load(handle)
+
+          annotations = index.get("annotations") or {}
+          expected_description = "Modern comic book management and acquisition platform"
+          if annotations.get("org.opencontainers.image.description") != expected_description:
+              print("Missing OCI index description annotation.", file=sys.stderr)
+              sys.exit(1)
+
+          manifests = index.get("manifests") or []
+          platforms = {
+              f"{(manifest.get('platform') or {}).get('os')}/"
+              f"{(manifest.get('platform') or {}).get('architecture')}"
+              for manifest in manifests
+              if manifest.get("platform")
+          }
+          expected_platforms = {"linux/amd64", "linux/arm64"}
+          if not expected_platforms.issubset(platforms):
+              print(f"Missing expected runnable platforms: {expected_platforms - platforms}", file=sys.stderr)
+              sys.exit(1)
+
+          attestation_count = sum(
+              1
+              for manifest in manifests
+              if (manifest.get("annotations") or {}).get("vnd.docker.reference.type")
+              == "attestation-manifest"
+          )
+          if attestation_count == 0:
+              print("Missing SBOM/provenance attestation manifests.", file=sys.stderr)
+              sys.exit(1)
+          PY
 
       - name: Summary
         run: |
@@ -592,7 +603,7 @@ jobs:
       - name: Verify published image signatures
         env:
           DIGEST: ${{ needs.push.outputs.image-digest }}
-          CERTIFICATE_IDENTITY_REGEXP: ^https://github.com/${{ github.repository }}/\.github/workflows/docker\.yml@refs/(tags/v.*|heads/.*)$
+          CERTIFICATE_IDENTITY_REGEXP: ^https://github.com/${{ github.repository }}/\.github/workflows/docker-release\.yml@refs/(tags/v.*|heads/.*)$
           CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
           verify_image_signature() {
