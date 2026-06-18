@@ -200,6 +200,28 @@ def test_ci_and_local_full_ci_enforce_v1_coverage_gate() -> None:
     assert "--cov-fail-under=60" not in ci_local_match.group(0)
 
 
+def test_ci_uploads_coverage_for_each_python_matrix_version() -> None:
+    """Coverage artifacts should be inspectable for every tested Python version."""
+    ci_workflow = _load_yaml(WORKFLOW_DIR / "ci.yml")
+    jobs = ci_workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    test_job = jobs.get("test")
+    assert isinstance(test_job, dict)
+
+    upload_steps = [
+        step
+        for step in test_job.get("steps", [])
+        if isinstance(step, dict) and step.get("name") == "Upload coverage report"
+    ]
+    assert len(upload_steps) == 1
+    upload_step = upload_steps[0]
+
+    assert upload_step.get("if") == "always()"
+    upload_with = upload_step.get("with")
+    assert isinstance(upload_with, dict)
+    assert upload_with.get("name") == "coverage-report-py${{ matrix.python-version }}"
+
+
 def test_required_gate_workflows_do_not_rerun_on_main_push() -> None:
     """PRs and merge queue are the correctness gate; main merges stay quiet."""
     for workflow_name in ["ci.yml", "security.yml", "workflow-hygiene.yml"]:

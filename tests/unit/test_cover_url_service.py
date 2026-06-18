@@ -33,6 +33,12 @@ def test_build_series_cover_url_adds_version_for_local_series_cover() -> None:
     assert url.startswith("/api/v1/series/42/cover?v=")
 
 
+def test_build_series_cover_url_returns_none_without_series_id() -> None:
+    series = _SeriesStub(id=0, comicvine_id=1234)
+
+    assert build_series_cover_url(series) is None
+
+
 def test_build_series_cover_url_changes_when_series_identity_changes() -> None:
     first = _SeriesStub(id=42, comicvine_id=1234, title="Alpha")
     second = _SeriesStub(id=42, comicvine_id=5678, title="Beta")
