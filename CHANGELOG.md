@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.9] - 2026-06-18
+
+Corrective release for the `0.9.8` release workflow, which pushed registry
+images but failed while validating OCI metadata on the Docker runner.
+
+### CI / Build
+
+- Docker release metadata validation now uses the runner-available `python3`
+  executable instead of assuming a `python` shim exists on the hardened Docker
+  runner.
+- Workflow contract tests now guard the release metadata validation command so
+  future release-only checks stay compatible with the Docker runner image.
+
 ## [0.9.8] - 2026-06-18
 
 Release-pipeline hardening focused on making release automation predictable,

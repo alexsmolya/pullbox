@@ -499,7 +499,7 @@ jobs:
           DIGEST: ${{ steps.push-image.outputs.digest }}
         run: |
           docker buildx imagetools inspect "${GHCR_IMAGE}@${DIGEST}" --raw > image-index.json
-          python - <<'PY'
+          python3 - <<'PY'
           import json
           import sys
 

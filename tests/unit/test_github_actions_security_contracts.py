@@ -446,6 +446,8 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert "digest.txt" in docker_workflow
     assert "actions/upload-artifact@" in docker_workflow
     assert "Validate pushed image metadata" in docker_workflow
+    assert "python3 - <<'PY'" in docker_workflow
+    assert "python - <<'PY'" not in docker_workflow
     assert "org.opencontainers.image.description" in docker_workflow
     assert "attestation-manifest" in docker_workflow
     assert "cosign verify" in docker_workflow
