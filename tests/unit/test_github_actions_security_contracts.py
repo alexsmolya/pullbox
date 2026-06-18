@@ -275,6 +275,13 @@ def test_release_sync_fast_path_requires_next_patch_dev_version() -> None:
     assert unchanged.is_sync is False
     assert "0.9.11-dev" in unchanged.reason
 
+    extra_version_file_change = validator.version_bump_is_release_sync(
+        '__version__ = "0.9.10"\nSTARTED_AT = "safe"\n',
+        '__version__ = "0.9.11-dev"\nSTARTED_AT = "changed"\n',
+    )
+    assert extra_version_file_change.is_sync is False
+    assert "beyond the expected version bump" in extra_version_file_change.reason
+
 
 def test_release_sync_validator_accepts_only_main_plus_next_dev_bump(tmp_path: Path) -> None:
     validator = _load_release_sync_module()
@@ -361,7 +368,9 @@ def test_release_sync_fast_path_is_wired_to_required_aggregate_workflows() -> No
         assert release_sync.get("outputs", {}).get("is_sync") == (
             "${{ steps.release-sync.outputs.is_sync }}"
         )
-        assert "python .github/scripts/validate-release-sync-pr.py" in workflow_text
+        assert "git show origin/main:.github/scripts/validate-release-sync-pr.py" in workflow_text
+        assert "python /tmp/pullbox-release-sync-validator.py" in workflow_text
+        assert "python .github/scripts/validate-release-sync-pr.py" not in workflow_text
 
         aggregate = jobs.get(contract["aggregate"])
         assert isinstance(aggregate, dict)
@@ -380,7 +389,9 @@ def test_release_sync_fast_path_is_wired_to_required_aggregate_workflows() -> No
 
 
 def test_docker_validation_skips_trusted_docker_runner_for_release_sync_prs() -> None:
-    data = _load_yaml(WORKFLOW_DIR / "docker-validate.yml")
+    workflow_path = WORKFLOW_DIR / "docker-validate.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    data = _load_yaml(workflow_path)
     jobs = data.get("jobs")
     assert isinstance(jobs, dict)
 
@@ -392,6 +403,9 @@ def test_docker_validation_skips_trusted_docker_runner_for_release_sync_prs() ->
     assert isinstance(trusted, dict)
     assert trusted.get("needs") == "release_sync_check"
     assert "needs.release_sync_check.outputs.is_sync != 'true'" in trusted.get("if", "")
+    assert "git show origin/main:.github/scripts/validate-release-sync-pr.py" in workflow_text
+    assert "python /tmp/pullbox-release-sync-validator.py" in workflow_text
+    assert "python .github/scripts/validate-release-sync-pr.py" not in workflow_text
 
 
 def test_trusted_jobs_use_explicit_self_hosted_runner_labels() -> None:

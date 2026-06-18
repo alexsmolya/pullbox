@@ -48,7 +48,17 @@ jobs:
           RELEASE_SYNC_REPOSITORY: ${{ github.repository }}
           RELEASE_SYNC_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
           RELEASE_SYNC_ACTOR: ${{ github.actor }}
-        run: python .github/scripts/validate-release-sync-pr.py
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git cat-file -e origin/main:.github/scripts/validate-release-sync-pr.py 2>/dev/null; then
+            echo "is_sync=false" >> "$GITHUB_OUTPUT"
+            echo "reason=trusted release sync validator is not available on origin/main yet" >> "$GITHUB_OUTPUT"
+            echo "release_sync=false"
+            echo "reason=trusted release sync validator is not available on origin/main yet"
+            exit 0
+          fi
+          git show origin/main:.github/scripts/validate-release-sync-pr.py > /tmp/pullbox-release-sync-validator.py
+          python /tmp/pullbox-release-sync-validator.py
 
   # ──────────────────────────────────────────────
   # Job 1: Quality Gate (~45s)

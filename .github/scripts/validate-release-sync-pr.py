@@ -42,6 +42,11 @@ def expected_next_dev_version(released_version: str) -> str | None:
     return f"{major}.{minor}.{patch + 1}-dev"
 
 
+def replace_version_line(text: str, version: str) -> str:
+    """Return ``text`` with only the Pullbox version assignment changed."""
+    return VERSION_RE.sub(f'__version__ = "{version}"', text, count=1)
+
+
 def version_bump_is_release_sync(main_text: str, head_text: str) -> ValidationResult:
     main_version = extract_version(main_text)
     head_version = extract_version(head_text)
@@ -56,6 +61,12 @@ def version_bump_is_release_sync(main_text: str, head_text: str) -> ValidationRe
             False,
             f"expected {VERSION_FILE} to be bumped from {main_version} to {expected}; "
             f"found {head_version}",
+        )
+    expected_head_text = replace_version_line(main_text, expected)
+    if head_text != expected_head_text:
+        return ValidationResult(
+            False,
+            f"{VERSION_FILE} contains changes beyond the expected version bump",
         )
     return ValidationResult(True, f"release sync with dev bump {main_version} -> {head_version}")
 
@@ -75,7 +86,7 @@ def _git_succeeds(*args: str, cwd: Path) -> bool:
 
 
 def _git_stdout(*args: str, cwd: Path) -> str:
-    return _run_git(*args, cwd=cwd).stdout.strip()
+    return _run_git(*args, cwd=cwd).stdout
 
 
 def _fetch_release_refs(cwd: Path) -> None:
