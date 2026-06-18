@@ -212,6 +212,28 @@ async def test_update_config_rejects_local_bypass_without_safe_target(
 
 
 @pytest.mark.asyncio
+async def test_update_config_enables_local_bypass_with_default_addresses(
+    db_session: AsyncSession,
+) -> None:
+    """Fresh installs should honor default trusted addresses when toggling bypass."""
+    db_session.add(User(username="admin", password_hash=AuthService.hash_password("Test@1234")))
+    await db_session.flush()
+
+    response = await _call_update(
+        db_session,
+        {
+            "local_auth_bypass_enabled": "true",
+            "local_auth_bypass_username": "admin",
+        },
+    )
+
+    configs = {item["key"]: item["value"] for item in response["configs"]}
+    assert configs["local_auth_bypass_enabled"] == "true"
+    assert configs["local_auth_bypass_username"] == "admin"
+    assert configs["local_auth_bypass_addresses"] == "127.0.0.1, ::1"
+
+
+@pytest.mark.asyncio
 async def test_update_config_applies_runtime_side_effects_and_restart_response(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
