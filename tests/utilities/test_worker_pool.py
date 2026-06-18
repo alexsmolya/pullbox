@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from pullbox.utilities.base_executor import ExecutionMode, ItemResult, JobExecutor, ProcessedItem
-from pullbox.utilities.worker_pool import WorkerPool
+from pullbox.utilities.worker_pool import WorkerPool, _execute_in_worker
 
 # ── Test Executors (must be module-level for pickling) ─────────
 
@@ -86,6 +86,19 @@ class NoneReturningExecutor(JobExecutor):
 
     def process_item(self, item_data: dict[str, Any], job_config: dict[str, Any]) -> ProcessedItem:
         return None  # type: ignore[return-value]
+
+    def rollback_item(self, item_data: dict[str, Any], job_config: dict[str, Any]) -> ProcessedItem:
+        return ProcessedItem(item_id=item_data["id"], result=ItemResult.COMPLETED)
+
+
+class AlwaysCrashingExecutor(JobExecutor):
+    """Executor that always raises when executed in a worker."""
+
+    async def generate_items(self, job_config: dict[str, Any]) -> list[dict[str, Any]]:
+        return []
+
+    def process_item(self, item_data: dict[str, Any], job_config: dict[str, Any]) -> ProcessedItem:
+        raise RuntimeError("boom")
 
     def rollback_item(self, item_data: dict[str, Any], job_config: dict[str, Any]) -> ProcessedItem:
         return ProcessedItem(item_id=item_data["id"], result=ItemResult.COMPLETED)
@@ -198,6 +211,36 @@ class TestErrorHandling:
             results = await pool.process_batch(items, NoneReturningExecutor(), {})
             assert len(results) == 1
             assert results[0].result == ItemResult.FAILED
+        finally:
+            pool.shutdown()
+
+    def test_worker_function_normalizes_none_return(self) -> None:
+        result = _execute_in_worker(NoneReturningExecutor(), {"id": "bad"}, {}, None, 7)
+
+        assert result.item_id == "bad"
+        assert result.result == ItemResult.FAILED
+        assert result.worker_id == 7
+        assert result.error_message == "process_item returned None instead of ProcessedItem"
+
+    def test_worker_function_normalizes_exception(self) -> None:
+        result = _execute_in_worker(AlwaysCrashingExecutor(), {"id": "bad"}, {}, None, 3)
+
+        assert result.item_id == "bad"
+        assert result.result == ItemResult.FAILED
+        assert result.worker_id == 3
+        assert result.error_message == "boom"
+        assert result.log_entries == [("ERROR", "Worker exception: boom", {})]
+
+    def test_coerce_result_normalizes_exception_and_unexpected_type(self) -> None:
+        pool = WorkerPool(execution_mode=ExecutionMode.THREAD, max_workers=1)
+        try:
+            failed = pool._coerce_result({"id": "boom"}, RuntimeError("bad worker"))
+            unexpected = pool._coerce_result({"id": "weird"}, {"not": "a result"})
+
+            assert failed.result == ItemResult.FAILED
+            assert failed.error_message == "Worker process failed: bad worker"
+            assert unexpected.result == ItemResult.FAILED
+            assert unexpected.error_message == "Unexpected result type: dict"
         finally:
             pool.shutdown()
 
