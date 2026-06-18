@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from pullbox.core.secret_validation import MIN_APPLICATION_SECRET_LENGTH
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DEPENDABOT_CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
@@ -293,6 +295,20 @@ def test_docker_validation_workflow_never_publishes_images() -> None:
         "X64",
         "docker",
     ]
+
+
+def test_docker_smoke_workflows_use_valid_application_secrets() -> None:
+    """Docker smoke checks should not fail before startup due to weak test secrets."""
+    failures: list[str] = []
+    secret_re = re.compile(r"PULLBOX_SECRET_KEY=([^\\\n\"' ]+)")
+
+    for workflow_name in ["docker-validate.yml", "docker-release.yml"]:
+        workflow_text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+        for secret in secret_re.findall(workflow_text):
+            if len(secret) < MIN_APPLICATION_SECRET_LENGTH:
+                failures.append(f"{workflow_name}: {secret}")
+
+    assert failures == []
 
 
 def test_docker_release_workflow_runs_grype_before_publish() -> None:

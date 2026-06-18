@@ -136,7 +136,7 @@ jobs:
           docker run -d \
             --name pullbox-validate \
             -p 8585:8585 \
-            -e PULLBOX_SECRET_KEY=docker-validate-secret-key \
+            -e PULLBOX_SECRET_KEY=docker-validate-secret-key-for-ci \
             -e PULLBOX_LOG_LEVEL=WARNING \
             pullbox:validate
 
