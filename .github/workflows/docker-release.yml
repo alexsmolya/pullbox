@@ -507,7 +507,10 @@ jobs:
               index = json.load(handle)
 
           annotations = index.get("annotations") or {}
-          expected_description = "Modern comic book management and acquisition platform"
+          expected_description = (
+              "Modern comic book management and acquisition platform for "
+              "self-hosted environments"
+          )
           if annotations.get("org.opencontainers.image.description") != expected_description:
               print("Missing OCI index description annotation.", file=sys.stderr)
               sys.exit(1)

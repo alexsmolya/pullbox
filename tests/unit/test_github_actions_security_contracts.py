@@ -417,6 +417,14 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     metadata_env = metadata_steps[0].get("env")
     assert isinstance(metadata_env, dict)
     assert metadata_env.get("DOCKER_METADATA_ANNOTATIONS_LEVELS") == "manifest,index"
+    metadata_with = metadata_steps[0].get("with")
+    assert isinstance(metadata_with, dict)
+    assert (
+        "org.opencontainers.image.description=Modern comic book management and acquisition platform"
+    ) in metadata_with.get("labels", "")
+    assert "expected_description = (" in docker_workflow
+    assert "Modern comic book management and acquisition platform for " in docker_workflow
+    assert "self-hosted environments" in docker_workflow
 
     assert sign_job.get("runs-on") == "ubuntu-latest"
     assert sign_job.get("needs") == ["build", "push"]
