@@ -313,6 +313,8 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert "digest.txt" in docker_workflow
     assert "actions/upload-artifact@" in docker_workflow
     assert "cosign verify" in docker_workflow
+    assert "verify_image_signature()" in docker_workflow
+    assert "Signature for ${label} was not discoverable yet" in docker_workflow
     assert "--certificate-identity-regexp" in docker_workflow
     assert "--certificate-oidc-issuer" in docker_workflow
 
