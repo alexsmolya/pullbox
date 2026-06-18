@@ -2879,6 +2879,45 @@ class TestHandlersDirect:
             assert result.total == 2
 
     @pytest.mark.asyncio
+    async def test_logs_helper_ignores_non_integer_after_id(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The shared log helper defensively ignores invalid after_id values."""
+        from pullbox.api.v1.import_job_logs import build_import_job_logs_response
+
+        job_id = await _seed_import_job(_db_factory, with_logs=3)
+
+        async with _db_factory() as session:
+            result = await build_import_job_logs_response(
+                session=session,
+                job_id=job_id,
+                page=1,
+                page_size=100,
+                level=None,
+                after_id="not-an-int",  # type: ignore[arg-type]
+                order="asc",
+            )
+
+        assert result.total == 3
+        assert len(result.items) == 3
+
+        first_id = result.items[0].id
+        async with _db_factory() as session:
+            filtered = await build_import_job_logs_response(
+                session=session,
+                job_id=job_id,
+                page=1,
+                page_size=100,
+                level=None,
+                after_id=first_id,
+                order="asc",
+            )
+
+        assert filtered.total == 2
+        assert all(item.id > first_id for item in filtered.items)
+
+    @pytest.mark.asyncio
     async def test_logs_descending_direct(
         self,
         _db_factory: async_sessionmaker[AsyncSession],

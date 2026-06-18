@@ -21,7 +21,6 @@ from pullbox.models.base import Base
 from pullbox.models.import_job import (
     ImportedSeries,
     ImportJob,
-    ImportJobLog,
     ImportJobStatus,
     ImportSeriesStatus,
     ImportSourceType,
@@ -86,7 +85,6 @@ async def _seed_import_jobs(session: AsyncSession) -> int:
             error_msg = None
             series_found = (i * 3 + 7) % 45 + 3
             series_matched = int(series_found * 0.85)
-            series_no_match = series_found - series_matched
             series_imported = series_matched
             series_failed = 0
             files_found = series_found * (8 + i % 5)
@@ -97,7 +95,11 @@ async def _seed_import_jobs(session: AsyncSession) -> int:
         match_started = scan_done + timedelta(seconds=1)
         match_done = match_started + timedelta(seconds=30 + i * 2 % 60)
         import_started = match_done + timedelta(seconds=5)
-        import_done = import_started + timedelta(minutes=1 + i % 5) if status == ImportJobStatus.COMPLETED else None
+        import_done = (
+            import_started + timedelta(minutes=1 + i % 5)
+            if status == ImportJobStatus.COMPLETED
+            else None
+        )
 
         job = ImportJob(
             source_path=source_paths[i % len(source_paths)],
@@ -107,7 +109,9 @@ async def _seed_import_jobs(session: AsyncSession) -> int:
             scan_total_dirs=(series_found + 2),
             series_found=series_found,
             series_matched=int(series_found * 0.85) if status != ImportJobStatus.FAILED else 0,
-            series_no_match=series_found - int(series_found * 0.85) if status != ImportJobStatus.FAILED else series_found,
+            series_no_match=series_found - int(series_found * 0.85)
+            if status != ImportJobStatus.FAILED
+            else series_found,
             series_new=0,
             series_duplicate=i % 3,
             series_imported=series_imported if status != ImportJobStatus.FAILED else 0,
@@ -115,7 +119,9 @@ async def _seed_import_jobs(session: AsyncSession) -> int:
             total_files_found=files_found,
             total_files_matched=int(files_found * 0.9) if status != ImportJobStatus.FAILED else 0,
             total_files_conflict=i % 4,
-            total_files_no_match=int(files_found * 0.1) if status != ImportJobStatus.FAILED else files_found,
+            total_files_no_match=int(files_found * 0.1)
+            if status != ImportJobStatus.FAILED
+            else files_found,
             total_files_imported=files_imported if status != ImportJobStatus.FAILED else 0,
             total_files_failed=0 if status == ImportJobStatus.COMPLETED else files_found,
             scan_started_at=scan_started,
@@ -150,9 +156,11 @@ async def _seed_orphaned_series(session: AsyncSession) -> int:
     """
     existing = (
         await session.execute(
-            select(ImportedSeries).where(
+            select(ImportedSeries)
+            .where(
                 ImportedSeries.status.in_([ImportSeriesStatus.NO_MATCH, ImportSeriesStatus.SKIPPED])
-            ).limit(1)
+            )
+            .limit(1)
         )
     ).scalar_one_or_none()
     if existing:
@@ -161,13 +169,17 @@ async def _seed_orphaned_series(session: AsyncSession) -> int:
 
     # Get completed import jobs to attach orphaned series to
     completed_jobs = (
-        await session.execute(
-            select(ImportJob)
-            .where(ImportJob.status == ImportJobStatus.COMPLETED)
-            .order_by(ImportJob.created_at.desc())
-            .limit(10)
+        (
+            await session.execute(
+                select(ImportJob)
+                .where(ImportJob.status == ImportJobStatus.COMPLETED)
+                .order_by(ImportJob.created_at.desc())
+                .limit(10)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     if not completed_jobs:
         print("  No completed import jobs found. Run import job seed first.")
@@ -254,8 +266,18 @@ async def _seed_orphaned_series(session: AsyncSession) -> int:
     ]
 
     count = 0
-    publishers = ["DC Comics", "Marvel", "Image Comics", "Dark Horse", "IDW Publishing",
-                   "Boom! Studios", "Valiant", "Dynamite", "Aftershock", "Oni Press"]
+    publishers = [
+        "DC Comics",
+        "Marvel",
+        "Image Comics",
+        "Dark Horse",
+        "IDW Publishing",
+        "Boom! Studios",
+        "Valiant",
+        "Dynamite",
+        "Aftershock",
+        "Oni Press",
+    ]
     years = list(range(1985, 2025))
 
     # Orphaned (NO_MATCH) — 45 records
@@ -270,9 +292,7 @@ async def _seed_orphaned_series(session: AsyncSession) -> int:
             raw_publisher=publishers[i % len(publishers)],
             file_count=(i % 30) + 3,
             source_folder=f"/mnt/nas/comics/{name.replace(' ', '_').replace('-', '').lower()}",
-            sample_paths=[
-                f"{name} #{str(n).zfill(3)}.cbz" for n in range(1, min(4, (i % 5) + 2))
-            ],
+            sample_paths=[f"{name} #{str(n).zfill(3)}.cbz" for n in range(1, min(4, (i % 5) + 2))],
             has_files=True,
         )
         session.add(series)
@@ -297,7 +317,10 @@ async def _seed_orphaned_series(session: AsyncSession) -> int:
         count += 1
 
     await session.flush()
-    print(f"  Created {count} orphaned/dismissed series ({len(orphan_names)} orphaned, {len(dismissed_names)} dismissed)")
+    print(
+        f"  Created {count} orphaned/dismissed series "
+        f"({len(orphan_names)} orphaned, {len(dismissed_names)} dismissed)"
+    )
     return count
 
 

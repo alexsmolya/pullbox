@@ -64,7 +64,7 @@ jobs:
         run: npm ci
 
       - name: Rebuild Tailwind CSS
-        run: npx @tailwindcss/cli -i src/pullbox/ui/static/css/input.css -o src/pullbox/ui/static/css/tailwind.css --minify
+        run: npm run css:build
 
       - name: Check for uncommitted CSS changes
         run: |
@@ -134,7 +134,7 @@ jobs:
             --cov=pullbox \
             --cov-report=xml \
             --cov-report=term-missing \
-            --cov-fail-under=60 \
+            --cov-fail-under=90 \
             --junitxml=test-results.xml \
             -v
         env:

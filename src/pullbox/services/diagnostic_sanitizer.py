@@ -33,7 +33,7 @@ def coerce_json_safe(value: object, *, key: str | None = None) -> object:
             str(child_key): coerce_json_safe(child_value, key=str(child_key))
             for child_key, child_value in value.items()
         }
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+    elif isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return [coerce_json_safe(item) for item in value]
     elif isinstance(value, Enum):
         value = str(value)

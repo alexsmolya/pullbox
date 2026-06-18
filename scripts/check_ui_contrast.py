@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 CSS_PATH = ROOT / "src" / "pullbox" / "ui" / "static" / "css" / "input.css"
@@ -57,7 +59,9 @@ TEXT_CHECKS = [
 
 CONTROL_CHECKS = [
     ContrastCheck("pb-text-inverse", "pb-interactive", 4.5, "inverse text on interactive"),
-    ContrastCheck("pb-text-inverse", "pb-interactive-hover", 4.5, "inverse text on interactive hover"),
+    ContrastCheck(
+        "pb-text-inverse", "pb-interactive-hover", 4.5, "inverse text on interactive hover"
+    ),
     ContrastCheck("pb-text-inverse", "pb-brand", 4.5, "inverse text on brand"),
     ContrastCheck("pb-text-inverse", "pb-status-success", 4.5, "inverse text on success"),
     ContrastCheck("pb-text-inverse", "pb-status-warning", 4.5, "inverse text on warning"),
@@ -111,7 +115,9 @@ def extract_block(source: str, selector: str) -> str:
 
 
 def parse_tokens(block: str) -> dict[str, str]:
-    return {match.group("name"): match.group("value").strip() for match in TOKEN_PATTERN.finditer(block)}
+    return {
+        match.group("name"): match.group("value").strip() for match in TOKEN_PATTERN.finditer(block)
+    }
 
 
 def parse_color(raw: str, *, tokens: dict[str, str]) -> tuple[int, int, int, float]:
@@ -188,8 +194,7 @@ def run_checks(theme: str, tokens: dict[str, str], checks: Iterable[ContrastChec
         ratio = contrast_ratio(foreground, background)
         if ratio < check.minimum:
             failures.append(
-                f"{theme}: {check.label} failed at {ratio:.2f}:1 "
-                f"(needs {check.minimum:.2f}:1)"
+                f"{theme}: {check.label} failed at {ratio:.2f}:1 (needs {check.minimum:.2f}:1)"
             )
     return failures
 
@@ -198,17 +203,19 @@ def main() -> int:
     source = CSS_PATH.read_text()
     dark_tokens = parse_tokens(extract_block(source, ':root,\n  [data-theme="dark"]'))
     light_tokens = parse_tokens(extract_block(source, '[data-theme="light"]'))
-    fallback_tokens = parse_tokens(extract_block(source, ':root:not([data-theme])'))
+    fallback_tokens = parse_tokens(extract_block(source, ":root:not([data-theme])"))
 
     failures: list[str] = []
     failures.extend(run_checks("dark", dark_tokens, [*TEXT_CHECKS, *CONTROL_CHECKS, *FOCUS_CHECKS]))
-    failures.extend(run_checks("light", light_tokens, [*TEXT_CHECKS, *CONTROL_CHECKS, *FOCUS_CHECKS]))
+    failures.extend(
+        run_checks("light", light_tokens, [*TEXT_CHECKS, *CONTROL_CHECKS, *FOCUS_CHECKS])
+    )
 
     for token in LIGHT_SYNC_TOKENS:
         if light_tokens[token] != fallback_tokens[token]:
             failures.append(
                 f"light fallback drift: {token} is {fallback_tokens[token]} in system fallback "
-                f"but {light_tokens[token]} in [data-theme=\"light\"]"
+                f'but {light_tokens[token]} in [data-theme="light"]'
             )
 
     if failures:

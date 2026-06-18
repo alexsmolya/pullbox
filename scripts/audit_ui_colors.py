@@ -3,11 +3,10 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-import re
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -97,7 +96,10 @@ UTILITY_RE = re.compile(
     r"(?:bg|text|border|divide|ring|placeholder|from|via|to|stroke|fill|accent)-"
     r"(?:pb-[\w-]+|surface(?:-\d+)?|pb-\d+|(?:"
     + "|".join(sorted(PALETTE_FAMILIES))
-    + r")(?:-\d+)?(?:/\[[^\]]+\]|/\d+)?|\[#[0-9A-Fa-f]{3,8}\](?:/\d+)?|white(?:/\d+)?|black(?:/\d+)?|transparent|current|inherit)))"
+    + (
+        r")(?:-\d+)?(?:/\[[^\]]+\]|/\d+)?|\[#[0-9A-Fa-f]{3,8}\](?:/\d+)?"
+        r"|white(?:/\d+)?|black(?:/\d+)?|transparent|current|inherit)))"
+    )
 )
 
 HEX_RE = re.compile(r"#[0-9A-Fa-f]{3,8}")
@@ -255,9 +257,7 @@ def main() -> None:
         print_section(f"{category} Tokens")
         for token, count in token_counts.most_common(25):
             sample = next(f for f in items if f.token == token)
-            print(
-                f"{count:>3}  {token:<28} {sample.file}:{sample.line_no}"
-            )
+            print(f"{count:>3}  {token:<28} {sample.file}:{sample.line_no}")
 
     print_section("High-Signal Samples")
     seen: set[tuple[str, str]] = set()

@@ -88,7 +88,14 @@ async def enable_debug_logging_response(
     """Enable temporary debug logging with auto-expiry."""
     result = await session.execute(
         select(SystemConfig).where(
-            SystemConfig.key.in_(("log_level", "log_level_base", "log_level_override"))
+            SystemConfig.key.in_(
+                (
+                    "log_level",
+                    "log_level_base",
+                    "log_level_override",
+                    "log_level_override_expires",
+                )
+            )
         )
     )
     cfg = {row.key: row for row in result.scalars().all()}

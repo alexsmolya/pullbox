@@ -238,7 +238,7 @@ def build_intervention_item_meta(pending_match: Any) -> dict[str, object]:
     reason_labels = [INTERVENTION_REASON_LABELS.get(code, "Needs review") for code in reason_codes]
     similarity = details.get("series_similarity")
     similarity_pct = None
-    if isinstance(similarity, (float, int)):
+    if isinstance(similarity, float | int):
         similarity_pct = round(float(similarity) * 100, 1)
 
     indexer = getattr(pending_match, "indexer", None)

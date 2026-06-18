@@ -47,9 +47,7 @@ def extract_changelog_section(markdown: str, version: str) -> str:
 
     section = "\n".join(lines[start_index:end_index]).strip()
     if not _has_release_content(section):
-        raise ChangelogSectionError(
-            f"CHANGELOG.md release section for {version!r} is empty."
-        )
+        raise ChangelogSectionError(f"CHANGELOG.md release section for {version!r} is empty.")
 
     return f"{section}\n"
 

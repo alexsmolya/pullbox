@@ -19,7 +19,7 @@ def format_duration_ms(value: int | float) -> str:
 
 def format_duration_ms_label(value: object, *, fallback: str = "—") -> str:
     """Format a maybe-numeric millisecond value or return a fallback label."""
-    if not isinstance(value, (int, float)):
+    if not isinstance(value, int | float):
         return fallback
     return format_duration_ms(float(value))
 

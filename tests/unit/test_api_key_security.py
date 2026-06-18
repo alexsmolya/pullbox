@@ -94,6 +94,10 @@ class TestAPIKeyNameNormalization:
         with pytest.raises(ValueError, match="must not be blank"):
             normalize_api_key_name(name)
 
+    def test_rejects_api_key_name_over_max_length(self) -> None:
+        with pytest.raises(ValueError, match="at most 100 characters"):
+            normalize_api_key_name("x" * 101)
+
     def test_schema_normalizes_api_key_name(self) -> None:
         body = APIKeyCreate(name="  Kitchen   Display  ")
 

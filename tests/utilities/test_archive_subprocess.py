@@ -4,22 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import zipfile
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from pullbox.core.exceptions import JobCancelledError, JobPausedError
+from pullbox.utilities.executors import archive_subprocess
 from pullbox.utilities.executors.archive_subprocess import (
     _raise_worker_error,
     _run_archive_operation,
     convert_file_interruptible,
     embed_comicinfo_in_cbz_interruptible,
     materialize_cbz_with_comicinfo_interruptible,
+    transfer_file_interruptible,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _create_test_cbz(path: Path, *, include_comicinfo: bool = False) -> Path:
@@ -277,3 +278,361 @@ def test_raise_worker_error_normalizes_corrupt_cbr_without_payload() -> None:
     assert "Alice in Leatherland 001.cbr" in message
     assert "Try re-downloading or replacing the file" in message
     assert "payload=" not in message
+
+
+@pytest.mark.asyncio
+async def test_transfer_file_interruptible_reports_progress_and_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.cbz"
+    target = tmp_path / "library" / "target.cbz"
+    source.write_bytes(b"source-bytes")
+    progress_events: list[tuple[str, int, int, str]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+            return (json.dumps({"target_path": str(target)}).encode(), b"")
+
+    async def fake_create_subprocess_exec(*_args: Any, **_kwargs: Any) -> FakeProcess:
+        return FakeProcess()
+
+    def capture_progress(stage: str, current: int, total: int, unit: str) -> None:
+        progress_events.append((stage, current, total, unit))
+
+    monkeypatch.setattr(
+        "pullbox.utilities.executors.archive_subprocess.asyncio.create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    result = await transfer_file_interruptible(
+        source,
+        target,
+        "copy",
+        progress_callback=capture_progress,
+    )
+
+    assert result == target
+    assert progress_events[-1] == (
+        "transferring",
+        source.stat().st_size,
+        source.stat().st_size,
+        "bytes",
+    )
+
+
+@pytest.mark.asyncio
+async def test_archive_operation_reports_progress_state_and_invalid_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    progress_path = tmp_path / "progress.json"
+    progress_events: list[tuple[str, int, int, str]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            archive_subprocess._write_progress_state(progress_path, "packing", 2, 4, "files")
+            return (b"not-json", b"")
+
+    async def fake_create_subprocess_exec(*_args: Any, **_kwargs: Any) -> FakeProcess:
+        return FakeProcess()
+
+    async def capture_progress(stage: str, current: int, total: int, unit: str) -> None:
+        progress_events.append((stage, current, total, unit))
+
+    monkeypatch.setattr(
+        "pullbox.utilities.executors.archive_subprocess.asyncio.create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid JSON"):
+        await _run_archive_operation(
+            "embed",
+            {"cbz_path": "/tmp/source.cbz"},
+            progress_state_path=progress_path,
+            progress_callback=capture_progress,
+        )
+
+    assert progress_events == [("packing", 2, 4, "files")]
+    assert not progress_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_terminate_worker_process_handles_completed_and_kill_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed_task = asyncio.create_task(asyncio.sleep(0, result=(b"{}", b"")))
+    completed_proc = type("CompletedProc", (), {"returncode": 0})()
+    await archive_subprocess._terminate_worker_process(completed_proc, completed_task)
+
+    class HangingProcess:
+        returncode: int | None = None
+
+        def __init__(self) -> None:
+            self.done = asyncio.Event()
+            self.terminate_called = False
+            self.kill_called = False
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            await self.done.wait()
+            return (b"{}", b"")
+
+        def terminate(self) -> None:
+            self.terminate_called = True
+
+        def kill(self) -> None:
+            self.kill_called = True
+            self.returncode = 137
+            self.done.set()
+
+    async def fake_wait_for(_awaitable: object, timeout: float) -> object:
+        raise TimeoutError
+
+    proc = HangingProcess()
+    task = asyncio.create_task(proc.communicate())
+    monkeypatch.setattr(archive_subprocess.asyncio, "wait_for", fake_wait_for)
+
+    await archive_subprocess._terminate_worker_process(proc, task)
+
+    assert proc.terminate_called is True
+    assert proc.kill_called is True
+
+
+def test_progress_state_cleanup_and_worker_error_branches(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.json"
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{", encoding="utf-8")
+    incomplete = tmp_path / "incomplete.json"
+    incomplete.write_text(json.dumps({"stage": "packing", "current": 1}), encoding="utf-8")
+    bad_numbers = tmp_path / "bad-numbers.json"
+    bad_numbers.write_text(
+        json.dumps({"stage": "packing", "current": "nope", "total": 2, "unit": "files"}),
+        encoding="utf-8",
+    )
+    valid = tmp_path / "valid.json"
+    archive_subprocess._write_progress_state(valid, "packing", 1, 2, "files")
+
+    assert archive_subprocess._read_progress_state(missing) is None
+    assert archive_subprocess._read_progress_state(invalid) is None
+    assert archive_subprocess._read_progress_state(incomplete) is None
+    assert archive_subprocess._read_progress_state(bad_numbers) is None
+    assert archive_subprocess._read_progress_state(valid) == ("packing", 1, 2, "files")
+
+    cleanup_dir = tmp_path / "cleanup-dir"
+    cleanup_dir.mkdir()
+    cleanup_file = tmp_path / "cleanup.tmp"
+    cleanup_file.write_text("delete me")
+    archive_subprocess._cleanup_paths([cleanup_dir, cleanup_file, tmp_path / "gone.tmp"])
+    assert not cleanup_dir.exists()
+    assert not cleanup_file.exists()
+
+    for exc_type, expected in (
+        ("FileNotFoundError", FileNotFoundError),
+        ("FileExistsError", FileExistsError),
+        ("ValueError", ValueError),
+    ):
+        with pytest.raises(expected):
+            _raise_worker_error(
+                "embed",
+                {"cbz_path": "/tmp/source.cbz"},
+                b"",
+                json.dumps({"type": exc_type, "message": "boom"}).encode(),
+                returncode=1,
+            )
+
+    with pytest.raises(RuntimeError, match="signal 15"):
+        _raise_worker_error("embed", {}, b"", b"", returncode=-15)
+    with pytest.raises(RuntimeError, match="signal 2"):
+        _raise_worker_error("embed", {}, b"", b"", returncode=130)
+    with pytest.raises(RuntimeError, match="status 2"):
+        _raise_worker_error("embed", {}, b"", b"", returncode=2)
+    assert archive_subprocess._is_corrupt_archive_error("", "CRC check failed") is True
+    assert archive_subprocess._is_corrupt_archive_error("", "ordinary failure") is False
+    assert "extractor could not read" in archive_subprocess._format_corrupt_archive_worker_message(
+        tmp_path / "broken.cbr",
+        "",
+    )
+
+
+def test_worker_main_dispatches_and_reports_usage(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(SystemExit, match="usage:"):
+        archive_subprocess._worker_main([])
+
+    monkeypatch.setattr(
+        archive_subprocess,
+        "_worker_convert",
+        lambda payload: {"target_path": payload["target_path"]},
+    )
+    assert (
+        archive_subprocess._worker_main(
+            ["--worker", "convert", json.dumps({"target_path": "/tmp/out.cbz"})]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["target_path"] == "/tmp/out.cbz"
+
+    assert archive_subprocess._worker_main(["--worker", "unknown", "{}"]) == 1
+    error_payload = json.loads(capsys.readouterr().err)
+    assert error_payload["type"] == "ValueError"
+    assert "Unsupported archive worker operation" in error_payload["message"]
+
+
+def test_worker_helpers_write_progress_and_transfer_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.cbz"
+    target = tmp_path / "target.cbz"
+    source.write_text("comic")
+    progress_path = tmp_path / "progress.json"
+
+    def fake_convert_sync(
+        _source: Path,
+        _target_format: str,
+        target_path: Path,
+        *,
+        progress_callback: Any,
+        **_kwargs: Any,
+    ) -> Path:
+        progress_callback("packing", 1, 1, "files")
+        target_path.write_text("converted")
+        return target_path
+
+    monkeypatch.setattr(
+        "pullbox.utilities.executors.file_converter._convert_sync",
+        fake_convert_sync,
+    )
+    converted = archive_subprocess._worker_convert(
+        {
+            "source": str(source),
+            "target_format": "cbz",
+            "target_path": str(target),
+            "progress_path": str(progress_path),
+        }
+    )
+    assert converted == {"target_path": str(target)}
+    assert archive_subprocess._read_progress_state(progress_path) == ("packing", 1, 1, "files")
+
+    transfer_target = tmp_path / "copy" / "copied.cbz"
+    assert archive_subprocess._worker_transfer(
+        {"source": str(source), "target": str(transfer_target), "method": "copy"}
+    ) == {"target_path": str(transfer_target)}
+    assert transfer_target.read_text() == "comic"
+
+    def fake_embed_comicinfo_in_cbz(
+        _cbz_path: Path,
+        _data: dict[str, Any],
+        *,
+        progress_callback: Any,
+        **_kwargs: Any,
+    ) -> bool:
+        progress_callback("rewriting", 1, 1, "entries")
+        return True
+
+    def fake_materialize_cbz_with_comicinfo(
+        _source: Path,
+        _target: Path,
+        _data: dict[str, Any],
+        *,
+        progress_callback: Any,
+        **_kwargs: Any,
+    ) -> bool:
+        progress_callback("rewriting", 2, 2, "entries")
+        return False
+
+    monkeypatch.setattr(
+        "pullbox.utilities.comicinfo.embed_comicinfo_in_cbz",
+        fake_embed_comicinfo_in_cbz,
+    )
+    monkeypatch.setattr(
+        "pullbox.utilities.comicinfo.materialize_cbz_with_comicinfo",
+        fake_materialize_cbz_with_comicinfo,
+    )
+    assert archive_subprocess._worker_embed(
+        {
+            "cbz_path": str(source),
+            "data": {"Series": "Test"},
+            "temp_path": str(tmp_path / "tmp.cbz"),
+            "progress_path": str(progress_path),
+        }
+    ) == {"changed": True}
+    assert archive_subprocess._read_progress_state(progress_path) == ("rewriting", 1, 1, "entries")
+    assert archive_subprocess._worker_materialize_embed(
+        {
+            "source": str(source),
+            "target": str(target),
+            "data": {"Series": "Test"},
+            "transfer_method": "copy",
+            "temp_path": str(tmp_path / "tmp.cbz"),
+            "progress_path": str(progress_path),
+        }
+    ) == {"changed": False}
+    assert archive_subprocess._read_progress_state(progress_path) == ("rewriting", 2, 2, "entries")
+
+    hardlink_target = tmp_path / "hardlink.cbz"
+    archive_subprocess._transfer_sync(source, hardlink_target, "hardlink")
+    assert hardlink_target.exists()
+
+    symlink_target = tmp_path / "symlink.cbz"
+    archive_subprocess._transfer_sync(source, symlink_target, "symlink")
+    assert symlink_target.is_symlink()
+
+    with pytest.raises(ValueError, match="Unsupported transfer method"):
+        archive_subprocess._transfer_sync(source, tmp_path / "bad.cbz", "teleport")
+
+
+def test_safe_move_falls_back_on_cross_device_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.cbz"
+    target = tmp_path / "target.cbz"
+    source.write_text("comic")
+
+    def fake_rename(_src: Path, _dst: Path) -> None:
+        error = OSError("cross-device")
+        error.errno = 18
+        raise error
+
+    monkeypatch.setattr(archive_subprocess.os, "rename", fake_rename)
+    monkeypatch.setattr(archive_subprocess.time, "sleep", lambda _seconds: None)
+
+    archive_subprocess._safe_move(source, target)
+
+    assert target.read_text() == "comic"
+    assert not source.exists()
+
+
+def test_copy_with_retries_cleans_partial_file_before_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.cbz"
+    target = tmp_path / "nested" / "target.cbz"
+    source.write_text("comic")
+    calls = 0
+
+    def flaky_copy(src: str, dst: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            Path(dst).write_text("partial")
+            raise FileNotFoundError("temporary source miss")
+        shutil.copyfile(src, dst)
+
+    monkeypatch.setattr(archive_subprocess.shutil, "copy2", flaky_copy)
+    monkeypatch.setattr(archive_subprocess.time, "sleep", lambda _seconds: None)
+
+    archive_subprocess._copy_with_retries(source, target, preserve_metadata=True)
+
+    assert calls == 2
+    assert target.read_text() == "comic"

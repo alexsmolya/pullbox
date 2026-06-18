@@ -378,8 +378,10 @@ async def main() -> None:
 
             await session.refresh(job)
             library_files = (
-                await session.execute(select(LibraryFile).order_by(LibraryFile.file_name))
-            ).scalars().all()
+                (await session.execute(select(LibraryFile).order_by(LibraryFile.file_name)))
+                .scalars()
+                .all()
+            )
             source_format_counts = Counter(
                 path.suffix.lower().lstrip(".")
                 for file_paths in series_files

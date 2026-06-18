@@ -252,7 +252,7 @@ def _check_xml_error(xml_text: str, indexer_name: str) -> None:
     """Check for and raise on Newznab XML error responses."""
     try:
         root = DefusedElementTree.fromstring(xml_text)
-        error_el = root.find("error")
+        error_el = root if root.tag == "error" else root.find("error")
         if error_el is not None:
             code = error_el.get("code", "?")
             description = error_el.get("description", "Unknown error")

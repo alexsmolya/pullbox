@@ -97,10 +97,7 @@ class FakeMetadataProvider:
 
     async def get_issues_for_series(self, series_provider_id: str) -> list[IssueSummary]:
         self.issue_summary_calls += 1
-        return [
-            self._issue_summary(series_provider_id, float(idx))
-            for idx in range(1, 21)
-        ]
+        return [self._issue_summary(series_provider_id, float(idx)) for idx in range(1, 21)]
 
     async def get_issues_for_series_by_numbers(
         self,
@@ -141,8 +138,8 @@ async def main() -> None:
         event_bus=cast("Any", SimpleNamespace()),
     )
     benchmark_service = cast("Any", service)
-    benchmark_service._build_scan_metadata_provider = (
-        lambda _session: CachedImportMetadataProvider(provider)
+    benchmark_service._build_scan_metadata_provider = lambda _session: CachedImportMetadataProvider(
+        provider
     )
 
     archive_read_count = 0

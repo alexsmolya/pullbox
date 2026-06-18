@@ -28,6 +28,8 @@ from urllib.parse import urlparse
 
 import pytest
 import uvicorn
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -136,6 +138,24 @@ def wait_for_htmx(page: Page, *, timeout: int = 5000) -> None:
     waits for the htmx:afterSettle event. If htmx isn't loaded or has
     no pending work, returns immediately.
     """
+    deadline = time.monotonic() + (timeout / 1000)
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            _evaluate_htmx_idle(page, timeout=timeout)
+            return
+        except PlaywrightError as exc:
+            if "Execution context was destroyed" not in str(exc) or attempts >= 3:
+                raise
+
+            remaining_ms = max(250, int((deadline - time.monotonic()) * 1000))
+            with contextlib.suppress(PlaywrightError, PlaywrightTimeoutError):
+                page.wait_for_load_state("domcontentloaded", timeout=remaining_ms)
+
+
+def _evaluate_htmx_idle(page: Page, *, timeout: int) -> None:
+    """Evaluate the HTMX idle promise in the current browser context."""
     page.evaluate(
         """(timeout) => {
             return new Promise((resolve) => {

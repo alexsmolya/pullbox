@@ -41,7 +41,7 @@ def download_client_endpoint_summary(url: str) -> tuple[str, str, str]:
 
 def health_response_or_dash(response_ms: object) -> str:
     """Format a response time unless it is missing or effectively unmeasured."""
-    if not isinstance(response_ms, (int, float)) or float(response_ms) <= 0:
+    if not isinstance(response_ms, int | float) or float(response_ms) <= 0:
         return "—"
     return _health_response_label(response_ms)
 

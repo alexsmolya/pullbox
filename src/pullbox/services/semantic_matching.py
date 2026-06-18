@@ -606,7 +606,7 @@ def _as_float(value: object) -> float | None:
         return None
     if isinstance(value, bool):
         return float(value)
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
     if isinstance(value, str):
         try:

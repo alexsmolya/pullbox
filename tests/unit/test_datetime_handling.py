@@ -15,7 +15,9 @@ Verifies:
 from __future__ import annotations
 
 import os
+import sys
 from datetime import UTC, date, datetime
+from types import ModuleType
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -206,4 +208,36 @@ class TestGetTimezone:
         with patch.dict("os.environ", {}, clear=True):
             tz = get_timezone()
         assert tz is not None
+        get_timezone.cache_clear()
+
+    def test_tzlocal_string_timezone_is_converted(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.core.timezone import get_timezone
+
+        class StringTimezone:
+            def __str__(self) -> str:
+                return "Europe/London"
+
+        fake_tzlocal = ModuleType("tzlocal")
+        fake_tzlocal.get_localzone = lambda: StringTimezone()  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "tzlocal", fake_tzlocal)
+        get_timezone.cache_clear()
+        with patch.dict("os.environ", {}, clear=True):
+            tz = get_timezone()
+        assert str(tz) == "Europe/London"
+        get_timezone.cache_clear()
+
+    def test_tzlocal_failure_falls_back_to_utc(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.core.timezone import get_timezone
+
+        fake_tzlocal = ModuleType("tzlocal")
+
+        def fail_get_localzone() -> ZoneInfo:
+            raise RuntimeError("tzlocal unavailable")
+
+        fake_tzlocal.get_localzone = fail_get_localzone  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "tzlocal", fake_tzlocal)
+        get_timezone.cache_clear()
+        with patch.dict("os.environ", {}, clear=True):
+            tz = get_timezone()
+        assert str(tz) == "UTC"
         get_timezone.cache_clear()

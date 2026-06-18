@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from pullbox.api.v1 import filesystem as filesystem_api
 from pullbox.models import Base
 from pullbox.models.config import SystemConfig
 from pullbox.services.auth_service import SESSION_COOKIE_NAME, AuthService
@@ -204,3 +208,178 @@ async def test_directories_with_only_invalid_allowed_roots_fails_closed(
     assert data["parent"] is None
     assert data["directories"] == []
     assert data["quick_links"] == []
+
+
+def test_allowed_root_helpers_handle_unconstrained_duplicates_and_blanks(tmp_path: Path) -> None:
+    """Allowed-root helpers should be permissive only when no root constraint exists."""
+    child = tmp_path / "library" / "Series"
+    child.mkdir(parents=True)
+
+    assert filesystem_api._is_within_allowed_roots(child, []) is True
+    assert filesystem_api._is_within_allowed_roots(child, [tmp_path]) is True
+    assert filesystem_api._is_within_allowed_roots(tmp_path / "outside", [child]) is False
+
+    roots = filesystem_api._parse_allowed_roots(f" , {tmp_path}, {tmp_path}, /etc, ")
+    assert roots == [tmp_path.resolve()]
+
+
+def test_validate_browsable_path_defensively_blocks_unresolved_parent_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defensive ``..`` guard should fail closed if a path provider preserves traversal."""
+    real_path = Path
+
+    class _ResolvedPath:
+        parts = ("tmp", "..", "secret")
+
+        def __str__(self) -> str:
+            return "/tmp/../secret"
+
+    class _PathFactory:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+        def resolve(self) -> Path | _ResolvedPath:
+            if self.value == "/":
+                return real_path("/").resolve()
+            return _ResolvedPath()
+
+    monkeypatch.setattr(filesystem_api, "Path", _PathFactory)
+
+    assert filesystem_api._validate_browsable_path("/tmp/../secret") == real_path("/").resolve()
+
+
+def test_darwin_quick_links_ignore_unreadable_volumes(tmp_path: Path) -> None:
+    """Unreadable macOS volume listings should not break default quick links."""
+    original_is_dir = Path.is_dir
+
+    def _fake_is_dir(self: Path) -> bool:
+        if str(self) == "/Volumes":
+            return True
+        return original_is_dir(self)
+
+    def _fake_iterdir(self: Path):
+        if str(self) == "/Volumes":
+            raise PermissionError
+        return iter(())
+
+    with (
+        patch("pullbox.api.v1.filesystem.platform.system", return_value="Darwin"),
+        patch("pullbox.api.v1.filesystem.Path.home", return_value=tmp_path),
+        patch.object(Path, "is_dir", _fake_is_dir),
+        patch.object(Path, "iterdir", _fake_iterdir),
+    ):
+        links = filesystem_api._discover_quick_links()
+
+    assert [link.label for link in links] == ["Home", "/", "Volumes"]
+
+
+def test_linux_quick_links_ignore_unreadable_mount_children(tmp_path: Path) -> None:
+    """Unreadable Linux mount child listings should still expose the mount roots."""
+    original_is_dir = Path.is_dir
+
+    def _fake_is_dir(self: Path) -> bool:
+        if str(self) in {"/mnt", "/media"}:
+            return True
+        return original_is_dir(self)
+
+    def _fake_iterdir(self: Path):
+        if str(self) in {"/mnt", "/media"}:
+            raise PermissionError
+        return iter(())
+
+    with (
+        patch("pullbox.api.v1.filesystem.platform.system", return_value="Linux"),
+        patch("pullbox.api.v1.filesystem.Path.home", return_value=tmp_path),
+        patch.object(Path, "is_dir", _fake_is_dir),
+        patch.object(Path, "iterdir", _fake_iterdir),
+    ):
+        links = filesystem_api._discover_quick_links()
+
+    assert [link.label for link in links] == ["Home", "/", "Mounts", "Media"]
+
+
+@pytest.mark.asyncio
+async def test_browse_files_direct_handles_hidden_dirs_and_stat_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct browse helper should skip hidden entries and report size 0 on stat failure."""
+
+    class _Entry:
+        def __init__(
+            self,
+            name: str,
+            *,
+            is_dir: bool = False,
+            is_file: bool = False,
+            stat_raises: bool = False,
+        ) -> None:
+            self.name = name
+            self.suffix = Path(name).suffix
+            self._is_dir = is_dir
+            self._is_file = is_file
+            self._stat_raises = stat_raises
+
+        def __lt__(self, other: object) -> bool:
+            return isinstance(other, _Entry) and self.name < other.name
+
+        def __str__(self) -> str:
+            return f"/virtual/{self.name}"
+
+        def is_dir(self) -> bool:
+            return self._is_dir
+
+        def is_file(self) -> bool:
+            return self._is_file
+
+        def stat(self) -> SimpleNamespace:
+            if self._stat_raises:
+                raise OSError
+            return SimpleNamespace(st_size=123)
+
+    entries = [
+        _Entry(".hidden", is_dir=True),
+        _Entry("Alpha", is_dir=True),
+        _Entry("broken.cbz", is_file=True, stat_raises=True),
+        _Entry("notes.txt", is_file=True),
+    ]
+    monkeypatch.setattr(filesystem_api, "_validate_browsable_path", lambda *_: Path("/virtual"))
+    monkeypatch.setattr(filesystem_api, "_build_quick_links", lambda *_: [])
+    monkeypatch.setattr(Path, "iterdir", lambda *_: iter(entries))
+
+    listing = await filesystem_api.browse_files(
+        object(),
+        object(),
+        path="/unused",
+        roots=None,
+        extensions="cbz",
+    )
+
+    assert [entry.name for entry in listing.directories] == ["Alpha"]
+    assert [(entry.name, entry.size) for entry in listing.files] == [("broken.cbz", 0)]
+    assert listing.quick_links == []
+
+
+@pytest.mark.asyncio
+async def test_browse_files_direct_handles_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PermissionError during file browsing should return an empty listing."""
+    monkeypatch.setattr(filesystem_api, "_validate_browsable_path", lambda *_: Path("/virtual"))
+    monkeypatch.setattr(filesystem_api, "_build_quick_links", lambda *_: [])
+
+    def _raise_permission_error(*_args: object, **_kwargs: object):
+        raise PermissionError
+
+    monkeypatch.setattr(Path, "iterdir", _raise_permission_error)
+
+    listing = await filesystem_api.browse_files(
+        object(),
+        object(),
+        path="/unused",
+        roots=None,
+        extensions="cbz",
+    )
+
+    assert listing.directories == []
+    assert listing.files == []
