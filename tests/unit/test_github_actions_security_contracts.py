@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +18,7 @@ WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DEPENDABOT_CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
 CODEQL_CONFIG = REPO_ROOT / ".github" / "codeql" / "codeql-config.yml"
 GRYPE_CONFIG = REPO_ROOT / ".grype.yaml"
+RELEASE_SYNC_SCRIPT = REPO_ROOT / ".github" / "scripts" / "validate-release-sync-pr.py"
 
 ACTION_REF_RE = re.compile(
     r"""
@@ -36,6 +40,27 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     return data
+
+
+def _load_release_sync_module() -> Any:
+    spec = importlib.util.spec_from_file_location("release_sync_validator", RELEASE_SYNC_SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 def _non_comment_uses_lines(path: Path) -> list[tuple[int, str]]:
@@ -231,6 +256,158 @@ def test_required_gate_workflows_do_not_rerun_on_main_push() -> None:
         assert "push" not in triggers
 
 
+def test_release_sync_fast_path_requires_next_patch_dev_version() -> None:
+    validator = _load_release_sync_module()
+
+    assert validator.extract_version('__version__ = "0.9.10"\n') == "0.9.10"
+    assert validator.expected_next_dev_version("0.9.10") == "0.9.11-dev"
+
+    valid = validator.version_bump_is_release_sync(
+        '__version__ = "0.9.10"\n',
+        '__version__ = "0.9.11-dev"\n',
+    )
+    assert valid.is_sync is True
+
+    unchanged = validator.version_bump_is_release_sync(
+        '__version__ = "0.9.10"\n',
+        '__version__ = "0.9.10"\n',
+    )
+    assert unchanged.is_sync is False
+    assert "0.9.11-dev" in unchanged.reason
+
+    extra_version_file_change = validator.version_bump_is_release_sync(
+        '__version__ = "0.9.10"\nSTARTED_AT = "safe"\n',
+        '__version__ = "0.9.11-dev"\nSTARTED_AT = "changed"\n',
+    )
+    assert extra_version_file_change.is_sync is False
+    assert "beyond the expected version bump" in extra_version_file_change.reason
+
+
+def test_release_sync_validator_accepts_only_main_plus_next_dev_bump(tmp_path: Path) -> None:
+    validator = _load_release_sync_module()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    _git(repo, "init", "--initial-branch=develop")
+    _git(repo, "config", "user.email", "tests@example.invalid")
+    _git(repo, "config", "user.name", "Pullbox Tests")
+    version_file = repo / "src" / "pullbox" / "__init__.py"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text('__version__ = "0.9.9-dev"\n', encoding="utf-8")
+    _git(repo, "add", "src/pullbox/__init__.py")
+    _git(repo, "commit", "-m", "seed develop")
+    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+
+    _git(repo, "switch", "-c", "main")
+    version_file.write_text('__version__ = "0.9.10"\n', encoding="utf-8")
+    _git(repo, "commit", "-am", "release")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    _git(repo, "switch", "-c", "feature/sync-develop-0.9.10")
+    version_file.write_text('__version__ = "0.9.11-dev"\n', encoding="utf-8")
+    _git(repo, "commit", "-am", "dev bump")
+
+    env = {
+        "RELEASE_SYNC_EVENT_NAME": "pull_request",
+        "RELEASE_SYNC_BASE_REF": "develop",
+        "RELEASE_SYNC_HEAD_REF": "feature/sync-develop-0.9.10",
+        "RELEASE_SYNC_REPOSITORY": "pullboxapp/pullbox",
+        "RELEASE_SYNC_HEAD_REPOSITORY": "pullboxapp/pullbox",
+        "RELEASE_SYNC_ACTOR": "maintainer",
+    }
+
+    valid = validator.validate_release_sync_pr(env, repo, fetch_refs=False)
+    assert valid.is_sync is True
+
+    (repo / "README.md").write_text("extra change\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "extra change")
+
+    invalid = validator.validate_release_sync_pr(env, repo, fetch_refs=False)
+    assert invalid.is_sync is False
+    assert "only allows" in invalid.reason
+
+
+def test_release_sync_fast_path_is_wired_to_required_aggregate_workflows() -> None:
+    required_contracts = {
+        "ci.yml": {
+            "aggregate": "ci-required",
+            "heavy": [
+                "quality-gate",
+                "typecheck",
+                "alembic-check",
+                "test",
+                "accessibility",
+                "e2e",
+            ],
+            "message": "heavyweight CI jobs intentionally skipped",
+        },
+        "security.yml": {
+            "aggregate": "security-required",
+            "heavy": ["gitleaks", "dependency-audit", "safety-check", "bandit", "codeql"],
+            "message": "heavyweight security jobs intentionally skipped",
+        },
+        "workflow-hygiene.yml": {
+            "aggregate": "workflow-hygiene-required",
+            "heavy": ["actionlint"],
+            "message": "actionlint intentionally skipped",
+        },
+    }
+
+    for workflow_name, contract in required_contracts.items():
+        workflow_path = WORKFLOW_DIR / workflow_name
+        workflow_text = workflow_path.read_text(encoding="utf-8")
+        data = _load_yaml(workflow_path)
+        jobs = data.get("jobs")
+        assert isinstance(jobs, dict)
+
+        release_sync = jobs.get("release_sync_check")
+        assert isinstance(release_sync, dict)
+        assert release_sync.get("name") == "Release Sync Check"
+        assert release_sync.get("runs-on") == "ubuntu-latest"
+        assert release_sync.get("outputs", {}).get("is_sync") == (
+            "${{ steps.release-sync.outputs.is_sync }}"
+        )
+        assert "git show origin/main:.github/scripts/validate-release-sync-pr.py" in workflow_text
+        assert "python /tmp/pullbox-release-sync-validator.py" in workflow_text
+        assert "python .github/scripts/validate-release-sync-pr.py" not in workflow_text
+
+        aggregate = jobs.get(contract["aggregate"])
+        assert isinstance(aggregate, dict)
+        assert "release_sync_check" in aggregate.get("needs", [])
+        assert "RELEASE_SYNC_PR" in workflow_text
+        assert contract["message"] in workflow_text
+
+        for job_name in contract["heavy"]:
+            job = jobs.get(job_name)
+            assert isinstance(job, dict)
+            needs = job.get("needs")
+            if isinstance(needs, str):
+                needs = [needs]
+            assert "release_sync_check" in needs
+            assert "needs.release_sync_check.outputs.is_sync != 'true'" in str(job.get("if"))
+
+
+def test_docker_validation_skips_trusted_docker_runner_for_release_sync_prs() -> None:
+    workflow_path = WORKFLOW_DIR / "docker-validate.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    data = _load_yaml(workflow_path)
+    jobs = data.get("jobs")
+    assert isinstance(jobs, dict)
+
+    release_sync = jobs.get("release_sync_check")
+    assert isinstance(release_sync, dict)
+    assert release_sync.get("runs-on") == "ubuntu-latest"
+
+    trusted = jobs.get("trusted-production-validate")
+    assert isinstance(trusted, dict)
+    assert trusted.get("needs") == "release_sync_check"
+    assert "needs.release_sync_check.outputs.is_sync != 'true'" in trusted.get("if", "")
+    assert "git show origin/main:.github/scripts/validate-release-sync-pr.py" in workflow_text
+    assert "python /tmp/pullbox-release-sync-validator.py" in workflow_text
+    assert "python .github/scripts/validate-release-sync-pr.py" not in workflow_text
+
+
 def test_trusted_jobs_use_explicit_self_hosted_runner_labels() -> None:
     """Avoid generic self-hosted routing so untrusted code cannot drift onto runners."""
     failures: list[str] = []
@@ -300,6 +477,9 @@ def test_docker_validation_workflow_never_publishes_images() -> None:
     assert isinstance(triggers, dict)
     assert "pull_request" in triggers
     assert "push" not in triggers
+    pull_request = triggers.get("pull_request")
+    assert isinstance(pull_request, dict)
+    assert ".grype.yaml" in pull_request.get("paths", [])
 
     assert "push: true" not in docker_validate
     assert "packages: write" not in docker_validate
@@ -414,6 +594,18 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     metadata_env = metadata_steps[0].get("env")
     assert isinstance(metadata_env, dict)
     assert metadata_env.get("DOCKER_METADATA_ANNOTATIONS_LEVELS") == "manifest,index"
+    metadata_with = metadata_steps[0].get("with")
+    assert isinstance(metadata_with, dict)
+    assert (
+        "org.opencontainers.image.description=Modern comic book management and acquisition platform"
+    ) in metadata_with.get("labels", "")
+    assert (
+        "org.opencontainers.image.description=Modern comic book management and "
+        "acquisition platform for self-hosted environments"
+    ) in metadata_with.get("annotations", "")
+    assert "expected_description = (" in docker_workflow
+    assert "Modern comic book management and acquisition platform for " in docker_workflow
+    assert "self-hosted environments" in docker_workflow
 
     assert sign_job.get("runs-on") == "ubuntu-latest"
     assert sign_job.get("needs") == ["build", "push"]
@@ -443,9 +635,13 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert "digest.txt" in docker_workflow
     assert "actions/upload-artifact@" in docker_workflow
     assert "Validate pushed image metadata" in docker_workflow
+    assert "python3 - <<'PY'" in docker_workflow
+    assert "python - <<'PY'" not in docker_workflow
     assert "org.opencontainers.image.description" in docker_workflow
     assert "attestation-manifest" in docker_workflow
     assert "cosign verify" in docker_workflow
+    assert "verify_image_signature()" in docker_workflow
+    assert "Signature for ${label} was not discoverable yet" in docker_workflow
     assert "--certificate-identity-regexp" in docker_workflow
     assert "docker-release\\.yml" in docker_workflow
     assert "--certificate-oidc-issuer" in docker_workflow

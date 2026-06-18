@@ -23,6 +23,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.10] - 2026-06-18
+
+Corrective release for the `0.9.9` release workflow, which pushed registry
+images but failed while validating the OCI index package description.
+
+### CI / Build
+
+- Docker release metadata validation now checks the full index-level package
+  description that is actually published to GHCR and Docker Hub.
+- Workflow contract tests now guard against release image label and index
+  annotation validation drift.
+
+## [0.9.9] - 2026-06-18
+
+Corrective release for the `0.9.8` release workflow, which pushed registry
+images but failed while validating OCI metadata on the Docker runner.
+
+### CI / Build
+
+- Docker release metadata validation now uses the runner-available `python3`
+  executable instead of assuming a `python` shim exists on the hardened Docker
+  runner.
+- Workflow contract tests now guard the release metadata validation command so
+  future release-only checks stay compatible with the Docker runner image.
+
+## [0.9.8] - 2026-06-18
+
+Release-pipeline hardening focused on making release automation predictable,
+signed, and easier to debug ahead of the v1 release candidate path.
+
+### Testing
+
+- Expanded workflow contract coverage for runner routing, publishing triggers,
+  release metadata, signing requirements, Docker validation, and CI artifacts.
+- Broadened accessibility regression coverage across the app shell, modal,
+  dropdown, import, search, settings, and file-browser flows.
+
+### CI / Build
+
+- Split Docker validation and Docker release publishing into separate
+  workflows so PR validation can never publish registry images.
+- Docker release publishing now runs only from version tags or explicit release
+  dispatches, then signs and verifies GHCR and Docker Hub images with Cosign.
+- Release images now keep SBOM/provenance attestations and include OCI
+  annotations for clearer package metadata.
+- GitHub Release creation now depends on the successful Docker release workflow
+  and validates the signed release digest artifact before publishing notes.
+- Normal `main` merges no longer rerun full CI or publish Docker images after
+  required PR and merge-queue checks have already passed.
+- CI now uploads coverage XML artifacts for every tested Python version, and
+  coverage stays safely above the 90% gate instead of relying on rounded output.
+
+## [0.9.7] - 2026-06-17
+
+Testing and coverage sprint release focused on hardening Pullbox ahead of the
+v1 release candidate path.
+
+### Testing
+
+- Overall Python coverage now clears the 90% v1 gate.
+- Added broad API, provider, service, utility, and UI route branch coverage.
+- Added route and runtime regression coverage for downloads, search, settings,
+  health, library, series, utilities, import conflict review, Docker entrypoint,
+  startup helpers, filesystem browsing, and ComicVine metadata contracts.
+- Stabilized E2E setup visibility and HTMX context-swap expectations.
+
+### CI / Build
+
+- CI and local full-CI coverage checks now enforce the 90% coverage gate.
+- CI now rebuilds Tailwind CSS through the shared newline-preserving build
+  script.
+- Aligned pre-commit Ruff tooling and normalized generated Tailwind output.
+
+### Internal
+
+- Cleaned historical pre-commit drift and secret-like test fixture values.
+
 ## [0.9.6] - 2026-06-17
 
 Corrective patch release for signed Docker image publication after `0.9.5`

@@ -19,6 +19,7 @@ on:
       - "pyproject.toml"
       - "package.json"
       - "package-lock.json"
+      - ".grype.yaml"
       - ".github/workflows/docker-release.yml"
       - ".github/workflows/docker-validate.yml"
       - ".github/workflows/release.yml"
@@ -36,6 +37,40 @@ env:
   PYTHON_DEFAULT: "3.14"
 
 jobs:
+  release_sync_check:
+    name: Release Sync Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      is_sync: ${{ steps.release-sync.outputs.is_sync }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Detect safe post-release sync PR
+        id: release-sync
+        env:
+          RELEASE_SYNC_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_SYNC_BASE_REF: ${{ github.base_ref || '' }}
+          RELEASE_SYNC_HEAD_REF: ${{ github.head_ref || '' }}
+          RELEASE_SYNC_REPOSITORY: ${{ github.repository }}
+          RELEASE_SYNC_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          RELEASE_SYNC_ACTOR: ${{ github.actor }}
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git cat-file -e origin/main:.github/scripts/validate-release-sync-pr.py 2>/dev/null; then
+            echo "is_sync=false" >> "$GITHUB_OUTPUT"
+            echo "reason=trusted release sync validator is not available on origin/main yet" >> "$GITHUB_OUTPUT"
+            echo "release_sync=false"
+            echo "reason=trusted release sync validator is not available on origin/main yet"
+            exit 0
+          fi
+          git show origin/main:.github/scripts/validate-release-sync-pr.py > /tmp/pullbox-release-sync-validator.py
+          python /tmp/pullbox-release-sync-validator.py
+
   untrusted-sanity:
     name: Docker Sanity (untrusted PR)
     if: github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')
@@ -63,7 +98,12 @@ jobs:
 
   trusted-production-validate:
     name: Production Docker Validate (trusted)
-    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    needs: release_sync_check
+    if: >-
+      needs.release_sync_check.outputs.is_sync != 'true' &&
+      (github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'))
     runs-on: [self-hosted, Linux, X64, docker]
     timeout-minutes: 35
     permissions:

@@ -166,6 +166,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.gate.outputs.build-sha }}
             org.opencontainers.image.licenses=GPL-3.0-or-later
+          annotations: |
+            org.opencontainers.image.description=Modern comic book management and acquisition platform for self-hosted environments
 
       - name: Extract version
         id: version
@@ -453,6 +455,8 @@ jobs:
             org.opencontainers.image.revision=${{ needs.build.outputs.build-sha }}
             org.opencontainers.image.licenses=GPL-3.0-or-later
             org.opencontainers.image.version=${{ needs.build.outputs.image-version }}
+          annotations: |
+            org.opencontainers.image.description=Modern comic book management and acquisition platform for self-hosted environments
 
       - name: Extract version
         id: version
@@ -499,7 +503,7 @@ jobs:
           DIGEST: ${{ steps.push-image.outputs.digest }}
         run: |
           docker buildx imagetools inspect "${GHCR_IMAGE}@${DIGEST}" --raw > image-index.json
-          python - <<'PY'
+          python3 - <<'PY'
           import json
           import sys
 
@@ -507,7 +511,10 @@ jobs:
               index = json.load(handle)
 
           annotations = index.get("annotations") or {}
-          expected_description = "Modern comic book management and acquisition platform"
+          expected_description = (
+              "Modern comic book management and acquisition platform for "
+              "self-hosted environments"
+          )
           if annotations.get("org.opencontainers.image.description") != expected_description:
               print("Missing OCI index description annotation.", file=sys.stderr)
               sys.exit(1)
@@ -597,9 +604,8 @@ jobs:
             exit 1
           fi
 
-          cosign sign --yes \
-            "${GHCR_IMAGE}@${DIGEST}" \
-            "${DOCKERHUB_IMAGE}@${DIGEST}"
+          cosign sign --yes "${GHCR_IMAGE}@${DIGEST}"
+          cosign sign --yes "${DOCKERHUB_IMAGE}@${DIGEST}"
 
       - name: Verify published image signatures
         env:
@@ -607,15 +613,32 @@ jobs:
           CERTIFICATE_IDENTITY_REGEXP: ^https://github.com/${{ github.repository }}/\.github/workflows/docker-release\.yml@refs/(tags/v.*|heads/.*)$
           CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
-          cosign verify \
-            --certificate-identity-regexp "${CERTIFICATE_IDENTITY_REGEXP}" \
-            --certificate-oidc-issuer "${CERTIFICATE_OIDC_ISSUER}" \
-            "${GHCR_IMAGE}@${DIGEST}"
+          verify_image_signature() {
+            local image_ref="$1"
+            local label="$2"
+            local attempt
+            local max_attempts=6
 
-          cosign verify \
-            --certificate-identity-regexp "${CERTIFICATE_IDENTITY_REGEXP}" \
-            --certificate-oidc-issuer "${CERTIFICATE_OIDC_ISSUER}" \
-            "${DOCKERHUB_IMAGE}@${DIGEST}"
+            for attempt in $(seq 1 "${max_attempts}"); do
+              if cosign verify \
+                --certificate-identity-regexp "${CERTIFICATE_IDENTITY_REGEXP}" \
+                --certificate-oidc-issuer "${CERTIFICATE_OIDC_ISSUER}" \
+                "${image_ref}"; then
+                return 0
+              fi
+
+              if [ "${attempt}" -eq "${max_attempts}" ]; then
+                echo "::error::Signature for ${label} was not discoverable after ${max_attempts} attempts."
+                return 1
+              fi
+
+              echo "::notice::Signature for ${label} was not discoverable yet; retrying in 10 seconds (${attempt}/${max_attempts})."
+              sleep 10
+            done
+          }
+
+          verify_image_signature "${GHCR_IMAGE}@${DIGEST}" "GHCR"
+          verify_image_signature "${DOCKERHUB_IMAGE}@${DIGEST}" "Docker Hub"
 
       - name: Write release image digest artifact
         env:
