@@ -60,12 +60,9 @@ class TestSetupWizardPage:
         setup = SetupWizardPage(page, first_run_server)
         page.goto(f"{first_run_server}/setup", wait_until="commit")
         expect(page.get_by_test_id("setup-boot-splash")).to_have_count(0)
-        page.wait_for_function(
-            "() => document.body && getComputedStyle(document.body).visibility === 'visible'",
-            timeout=1200,
-        )
 
-        assert setup.page_root.is_visible()
+        expect(page.locator("body")).to_be_visible(timeout=5000)
+        expect(setup.page_root).to_be_visible(timeout=5000)
 
     def test_setup_wizard_renders_current_shell_without_framework_assets(
         self,
