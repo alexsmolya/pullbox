@@ -227,9 +227,11 @@
   </nav>
 
   <button
+    type="button"
     @click="toggleSidebar()"
     data-testid="sidebar-collapse-toggle"
     class="app-sidebar-toggle absolute hidden lg:flex"
+    x-bind:aria-label="sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'"
     x-bind:data-tip="sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'"
     data-tip-pos="right"
     data-tip-size="narrow"

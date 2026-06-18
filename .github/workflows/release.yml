@@ -1,12 +1,12 @@
 ---
 # Pullbox Release Pipeline
-# Creates or updates a GitHub Release after the Docker workflow succeeds for a
-# tagged commit.
+# Creates or updates a GitHub Release after the Docker Release workflow
+# publishes, signs, and verifies images for a tagged commit.
 #
 # Security: All actions pinned to full SHA.
 # See: docs/development/INFRASTRUCTURE.md
-# Trusted release automation stays on the self-hosted runner alongside the
-# Docker publish workflow.
+# Trusted release automation stays on the dedicated CI runner. Image publishing
+# stays isolated in the Docker Release workflow.
 #
 # Pre-release detection: v0.x.x or tag containing hyphen (v1.0.0-rc1)
 
@@ -14,7 +14,7 @@ name: Release
 
 on:
   workflow_run:
-    workflows: ["Docker"]
+    workflows: ["Docker Release"]
     types: [completed]
 
 permissions:
@@ -23,12 +23,12 @@ permissions:
 
 concurrency:
   group: release-${{ github.event.workflow_run.event || github.event_name }}-${{ github.event.workflow_run.head_sha || github.sha || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   create-release:
     name: Create GitHub Release
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, ci]
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     timeout-minutes: 20
     permissions:
@@ -99,7 +99,7 @@ jobs:
         run: |
           DIGEST_FILE="release-image-digest/digest.txt"
           if [ ! -f "${DIGEST_FILE}" ]; then
-            echo "::error::Docker workflow did not publish ${DIGEST_FILE}."
+            echo "::error::Docker Release workflow did not publish ${DIGEST_FILE}."
             exit 1
           fi
 
@@ -223,12 +223,12 @@ jobs:
             echo ""
             echo '```bash'
             echo "cosign verify \\"
-            echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\\.github/workflows/docker\\.yml@refs/tags/${{ steps.version.outputs.tag }}$' \\"
+            echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\\.github/workflows/docker-release\\.yml@refs/tags/${{ steps.version.outputs.tag }}$' \\"
             echo "  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\"
             echo "  ghcr.io/${{ github.repository }}@${{ steps.image-digest.outputs.digest }}"
             echo ""
             echo "cosign verify \\"
-            echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\\.github/workflows/docker\\.yml@refs/tags/${{ steps.version.outputs.tag }}$' \\"
+            echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\\.github/workflows/docker-release\\.yml@refs/tags/${{ steps.version.outputs.tag }}$' \\"
             echo "  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\"
             echo "  docker.io/pullbox/pullbox@${{ steps.image-digest.outputs.digest }}"
             echo '```'

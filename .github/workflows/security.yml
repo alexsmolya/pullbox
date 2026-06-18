@@ -18,8 +18,6 @@ on:
   schedule:
     # Weekly on Monday at 4:30 AM UTC
     - cron: "30 4 * * 1"
-  push:
-    branches: [main]
   pull_request:
     branches: [main, develop]
   merge_group:
@@ -39,7 +37,7 @@ jobs:
   # ──────────────────────────────────────────────
   gitleaks:
     name: Gitleaks
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -126,7 +124,7 @@ jobs:
   # ──────────────────────────────────────────────
   dependency-audit:
     name: pip-audit
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -161,7 +159,7 @@ jobs:
   # ──────────────────────────────────────────────
   safety-check:
     name: Safety Check
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -196,7 +194,7 @@ jobs:
   # ──────────────────────────────────────────────
   bandit:
     name: Bandit
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read

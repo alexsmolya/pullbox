@@ -8,8 +8,6 @@
 name: Workflow Hygiene
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main, develop]
   merge_group:
@@ -26,7 +24,7 @@ concurrency:
 jobs:
   actionlint:
     name: actionlint
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read

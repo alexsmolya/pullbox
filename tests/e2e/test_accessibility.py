@@ -22,7 +22,7 @@ def test_login_page_has_no_wcag_aa_violations(
     assert_no_axe_violations(
         page,
         name="page /login",
-        include=["main"],
+        include=["body"],
         exclude=["#toast-container", ".htmx-indicator"],
     )
 
@@ -61,7 +61,7 @@ def test_authenticated_pages_have_no_wcag_aa_violations(
     assert_no_axe_violations(
         authed_page,
         name=f"page {path}",
-        include=["main"],
+        include=["body"],
         exclude=["#toast-container", ".htmx-indicator"],
     )
 
@@ -92,6 +92,9 @@ def test_settings_confirm_modal_has_no_wcag_aa_violations(
         include=["#pb-confirm-dialog", "#pb-confirm-dialog > div"],
     )
 
+    authed_page.keyboard.press("Escape")
+    authed_page.locator("#pb-confirm-title").wait_for(state="hidden", timeout=5000)
+
 
 def test_settings_dropdown_panel_has_no_wcag_aa_violations(
     authed_page,
@@ -113,6 +116,41 @@ def test_settings_dropdown_panel_has_no_wcag_aa_violations(
         name="settings timezone dropdown",
         include=["[data-testid='settings-ui-timezone-select']"],
     )
+
+    authed_page.keyboard.press("Escape")
+    authed_page.locator("[data-dropdown-select-panel]:visible").wait_for(
+        state="hidden", timeout=5000
+    )
+
+
+def test_donation_modal_has_no_wcag_aa_violations(
+    authed_page,
+    seeded_server: str,  # type: ignore[no-untyped-def]
+) -> None:
+    authed_page.goto(f"{seeded_server}/")
+    authed_page.locator("[data-testid='dashboard-page']").first.wait_for(
+        state="visible", timeout=5000
+    )
+
+    authed_page.locator("[data-testid='header-donations-button']").click()
+    modal = authed_page.locator("[data-testid='donations-modal']").first
+    modal.wait_for(state="visible", timeout=5000)
+
+    authed_page.wait_for_function(
+        """(selector) => document.activeElement === document.querySelector(selector)""",
+        arg="[data-testid='donations-modal-close']",
+        timeout=5000,
+    )
+    authed_page.wait_for_timeout(250)
+
+    assert_no_axe_violations(
+        authed_page,
+        name="donation modal",
+        include=["[data-testid='donations-modal']"],
+    )
+
+    authed_page.keyboard.press("Escape")
+    modal.wait_for(state="hidden", timeout=5000)
 
 
 def test_settings_library_permissions_card_has_no_wcag_aa_violations(

@@ -1,0 +1,187 @@
+---
+# Pullbox Docker Validation Pipeline
+# PR/manual Docker checks prove that image changes build, scan, and smoke-test
+# without publishing anything to GHCR or Docker Hub.
+#
+# Trusted pull requests run the full production Docker Hardened Images build on
+# the dedicated Docker runner. Untrusted pull requests fall back to a reduced
+# public sanity check that does not require secrets or self-hosted runners.
+
+name: Docker Validate
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "docker/**"
+      - "src/**"
+      - "alembic/**"
+      - "pyproject.toml"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/docker-release.yml"
+      - ".github/workflows/docker-validate.yml"
+      - ".github/workflows/release.yml"
+      - ".github/scripts/preflight-runner.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_DEFAULT: "3.14"
+
+jobs:
+  untrusted-sanity:
+    name: Docker Sanity (untrusted PR)
+    if: github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Explain reduced validation
+        run: |
+          echo "Repository secrets are unavailable for fork or Dependabot pull requests."
+          echo "Running a reduced Docker sanity check instead of the trusted Docker Hardened Images build."
+
+      - name: Build local development image
+        run: docker build -f docker/Dockerfile.dev -t pullbox:pr-sanity .
+
+      - name: Inspect built development image
+        run: docker image inspect pullbox:pr-sanity >/dev/null
+
+      - name: Cleanup
+        if: always()
+        run: docker image rm -f pullbox:pr-sanity || true
+
+  trusted-production-validate:
+    name: Production Docker Validate (trusted)
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    runs-on: [self-hosted, Linux, X64, docker]
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Runner preflight
+        run: .github/scripts/preflight-runner.sh docker
+
+      - name: Validate DHI authentication
+        env:
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: |
+          if [ -z "${DHI_USERNAME}" ] || [ -z "${DHI_TOKEN}" ]; then
+            echo "::error::DHI_USERNAME and DHI_TOKEN repository secrets are required to build Docker Hardened Images in CI."
+            exit 1
+          fi
+
+      - name: Log in to DHI
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Build production Docker image
+        run: |
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          GIT_SHA="${GITHUB_SHA}"
+          docker build \
+            -f docker/Dockerfile \
+            -t pullbox:validate \
+            --build-arg BUILD_DATE="${BUILD_DATE}" \
+            --build-arg GIT_SHA="${GIT_SHA}" \
+            --build-arg GIT_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" \
+            --build-arg VERSION="validate-${GIT_SHA::7}" \
+            .
+
+      - name: Inspect built production image
+        run: docker image inspect pullbox:validate >/dev/null
+
+      - name: Run Grype scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: pullbox:validate
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+          config: .grype.yaml
+
+      - name: Verify packaged static assets
+        run: |
+          docker run --rm --entrypoint python pullbox:validate -c '
+          import pullbox.app
+
+          assets = [
+              pullbox.app.STATIC_DIR / "css" / "tailwind.css",
+              pullbox.app.STATIC_DIR / "js" / "htmx.min.js",
+          ]
+          missing = [str(asset) for asset in assets if not asset.is_file()]
+          if missing:
+              raise SystemExit("Missing packaged static assets: " + ", ".join(missing))
+          print("Packaged static assets verified")
+          '
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name pullbox-validate \
+            -p 8585:8585 \
+            -e PULLBOX_SECRET_KEY=docker-validate-secret-key \
+            -e PULLBOX_LOG_LEVEL=WARNING \
+            pullbox:validate
+
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8585/ping > /dev/null 2>&1; then
+              echo "Container healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Container failed to become healthy"
+          docker logs pullbox-validate
+          exit 1
+
+      - name: Write Docker validation summary
+        if: always()
+        run: |
+          {
+            echo "## Docker Validation"
+            echo ""
+            echo "- Production image build: pullbox:validate"
+            echo "- Grype scan: high severity gate"
+            echo "- Smoke test: /ping health check"
+            echo "- Publish: disabled for validation workflow"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect container logs on failure
+        if: failure() || cancelled()
+        run: |
+          mkdir -p test-results/docker-validate
+          docker logs pullbox-validate > test-results/docker-validate/container.log 2>&1 || true
+
+      - name: Upload Docker validation failure artifacts
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docker-validate-failure-artifacts
+          path: test-results/docker-validate/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f pullbox-validate || true
+          docker image rm -f pullbox:validate || true

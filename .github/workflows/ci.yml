@@ -1,7 +1,6 @@
 ---
 # Pullbox CI Pipeline
 # Quality gate — lint, typecheck, test, migration check, accessibility, E2E.
-# Docker builds trigger via workflow_run after CI passes on main.
 #
 # Security: All actions pinned to full SHA. No pull_request_target.
 # See: docs/development/INFRASTRUCTURE.md
@@ -9,19 +8,18 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main, develop]
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHON_DEFAULT: "3.14"
@@ -33,7 +31,7 @@ jobs:
   # ──────────────────────────────────────────────
   quality-gate:
     name: Quality Gate
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -79,7 +77,7 @@ jobs:
   # ──────────────────────────────────────────────
   typecheck:
     name: Type Check
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -104,7 +102,7 @@ jobs:
   # ──────────────────────────────────────────────
   test:
     name: Test (Python ${{ matrix.python-version }})
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     needs: [quality-gate, typecheck, alembic-check]
     timeout-minutes: 30
     permissions:
@@ -141,12 +139,13 @@ jobs:
           PULLBOX_SECRET_KEY: test-ci-key
           PYTEST_WORKERS: ${{ env.PYTEST_WORKERS }}
 
-      - name: Upload coverage report
+      - name: Upload coverage report (Python 3.12 only)
         if: always() && matrix.python-version == '3.12'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-report
+          name: coverage-report-py3.12
           path: coverage.xml
+          if-no-files-found: error
           retention-days: 30
 
       - name: Upload test results
@@ -162,7 +161,7 @@ jobs:
   # ──────────────────────────────────────────────
   alembic-check:
     name: Migration Check
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -207,7 +206,7 @@ jobs:
   # ──────────────────────────────────────────────
   accessibility:
     name: Accessibility Checks
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     needs: [quality-gate, typecheck, alembic-check]
     timeout-minutes: 30
     permissions:
@@ -262,20 +261,32 @@ jobs:
           path: test-results/accessibility-junit.xml
           retention-days: 14
 
-      - name: Upload accessibility artifacts
-        if: failure()
+      - name: Upload accessibility failure artifacts
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: accessibility-artifacts
           path: test-results/
+          if-no-files-found: ignore
           retention-days: 14
+
+      - name: Accessibility job summary
+        if: always()
+        run: |
+          {
+            echo "## Accessibility Checks"
+            echo ""
+            echo "- Contrast audit: semantic color token gate"
+            echo "- Browser audit: marked accessibility E2E coverage"
+            echo "- Failure artifacts: uploaded only when the job fails or is canceled"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────
   # Job 6: E2E Tests (per-browser isolated pytest sessions, after tests pass)
   # ──────────────────────────────────────────────
   e2e:
     name: E2E Tests (${{ matrix.browser }})
-    runs-on: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && 'ubuntu-latest' || (vars.PULLBOX_CHECKS_RUNNER == 'github-hosted' && 'ubuntu-latest' || 'self-hosted') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     needs: [test]
     timeout-minutes: 30
     permissions:
@@ -331,12 +342,23 @@ jobs:
           retention-days: 14
 
       - name: Upload Playwright failure artifacts
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-artifacts-${{ matrix.browser }}
           path: test-results/
+          if-no-files-found: ignore
           retention-days: 14
+
+      - name: E2E job summary
+        if: always()
+        run: |
+          {
+            echo "## E2E Checks (${{ matrix.browser }})"
+            echo ""
+            echo "- Browser: ${{ matrix.browser }}"
+            echo "- Failure artifacts: uploaded only when the job fails or is canceled"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Stable aggregate required check for branch rulesets.
   ci-required:
