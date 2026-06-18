@@ -23,6 +23,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.7] - 2026-06-17
+
+Testing and coverage sprint release focused on hardening Pullbox ahead of the
+v1 release candidate path.
+
+### Testing
+
+- Overall Python coverage now clears the 90% v1 gate.
+- Added broad API, provider, service, utility, and UI route branch coverage.
+- Added route and runtime regression coverage for downloads, search, settings,
+  health, library, series, utilities, import conflict review, Docker entrypoint,
+  startup helpers, filesystem browsing, and ComicVine metadata contracts.
+- Stabilized E2E setup visibility and HTMX context-swap expectations.
+
+### CI / Build
+
+- CI and local full-CI coverage checks now enforce the 90% coverage gate.
+- CI now rebuilds Tailwind CSS through the shared newline-preserving build
+  script.
+- Aligned pre-commit Ruff tooling and normalized generated Tailwind output.
+
+### Internal
+
+- Cleaned historical pre-commit drift and secret-like test fixture values.
+
 ## [0.9.6] - 2026-06-17
 
 Corrective patch release for signed Docker image publication after `0.9.5`
