@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 pytest_plugins = ["conftest_security"]
 
 os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-system-ui")
+
+
+def test_system_task_status_pills_center_their_labels() -> None:
+    """Task status labels like Never run should stay centered in their pill."""
+    input_css = Path("src/pullbox/ui/static/css/input.css").read_text(encoding="utf-8")
+
+    assert (
+        "@apply inline-flex items-center justify-center gap-1 rounded-full px-2 py-0.5 "
+        "text-center text-[11px] font-sans font-medium;"
+    ) in input_css
 
 
 @pytest.mark.asyncio
