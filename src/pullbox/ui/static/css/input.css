@@ -6190,6 +6190,13 @@
   .settings-media-preview-panel {
     background-color: var(--pb-surface-selected);
     border-color: color-mix(in srgb, var(--pb-border-hover) 85%, transparent);
+    min-height: 4.625rem;
+    overflow-wrap: anywhere;
+    transition: opacity 160ms ease, border-color 160ms ease;
+  }
+  .settings-media-preview-panel.is-loading {
+    opacity: 0.68;
+    border-color: color-mix(in srgb, var(--pb-interactive) 30%, var(--pb-border-hover));
   }
   .workflow-step {
     @apply rounded-xl border border-pb-border bg-pb-card px-3 py-3;
