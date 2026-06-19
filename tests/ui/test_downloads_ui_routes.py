@@ -126,6 +126,48 @@ async def _seed_download_history_contract_data(sec_db) -> None:  # type: ignore[
         await session.commit()
 
 
+async def _seed_post_processing_only_history_data(sec_db) -> None:  # type: ignore[no-untyped-def]
+    """Seed successful/processing-failed rows that do not belong to Downloads History."""
+    async with sec_db() as session:
+        series = Series(title="Wolverine", sort_title="wolverine")
+        session.add(series)
+        await session.flush()
+
+        issue_one = Issue(series_id=series.id, issue_number=1.0)
+        issue_two = Issue(series_id=series.id, issue_number=2.0)
+        session.add_all([issue_one, issue_two])
+        await session.flush()
+
+        session.add_all(
+            [
+                DownloadHistory(
+                    title="Wolverine 001 (2026) (Digital).cbz",
+                    state=DownloadState.COMPLETED,
+                    download_client=DownloadClientType.SABNZBD,
+                    download_url="https://example.com/wolverine-001.nzb",
+                    issue_id=issue_one.id,
+                    downloaded_path="/downloads/wolverine-001.cbz",
+                    final_path="/comics/Wolverine/Wolverine 001.cbz",
+                    imported_at=datetime(2026, 4, 3, 20, 10, tzinfo=UTC),
+                    file_size=42_000_000,
+                    updated_at=datetime(2026, 4, 3, 20, 10, tzinfo=UTC),
+                ),
+                DownloadHistory(
+                    title="Wolverine 002 (2026) (Digital).cbz",
+                    state=DownloadState.FAILED,
+                    download_client=DownloadClientType.SABNZBD,
+                    download_url="https://example.com/wolverine-002.nzb",
+                    issue_id=issue_two.id,
+                    downloaded_path="/downloads/wolverine-002.cbz",
+                    error_message="Move failed: destination is not writable",
+                    file_size=43_000_000,
+                    updated_at=datetime(2026, 4, 3, 20, 20, tzinfo=UTC),
+                ),
+            ]
+        )
+        await session.commit()
+
+
 async def _seed_download_queue_contract_data(sec_db) -> None:  # type: ignore[no-untyped-def]
     """Seed an active queue row so the shared queue card contract can be asserted."""
     async with sec_db() as session:
@@ -544,6 +586,30 @@ class TestDownloadsRouteContracts:
         assert response.status_code == 200
         assert "Clear History" in response.text
         assert ">Clear<" not in response.text
+
+    async def test_download_history_empty_state_points_to_post_processing_history(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        await _seed_post_processing_only_history_data(sec_db)
+
+        response = await authenticated_client.get(
+            "/htmx/downloads/history",
+            headers={"HX-Request": "true"},
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="downloads-history-empty"' in response.text
+        assert "0 download-client records" in response.text
+        assert "2 post-processing records" in response.text
+        assert (
+            "Downloads that completed and moved into import/post-processing are shown in "
+            "Post-processing History." in response.text
+        )
+        assert 'href="/post-processing?tab=history"' in response.text
+        assert "Wolverine 001 (2026) (Digital).cbz" not in response.text
+        assert "Wolverine 002 (2026) (Digital).cbz" not in response.text
 
     async def test_download_history_supports_search_and_preserves_query_in_contract(
         self,

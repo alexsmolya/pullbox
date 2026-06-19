@@ -23,6 +23,7 @@ from pullbox.models.series import Series
 from pullbox.services.download_history_classification import (
     download_history_clause,
     post_processing_failure_clause,
+    post_processing_history_clause,
 )
 
 logger = structlog.get_logger(__name__)
@@ -632,6 +633,12 @@ async def load_download_history_context(
         )
     ).scalar_one()
 
+    post_processing_history_total: int = (
+        await session.execute(
+            select(func.count(DownloadHistory.id)).where(post_processing_history_clause())
+        )
+    ).scalar_one()
+
     history_completed_count, history_failed_count, history_cancelled_count = (
         await session.execute(
             select(
@@ -693,6 +700,7 @@ async def load_download_history_context(
         "history_completed_count": int(history_completed_count or 0),
         "history_failed_count": int(history_failed_count or 0),
         "history_cancelled_count": int(history_cancelled_count or 0),
+        "post_processing_history_total": post_processing_history_total,
         "history_pages": history_pages,
         "page": page,
         "status_filter": status or "",

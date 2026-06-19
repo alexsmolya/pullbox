@@ -187,7 +187,12 @@
         <p class="downloads-empty-copy">Try widening the search or clearing one of the active filters.</p>
       {% else %}
         <p class="downloads-empty-title">History is clear</p>
-        <p class="downloads-empty-copy">Completed, failed, and cancelled downloads will appear here.</p>
+        {% if post_processing_history_total > 0 %}
+          <p class="downloads-empty-copy">Download-client history is clear. Downloads that completed and moved into import/post-processing are shown in Post-processing History.</p>
+          <a href="/post-processing?tab=history" class="btn-secondary control-size-sm mt-4 inline-flex">Open Post-processing History</a>
+        {% else %}
+          <p class="downloads-empty-copy">Completed downloads waiting for import, failed downloads before post-processing, and cancelled downloads will appear here.</p>
+        {% endif %}
       {% endif %}
     </div>
   {% endif %}
