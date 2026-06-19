@@ -5157,28 +5157,64 @@
     color: var(--pb-text-tertiary);
     background: linear-gradient(155deg, var(--pb-surface-card) 0%, var(--pb-surface-app) 100%);
   }
-  .series-wall-monitor-dot {
-    position: absolute;
-    top: 9px;
-    left: 9px;
+  .series-monitor-badge {
     width: 1.5rem;
     height: 1.5rem;
     border-radius: 999px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex: 0 0 auto;
     color: var(--pb-text-inverse);
     background: var(--pb-brand-signal);
     border: 2px solid color-mix(in srgb, var(--pb-surface-card) 92%, white);
     box-shadow:
       0 0 0 2px color-mix(in srgb, black 42%, transparent),
       0 10px 22px color-mix(in srgb, black 34%, transparent);
-    z-index: 3;
   }
-  .series-wall-monitor-dot svg {
+  .series-monitor-badge svg {
     width: 0.9rem;
     height: 0.9rem;
     flex: 0 0 auto;
+  }
+  .series-monitor-badge.is-paused {
+    color: var(--pb-text-secondary);
+    background: var(--pb-surface-raised);
+    border-color: var(--pb-border-default);
+    box-shadow: 0 0 0 1px var(--pb-border-subtle);
+  }
+  .series-wall-monitor-dot {
+    position: absolute;
+    top: 9px;
+    left: 9px;
+    z-index: 3;
+  }
+  .pull-list-monitor-toggle {
+    width: 28px;
+    height: 28px;
+    border-width: 1px;
+    border-radius: 6px;
+    box-shadow: none;
+    cursor: pointer;
+    transition:
+      background-color 0.14s ease,
+      border-color 0.14s ease,
+      color 0.14s ease,
+      box-shadow 0.14s ease;
+  }
+  .pull-list-monitor-toggle svg {
+    width: 12px;
+    height: 12px;
+  }
+  .pull-list-monitor-toggle:hover {
+    border-color: color-mix(in srgb, var(--pb-brand-signal) 56%, transparent);
+    background: var(--pb-brand-signal);
+    color: var(--pb-text-inverse);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pb-brand-signal) 14%, transparent);
+  }
+  .pull-list-monitor-toggle:focus-visible {
+    outline: 2px solid var(--pb-focus-outline);
+    outline-offset: 3px;
   }
   .series-wall-selection-control {
     position: absolute;
