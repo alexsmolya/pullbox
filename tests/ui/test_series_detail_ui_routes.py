@@ -108,7 +108,7 @@ async def seeded_series_detail_ui_data(sec_db) -> dict[str, int]:  # type: ignor
         )
 
         await session.commit()
-        return {"series_id": series.id}
+        return {"series_id": series.id, "paused_series_id": child.id}
 
 
 @pytest.mark.asyncio
@@ -178,7 +178,10 @@ class TestSeriesDetailRouteContracts:
         assert 'data-testid="series-detail-actions-title"' in response.text
         assert 'data-testid="series-action-monitor-control"' in response.text
         assert 'data-testid="series-action-monitor-label"' in response.text
+        assert "Pause monitoring for this series" in response.text
         assert 'data-testid="series-action-monitor-toggle"' in response.text
+        assert ':checked="!monitored"' in response.text
+        assert '@change="togglePaused($event.target.checked)"' in response.text
         assert 'data-testid="series-action-refresh"' in response.text
         assert 'data-testid="series-action-search"' in response.text
         assert 'data-testid="series-action-delete"' in response.text
@@ -217,6 +220,24 @@ class TestSeriesDetailRouteContracts:
         assert "window.location.reload()" not in response.text
         assert "window.__autoSearching" not in response.text
         assert "htmx.ajax('POST', '/htmx/series/" not in response.text
+
+    async def test_paused_series_action_switch_uses_paused_semantics(
+        self,
+        authenticated_client,
+        seeded_series_detail_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(
+            f"/series/{seeded_series_detail_ui_data['paused_series_id']}"
+        )
+
+        assert response.status_code == 200
+        assert "monitored: false" in response.text
+        assert 'data-testid="series-action-monitor-label"' in response.text
+        assert "Pause monitoring for this series" in response.text
+        assert 'class="pill pill-neutral">Paused</span>' in response.text
+        assert ':checked="!monitored"' in response.text
+        assert ":aria-checked=\"!monitored ? 'true' : 'false'\"" in response.text
+        assert '@change="togglePaused($event.target.checked)"' in response.text
 
     @pytest.mark.parametrize(
         ("catalog_state", "expected_copy"),
