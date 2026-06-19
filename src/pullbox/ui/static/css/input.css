@@ -6789,6 +6789,9 @@
     box-shadow: inset 0 0 0 1px var(--pb-border-hover);
     transition: background-color 180ms ease, box-shadow 180ms ease;
   }
+  label:has(> .toggle-input + .toggle-switch) {
+    position: relative;
+  }
   .toggle-input {
     position: absolute;
     width: 1px;

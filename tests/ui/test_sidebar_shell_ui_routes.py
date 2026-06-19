@@ -56,6 +56,11 @@ class TestSidebarShellRouteContracts:
         assert "window.Alpine.nextTick" in response.text
         assert "armBootTransitionRelease" in response.text
         assert "releaseBootTransitions" in response.text
+        assert (
+            'id="main-area" class="relative flex h-[100dvh] flex-col overflow-hidden"'
+            in response.text
+        )
+        assert "#main-area { overflow: clip; }" in response.text
         assert 'href="/static/fonts/dm-sans-variable.woff2"' in response.text
         assert 'href="/static/fonts/bricolage-grotesque-800.woff2"' in response.text
         assert 'data-testid="app-sidebar"' in response.text

@@ -115,6 +115,8 @@
     }
     main { min-height: 0; }
     #content { min-height: 0; }
+    /* Keep the shell itself from becoming a focus-scroll container. */
+    #main-area { overflow: clip; }
   </style>
   <script>
     if (localStorage.getItem('sidebarOpen') === 'false' && window.innerWidth >= 1024) {
@@ -143,7 +145,7 @@
   {% endblock %}
 
   {#- ── Main content area ─────────────────────────────────────── -#}
-  <div id="main-area" class="relative flex h-[100dvh] flex-col"
+  <div id="main-area" class="relative flex h-[100dvh] flex-col overflow-hidden"
        :style="mainAreaStyle()"
        hx-boost="true">
 

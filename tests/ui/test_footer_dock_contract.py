@@ -112,3 +112,19 @@ def test_content_scroll_container_renders_footer_clearance_globally() -> None:
     assert "pointer-events: none;" in clearance
     assert "pb-5" not in content_classes
     assert "sm:pb-6" not in content_classes
+
+
+def test_main_area_is_not_a_focus_scroll_container() -> None:
+    html = _base_template()
+
+    assert 'id="main-area" class="relative flex h-[100dvh] flex-col overflow-hidden"' in html
+    assert "#main-area { overflow: clip; }" in html
+
+
+def test_toggle_inputs_are_positioned_inside_their_visible_label() -> None:
+    css = _css()
+    toggle_label = _rule_block(css, "label:has(> .toggle-input + .toggle-switch)")
+    toggle_input = _rule_block(css, ".toggle-input")
+
+    assert "position: relative;" in toggle_label
+    assert "position: absolute;" in toggle_input
