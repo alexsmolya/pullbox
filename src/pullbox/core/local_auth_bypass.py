@@ -52,10 +52,24 @@ def normalize_local_bypass_addresses(raw: str) -> str:
             continue
         try:
             if "/" in value:
-                normalized.append(str(ipaddress.ip_network(value, strict=False)))
+                network = ipaddress.ip_network(value, strict=False)
+                if network.network_address.is_unspecified or network.prefixlen == 0:
+                    raise ValueError(
+                        "Wildcard bind addresses like 0.0.0.0, ::, 0.0.0.0/0, and "
+                        "::/0 are not valid trusted client addresses."
+                    )
+                normalized.append(str(network))
             else:
-                normalized.append(str(ipaddress.ip_address(value)))
+                address = ipaddress.ip_address(value)
+                if address.is_unspecified:
+                    raise ValueError(
+                        "Wildcard bind addresses like 0.0.0.0 and :: are not valid "
+                        "trusted client addresses."
+                    )
+                normalized.append(str(address))
         except ValueError as exc:
+            if "not valid trusted client addresses" in str(exc):
+                raise
             raise ValueError(f"Invalid local bypass address or CIDR: {value}") from exc
     return ", ".join(normalized)
 

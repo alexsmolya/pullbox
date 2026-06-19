@@ -9,7 +9,8 @@ from sqlalchemy import select
 from starlette.responses import Response
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
-from pullbox.core.config_resolver import load_system_config_values
+from pullbox.core.config_resolver import get_runtime_settings, load_system_config_values
+from pullbox.core.local_auth_bypass import resolve_client_ip
 from pullbox.models.config import SystemConfig
 
 page_router = APIRouter()
@@ -104,6 +105,14 @@ async def load_security_tab(session: DbSession, tab: str) -> dict[str, object]:
     return ctx
 
 
+def _add_authentication_request_context(request: Request, tab: str, ctx: dict[str, object]) -> None:
+    """Add request-scoped diagnostics for the authentication settings panel."""
+    if tab != "authentication":
+        return
+    settings = get_runtime_settings()
+    ctx["current_client_ip"] = resolve_client_ip(request, settings.trusted_proxies)
+
+
 def _normalize_security_tab(tab: str) -> str:
     if tab not in _SECURITY_TABS:
         return "authentication"
@@ -120,6 +129,7 @@ async def security_page(
     """Render the security page with tabbed interface."""
     tab = _normalize_security_tab(tab)
     tab_data = await load_security_tab(session, tab)
+    _add_authentication_request_context(request, tab, tab_data)
     return _templates().TemplateResponse(
         request,
         "pages/security.html",
@@ -137,6 +147,7 @@ async def htmx_security_tab(
     """Load a security tab partial via HTMX."""
     tab = _normalize_security_tab(tab)
     tab_data = await load_security_tab(session, tab)
+    _add_authentication_request_context(request, tab, tab_data)
     return _templates().TemplateResponse(
         request,
         "partials/security_content_bundle.html",

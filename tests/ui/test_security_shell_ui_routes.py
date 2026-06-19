@@ -49,6 +49,8 @@ class TestSecurityRouteContracts:
         assert 'data-testid="security-authentication-password-form"' in response.text
         assert "Bypass Account" in response.text
         assert "full operator access without login" in response.text
+        assert "Current request appears as" in response.text
+        assert 'data-testid="security-current-client-ip"' in response.text
 
     async def test_security_htmx_tab_returns_content_bundle(
         self,
