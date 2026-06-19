@@ -1,12 +1,18 @@
 # Pullbox — Docker Compose example
 #
 # Usage:
-#   docker compose up -d
+#   cp docker/.env.example .env
+#   docker compose -f docker/docker-compose.yml --env-file .env up -d
 #
-# config.xml is auto-generated on first run inside the pullbox-data volume.
-# It contains Pullbox's application secret, so keep /data durable and backed up.
-# Keep /data for Pullbox-managed state only. Mount library/download folders
-# separately so SQLite stays off host bind mounts.
+# See docker/.env.example for the complete environment-variable reference.
+# Optional PULLBOX_* overrides should be passed under environment only when you
+# intentionally want the container runtime to manage that setting.
+#
+# config.xml is auto-generated on first run inside the /data mount.
+# It contains Pullbox's application secret, so keep this appdata folder durable
+# and backed up. Keep /data for Pullbox-managed state only. Mount library and
+# download folders separately so database/config files are easy to inspect,
+# copy, and restore without mixing them into the comic library.
 #
 # Recommended multi-system/NAS model:
 # - Mount your shared library path at /comics
@@ -17,20 +23,20 @@
 
 services:
   pullbox:
-    image: ghcr.io/pullboxapp/pullbox:latest
+    image: ${PULLBOX_IMAGE:-ghcr.io/pullboxapp/pullbox:latest}
     container_name: pullbox
     restart: unless-stopped
     ports:
-      - "8585:8585"
+      - "${PULLBOX_HOST_PORT:-8585}:8585"
     volumes:
-      - pullbox-data:/data
-      - /path/to/your/comics:/comics
-      - /path/to/your/shared-downloads:/downloads
-      - /path/to/your/imports:/imports
+      - ${PULLBOX_DATA_PATH:?set PULLBOX_DATA_PATH in .env}:/data
+      - ${COMICS_PATH:?set COMICS_PATH in .env}:/comics
+      - ${DOWNLOADS_PATH:?set DOWNLOADS_PATH in .env}:/downloads
+      - ${IMPORTS_PATH:?set IMPORTS_PATH in .env}:/imports
       # Optional native HTTPS certificate mount. Files must be readable by UID 65532.
       # - /path/to/your/certs:/config/certs:ro
     environment:
-      - TZ=America/New_York
+      - TZ=${TZ:-America/New_York}
       - PULLBOX_DB_URL=sqlite+aiosqlite:////data/pullbox.db
       - PULLBOX_SQLITE_JOURNAL_MODE=WAL
       - PULLBOX_LIBRARY_ROOT=/comics
@@ -46,7 +52,3 @@ services:
       # - PULLBOX_HTTPS_CERT_PATH=/config/certs/pullbox.crt
       # - PULLBOX_HTTPS_KEY_PATH=/config/certs/pullbox.key
       # - PULLBOX_HTTPS_CERT_ROOT=/config/certs
-
-volumes:
-  pullbox-data:
-    name: pullbox-data

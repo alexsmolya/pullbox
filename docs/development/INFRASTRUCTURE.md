@@ -385,7 +385,9 @@ TZ
 
 ### 6.2 Required standard
 
-- `/data` should be a Docker-managed volume or another durable state mount.
+- `/data` should be a visible durable appdata bind mount on local storage so
+  operators can inspect, copy, back up, and restore database backups and
+  `config.xml` without Docker-volume archaeology.
 - `/comics`, `/downloads`, and `/imports` should be explicit host or network
   mounts when those workflows are used.
 - `/data/config.xml` stores the normal Docker application secret and must be
@@ -445,19 +447,17 @@ services:
       # - PULLBOX_HTTPS_CERT_PATH=/config/certs/pullbox.crt
       # - PULLBOX_HTTPS_KEY_PATH=/config/certs/pullbox.key
       # - PULLBOX_HTTPS_CERT_ROOT=/config/certs
-      # Optional pullbox-data override. Leave public default for installs.
+      # Optional Pullbox Data API override. Leave public default for installs.
       # - PULLBOX_DATA_API_BASE_URL=https://api.pullbox.app
       - TZ=America/Los_Angeles
     volumes:
-      - pullbox-data:/data
+      # PULLBOX_DATA_PATH should point to a durable local appdata folder.
+      - ${PULLBOX_DATA_PATH}:/data
       - /path/to/comics:/comics
       - /path/to/shared-downloads:/downloads
       - /path/to/imports:/imports
       # Optional native HTTPS cert/key mount.
       # - /path/to/certs:/config/certs:ro
-
-volumes:
-  pullbox-data:
 ```
 
 ### 6.3 Current repo nuances
@@ -472,6 +472,12 @@ volumes:
 - The production image runs as UID/GID `65532:65532`. Deployments should make
   mounted paths writable by that runtime identity, by a compatible group, or by
   the storage layer's normal container mapping.
+- The production image does not consume `PUID` or `PGID` variables. Do not add a
+  compose `user:` override or LinuxServer-style identity variables unless a
+  deployment intentionally departs from the hardened-image contract.
+- Linux hosts can grant access to existing media folders with ACLs such as
+  `setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/comics`; dedicated
+  Pullbox-only folders may instead be owned by `65532:65532`.
 - Native HTTPS settings can be edited in Settings > General, but env vars
   (`PULLBOX_HTTPS_ENABLED`, `PULLBOX_HTTPS_CERT_PATH`,
   `PULLBOX_HTTPS_KEY_PATH`, and `PULLBOX_HTTPS_CERT_ROOT`) take precedence at
@@ -641,34 +647,23 @@ Create a full `/data` state backup, including `config.xml`, logs, database, and
 database restore-point archives:
 
 ```bash
-docker run --rm \
-  -v pullbox-data:/state \
-  -v "$PWD":/backup \
-  alpine \
-  tar czf /backup/pullbox-state-backup.tgz -C /state .
+tar czf pullbox-state-backup.tgz -C "$PULLBOX_DATA_PATH" .
 ```
 
-Restore a full `/data` state backup into an empty Docker volume before starting
+Restore a full `/data` state backup into an empty appdata folder before starting
 the replacement container:
 
 ```bash
-docker run --rm \
-  -v pullbox-data:/state \
-  -v "$PWD":/backup \
-  alpine \
-  sh -lc 'cd /state && tar xzf /backup/pullbox-state-backup.tgz'
+mkdir -p "$PULLBOX_DATA_PATH"
+tar xzf pullbox-state-backup.tgz -C "$PULLBOX_DATA_PATH"
 ```
 
 ```bash
-docker run --rm -it -v pullbox-data:/state alpine sh
+ls -la "$PULLBOX_DATA_PATH"
 ```
 
 ```bash
-docker run --rm \
-  -v pullbox-data:/state \
-  -v "$PWD":/out \
-  alpine \
-  sh -lc 'cp -R /state/logs /out/pullbox-logs'
+cp -R "$PULLBOX_DATA_PATH/logs" ./pullbox-logs
 ```
 
 Reset a user's password from a production or production-like container:
