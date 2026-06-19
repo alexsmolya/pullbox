@@ -14518,7 +14518,7 @@ function seriesDetailPage(config) {
           if (!response.ok) throw new Error("Failed to update monitoring");
           self.monitored = enabled;
           self.dispatchToast(
-            enabled ? "Monitoring resumed" : "Series paused",
+            enabled ? "Monitoring enabled" : "Monitoring disabled",
             enabled ? "success" : "info"
           );
           setTimeout(function () {
@@ -14529,10 +14529,6 @@ function seriesDetailPage(config) {
           self.dispatchToast("Failed to update monitoring", "error");
           self.saving = false;
         });
-    },
-
-    togglePaused: function (paused) {
-      this.toggleMonitoring(!paused);
     },
 
     refreshMetadata: function () {

@@ -8,18 +8,18 @@
     class="series-domain-inline-toggle"
     x-bind:class="saving ? 'pointer-events-none opacity-50' : ''"
   >
-    <span data-testid="series-action-monitor-label" class="series-domain-inline-toggle-label">Paused</span>
+    <span data-testid="series-action-monitor-label" class="series-domain-inline-toggle-label">Monitored</span>
     <label class="relative inline-flex shrink-0 items-center" data-testid="series-action-monitor-toggle">
       <input
         type="checkbox"
         role="switch"
         class="peer toggle-input"
-        aria-label="Pause monitoring for this series"
-        :checked="!monitored"
-        :aria-checked="!monitored ? 'true' : 'false'"
-        {% if not series.monitored %}checked{% endif %}
+        aria-label="Toggle monitoring for this series"
+        :checked="monitored"
+        :aria-checked="monitored ? 'true' : 'false'"
+        {% if series.monitored %}checked{% endif %}
         :disabled="saving"
-        @change="togglePaused($event.target.checked)"
+        @change="toggleMonitoring($event.target.checked)"
       >
       <span class="toggle-switch"></span>
     </label>

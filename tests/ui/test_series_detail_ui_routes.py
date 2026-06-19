@@ -18,6 +18,13 @@ os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-series-detail-u
 _EN_DASH = "\u2013"
 
 
+def _series_monitor_control_html(html: str) -> str:
+    """Return the isolated monitor toggle markup from the rendered series page."""
+    start = html.index('data-testid="series-action-monitor-control"')
+    end = html.index('data-testid="series-action-search"', start)
+    return html[start:end]
+
+
 @pytest.fixture
 async def seeded_series_detail_ui_data(sec_db) -> dict[str, int]:  # type: ignore[no-untyped-def]
     """Seed a series-detail dataset with issues, related series, and file data."""
@@ -178,10 +185,13 @@ class TestSeriesDetailRouteContracts:
         assert 'data-testid="series-detail-actions-title"' in response.text
         assert 'data-testid="series-action-monitor-control"' in response.text
         assert 'data-testid="series-action-monitor-label"' in response.text
-        assert "Pause monitoring for this series" in response.text
+        monitor_control_html = _series_monitor_control_html(response.text)
+        assert ">Monitored</span>" in monitor_control_html
+        assert "Toggle monitoring for this series" in monitor_control_html
         assert 'data-testid="series-action-monitor-toggle"' in response.text
-        assert ':checked="!monitored"' in response.text
-        assert '@change="togglePaused($event.target.checked)"' in response.text
+        assert ':checked="monitored"' in monitor_control_html
+        assert ":aria-checked=\"monitored ? 'true' : 'false'\"" in monitor_control_html
+        assert '@change="toggleMonitoring($event.target.checked)"' in monitor_control_html
         assert 'data-testid="series-action-refresh"' in response.text
         assert 'data-testid="series-action-search"' in response.text
         assert 'data-testid="series-action-delete"' in response.text
@@ -221,7 +231,7 @@ class TestSeriesDetailRouteContracts:
         assert "window.__autoSearching" not in response.text
         assert "htmx.ajax('POST', '/htmx/series/" not in response.text
 
-    async def test_paused_series_action_switch_uses_paused_semantics(
+    async def test_unmonitored_series_action_switch_uses_positive_monitoring_semantics(
         self,
         authenticated_client,
         seeded_series_detail_ui_data,
@@ -233,11 +243,13 @@ class TestSeriesDetailRouteContracts:
         assert response.status_code == 200
         assert "monitored: false" in response.text
         assert 'data-testid="series-action-monitor-label"' in response.text
-        assert "Pause monitoring for this series" in response.text
+        monitor_control_html = _series_monitor_control_html(response.text)
+        assert ">Monitored</span>" in monitor_control_html
+        assert "Toggle monitoring for this series" in monitor_control_html
         assert 'class="pill pill-neutral">Paused</span>' in response.text
-        assert ':checked="!monitored"' in response.text
-        assert ":aria-checked=\"!monitored ? 'true' : 'false'\"" in response.text
-        assert '@change="togglePaused($event.target.checked)"' in response.text
+        assert ':checked="monitored"' in monitor_control_html
+        assert ":aria-checked=\"monitored ? 'true' : 'false'\"" in monitor_control_html
+        assert '@change="toggleMonitoring($event.target.checked)"' in monitor_control_html
 
     @pytest.mark.parametrize(
         ("catalog_state", "expected_copy"),
