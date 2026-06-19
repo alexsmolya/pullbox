@@ -9,7 +9,7 @@
       title_style="plain"
     ) %}
       <button @click="openNewKeyForm()"
-              x-show="!showNewKeyForm"
+              x-show="!showKeyActionPanel()"
               class="btn-primary gap-2">
         <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
@@ -19,33 +19,39 @@
     {% endcall %}
 
     <div class="section-body space-y-4">
-      <div x-show="showNewKeyForm" x-transition class="rounded-xl border border-pb-border-hover bg-pb-card-hover/50 p-4 space-y-4">
-        <h4 class="text-sm font-medium text-pb-text">New API Key</h4>
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label class="mb-1 block text-xs text-pb-text-sec">Key Name</label>
-            <input type="text" x-model="newKeyName" placeholder="e.g. Home Server" class="input-pb">
+      <div
+        x-show="showKeyActionPanel()"
+        x-cloak
+        data-testid="security-api-key-action-panel"
+        class="rounded-xl border p-4 space-y-4"
+        :class="createdKey ? 'border-pb-success/30 bg-pb-success-dim' : 'border-pb-border-hover bg-pb-card-hover/50'"
+      >
+        <div x-show="showNewKeyForm && !createdKey" data-testid="security-api-key-create-form">
+          <h4 class="text-sm font-medium text-pb-text">New API Key</h4>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="mb-1 block text-xs text-pb-text-sec">Key Name</label>
+              <input type="text" x-model="newKeyName" placeholder="e.g. Home Server" class="input-pb">
+            </div>
+            <div>
+              <label class="mb-1 block text-xs text-pb-text-sec">Expires (optional)</label>
+              <input type="date" x-model="newKeyExpiry" :min="todayDate()" class="input-pb">
+            </div>
           </div>
-          <div>
-            <label class="mb-1 block text-xs text-pb-text-sec">Expires (optional)</label>
-            <input type="date" x-model="newKeyExpiry" :min="todayDate()" class="input-pb">
+          <div class="mt-4 flex flex-wrap items-center gap-2">
+            <button @click="generateKey()" :disabled="!newKeyName.trim() || keyGenerating" class="btn-primary btn-sm">
+              <span x-show="!keyGenerating">Generate</span>
+              <span x-show="keyGenerating">Generating...</span>
+            </button>
+            <button @click="cancelNewKey()" class="btn-ghost btn-sm">Cancel</button>
           </div>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <button @click="generateKey()" :disabled="!newKeyName.trim() || keyGenerating" class="btn-primary btn-sm">
-            <span x-show="!keyGenerating">Generate</span>
-            <span x-show="keyGenerating">Generating...</span>
-          </button>
-          <button @click="cancelNewKey()" class="btn-ghost btn-sm">Cancel</button>
-        </div>
-      </div>
 
-      <template x-if="createdKey">
-        <div class="rounded-xl border border-pb-success/30 bg-pb-success-dim p-4">
+        <div x-show="createdKey" data-testid="security-api-key-created-panel">
           <p class="mb-2 text-xs font-medium text-pb-success">API key generated. Copy it now because it won&apos;t be shown again.</p>
           <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
             <code class="flex-1 break-all rounded-md border border-pb-border bg-pb-surface px-3 py-2 text-xs font-mono text-pb-text"
-                  x-text="createdKey"></code>
+                  x-text="createdKey || ''"></code>
             <div class="flex shrink-0 items-center gap-2">
               <button
                 @click="copyKey(createdKey)"
@@ -57,7 +63,7 @@
                 <span x-show="keyCopied" class="text-pb-success">Copied!</span>
               </button>
               <button
-                @click="createdKey = null"
+                @click="dismissCreatedKey()"
                 class="btn-ghost btn-sm"
                 data-testid="security-api-key-dismiss-btn"
                 type="button"
@@ -67,113 +73,107 @@
             </div>
           </div>
         </div>
-      </template>
+      </div>
 
       <div class="downloads-table-wrap is-clipped">
-        <template x-if="apiKeys.length > 0">
-          <div class="overflow-x-auto">
-            <table class="downloads-table min-w-[760px]" data-testid="security-api-access-table">
-              <thead>
+        <div x-show="apiKeys.length > 0" x-cloak class="overflow-x-auto">
+          <table class="downloads-table min-w-[760px]" data-testid="security-api-access-table">
+            <thead>
+              <tr>
+                <th :aria-sort="ariaSort('name')">
+                  <button
+                    type="button"
+                    data-testid="security-api-access-sort-name"
+                    @click="sortBy('name')"
+                    class="downloads-sort-btn"
+                    :class="sortField === 'name' ? 'is-active' : ''"
+                  >
+                    <span>Name</span>
+                    <svg class="downloads-sort-chevron" :class="sortField === 'name' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                  </button>
+                </th>
+                <th class="w-[136px]" :aria-sort="ariaSort('created_at')">
+                  <button
+                    type="button"
+                    data-testid="security-api-access-sort-created"
+                    @click="sortBy('created_at')"
+                    class="downloads-sort-btn"
+                    :class="sortField === 'created_at' ? 'is-active' : ''"
+                  >
+                    <span>Created</span>
+                    <svg class="downloads-sort-chevron" :class="sortField === 'created_at' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                  </button>
+                </th>
+                <th class="w-[136px]" :aria-sort="ariaSort('last_used_at')">
+                  <button
+                    type="button"
+                    data-testid="security-api-access-sort-last-used"
+                    @click="sortBy('last_used_at')"
+                    class="downloads-sort-btn"
+                    :class="sortField === 'last_used_at' ? 'is-active' : ''"
+                  >
+                    <span>Last Used</span>
+                    <svg class="downloads-sort-chevron" :class="sortField === 'last_used_at' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                  </button>
+                </th>
+                <th class="w-[120px]" :aria-sort="ariaSort('expires_at')">
+                  <button
+                    type="button"
+                    data-testid="security-api-access-sort-expires"
+                    @click="sortBy('expires_at')"
+                    class="downloads-sort-btn"
+                    :class="sortField === 'expires_at' ? 'is-active' : ''"
+                  >
+                    <span>Expires</span>
+                    <svg class="downloads-sort-chevron" :class="sortField === 'expires_at' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                  </button>
+                </th>
+                <th class="is-right w-[72px]"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="key in sortedApiKeys" :key="key.id">
                 <tr>
-                  <th :aria-sort="ariaSort('name')">
-                    <button
-                      type="button"
-                      data-testid="security-api-access-sort-name"
-                      @click="sortBy('name')"
-                      class="downloads-sort-btn"
-                      :class="sortField === 'name' ? 'is-active' : ''"
-                    >
-                      <span>Name</span>
-                      <svg class="downloads-sort-chevron" :class="sortField === 'name' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
-                      </svg>
-                    </button>
-                  </th>
-                  <th class="w-[136px]" :aria-sort="ariaSort('created_at')">
-                    <button
-                      type="button"
-                      data-testid="security-api-access-sort-created"
-                      @click="sortBy('created_at')"
-                      class="downloads-sort-btn"
-                      :class="sortField === 'created_at' ? 'is-active' : ''"
-                    >
-                      <span>Created</span>
-                      <svg class="downloads-sort-chevron" :class="sortField === 'created_at' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
-                      </svg>
-                    </button>
-                  </th>
-                  <th class="w-[136px]" :aria-sort="ariaSort('last_used_at')">
-                    <button
-                      type="button"
-                      data-testid="security-api-access-sort-last-used"
-                      @click="sortBy('last_used_at')"
-                      class="downloads-sort-btn"
-                      :class="sortField === 'last_used_at' ? 'is-active' : ''"
-                    >
-                      <span>Last Used</span>
-                      <svg class="downloads-sort-chevron" :class="sortField === 'last_used_at' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
-                      </svg>
-                    </button>
-                  </th>
-                  <th class="w-[120px]" :aria-sort="ariaSort('expires_at')">
-                    <button
-                      type="button"
-                      data-testid="security-api-access-sort-expires"
-                      @click="sortBy('expires_at')"
-                      class="downloads-sort-btn"
-                      :class="sortField === 'expires_at' ? 'is-active' : ''"
-                    >
-                      <span>Expires</span>
-                      <svg class="downloads-sort-chevron" :class="sortField === 'expires_at' && sortDirection === 'asc' ? 'is-desc' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
-                      </svg>
-                    </button>
-                  </th>
-                  <th class="is-right w-[72px]"></th>
+                  <td class="font-medium text-pb-text" x-text="key.name"></td>
+                  <td class="downloads-mono-cell" x-text="formatDate(key.created_at)"></td>
+                  <td class="downloads-mono-cell" x-text="key.last_used_at ? formatDate(key.last_used_at) : '—'"></td>
+                  <td class="downloads-mono-cell" x-text="key.expires_at ? formatDate(key.expires_at) : 'Never'"></td>
+                  <td class="is-right">
+                    <div class="downloads-action-group">
+                      <button
+                        @click="revokeKey(key.id, key.name)"
+                        data-testid="security-api-access-revoke-btn"
+                        class="downloads-action-btn is-danger"
+                        data-tip="Revoke"
+                        data-tip-pos="left"
+                        aria-label="Revoke API key"
+                        type="button"
+                      >
+                        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                <template x-for="key in sortedApiKeys" :key="key.id">
-                  <tr>
-                    <td class="font-medium text-pb-text" x-text="key.name"></td>
-                    <td class="downloads-mono-cell" x-text="formatDate(key.created_at)"></td>
-                    <td class="downloads-mono-cell" x-text="key.last_used_at ? formatDate(key.last_used_at) : '—'"></td>
-                    <td class="downloads-mono-cell" x-text="key.expires_at ? formatDate(key.expires_at) : 'Never'"></td>
-                    <td class="is-right">
-                      <div class="downloads-action-group">
-                        <button
-                          @click="revokeKey(key.id, key.name)"
-                          data-testid="security-api-access-revoke-btn"
-                          class="downloads-action-btn is-danger"
-                          data-tip="Revoke"
-                          data-tip-pos="left"
-                          aria-label="Revoke API key"
-                          type="button"
-                        >
-                          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
-                          </svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
-        </template>
-        <template x-if="apiKeys.length === 0 && !keysLoading">
-          <div class="table-empty">
-            <p class="table-empty-copy">No API keys. Generate one only when a trusted external integration actually needs API access.</p>
-          </div>
-        </template>
-        <template x-if="keysLoading">
-          <div class="table-empty">
-            <p class="table-empty-copy">Loading...</p>
-          </div>
-        </template>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <div x-show="apiKeys.length === 0 && !keysLoading" x-cloak class="table-empty">
+          <p class="table-empty-copy">No API keys. Generate one only when a trusted external integration actually needs API access.</p>
+        </div>
+        <div x-show="keysLoading" x-cloak class="table-empty">
+          <p class="table-empty-copy">Loading...</p>
+        </div>
       </div>
     </div>
   </div>
@@ -258,6 +258,15 @@ function apiAccessTab() {
       this.newKeyExpiry = "";
     },
 
+    dismissCreatedKey() {
+      this.createdKey = null;
+      this.keyCopied = false;
+    },
+
+    showKeyActionPanel() {
+      return this.showNewKeyForm || !!this.createdKey;
+    },
+
     todayDate() {
       const now = new Date();
       const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -309,7 +318,7 @@ function apiAccessTab() {
           this.showNewKeyForm = false;
           this.newKeyName = "";
           this.newKeyExpiry = "";
-          this.loadKeys();
+          this.upsertApiKey(data.api_key);
           if (typeof showToast === "function") showToast({ message: "API key generated.", level: "success" });
         })
         .catch(err => {
@@ -321,10 +330,21 @@ function apiAccessTab() {
     },
 
     copyKey(key) {
+      if (!key) return;
       navigator.clipboard.writeText(key).then(() => {
         this.keyCopied = true;
         setTimeout(() => { this.keyCopied = false; }, 2000);
       });
+    },
+
+    upsertApiKey(apiKey) {
+      if (!apiKey || apiKey.id === undefined || apiKey.id === null) return;
+      const existingIndex = this.apiKeys.findIndex(key => key.id === apiKey.id);
+      if (existingIndex === -1) {
+        this.apiKeys = [apiKey, ...this.apiKeys];
+        return;
+      }
+      this.apiKeys = this.apiKeys.map(key => key.id === apiKey.id ? apiKey : key);
     },
 
     async revokeKey(id, name) {
@@ -340,7 +360,7 @@ function apiAccessTab() {
       })
         .then(r => {
           if (!r.ok && r.status !== 204) throw new Error("Failed");
-          this.loadKeys();
+          this.apiKeys = this.apiKeys.filter(key => key.id !== id);
           if (typeof showToast === "function") showToast({ message: "API key revoked.", level: "success" });
         })
         .catch(() => {
