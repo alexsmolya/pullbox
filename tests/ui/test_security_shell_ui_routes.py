@@ -128,10 +128,17 @@ class TestSecurityRouteContracts:
         assert response.status_code == 200
         assert 'data-testid="security-api-access-registry-card"' in response.text
         assert 'data-testid="security-api-access-table"' in response.text
-        assert 'class="downloads-table-wrap"' in response.text
-        assert 'class="downloads-table"' in response.text
+        assert 'class="downloads-table-wrap is-clipped"' in response.text
+        assert 'class="downloads-table min-w-[760px]"' in response.text
         assert 'class="downloads-action-btn is-danger"' in response.text
         assert 'data-testid="security-api-access-revoke-btn"' in response.text
+        assert 'data-testid="security-api-key-copy-btn"' in response.text
+        assert 'data-testid="security-api-key-dismiss-btn"' in response.text
+        assert 'data-testid="security-api-access-sort-name"' in response.text
+        assert 'data-testid="security-api-access-sort-created"' in response.text
+        assert 'data-testid="security-api-access-sort-last-used"' in response.text
+        assert 'data-testid="security-api-access-sort-expires"' in response.text
+        assert 'x-for="key in sortedApiKeys"' in response.text
         assert "active keys" not in response.text
         assert "expiring soon" not in response.text
         assert "unused" not in response.text
