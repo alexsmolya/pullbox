@@ -5237,19 +5237,30 @@
     color: var(--pb-text-primary);
   }
   .series-wall-overlay {
+    --series-wall-overlay-edge: rgb(255 255 255);
+
     position: absolute;
-    inset: 0;
+    inset: -4px;
     z-index: 3;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
     padding: 0.875rem;
-    border-radius: 14px;
+    border-radius: 18px;
     background: rgba(30, 26, 23, 0.88);
     backdrop-filter: blur(6px);
+    box-shadow: inset 0 0 0 4.5px var(--series-wall-overlay-edge);
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s ease;
+  }
+  [data-theme="light"] .series-wall-overlay {
+    --series-wall-overlay-edge: rgb(30 26 23);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) .series-wall-overlay {
+      --series-wall-overlay-edge: rgb(30 26 23);
+    }
   }
   .series-wall-card:hover .series-wall-overlay {
     opacity: 1;
