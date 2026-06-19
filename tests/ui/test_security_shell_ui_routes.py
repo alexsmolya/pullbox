@@ -139,6 +139,10 @@ class TestSecurityRouteContracts:
         assert 'data-testid="security-api-access-sort-last-used"' in response.text
         assert 'data-testid="security-api-access-sort-expires"' in response.text
         assert 'x-for="key in sortedApiKeys"' in response.text
+        assert ':min="todayDate()"' in response.text
+        assert "expiryDateToEndOfDayIso" in response.text
+        assert "Cannot create an API key that expires in the past." in response.text
+        assert "apiKeyGenerationErrorMessage" in response.text
         assert "active keys" not in response.text
         assert "expiring soon" not in response.text
         assert "unused" not in response.text

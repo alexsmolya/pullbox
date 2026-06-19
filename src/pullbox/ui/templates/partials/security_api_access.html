@@ -28,7 +28,7 @@
           </div>
           <div>
             <label class="mb-1 block text-xs text-pb-text-sec">Expires (optional)</label>
-            <input type="date" x-model="newKeyExpiry" class="input-pb">
+            <input type="date" x-model="newKeyExpiry" :min="todayDate()" class="input-pb">
           </div>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -258,11 +258,38 @@ function apiAccessTab() {
       this.newKeyExpiry = "";
     },
 
+    todayDate() {
+      const now = new Date();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      return `${now.getFullYear()}-${month}-${day}`;
+    },
+
+    expiryDateToEndOfDayIso(dateValue) {
+      const [year, month, day] = dateValue.split("-").map(Number);
+      return new Date(year, month - 1, day, 23, 59, 59, 999).toISOString();
+    },
+
+    apiKeyGenerationErrorMessage(data) {
+      return (data && data.error && data.error.message)
+        || "Failed to generate key.";
+    },
+
     generateKey() {
       if (!this.newKeyName.trim()) return;
+      if (this.newKeyExpiry && this.newKeyExpiry < this.todayDate()) {
+        if (typeof showToast === "function") {
+          showToast({
+            message: "Cannot create an API key that expires in the past.",
+            level: "error",
+          });
+        }
+        return;
+      }
+
       this.keyGenerating = true;
       const body = { name: this.newKeyName.trim() };
-      if (this.newKeyExpiry) body.expires_at = new Date(this.newKeyExpiry).toISOString();
+      if (this.newKeyExpiry) body.expires_at = this.expiryDateToEndOfDayIso(this.newKeyExpiry);
 
       fetch("/api/v1/auth/apikeys", {
         method: "POST",
@@ -272,7 +299,11 @@ function apiAccessTab() {
         },
         body: JSON.stringify(body),
       })
-        .then(r => { if (!r.ok) throw new Error("Failed"); return r.json(); })
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(this.apiKeyGenerationErrorMessage(data));
+          return data;
+        })
         .then(data => {
           this.createdKey = data.key;
           this.showNewKeyForm = false;
@@ -281,8 +312,10 @@ function apiAccessTab() {
           this.loadKeys();
           if (typeof showToast === "function") showToast({ message: "API key generated.", level: "success" });
         })
-        .catch(() => {
-          if (typeof showToast === "function") showToast({ message: "Failed to generate key.", level: "error" });
+        .catch(err => {
+          if (typeof showToast === "function") {
+            showToast({ message: err.message || "Failed to generate key.", level: "error" });
+          }
         })
         .finally(() => { this.keyGenerating = false; });
     },
