@@ -16832,12 +16832,6 @@ document.addEventListener("htmx:afterSettle", function (e) {
       e.detail.target.dispatchEvent(new Event("scroll"));
     }
     syncAppShellNavigation(document);
-    var h1 = document.querySelector("#main-area h1");
-    if (h1) {
-      var title = h1.textContent.trim();
-      var appName = (window._pb && _pb.instanceName) || "Pullbox";
-      document.title = title === "Dashboard" ? appName : title + " \u2014 " + appName;
-    }
 
     _ensureUtilityWorkflowBackstop();
   }
