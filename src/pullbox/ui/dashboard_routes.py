@@ -214,7 +214,12 @@ async def load_dashboard_intelligence(
 
 async def load_dashboard_active_download_count(session: AsyncSession) -> int:
     """Return the count used by the downloads gauge and footer strip."""
-    active_states = (DownloadState.QUEUED, DownloadState.SENT, DownloadState.DOWNLOADING)
+    active_states = (
+        DownloadState.QUEUED,
+        DownloadState.SENT,
+        DownloadState.DOWNLOADING,
+        DownloadState.FINALIZING,
+    )
     return int(
         (
             await session.execute(

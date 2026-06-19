@@ -75,7 +75,7 @@ async def _reset_issue_for_permanent_failure(
 async def _recover_stalled_downloads(
     session: AsyncSession,
 ) -> int:
-    """Recover DOWNLOADING records that have stalled."""
+    """Recover active download records that have stalled."""
     now = datetime.now(UTC)
     timeout = await _get_stall_timeout(session)
     stall_cutoff = now - timeout
@@ -85,7 +85,7 @@ async def _recover_stalled_downloads(
 
     result = await session.execute(
         select(DownloadHistory).where(
-            DownloadHistory.state == DownloadState.DOWNLOADING,
+            DownloadHistory.state.in_([DownloadState.DOWNLOADING, DownloadState.FINALIZING]),
             DownloadHistory.external_id.isnot(None),
             DownloadHistory.updated_at < stall_cutoff,
         )
@@ -122,7 +122,7 @@ async def _recover_stalled_downloads(
             continue
 
         dl_obj = await session.get(DownloadHistory, dl_id)
-        if not dl_obj or dl_obj.state != DownloadState.DOWNLOADING:
+        if not dl_obj or dl_obj.state not in {DownloadState.DOWNLOADING, DownloadState.FINALIZING}:
             _stall_first_seen.pop(dl_id, None)
             continue
 

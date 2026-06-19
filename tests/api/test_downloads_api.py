@@ -169,6 +169,12 @@ class TestDownloadQueueAndHistory:
             state=DownloadState.QUEUED,
             error_message=None,
         )
+        await _seed_download(
+            db_factory,
+            issue_id,
+            state=DownloadState.FINALIZING,
+            error_message=None,
+        )
         await _seed_download(db_factory, issue_id, state=DownloadState.COMPLETED)
         await _seed_download(db_factory, issue_id, state=DownloadState.FAILED)
 
@@ -176,7 +182,7 @@ class TestDownloadQueueAndHistory:
 
         assert response.status_code == 200
         data = response.json()
-        assert [item["state"] for item in data] == ["queued"]
+        assert {item["state"] for item in data} == {"queued", "finalizing"}
         assert data[0]["series_title"] == "Batman"
         assert data[0]["issue_number"] == 4.0
 

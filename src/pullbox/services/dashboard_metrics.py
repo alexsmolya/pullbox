@@ -62,6 +62,7 @@ _ACTIVE_DOWNLOAD_STATES = (
     DownloadState.QUEUED,
     DownloadState.SENT,
     DownloadState.DOWNLOADING,
+    DownloadState.FINALIZING,
 )
 _SUCCESS_DOWNLOAD_STATES = (DownloadState.COMPLETED, DownloadState.IMPORTED)
 

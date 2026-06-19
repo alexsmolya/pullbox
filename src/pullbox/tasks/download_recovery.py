@@ -35,7 +35,9 @@ async def _recover_orphaned_downloads(
     stale_cutoff = now - _STALE_DOWNLOAD_TIMEOUT
     result = await session.execute(
         select(DownloadHistory).where(
-            DownloadHistory.state.in_([DownloadState.SENT, DownloadState.DOWNLOADING]),
+            DownloadHistory.state.in_(
+                [DownloadState.SENT, DownloadState.DOWNLOADING, DownloadState.FINALIZING]
+            ),
             DownloadHistory.external_id.is_(None),
             DownloadHistory.updated_at < stale_cutoff,
         )
@@ -102,6 +104,7 @@ async def _recover_orphaned_downloads(
                             DownloadState.QUEUED,
                             DownloadState.SENT,
                             DownloadState.DOWNLOADING,
+                            DownloadState.FINALIZING,
                             DownloadState.PAUSED,
                             DownloadState.RETRY_PENDING,
                         ]

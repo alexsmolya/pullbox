@@ -333,15 +333,13 @@ class SABnzbdClient:
         """Map a SABnzbd queue slot to a DownloadStatus DTO."""
         raw_status = slot.get("status", "")
 
-        # SABnzbd progress is a string like "45.2" (percentage).
-        # During post-download phases (Repairing, Extracting, Verifying),
-        # SABnzbd resets percentage to show phase progress — but the actual
-        # download is already 100% complete, so we pin progress to 1.0.
+        # SABnzbd progress is a string like "45.2" (percentage). During
+        # post-download phases this becomes phase progress for repair/extract.
         post_download_phases = {"Repairing", "Extracting", "Verifying", "Moving"}
+        percentage = _safe_float(slot.get("percentage", 0))
         if raw_status in post_download_phases:
-            progress = 1.0
+            progress = percentage / 100.0 if percentage else 1.0
         else:
-            percentage = _safe_float(slot.get("percentage", 0))
             progress = percentage / 100.0 if percentage else 0.0
 
         # Size in MB
@@ -377,10 +375,9 @@ class SABnzbdClient:
     def _map_history_slot(slot: dict[str, Any]) -> DownloadStatus:
         """Map a SABnzbd history slot to a DownloadStatus DTO.
 
-        SABnzbd moves items to history during post-processing phases
+        SABnzbd moves items to history during client-side finalization phases
         (Repairing, Extracting, Verifying, etc.) — not just on completion.
-        These in-progress history entries are mapped to state="downloading"
-        with progress=1.0 so the UI shows 100% during post-processing.
+        These in-progress history entries are mapped to state="finalizing".
         """
         raw_status = slot.get("status", "")
 
@@ -401,8 +398,8 @@ class SABnzbdClient:
             state = "failed"
             progress = 0.0
         elif raw_status in _history_post_phases:
-            # Download finished, post-processing in progress
-            state = "downloading"
+            # Download finished, client-side repair/extract/move still in progress.
+            state = "finalizing"
             progress = 1.0
         else:
             state = raw_status.lower()
@@ -475,8 +472,11 @@ def _map_queue_state(status: str) -> str:
         "Fetching": "downloading",
         "Grabbing": "downloading",
         "Propagating": "queued",
-        "Repairing": "downloading",
-        "Extracting": "downloading",
-        "Verifying": "downloading",
+        "Repairing": "finalizing",
+        "Extracting": "finalizing",
+        "Verifying": "finalizing",
+        "Moving": "finalizing",
+        "Running": "finalizing",
+        "QuickCheck": "finalizing",
     }
     return mapping.get(status, status.lower())

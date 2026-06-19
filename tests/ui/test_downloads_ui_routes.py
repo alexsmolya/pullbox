@@ -443,10 +443,8 @@ class TestDownloadsRouteContracts:
         assert response.status_code == 200
         assert 'style="width: 100.0%"' in response.text
         assert "Finalizing in client" in response.text
-        assert "Finalizing" in response.text
+        assert "Repairing" in response.text
         assert 'data-testid="downloads-queue-item-status"' in response.text
-        assert "Repairing" not in response.text
-        assert 'data-testid="downloads-queue-item-phase-detail"' not in response.text
 
     async def test_download_history_partial_returns_panel_only(
         self,
@@ -787,6 +785,66 @@ class TestDownloadsRouteContracts:
         assert progress_map[queue_items[1].id].client_state == "Extracting"
         assert progress_map[queue_items[1].id].speed_bytes is None
         assert progress_map[queue_items[1].id].eta_seconds is None
+
+    async def test_download_progress_map_falls_back_to_usenet_status_when_queue_misses(
+        self,
+        sec_db,
+        monkeypatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        import pullbox.composition.providers as registry_module
+
+        await _seed_multi_active_download_queue_data(sec_db)
+
+        fake_client = SimpleNamespace(
+            client_type=DownloadClientType.SABNZBD.value,
+            get_queue=AsyncMock(return_value=[]),
+            get_download_status=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(
+                        external_id="queue-batch-a",
+                        progress=1.0,
+                        speed_bytes=None,
+                        eta_seconds=None,
+                        size_bytes=90_000_000,
+                        client_state="Extracting",
+                        state="finalizing",
+                    ),
+                    RuntimeError("not found"),
+                ]
+            ),
+        )
+
+        async def _fake_register(session, registry):  # type: ignore[no-untyped-def]
+            del session
+            registry.register_download_client(1, fake_client)
+            return []
+
+        monkeypatch.setattr(registry_module, "register_download_clients", _fake_register)
+
+        async with sec_db() as session:
+            queue_items = list(
+                (
+                    await session.execute(
+                        select(DownloadHistory)
+                        .where(DownloadHistory.state == DownloadState.DOWNLOADING)
+                        .order_by(DownloadHistory.id.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            progress_map = await ui_routes._load_download_progress_map(
+                session,
+                queue_items,
+                fallback_progress={},
+            )
+
+        fake_client.get_queue.assert_awaited_once()
+        assert fake_client.get_download_status.await_count == 2
+        assert progress_map[queue_items[0].id].progress == pytest.approx(1.0)
+        assert progress_map[queue_items[0].id].client_state == "Extracting"
+        assert queue_items[1].id not in progress_map
 
     async def test_download_progress_map_keeps_scheduler_fallback_when_client_fetch_fails(
         self,
