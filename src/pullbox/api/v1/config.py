@@ -1,5 +1,7 @@
 """Configuration API routes — get/update system config and naming preview."""
 
+from pathlib import Path
+
 import structlog
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
@@ -305,6 +307,19 @@ async def update_config(
             actually_changed.add(key)
             old_values[key] = config.value
             config.value = value
+
+    if "comics_directory" in body.values and body.values["comics_directory"].strip():
+        from pullbox.core.exceptions import ValidationError
+        from pullbox.services.library_service import set_comics_directory
+
+        try:
+            root = await set_comics_directory(
+                session,
+                Path(body.values["comics_directory"]),
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        body.values["comics_directory"] = root.path
 
     https_keys = set(HTTPS_CONFIG_KEYS)
     if https_keys & body.values.keys():
