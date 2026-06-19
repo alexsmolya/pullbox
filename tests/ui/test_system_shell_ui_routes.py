@@ -242,7 +242,9 @@ class TestSystemRouteContracts:
         assert 'data-tip="Restore"' in backups.text
         assert 'data-tip="Delete"' in backups.text
         assert "database restore points" in backups.text
-        assert "They do not include comics or downloaded media files." in backups.text
+        assert "They do not include comics," in backups.text
+        assert "/data/config.xml" in backups.text
+        assert "PULLBOX_SECRET_KEY" in backups.text
 
         assert 'data-testid="system-logs-table"' in logs.text
         assert 'class="downloads-table-wrap"' in logs.text

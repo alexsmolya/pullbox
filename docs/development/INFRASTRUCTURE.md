@@ -389,9 +389,15 @@ TZ
 - `/comics`, `/downloads`, and `/imports` should be explicit host or network
   mounts when those workflows are used.
 - `/data/config.xml` stores the normal Docker application secret and must be
-  durable and backed up.
+  durable and backed up separately from database restore-point archives.
 - `PULLBOX_SECRET_KEY` is optional in production. When set, it overrides
   `config.xml` and must be stable, secret, and deployment-specific.
+- Database restore points contain the SQLite database and metadata only. They
+  intentionally do not include `config.xml`, comics, downloaded media, or import
+  sources.
+- Fresh-install restores must preserve the original `config.xml` or reuse the
+  same env-managed `PULLBOX_SECRET_KEY` before restoring the database, otherwise
+  encrypted credentials remain present but cannot be decrypted.
 - SQLite deployments should use storage that safely supports the configured
   journal mode.
 - Download-client remote paths must map to files visible under `/downloads`
@@ -484,6 +490,8 @@ volumes:
       workflows in use.
 - [ ] `/data/config.xml` is backed up, or an env-managed
       `PULLBOX_SECRET_KEY` is stable and not committed.
+- [ ] Fresh-install restore instructions include restoring `config.xml` before
+      the database, or setting the same env-managed `PULLBOX_SECRET_KEY`.
 - [ ] Download client path mapping is verified.
 - [ ] Manual import and Mylar3 paths are verified inside the container, not only
       on the host.
@@ -629,12 +637,26 @@ Development dependency categories:
 
 Useful state-volume commands:
 
+Create a full `/data` state backup, including `config.xml`, logs, database, and
+database restore-point archives:
+
 ```bash
 docker run --rm \
   -v pullbox-data:/state \
   -v "$PWD":/backup \
   alpine \
   tar czf /backup/pullbox-state-backup.tgz -C /state .
+```
+
+Restore a full `/data` state backup into an empty Docker volume before starting
+the replacement container:
+
+```bash
+docker run --rm \
+  -v pullbox-data:/state \
+  -v "$PWD":/backup \
+  alpine \
+  sh -lc 'cd /state && tar xzf /backup/pullbox-state-backup.tgz'
 ```
 
 ```bash

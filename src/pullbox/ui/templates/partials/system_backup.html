@@ -22,8 +22,17 @@
 
     <div class="section-body space-y-4">
       <p class="text-sm leading-6 text-pb-text-sec">
-        These restore points back up Pullbox's database only. They do not include comics or downloaded media files.
+        These restore points back up Pullbox's database only. They do not include comics,
+        downloaded media files, or <span class="font-mono text-pb-text">/data/config.xml</span>.
       </p>
+      <div class="info-panel border-pb-warning/30 bg-pb-warning-dim">
+        <p class="text-sm leading-6 text-pb-text">
+          Restoring encrypted credentials requires the same application secret used when the
+          backup was created. For normal Docker installs, preserve
+          <span class="font-mono">/data/config.xml</span>. For env-managed installs, keep
+          <span class="font-mono">PULLBOX_SECRET_KEY</span> unchanged.
+        </p>
+      </div>
 
       <div x-show="loading" class="info-panel info-panel-muted py-10 text-center text-sm text-pb-text-dim">
         Loading backups...
@@ -122,6 +131,7 @@
           <div class="space-y-2 text-xs leading-6 text-pb-text-sec">
             <p><span class="font-semibold text-pb-text">Current database:</span> a safety backup is created before overwrite.</p>
             <p><span class="font-semibold text-pb-text">After restore:</span> restart Pullbox before the restored database becomes active.</p>
+            <p><span class="font-semibold text-pb-text">Encrypted credentials:</span> keep the original <span class="font-mono">/data/config.xml</span> or unchanged <span class="font-mono">PULLBOX_SECRET_KEY</span>, otherwise saved API keys and passwords cannot be decrypted.</p>
           </div>
         </div>
       </div>

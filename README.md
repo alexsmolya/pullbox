@@ -27,6 +27,11 @@ Keep `/data` durable and backed up. On first startup, Pullbox creates
 and encrypted integration secrets. You do not need to generate this manually
 for normal Docker installs.
 
+Pullbox's built-in database backups do not include `config.xml`. If you restore
+a database backup onto a fresh install, restore the original `/data/config.xml`
+first or keep the same env-managed `PULLBOX_SECRET_KEY`; otherwise saved API
+keys, indexer credentials, and download-client credentials cannot be decrypted.
+
 If you intentionally manage the application secret outside `config.xml`, set
 `PULLBOX_SECRET_KEY` to a stable, deployment-specific value and never change it
 after saving credentials:
@@ -38,6 +43,21 @@ export PULLBOX_SECRET_KEY="$(openssl rand -hex 64)"
 When `PULLBOX_SECRET_KEY` is set, it overrides the value in `config.xml` at
 runtime. Changing it later prevents Pullbox from decrypting saved integration
 secrets.
+
+### Fresh Install Restore
+
+For disaster recovery or migration to a fresh host, keep these pieces together:
+
+- The Pullbox database backup archive from System > Backup.
+- The original `/data/config.xml`, unless you manage the secret with
+  `PULLBOX_SECRET_KEY`.
+- Your compose/env file and the same library, download, and import path
+  mappings.
+- Your comics/media files, which are not included in Pullbox database backups.
+
+Restore the original `config.xml` or set the same `PULLBOX_SECRET_KEY` before
+restoring the database backup. Then restart Pullbox and verify ComicVine,
+indexers, and download clients from Settings.
 
 ### Docker Run
 
