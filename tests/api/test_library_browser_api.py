@@ -72,6 +72,11 @@ async def seeded_library_browser_data(
     loose_file = root_path / "Loose File.cbz"
     loose_file.write_bytes(b"loose")
 
+    loose_folder = root_path / "Loose Folder"
+    loose_folder.mkdir()
+    loose_folder_file = loose_folder / "Loose Folder 001.cbz"
+    loose_folder_file.write_bytes(b"loose-folder")
+
     untracked_file = root_path / "Not Pullbox Owned.cbz"
     untracked_file.write_bytes(b"external")
 
@@ -160,6 +165,18 @@ async def seeded_library_browser_data(
                     match_confidence=MatchConfidence.UNMATCHED,
                     has_comicinfo=False,
                 ),
+                LibraryFile(
+                    library_root_id=root.id,
+                    file_path=str(loose_folder_file),
+                    file_name=loose_folder_file.name,
+                    file_size=loose_folder_file.stat().st_size,
+                    file_format=FileFormat.CBZ,
+                    file_modified_at=datetime.fromtimestamp(
+                        loose_folder_file.stat().st_mtime, tz=UTC
+                    ),
+                    match_confidence=MatchConfidence.UNMATCHED,
+                    has_comicinfo=False,
+                ),
             ]
         )
         await session.commit()
@@ -172,6 +189,8 @@ async def seeded_library_browser_data(
         "series_without_issues_folder": series_without_issues_folder,
         "stale_series_file": stale_series_file,
         "loose_file": loose_file,
+        "loose_folder": loose_folder,
+        "loose_folder_file": loose_folder_file,
         "untracked_file": untracked_file,
         "untracked_folder": untracked_folder,
         "convertible_file": convertible_file,
@@ -205,6 +224,115 @@ async def test_library_browser_entry_returns_real_metadata_and_actions(
     assert data["delete_context"]["has_linked_issue"] is False
     assert data["delete_context"]["issue_status_after_delete"] is None
     assert data["rename_context"]["stale_reference"] is False
+
+
+@pytest.mark.asyncio
+async def test_library_browser_entry_allows_direct_tracked_file_parent_folder(
+    authenticated_client,
+    seeded_library_browser_data: dict[str, Path],
+) -> None:  # type: ignore[no-untyped-def]
+    response = await authenticated_client.get(
+        "/api/v1/library/browser/entry",
+        params={"path": str(seeded_library_browser_data["loose_folder"])},
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Loose Folder"
+    assert data["kind"] == "folder"
+    assert data["actions"]["can_properties"] is True
+    assert data["actions"]["can_rename"] is True
+    assert data["actions"]["can_auto_rename"] is True
+    assert data["actions"]["can_convert"] is False
+    assert data["actions"]["can_delete"] is True
+    assert data["delete_context"]["mode"] == "folder"
+    assert data["delete_context"]["tracked_file_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_folder_descendant_detection_uses_normalized_library_file_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    sec_db: async_sessionmaker,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "visible-root"
+    target.mkdir()
+    stored_path = "/private/tmp/pullbox-visible-root/Series/Issue 001.cbz"
+
+    def fake_normalize(path_value: str | Path | None) -> str | None:
+        if path_value is None:
+            return None
+        path_text = str(path_value)
+        if path_text == str(target):
+            return "/tmp/pullbox-visible-root"
+        if path_text == stored_path:
+            return "/tmp/pullbox-visible-root/Series/Issue 001.cbz"
+        return path_text
+
+    monkeypatch.setattr(library_api, "_normalize_library_path", fake_normalize)
+
+    async with sec_db() as session:
+        root = LibraryRoot(name="Primary Root", path=str(target), enabled=True)
+        session.add(root)
+        await session.flush()
+        session.add(
+            LibraryFile(
+                library_root_id=root.id,
+                file_path=stored_path,
+                file_name="Issue 001.cbz",
+                file_size=12,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(UTC),
+                match_confidence=MatchConfidence.UNMATCHED,
+                has_comicinfo=False,
+            )
+        )
+        await session.commit()
+
+    async with sec_db() as session:
+        assert await library_api._folder_has_tracked_descendants(session, target) is True
+
+
+@pytest.mark.asyncio
+async def test_folder_descendant_detection_uses_normalized_series_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    sec_db: async_sessionmaker,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "visible-root"
+    target.mkdir()
+    stored_path = "/private/tmp/pullbox-visible-root/Series"
+
+    def fake_normalize(path_value: str | Path | None) -> str | None:
+        if path_value is None:
+            return None
+        path_text = str(path_value)
+        if path_text == str(target):
+            return "/tmp/pullbox-visible-root"
+        if path_text == stored_path:
+            return "/tmp/pullbox-visible-root/Series"
+        return path_text
+
+    monkeypatch.setattr(library_api, "_normalize_library_path", fake_normalize)
+
+    async with sec_db() as session:
+        root = LibraryRoot(name="Primary Root", path=str(target), enabled=True)
+        session.add(root)
+        await session.flush()
+        session.add(
+            Series(
+                title="Series",
+                sort_title="series",
+                path=stored_path,
+                library_root_id=root.id,
+                monitored=True,
+            )
+        )
+        await session.commit()
+
+    async with sec_db() as session:
+        assert await library_api._folder_has_tracked_descendants(session, target) is True
 
 
 @pytest.mark.asyncio

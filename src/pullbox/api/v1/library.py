@@ -191,10 +191,17 @@ def _build_library_actions(
     tracking_scope: str = "tracked_file",
 ) -> LibraryBrowserActionFlags:
     normalized_format = (file_format or "").strip().lower()
-    if kind == "root" or tracking_scope == "tracked_descendant_folder":
+    if kind == "root":
         return LibraryBrowserActionFlags(can_properties=True)
 
-    if tracking_scope not in {"tracked_file", "tracked_series_folder"}:
+    if tracking_scope == "tracked_descendant_folder":
+        return LibraryBrowserActionFlags(can_properties=True)
+
+    if tracking_scope not in {
+        "tracked_file",
+        "tracked_series_folder",
+        "tracked_file_parent_folder",
+    }:
         return LibraryBrowserActionFlags(can_properties=False)
 
     return LibraryBrowserActionFlags(
@@ -224,6 +231,18 @@ async def _tracked_library_file_exists(session: DbSession, target: Path) -> bool
     return False
 
 
+async def _folder_is_direct_tracked_file_parent(session: DbSession, target: Path) -> bool:
+    normalized_target = _normalize_library_path(target)
+    if normalized_target is None:
+        return False
+
+    for stored_path in (await session.execute(select(LibraryFile.file_path))).scalars():
+        normalized_path = _normalize_library_path(stored_path)
+        if normalized_path is not None and str(Path(normalized_path).parent) == normalized_target:
+            return True
+    return False
+
+
 async def _folder_has_tracked_descendants(session: DbSession, target: Path) -> bool:
     prefix = str(target).rstrip("/")
     file_count = int(
@@ -237,6 +256,14 @@ async def _folder_has_tracked_descendants(session: DbSession, target: Path) -> b
     if file_count > 0:
         return True
 
+    normalized_target = _normalize_library_path(target)
+    if normalized_target is not None:
+        normalized_prefix = f"{normalized_target}/"
+        for stored_path in (await session.execute(select(LibraryFile.file_path))).scalars():
+            normalized_path = _normalize_library_path(stored_path)
+            if normalized_path is not None and normalized_path.startswith(normalized_prefix):
+                return True
+
     series_count = int(
         (
             await session.execute(
@@ -245,6 +272,18 @@ async def _folder_has_tracked_descendants(session: DbSession, target: Path) -> b
         ).scalar_one()
         or 0
     )
+    if series_count > 0:
+        return True
+
+    if normalized_target is not None:
+        normalized_prefix = f"{normalized_target}/"
+        for series_stored_path in (
+            await session.execute(select(Series.path).where(Series.path.is_not(None)))
+        ).scalars():
+            normalized_path = _normalize_library_path(series_stored_path)
+            if normalized_path is not None and normalized_path.startswith(normalized_prefix):
+                return True
+
     return series_count > 0
 
 
@@ -272,6 +311,9 @@ async def _library_browser_tracking_scope(
         if _normalize_library_path(series_path) == normalized_target:
             return "tracked_series_folder"
 
+    if await _folder_is_direct_tracked_file_parent(session, target):
+        return "tracked_file_parent_folder"
+
     if await _folder_has_tracked_descendants(session, target):
         return "tracked_descendant_folder"
     return "untracked"
@@ -286,7 +328,8 @@ def _require_mutable_library_catalog_entry(tracking_scope: str) -> None:
     _require_library_catalog_entry(tracking_scope)
     if tracking_scope == "tracked_descendant_folder":
         raise ValidationError(
-            "Only tracked series folders and tracked files can be changed from Library."
+            "Only tracked series folders, tracked file folders, and tracked files "
+            "can be changed from Library."
         )
 
 

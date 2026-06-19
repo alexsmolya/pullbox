@@ -56,9 +56,9 @@ class TestSeriesDetailPage:
         assert authed_page.locator("[data-testid='series-detail-acquisition-bar']").count() == 0
         assert series.monitor_control.is_visible()
         assert series.monitor_label.is_visible()
-        assert series.monitor_label.text_content() == "Paused"
+        assert series.monitor_label.text_content() == "Monitored"
         assert series.monitor_toggle.is_visible()
-        assert not series.monitor_toggle.is_checked()
+        assert series.monitor_toggle.is_checked()
         assert series.issues_section.is_visible()
         assert series.footer.is_visible()
         assert authed_page.locator("[data-testid='series-detail-telemetry-strip']").count() == 0
@@ -78,10 +78,10 @@ class TestSeriesDetailPage:
         assert monitor_box is not None
         assert refresh_box is not None
         assert abs(monitor_box["height"] - refresh_box["height"]) <= 2
-        assert series.monitor_label.text_content() == "Paused"
-        assert "Unmonitored" not in (series.monitor_control.text_content() or "")
+        assert series.monitor_label.text_content() == "Monitored"
+        assert "Paused" not in (series.monitor_control.text_content() or "")
 
-    def test_paused_series_renders_pause_switch_on(
+    def test_unmonitored_series_renders_monitor_switch_off(
         self,
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
@@ -89,8 +89,8 @@ class TestSeriesDetailPage:
         series = SeriesDetailPage(authed_page, seeded_server)
         series.goto(2)
 
-        assert series.monitor_label.text_content() == "Paused"
-        assert series.monitor_toggle.is_checked()
+        assert series.monitor_label.text_content() == "Monitored"
+        assert not series.monitor_toggle.is_checked()
 
     def test_status_row_uses_real_pill_contracts(
         self,

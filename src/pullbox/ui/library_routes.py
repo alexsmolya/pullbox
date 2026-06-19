@@ -314,7 +314,12 @@ async def load_library_browser_catalog_entries(
         root_path = _matching_catalog_root(resolved_path, root_paths)
         if root_path is None:
             continue
-        _add_catalog_folder_path(entries, folder_path=resolved_path.parent, root_path=root_path)
+        _add_catalog_folder_path(
+            entries,
+            folder_path=resolved_path.parent,
+            root_path=root_path,
+            can_mutate=True,
+        )
         entries[str(resolved_path)] = LibraryBrowserCatalogEntry(
             path=str(resolved_path),
             kind="file",

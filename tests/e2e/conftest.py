@@ -317,6 +317,7 @@ async def _seed_series_library_data() -> None:
 
     from pullbox.database import get_session_factory
     from pullbox.models.blocklist import BlocklistEntry, BlocklistReason, normalize_release_title
+    from pullbox.models.config import SystemConfig
     from pullbox.models.creator import Creator, IssueCreator
     from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
     from pullbox.models.import_job import (
@@ -360,6 +361,19 @@ async def _seed_series_library_data() -> None:
         session.add_all([primary_publisher, secondary_publisher, library_root])
         await session.flush()
 
+        comics_directory = await session.get(SystemConfig, "comics_directory")
+        e2e_library_path = str(Path("/tmp/pullbox-e2e-library").resolve())
+        if comics_directory is None:
+            session.add(
+                SystemConfig(
+                    key="comics_directory",
+                    value=e2e_library_path,
+                    value_type="string",
+                )
+            )
+        else:
+            comics_directory.value = e2e_library_path
+
         seeded_series = [
             ("Batman", 2016, SeriesStatus.CONTINUING, True, primary_publisher),
             ("Batman Beyond", 2015, SeriesStatus.ENDED, False, primary_publisher),
@@ -397,6 +411,8 @@ async def _seed_series_library_data() -> None:
             if title == "Batman":
                 (series_path / "cover.png").write_bytes(_TEST_COVER_PNG)
                 (series_path / "issue_001.png").write_bytes(_TEST_COVER_PNG)
+                (series_path / "Batman 001 (2016).cbz").write_bytes(b"cbz")
+                (series_path / "library-context-test.cbr").write_bytes(b"rar-ish")
                 series.cover_path = f"/api/v1/series/{series.id}/cover"
 
             owned_issue = Issue(
@@ -451,6 +467,17 @@ async def _seed_series_library_data() -> None:
                         file_size=52_428_800,
                         file_format=FileFormat.CBZ,
                         file_modified_at=datetime(2024, 1, 1, tzinfo=UTC),
+                        match_confidence=MatchConfidence.MANUAL,
+                    )
+                )
+                session.add(
+                    LibraryFile(
+                        library_root_id=library_root.id,
+                        file_path=f"{series_path}/library-context-test.cbr",
+                        file_name="library-context-test.cbr",
+                        file_size=7,
+                        file_format=FileFormat.CBR,
+                        file_modified_at=datetime(2024, 1, 2, tzinfo=UTC),
                         match_confidence=MatchConfidence.MANUAL,
                     )
                 )
@@ -646,6 +673,35 @@ async def _seed_series_library_data() -> None:
         misc_folder = Path("/tmp/pullbox-e2e-library/99-misc-folder")
         misc_folder.mkdir(parents=True, exist_ok=True)
         (misc_folder / "notes.txt").write_text("not tracked", encoding="utf-8")
+        (misc_folder / "tracked-note.cbz").write_bytes(b"cbz")
+        session.add(
+            LibraryFile(
+                library_root_id=library_root.id,
+                file_path=f"{misc_folder}/tracked-note.cbz",
+                file_name="tracked-note.cbz",
+                file_size=3,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime(2024, 1, 4, tzinfo=UTC),
+                match_confidence=MatchConfidence.MANUAL,
+            )
+        )
+
+        for index in range(90):
+            scroll_folder = Path(f"/tmp/pullbox-e2e-library/zz-scroll-{index:03d}")
+            scroll_folder.mkdir(parents=True, exist_ok=True)
+            scroll_file = scroll_folder / "tracked.cbz"
+            scroll_file.write_bytes(b"cbz")
+            session.add(
+                LibraryFile(
+                    library_root_id=library_root.id,
+                    file_path=str(scroll_file),
+                    file_name=scroll_file.name,
+                    file_size=3,
+                    file_format=FileFormat.CBZ,
+                    file_modified_at=datetime(2024, 1, 5, tzinfo=UTC),
+                    match_confidence=MatchConfidence.MANUAL,
+                )
+            )
 
         completed_job = ImportJob(
             source_path="/tmp/imports/batman-batch",
