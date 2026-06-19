@@ -519,6 +519,36 @@ class TestBuildDashboard:
         assert scorecards["client-reliability"].value_label == "60%"
         assert "degraded threshold" in scorecards["storage-runway"].value_label.lower()
 
+    async def test_storage_summary_measures_enabled_library_root(
+        self,
+        db_session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        library_root = tmp_path / "comics"
+        library_root.mkdir()
+        db_session.add(LibraryRoot(name="Primary", path=str(library_root), enabled=True))
+        await db_session.commit()
+
+        measured_paths: list[str] = []
+
+        def _disk_usage(path):  # type: ignore[no-untyped-def]
+            measured_paths.append(str(path))
+            return SimpleNamespace(total=10_000, used=2_000, free=8_000)
+
+        monkeypatch.setattr(
+            "pullbox.services.dashboard_intelligence_service.shutil.disk_usage",
+            _disk_usage,
+        )
+
+        intelligence = await DashboardIntelligenceService(db_session).build_dashboard(
+            now=_fixed_now()
+        )
+
+        storage = next(card for card in intelligence.scorecards if card.key == "storage-runway")
+        assert measured_paths == [str(library_root)]
+        assert storage.value_label == "Collecting baseline"
+
     async def test_healthy_state_stays_quiet_without_fake_urgency(
         self,
         db_session,

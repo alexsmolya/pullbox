@@ -4,7 +4,6 @@ import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Request
@@ -23,6 +22,7 @@ from pullbox.models.library import LibraryFile
 from pullbox.models.search_log import SearchLog
 from pullbox.models.series import Series
 from pullbox.services.dashboard_intelligence_service import DashboardIntelligence
+from pullbox.services.dashboard_storage_path import resolve_dashboard_storage_path
 from pullbox.ui.dashboard_display import (
     dashboard_completion_tone as dashboard_completion_tone,
 )
@@ -412,7 +412,7 @@ async def build_dashboard_view(
         current_time=current_time,
         first_run=dashboard.is_first_run,
     )
-    storage_free_bytes, storage_delta = load_dashboard_storage_strip(dashboard)
+    storage_free_bytes, storage_delta = await load_dashboard_storage_strip(session, dashboard)
 
     gauges = (
         DashboardGaugeView(
@@ -569,19 +569,21 @@ async def load_dashboard_search_quality(
     return (f"{quality_rate}%", f"{rejection_rate}% rejection rate")
 
 
-def load_dashboard_storage_strip(dashboard: DashboardIntelligence) -> tuple[int, str]:
+async def load_dashboard_storage_strip(
+    session: AsyncSession,
+    dashboard: DashboardIntelligence,
+) -> tuple[int, str]:
     """Return storage-free bytes plus the runway label for the scoreboard."""
-    storage_path = Path.cwd()
+    storage_path = await resolve_dashboard_storage_path(session)
     try:
-        from pullbox.config import get_settings
-
-        settings = get_settings()
-        if settings.data_dir != Path("/data"):
-            storage_path = settings.data_dir
-    except Exception:
-        logger.warning("dashboard.storage_usage.settings_load_failed")
-
-    free_bytes = int(shutil.disk_usage(storage_path).free)
+        free_bytes = int(shutil.disk_usage(storage_path).free)
+    except OSError as exc:
+        logger.warning(
+            "dashboard.storage_usage.disk_usage_failed",
+            path=str(storage_path),
+            error=str(exc),
+        )
+        free_bytes = 0
     storage_card = next(
         (scorecard for scorecard in dashboard.scorecards if scorecard.key == "storage-runway"),
         None,

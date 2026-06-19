@@ -74,6 +74,14 @@ class DiskUsageResult(Protocol):
     free: int
 
 
+class _ZeroDiskUsage:
+    """Fallback usage when the intended dashboard storage path is unavailable."""
+
+    total = 0
+    used = 0
+    free = 0
+
+
 class LogCacheErrorFunc(Protocol):
     """Callable shape for dashboard cache warning hooks."""
 
@@ -109,7 +117,7 @@ class DashboardMetricLoader:
         log_cache_error: LogCacheErrorFunc,
         run_best_effort_cache_write: CacheWriteFunc,
         disk_usage_func: DiskUsageFunc,
-        resolve_storage_path_func: Callable[[], Path],
+        resolve_storage_path_func: Callable[[], Awaitable[Path]],
     ) -> None:
         self._session = session
         self._rollback_after_cache_error = rollback_after_cache_error
@@ -595,8 +603,11 @@ class DashboardMetricLoader:
 
     async def load_storage_summary(self, current_time: datetime) -> StorageSummary:
         """Load disk usage and storage-growth summary metrics."""
-        storage_path = self._resolve_storage_path_func()
-        usage = cast("DiskUsageResult", self._disk_usage_func(storage_path))
+        storage_path = await self._resolve_storage_path_func()
+        try:
+            usage = cast("DiskUsageResult", self._disk_usage_func(storage_path))
+        except OSError:
+            usage = _ZeroDiskUsage()
 
         try:
             snapshots = (
