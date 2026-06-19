@@ -5456,6 +5456,10 @@
   ) {
     padding-bottom: 0;
   }
+  /* Toggle-driven settings panels reveal controls inline; avoid anchoring to the footer dock. */
+  #content:has(.admin-workspace-page) {
+    overflow-anchor: none;
+  }
   .page-dock-inner {
     --page-dock-height-status: 2rem;
     --page-dock-height-pagination: 2.5rem;
@@ -6330,6 +6334,7 @@
   .settings-footer {
     @apply flex flex-col gap-3 border-t border-pb-border px-6 py-3 sm:flex-row sm:items-center sm:justify-between;
     background-color: var(--pb-bg-surface);
+    overflow-anchor: none;
   }
   .settings-footer-end {
     @apply sm:justify-end;
