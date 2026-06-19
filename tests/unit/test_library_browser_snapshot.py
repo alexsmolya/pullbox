@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -14,6 +15,22 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _catalog_entry(
+    path: Path,
+    *,
+    kind: str,
+    size_bytes: int = 0,
+    modified_at: datetime | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        path=str(path),
+        kind=kind,
+        size_bytes=size_bytes,
+        modified_at=modified_at,
+        file_format=None,
+    )
+
+
 def _flatten_tree_names(nodes: tuple[object, ...]) -> list[str]:
     names: list[str] = []
     for node in nodes:
@@ -22,18 +39,28 @@ def _flatten_tree_names(nodes: tuple[object, ...]) -> list[str]:
     return names
 
 
-def test_library_browser_snapshot_returns_all_visible_entries(tmp_path: Path) -> None:
-    """The browser presenter should not silently cap tree or row entries."""
+def test_library_browser_snapshot_returns_catalog_entries_only(tmp_path: Path) -> None:
+    """The browser presenter should show DB-backed catalog entries, not raw disk contents."""
     library_root_path = tmp_path / "library"
     library_root_path.mkdir()
 
-    for index in range(20):
-        (library_root_path / f"{index:02d}-series").mkdir()
-        (library_root_path / f"{index:02d}-issue.cbz").write_text("test", encoding="utf-8")
+    for index in range(10):
+        (library_root_path / f"{index:02d}-untracked-series").mkdir()
+        (library_root_path / f"{index:02d}-untracked-issue.cbz").write_text(
+            "test",
+            encoding="utf-8",
+        )
 
     hidden_dir = library_root_path / ".hidden"
     hidden_dir.mkdir()
     (library_root_path / ".hidden.cbz").write_text("hidden", encoding="utf-8")
+
+    tracked_series = library_root_path / "Tracked Series"
+    tracked_series.mkdir()
+    tracked_file = tracked_series / "Tracked Series 001.cbz"
+    tracked_file.write_text("tracked", encoding="utf-8")
+    root_file = library_root_path / "Root Tracked.pdf"
+    root_file.write_text("pdf", encoding="utf-8")
 
     root = LibraryRoot(name="Primary", path=str(library_root_path), enabled=True)
 
@@ -49,6 +76,11 @@ def test_library_browser_snapshot_returns_all_visible_entries(tmp_path: Path) ->
         active_root=library_root_path,
         library_roots=[root],
         series_metrics={},
+        catalog_entries=[
+            _catalog_entry(tracked_series, kind="folder"),
+            _catalog_entry(tracked_file, kind="file", size_bytes=7),
+            _catalog_entry(root_file, kind="file", size_bytes=3),
+        ],
         total_size_bytes=0,
         browser_sort="name",
     )
@@ -57,14 +89,17 @@ def test_library_browser_snapshot_returns_all_visible_entries(tmp_path: Path) ->
     assert current_path_label == str(library_root_path)
     assert len(tree_nodes) == 1
     assert tree_nodes[0].has_children is True
-    assert len(tree_nodes[0].children) == 20
-    assert len(rows) == 40
+    assert len(tree_nodes[0].children) == 1
+    assert len(rows) == 2
+    assert {row.name for row in rows} == {"Tracked Series", "Root Tracked.pdf"}
     assert len(breadcrumbs) == 1
     assert tree_nodes[0].kind == "root"
     assert tree_nodes[0].is_root is True
     assert rows[0].root_path == str(library_root_path)
     assert all(".hidden" not in name for name in _flatten_tree_names(tree_nodes))
     assert all(".hidden" not in row.name for row in rows)
+    assert all("untracked" not in name.lower() for name in _flatten_tree_names(tree_nodes))
+    assert all("untracked" not in row.name.lower() for row in rows)
 
 
 def test_library_browser_snapshot_marks_active_branch_open(tmp_path: Path) -> None:
@@ -88,6 +123,10 @@ def test_library_browser_snapshot_marks_active_branch_open(tmp_path: Path) -> No
         active_root=library_root_path,
         library_roots=[root],
         series_metrics={},
+        catalog_entries=[
+            _catalog_entry(root_folder, kind="folder"),
+            _catalog_entry(issue_folder, kind="folder"),
+        ],
         total_size_bytes=0,
         browser_sort="name",
     )
@@ -122,6 +161,10 @@ def test_library_browser_snapshot_sorts_rows_by_size_desc(tmp_path: Path) -> Non
         active_root=library_root_path,
         library_roots=[root],
         series_metrics={},
+        catalog_entries=[
+            _catalog_entry(library_root_path / "alpha.cbz", kind="file", size_bytes=1),
+            _catalog_entry(library_root_path / "omega.cbz", kind="file", size_bytes=5),
+        ],
         total_size_bytes=0,
         browser_sort="-size",
     )
@@ -175,6 +218,9 @@ def test_library_browser_snapshot_uses_display_datetime_settings(
         active_root=library_root_path,
         library_roots=[root],
         series_metrics={},
+        catalog_entries=[
+            _catalog_entry(issue_file, kind="file", size_bytes=3, modified_at=modified_at),
+        ],
         total_size_bytes=0,
         browser_sort="name",
     )

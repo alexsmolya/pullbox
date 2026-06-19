@@ -7959,6 +7959,7 @@ function libraryBrowserPage(config) {
         rootPath: dataset.entryRootPath || this.rootPath || "",
         fileFormat: (dataset.entryFormat || "").toLowerCase(),
         canConvert: boolValue(dataset.entryConvertible),
+        canMutate: boolValue(dataset.entryCanMutate),
       };
     },
 
@@ -8126,6 +8127,12 @@ function libraryBrowserPage(config) {
         modifiedAt: data.modified_at || "",
         permissionsLabel: data.permissions_label || "",
         actions: data.actions || {},
+        canMutate: !!(
+          data.actions &&
+          (data.actions.can_rename ||
+            data.actions.can_auto_rename ||
+            data.actions.can_delete)
+        ),
         canConvert: !!(data.actions && data.actions.can_convert),
         canDelete: !!(data.actions && data.actions.can_delete),
         deleteContext: data.delete_context || {
@@ -8371,7 +8378,7 @@ function libraryBrowserPage(config) {
     },
 
     openRename: async function () {
-      if (!this.contextTarget || this.contextTarget.kind === "root") return;
+      if (!this.contextTarget || !this.contextTarget.canMutate) return;
       var entry = cloneEntry(this.contextTarget);
       this.closeContextMenu({ preserveTarget: true });
       this.modalLoading = true;
@@ -8397,7 +8404,7 @@ function libraryBrowserPage(config) {
     },
 
     openAutoRename: async function () {
-      if (!this.contextTarget || this.contextTarget.kind === "root") return;
+      if (!this.contextTarget || !this.contextTarget.canMutate) return;
       var entry = cloneEntry(this.contextTarget);
       this.closeContextMenu({ preserveTarget: true });
       this.modalLoading = true;
@@ -8464,7 +8471,7 @@ function libraryBrowserPage(config) {
     },
 
     openDelete: async function () {
-      if (!this.contextTarget || this.contextTarget.kind === "root") return;
+      if (!this.contextTarget || !this.contextTarget.canMutate) return;
       var entry = cloneEntry(this.contextTarget);
       this.closeContextMenu({ preserveTarget: true });
       this.modalLoading = true;

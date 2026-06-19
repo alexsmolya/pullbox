@@ -188,10 +188,14 @@ def _build_library_actions(
     *,
     kind: str,
     file_format: str | None,
+    tracking_scope: str = "tracked_file",
 ) -> LibraryBrowserActionFlags:
     normalized_format = (file_format or "").strip().lower()
-    if kind == "root":
+    if kind == "root" or tracking_scope == "tracked_descendant_folder":
         return LibraryBrowserActionFlags(can_properties=True)
+
+    if tracking_scope not in {"tracked_file", "tracked_series_folder"}:
+        return LibraryBrowserActionFlags(can_properties=False)
 
     return LibraryBrowserActionFlags(
         can_properties=True,
@@ -200,6 +204,90 @@ def _build_library_actions(
         can_convert=kind == "file" and normalized_format in _CONVERTIBLE_FILE_FORMATS,
         can_delete=True,
     )
+
+
+async def _tracked_library_file_exists(session: DbSession, target: Path) -> bool:
+    target_str = str(target).rstrip("/")
+    if (
+        await session.execute(select(LibraryFile.id).where(LibraryFile.file_path == target_str))
+    ).scalar_one_or_none() is not None:
+        return True
+
+    normalized_target = _normalize_library_path(target)
+    for stored_path in (
+        await session.execute(
+            select(LibraryFile.file_path).where(LibraryFile.file_name == target.name)
+        )
+    ).scalars():
+        if _normalize_library_path(stored_path) == normalized_target:
+            return True
+    return False
+
+
+async def _folder_has_tracked_descendants(session: DbSession, target: Path) -> bool:
+    prefix = str(target).rstrip("/")
+    file_count = int(
+        (
+            await session.execute(
+                select(func.count(LibraryFile.id)).where(LibraryFile.file_path.like(f"{prefix}/%"))
+            )
+        ).scalar_one()
+        or 0
+    )
+    if file_count > 0:
+        return True
+
+    series_count = int(
+        (
+            await session.execute(
+                select(func.count(Series.id)).where(Series.path.like(f"{prefix}/%"))
+            )
+        ).scalar_one()
+        or 0
+    )
+    return series_count > 0
+
+
+async def _library_browser_tracking_scope(
+    session: DbSession,
+    *,
+    target: Path,
+    kind: str,
+    delete_context: LibraryDeleteContext | None = None,
+) -> str:
+    """Return how strongly the Library catalog owns this browser path."""
+    if kind == "root":
+        return "root"
+    if kind == "file":
+        return (
+            "tracked_file" if await _tracked_library_file_exists(session, target) else "untracked"
+        )
+    if delete_context is not None and delete_context.mode == "series":
+        return "tracked_series_folder"
+
+    normalized_target = _normalize_library_path(target)
+    for series_path in (
+        await session.execute(select(Series.path).where(Series.path.is_not(None)))
+    ).scalars():
+        if _normalize_library_path(series_path) == normalized_target:
+            return "tracked_series_folder"
+
+    if await _folder_has_tracked_descendants(session, target):
+        return "tracked_descendant_folder"
+    return "untracked"
+
+
+def _require_library_catalog_entry(tracking_scope: str) -> None:
+    if tracking_scope == "untracked":
+        raise ValidationError("This path is not tracked by Pullbox's library catalog.")
+
+
+def _require_mutable_library_catalog_entry(tracking_scope: str) -> None:
+    _require_library_catalog_entry(tracking_scope)
+    if tracking_scope == "tracked_descendant_folder":
+        raise ValidationError(
+            "Only tracked series folders and tracked files can be changed from Library."
+        )
 
 
 def _kind_label(kind: str) -> str:
@@ -353,6 +441,8 @@ async def _validate_library_browser_convert(
     kind = _library_entry_kind(source, root_path=root_path)
     if kind != "file":
         raise ValidationError("Only files can be converted from the browser.")
+    if not await _tracked_library_file_exists(session, source):
+        raise ValidationError("This path is not tracked by Pullbox's library catalog.")
 
     source_format = source.suffix.lower().lstrip(".")
     if source_format not in _CONVERTIBLE_FILE_FORMATS:
@@ -420,6 +510,13 @@ async def library_browser_entry(
         kind=kind,
         trash_enabled=trash_dir is not None,
     )
+    tracking_scope = await _library_browser_tracking_scope(
+        session,
+        target=resolved,
+        kind=kind,
+        delete_context=delete_context,
+    )
+    _require_library_catalog_entry(tracking_scope)
     rename_context = await _build_library_rename_context(
         session,
         target=resolved,
@@ -439,7 +536,11 @@ async def library_browser_entry(
         item_count=_visible_child_count(resolved),
         modified_at=_entry_modified_at(resolved),
         permissions_label=_entry_permissions_label(resolved),
-        actions=_build_library_actions(kind=kind, file_format=file_format),
+        actions=_build_library_actions(
+            kind=kind,
+            file_format=file_format,
+            tracking_scope=tracking_scope,
+        ),
         delete_context=LibraryBrowserDeleteContext.model_validate(asdict(delete_context)),
         rename_context=rename_context,
         storage=_root_storage_summary(root_path),
@@ -463,6 +564,12 @@ async def _validate_library_browser_rename(
         kind=kind,
         trash_enabled=trash_dir is not None,
     )
+    tracking_scope = await _library_browser_tracking_scope(
+        session,
+        target=source,
+        kind=kind,
+        delete_context=delete_context,
+    )
     rename_context = await _build_library_rename_context(
         session,
         target=source,
@@ -472,6 +579,7 @@ async def _validate_library_browser_rename(
 
     if kind == "root":
         raise ValidationError("Library roots cannot be renamed from the browser.")
+    _require_mutable_library_catalog_entry(tracking_scope)
     if rename_context.stale_reference:
         raise ValidationError(
             rename_context.message
@@ -574,6 +682,13 @@ async def delete_library_browser_entry(
         kind=kind,
         trash_enabled=trash_dir is not None,
     )
+    tracking_scope = await _library_browser_tracking_scope(
+        session,
+        target=target,
+        kind=kind,
+        delete_context=delete_context,
+    )
+    _require_mutable_library_catalog_entry(tracking_scope)
     outcome = await delete_library_entry(
         session,
         target=target,
