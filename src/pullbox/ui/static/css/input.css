@@ -4139,15 +4139,16 @@
   }
   .series-domain-alt-strip {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
+    flex-direction: column;
     gap: 0.5rem;
-    flex-wrap: wrap;
   }
   .series-domain-alt-list {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.35rem;
     flex-wrap: wrap;
+    min-height: 0;
   }
   .series-domain-alt-pill {
     gap: 0.35rem;
@@ -4165,6 +4166,7 @@
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
+    width: 100%;
   }
   .series-domain-alt-input {
     width: 180px;

@@ -1,7 +1,6 @@
 <div data-testid="series-detail-alternate-names" class="series-domain-alt-panel">
   <p class="series-domain-alt-title">Alternate Names</p>
   <div class="series-domain-alt-strip">
-    {% include "partials/series_detail_alternate_names_list.html" %}
     <form
       hx-post="/htmx/series/{{ series.id }}/alternate-names"
       hx-target="#series-detail-alternate-names-list"
@@ -19,5 +18,6 @@
         Add
       </button>
     </form>
+    {% include "partials/series_detail_alternate_names_list.html" %}
   </div>
 </div>
