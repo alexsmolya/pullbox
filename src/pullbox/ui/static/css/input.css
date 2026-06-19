@@ -5159,21 +5159,26 @@
   }
   .series-wall-monitor-dot {
     position: absolute;
-    top: 10px;
-    left: 10px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    border: 2px solid var(--pb-surface-card);
-    z-index: 2;
+    top: 9px;
+    left: 9px;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--pb-text-inverse);
+    background: var(--pb-brand-signal);
+    border: 2px solid color-mix(in srgb, var(--pb-surface-card) 92%, white);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, black 42%, transparent),
+      0 10px 22px color-mix(in srgb, black 34%, transparent);
+    z-index: 3;
   }
-  .series-wall-monitor-dot.on {
-    background: var(--pb-status-success);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--pb-status-success) 40%, transparent);
-  }
-  .series-wall-monitor-dot.off {
-    background: var(--pb-text-tertiary);
-    opacity: 0.6;
+  .series-wall-monitor-dot svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    flex: 0 0 auto;
   }
   .series-wall-selection-control {
     position: absolute;

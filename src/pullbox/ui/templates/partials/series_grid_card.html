@@ -11,10 +11,18 @@
   class="series-wall-card"
 >
   <div data-testid="series-grid-cover-frame" class="series-wall-cover-wrap">
-    <span
-      data-testid="series-monitored-indicator"
-      class="series-wall-monitor-dot {{ 'on' if s.monitored else 'off' }}"
-    ></span>
+    {% if s.monitored %}
+      <span
+        data-testid="series-monitored-indicator"
+        class="series-wall-monitor-dot"
+        aria-label="Monitored"
+        title="Monitored"
+      >
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M5 10.6 8.2 14 15 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </span>
+    {% endif %}
     <label data-series-selection-control="grid" class="series-wall-selection-control">
       <input
         type="checkbox"

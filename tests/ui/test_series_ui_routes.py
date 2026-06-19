@@ -381,9 +381,25 @@ class TestSeriesRouteContracts:
         assert 'data-testid="series-grid-hover-years"' in response.text
         assert 'data-testid="series-grid-hover-type"' not in response.text
         assert 'data-testid="series-grid-hover-owned"' in response.text
+        assert 'data-testid="series-monitored-indicator"' in response.text
+        assert 'aria-label="Monitored"' in response.text
         assert 'data-testid="series-compact-view"' not in response.text
         assert "Visual shelf" not in response.text
         assert "Cover-first browsing" not in response.text
+
+    async def test_grid_view_hides_cover_monitor_indicator_for_paused_series(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        authenticated_client.cookies.set("series_view", "grid")
+        response = await authenticated_client.get(
+            "/series?status=ended&q=Batman%20Beyond&per_page=5"
+        )
+
+        assert response.status_code == 200
+        assert "Batman Beyond" in response.text
+        assert 'data-testid="series-monitored-indicator"' not in response.text
 
     async def test_grid_view_hover_shows_full_non_standard_series_type(
         self,

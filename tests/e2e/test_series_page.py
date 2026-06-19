@@ -378,6 +378,12 @@ class TestSeriesPage:
         assert first_card.locator("[data-testid='series-grid-hover-type']").count() == 0
         assert first_card.locator("[data-testid='series-grid-hover-owned']").count() == 1
         assert first_card.locator(".series-wall-monitor-dot").is_visible()
+        assert (
+            first_card.locator("[data-testid='series-monitored-indicator']").get_attribute(
+                "aria-label"
+            )
+            == "Monitored"
+        )
         assert first_card.locator(".series-wall-ring").is_visible()
         assert first_card.locator(".series-wall-overlay").count() == 1
         cover_frame_alignment = authed_page.evaluate(
@@ -689,7 +695,7 @@ class TestSeriesPage:
                 }
                 return {
                     text: card.textContent || "",
-                    hasOffDot: Boolean(card.querySelector(".series-wall-monitor-dot.off")),
+                    hasMonitorBadge: Boolean(card.querySelector(".series-wall-monitor-dot")),
                 };
             }"""
         )
@@ -697,7 +703,7 @@ class TestSeriesPage:
         assert ended_card is not None
         assert "Batman Beyond" in ended_card["text"]
         assert "Monitored" not in ended_card["text"]
-        assert ended_card["hasOffDot"] is True
+        assert ended_card["hasMonitorBadge"] is False
 
     def test_grid_view_packs_more_cards_per_row_on_wide_screens(
         self,
