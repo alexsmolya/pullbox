@@ -218,10 +218,18 @@ class TestUtilitiesRouteContracts:
             in detail_response.text
         )
         assert (
-            'class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-auto'
+            'class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden'
             in detail_response.text
         )
-        assert 'class="log-detail min-w-0 max-w-full overflow-x-auto' in detail_response.text
+        assert (
+            'class="log-line flex w-full min-w-0 max-w-full gap-0 overflow-hidden'
+            in detail_response.text
+        )
+        assert (
+            "x-bind:title=\"[entry.formatted_timestamp || entry.timestamp || ''"
+            in detail_response.text
+        )
+        assert 'class="log-detail min-w-0 max-w-full overflow-hidden' in detail_response.text
 
     async def test_utilities_history_uses_shared_table_contract(
         self,

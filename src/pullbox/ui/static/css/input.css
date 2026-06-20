@@ -7716,6 +7716,8 @@ input[type="range"].range-pb::-moz-range-thumb {
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  overflow-x: hidden;
+  contain: inline-size;
   background: color-mix(in srgb, var(--pb-bg-surface) 82%, var(--pb-bg-base));
   background-image:
     repeating-linear-gradient(
@@ -7729,6 +7731,9 @@ input[type="range"].range-pb::-moz-range-thumb {
 .log-line {
   width: 100%;
   min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
   border-left: 3px solid transparent;
 }
 .log-line:hover { background: color-mix(in srgb, var(--pb-bg-card-hover) 36%, transparent); }
@@ -7743,6 +7748,8 @@ input[type="range"].range-pb::-moz-range-thumb {
 .log-line.expanded { background: color-mix(in srgb, var(--pb-bg-card-hover) 54%, transparent) !important; }
 .log-detail {
   max-width: calc(100% - 140px);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .log-path {
   overflow-wrap: anywhere;

@@ -151,10 +151,14 @@ class TestSystemRouteContracts:
             in response.text
         )
         assert (
-            'class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-auto'
+            'class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden'
             in response.text
         )
-        assert 'class="log-detail min-w-0 max-w-full overflow-x-auto' in response.text
+        assert (
+            'class="log-line flex w-full min-w-0 max-w-full gap-0 overflow-hidden' in response.text
+        )
+        assert "x-bind:title=\"[entry.formatted_timestamp || entry.timestamp || ''" in response.text
+        assert 'class="log-detail min-w-0 max-w-full overflow-hidden' in response.text
 
     async def test_system_logs_tab_accepts_server_rendered_log_rows(
         self,
