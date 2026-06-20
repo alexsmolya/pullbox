@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 def _create_mylar_db(
     db_path: Path,
     series: list[dict[str, str | int | None]] | None = None,
+    issues: list[dict[str, str | int | None]] | None = None,
+    annuals: list[dict[str, str | int | None]] | None = None,
 ) -> None:
     """Create a fake Mylar3 database with a comic table."""
     conn = sqlite3.connect(str(db_path))
@@ -46,6 +48,64 @@ def _create_mylar_db(
                 s.get("ComicImage"),
             ),
         )
+    if issues is not None:
+        conn.execute("""
+            CREATE TABLE issues (
+                IssueID TEXT,
+                ComicName TEXT,
+                IssueName TEXT,
+                Issue_Number TEXT,
+                ComicID TEXT,
+                Location TEXT,
+                IssueDate TEXT,
+                Int_IssueNumber INTEGER
+            )
+        """)
+        for issue in issues:
+            conn.execute(
+                "INSERT INTO issues VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    issue.get("IssueID"),
+                    issue.get("ComicName"),
+                    issue.get("IssueName"),
+                    issue.get("Issue_Number"),
+                    issue.get("ComicID"),
+                    issue.get("Location"),
+                    issue.get("IssueDate"),
+                    issue.get("Int_IssueNumber"),
+                ),
+            )
+    if annuals is not None:
+        conn.execute("""
+            CREATE TABLE annuals (
+                IssueID TEXT,
+                Issue_Number TEXT,
+                IssueName TEXT,
+                IssueDate TEXT,
+                ComicID TEXT,
+                Location TEXT,
+                Int_IssueNumber INTEGER,
+                ComicName TEXT,
+                ReleaseComicID TEXT,
+                ReleaseComicName TEXT
+            )
+        """)
+        for annual in annuals:
+            conn.execute(
+                "INSERT INTO annuals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    annual.get("IssueID"),
+                    annual.get("Issue_Number"),
+                    annual.get("IssueName"),
+                    annual.get("IssueDate"),
+                    annual.get("ComicID"),
+                    annual.get("Location"),
+                    annual.get("Int_IssueNumber"),
+                    annual.get("ComicName"),
+                    annual.get("ReleaseComicID"),
+                    annual.get("ReleaseComicName"),
+                ),
+            )
     conn.commit()
     conn.close()
 
@@ -159,6 +219,62 @@ class TestComicVineId:
         results = await reader.read_series()
 
         assert results[0].mylar3_cv_id == 47050
+
+    @pytest.mark.asyncio
+    async def test_issue_metadata_is_preserved_from_mylar3_issues(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        db = tmp_path / "mylar.db"
+        series_dir = tmp_path / "comics" / "Batman"
+        series_dir.mkdir(parents=True)
+        issue_path = series_dir / "Batman 001 (2016).cbz"
+        issue_path.touch()
+        _create_mylar_db(
+            db,
+            [
+                {
+                    "ComicID": "CV-47050",
+                    "ComicName": "Batman",
+                    "ComicYear": "2016",
+                    "ComicPublisher": "DC Comics",
+                    "ComicLocation": str(series_dir),
+                    "Status": "Ended",
+                    "Total": 85,
+                },
+            ],
+            issues=[
+                {
+                    "IssueID": "500001",
+                    "ComicID": "47050",
+                    "ComicName": "Batman",
+                    "IssueName": "I Am Gotham",
+                    "Issue_Number": "1",
+                    "Location": issue_path.name,
+                    "IssueDate": "2016-08-01",
+                },
+            ],
+        )
+
+        reader = Mylar3Reader(db)
+        results = await reader.read_series()
+
+        assert len(results) == 1
+        series = results[0]
+        assert series.diagnostics["issue_count_hint"] == 85
+        assert series.diagnostics["series_status"] == "Ended"
+        assert series.files[0].comicvine_issue_id == 500001
+        assert series.files[0].comicvine_series_id == 47050
+        assert series.files[0].issue_count_hint == 85
+        assert series.files[0].series_status == "Ended"
+        assert series.files[0].metadata_signals["comicvine_issue_id"] == "mylar3"
+        assert series.files[0].metadata_signals["comicvine_series_id"] == "mylar3"
+        assert series.files[0].metadata_diagnostics["mylar3_issue"] == {
+            "issue_id": 500001,
+            "issue_number": "1",
+            "title": "I Am Gotham",
+            "release_date": "2016-08-01",
+        }
 
 
 class TestStatusHandling:

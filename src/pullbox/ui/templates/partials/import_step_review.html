@@ -980,13 +980,14 @@
                   <div>
                     <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-pb-text-dim">Blocked files</p>
                     <p class="mt-1 text-sm leading-6 text-pb-text-sec">
-                      These files exceeded the archive safety limit during scan. Allowing a file applies only to this import job and then reruns normal issue matching.
+                      These files need safety review before import. Resource-limit blocks can be allowed once; corrupt or unsafe files must be skipped or replaced.
                     </p>
                   </div>
                   <div class="space-y-2">
                     {% for blocked_file in safety_blocked_files_by_series_id.get(item.id, []) %}
                     {% set blocked_diagnostics = blocked_file.diagnostics or {} %}
                     {% set safety_block = blocked_diagnostics.get('safety_block', {}) %}
+                    {% set safety_block_overrideable = safety_block.get('overrideable', true) is not sameas false %}
                     <div class="rounded-lg border border-pb-border bg-pb-card/70 p-3">
                       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div class="min-w-0">
@@ -996,6 +997,7 @@
                           </p>
                         </div>
                         <div class="flex shrink-0 flex-wrap items-center gap-2">
+                          {% if safety_block_overrideable %}
                           <button
                             type="button"
                             class="btn-primary btn-sm"
@@ -1007,6 +1009,9 @@
                           >
                             Allow once
                           </button>
+                          {% else %}
+                          <span class="pill pill-error justify-center">Cannot override</span>
+                          {% endif %}
                           <button
                             type="button"
                             class="btn-ghost btn-sm"

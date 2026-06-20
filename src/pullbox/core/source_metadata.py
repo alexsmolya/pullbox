@@ -280,6 +280,7 @@ class MetadataSignal(enum.StrEnum):
     COMICINFO = "comicinfo"
     SIDECAR = "sidecar"
     FOLDER_HINT = "folder_hint"
+    MYLAR3 = "mylar3"
 
 
 @dataclass(frozen=True, slots=True)

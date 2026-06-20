@@ -2374,6 +2374,7 @@ class TestImportShellRouteContracts:
                             "kind": "file_safety_blocked",
                             "reason": "Archive decompressed size exceeds limit",
                             "details": ["/tmp/review-1/oversized.cbz"],
+                            "overrideable": True,
                         }
                     },
                 )
@@ -2394,6 +2395,53 @@ class TestImportShellRouteContracts:
         assert "/safety/allow-once?status=safety_blocked" in response.text
         assert "/safety/skip?status=safety_blocked" in response.text
         assert 'hx-target="#import-step-review-shell"' in response.text
+
+    async def test_import_review_non_overrideable_safety_block_hides_allow_action(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.import_job import ImportedFile, ImportedFileStatus, ImportedSeries
+
+        job_id = await _seed_import_review_job(sec_db)
+        async with sec_db() as session:
+            series = await session.get(ImportedSeries, 1)
+            assert series is not None
+            series.files_matched = 0
+            series.diagnostics = {"safety_blocked_files": 1}
+            session.add(
+                ImportedFile(
+                    import_job_id=job_id,
+                    import_series_id=series.id,
+                    file_path="/tmp/review-1/corrupt.cbz",
+                    file_name="Corrupt Download.cbz",
+                    file_size=694,
+                    file_format="cbz",
+                    status=ImportedFileStatus.SAFETY_BLOCKED,
+                    error_message="Archive could not be inspected",
+                    diagnostics={
+                        "safety_block": {
+                            "kind": "file_safety_blocked",
+                            "reason": "Archive could not be inspected",
+                            "details": ["/tmp/review-1/corrupt.cbz"],
+                            "overrideable": False,
+                        }
+                    },
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get(
+            f"/import/{job_id}/review-partial?status=safety_blocked"
+        )
+
+        assert response.status_code == 200
+        assert "Corrupt Download.cbz" in response.text
+        assert "Cannot override" in response.text
+        assert 'data-testid="import-review-allow-safety-file"' not in response.text
+        assert "/safety/allow-once?status=safety_blocked" not in response.text
+        assert 'data-testid="import-review-skip-safety-file"' in response.text
+        assert "/safety/skip?status=safety_blocked" in response.text
 
     async def test_import_review_allow_safety_file_post_refreshes_review(
         self,
