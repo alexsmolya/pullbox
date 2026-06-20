@@ -239,6 +239,8 @@ class TestSystemRouteContracts:
         assert "<th>Next execution</th>" in tasks.text
 
         assert 'data-testid="system-backups-table"' in backups.text
+        assert 'data-testid="system-restore-recovery-banner"' in backups.text
+        assert "/api/v1/system/restore-recovery" in backups.text
         assert 'class="downloads-table-wrap"' in backups.text
         assert 'class="downloads-table min-w-[880px]"' in backups.text
         assert 'class="downloads-action-group is-hover-reveal justify-end"' in backups.text

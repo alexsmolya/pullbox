@@ -590,19 +590,45 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await scheduler.load_persisted_stats()
     scheduler.start()
 
-    from pullbox.tasks.cover_backfill_task import backfill_series_covers
+    from pullbox.services.restore_recovery_service import (
+        has_pending_restore_recovery,
+        run_restore_recovery_if_pending,
+    )
 
-    startup_cover_task = asyncio.create_task(backfill_series_covers(limit=24))
-    _startup_background_tasks.add(startup_cover_task)
+    restore_recovery_pending = has_pending_restore_recovery()
+    if restore_recovery_pending:
+        restore_recovery_task = asyncio.create_task(run_restore_recovery_if_pending())
+        _startup_background_tasks.add(restore_recovery_task)
 
-    def _cleanup_startup_task(task: asyncio.Task[object]) -> None:
-        _startup_background_tasks.discard(task)
-        with suppress(asyncio.CancelledError):
-            exc = task.exception()
-            if exc is not None:
-                logger.warning("startup_cover_backfill_failed", exc_info=exc)
+        def _cleanup_restore_recovery_task(task: asyncio.Task[object]) -> None:
+            _startup_background_tasks.discard(task)
+            with suppress(asyncio.CancelledError):
+                exc = task.exception()
+                if exc is not None:
+                    logger.warning("restore_recovery_startup_failed", exc_info=exc)
+                    return
+                result = task.result()
+                if isinstance(result, dict):
+                    logger.info(
+                        "restore_recovery_startup_complete",
+                        status=result.get("status"),
+                    )
 
-    startup_cover_task.add_done_callback(_cleanup_startup_task)
+        restore_recovery_task.add_done_callback(_cleanup_restore_recovery_task)
+    else:
+        from pullbox.tasks.cover_backfill_task import backfill_series_covers
+
+        startup_cover_task = asyncio.create_task(backfill_series_covers(limit=24))
+        _startup_background_tasks.add(startup_cover_task)
+
+        def _cleanup_startup_task(task: asyncio.Task[object]) -> None:
+            _startup_background_tasks.discard(task)
+            with suppress(asyncio.CancelledError):
+                exc = task.exception()
+                if exc is not None:
+                    logger.warning("startup_cover_backfill_failed", exc_info=exc)
+
+        startup_cover_task.add_done_callback(_cleanup_startup_task)
 
     from pullbox.services.whats_new_refresh_queue import refresh_whats_new_cache_if_needed
 
