@@ -431,6 +431,41 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.warning("import_recovery_failed", subsystem="import_recovery", exc_info=True)
 
+    # Resume any deferred ComicInfo.xml rewrites from imports that completed
+    # before the app stopped. This is background-only so startup stays fast.
+    try:
+        from pullbox.composition.services import build_import_service
+
+        factory = get_session_factory()
+
+        async def _resume_deferred_import_comicinfo() -> int:
+            async with factory() as session:
+                import_service = await build_import_service(session)
+            return await import_service.recover_pending_comicinfo_enrichment(factory)
+
+        comicinfo_recovery_task = asyncio.create_task(_resume_deferred_import_comicinfo())
+        _startup_background_tasks.add(comicinfo_recovery_task)
+
+        def _cleanup_comicinfo_recovery_task(task: asyncio.Task[object]) -> None:
+            _startup_background_tasks.discard(task)
+            with suppress(asyncio.CancelledError):
+                exc = task.exception()
+                if exc is not None:
+                    logger.warning("import_comicinfo_recovery_failed", exc_info=exc)
+                    return
+
+                recovered = task.result()
+                if isinstance(recovered, int) and recovered:
+                    logger.info("import_comicinfo_recovered_at_startup", jobs=recovered)
+
+        comicinfo_recovery_task.add_done_callback(_cleanup_comicinfo_recovery_task)
+    except Exception:
+        logger.warning(
+            "import_comicinfo_recovery_startup_failed",
+            subsystem="import_recovery",
+            exc_info=True,
+        )
+
     # Load scheduler interval overrides from SystemConfig (DB) first,
     # falling back to PullboxSettings (env vars / defaults)
     _interval_keys = [

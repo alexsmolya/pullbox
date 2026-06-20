@@ -376,6 +376,12 @@ async def main() -> None:
             finally:
                 import_service_module.register_library_file = original_register
 
+            from pullbox.services.import_comicinfo_enrichment import comicinfo_enrichment_tasks
+
+            pending_enrichment = list(comicinfo_enrichment_tasks)
+            if pending_enrichment:
+                await asyncio.gather(*pending_enrichment, return_exceptions=True)
+
             await session.refresh(job)
             library_files = (
                 (await session.execute(select(LibraryFile).order_by(LibraryFile.file_name)))

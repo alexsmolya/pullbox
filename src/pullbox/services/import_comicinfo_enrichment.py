@@ -13,7 +13,7 @@ import structlog
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import joinedload
 
-from pullbox.models.import_job import ImportedFile, ImportedFileStatus
+from pullbox.models.import_job import ImportedFile, ImportedFileStatus, ImportJob, ImportJobStatus
 from pullbox.models.issue import Issue
 from pullbox.models.library import LibraryFile
 from pullbox.models.series import Series
@@ -86,6 +86,27 @@ def schedule_import_comicinfo_enrichment(
     task.add_done_callback(comicinfo_enrichment_tasks.discard)
 
 
+async def run_pending_import_comicinfo_enrichment(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    build_comicinfo_payload: ImportComicInfoBuildPayload,
+    apply_comicinfo: ImportComicInfoApply,
+    log_event: ImportComicInfoLogEvent,
+) -> int:
+    """Refresh deferred ComicInfo metadata for all completed jobs with pending rows."""
+    async with comicinfo_enrichment_gate():
+        pending_job_ids = await _load_pending_import_job_ids(session_factory)
+        for job_id in pending_job_ids:
+            await run_import_comicinfo_enrichment(
+                session_factory,
+                job_id=job_id,
+                build_comicinfo_payload=build_comicinfo_payload,
+                apply_comicinfo=apply_comicinfo,
+                log_event=log_event,
+            )
+        return len(pending_job_ids)
+
+
 async def run_import_comicinfo_enrichment(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -138,10 +159,35 @@ async def _load_pending_imported_file_ids(
         return ids
 
 
+async def _load_pending_import_job_ids(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> list[int]:
+    async with session_factory() as session:
+        result = await session.execute(
+            sa_select(ImportedFile.import_job_id, ImportedFile.diagnostics)
+            .join(ImportJob, ImportedFile.import_job_id == ImportJob.id)
+            .where(ImportJob.status == ImportJobStatus.COMPLETED)
+            .where(ImportedFile.status == ImportedFileStatus.IMPORTED)
+            .order_by(ImportedFile.import_job_id)
+        )
+        ids: list[int] = []
+        seen: set[int] = set()
+        for job_id, diagnostics in result.all():
+            if int(job_id) in seen or not _is_pending_comicinfo_enrichment_diagnostics(diagnostics):
+                continue
+            seen.add(int(job_id))
+            ids.append(int(job_id))
+        return ids
+
+
 def _is_pending_comicinfo_enrichment(imported_file: ImportedFile | None) -> bool:
     if imported_file is None:
         return False
-    diagnostics = imported_file.diagnostics if isinstance(imported_file.diagnostics, dict) else {}
+    return _is_pending_comicinfo_enrichment_diagnostics(imported_file.diagnostics)
+
+
+def _is_pending_comicinfo_enrichment_diagnostics(diagnostics: Any) -> bool:
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
     details = diagnostics.get(COMICINFO_ENRICHMENT_DIAGNOSTIC_KEY)
     return isinstance(details, dict) and details.get("status") == "pending"
 

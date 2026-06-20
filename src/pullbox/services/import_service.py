@@ -21,7 +21,10 @@ from pullbox.core.file_ops import (
 )
 from pullbox.core.mylar3_reader import Mylar3Reader
 from pullbox.models.import_job import ImportedSeries, ImportJob, ImportJobAction, ImportJobStatus
-from pullbox.services.import_comicinfo_enrichment import schedule_import_comicinfo_enrichment
+from pullbox.services.import_comicinfo_enrichment import (
+    run_pending_import_comicinfo_enrichment,
+    schedule_import_comicinfo_enrichment,
+)
 from pullbox.services.import_confirm_policy import apply_confirm_import_policy
 from pullbox.services.import_confirmation import confirm_import_job
 from pullbox.services.import_counters import job_stats as import_job_stats
@@ -116,7 +119,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from pullbox.core.collection_scanner import DiscoveredSeries
     from pullbox.core.events import EventBus
@@ -562,6 +565,18 @@ class ImportService(
                 )
         finally:
             self._import_runtime_cache_by_job.pop(job_id, None)
+
+    async def recover_pending_comicinfo_enrichment(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> int:
+        """Resume deferred ComicInfo rewrites left pending after a restart."""
+        return await run_pending_import_comicinfo_enrichment(
+            session_factory,
+            build_comicinfo_payload=self._build_comicinfo_payload_for_issue,
+            apply_comicinfo=self._apply_comicinfo_to_imported_artifact,
+            log_event=self._log_event,
+        )
 
     async def _process_series_files(
         self,
