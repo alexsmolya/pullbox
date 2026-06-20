@@ -9,11 +9,12 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import pullbox.services.import_series_matching as import_series_matching
 from pullbox.core.exceptions import ImportProviderDegradedError, JobPausedError
 from pullbox.core.source_metadata import SourceMetadata
+from pullbox.models import Base
 from pullbox.models.import_job import (
     ImportedFile,
     ImportedFileStatus,
@@ -453,6 +454,151 @@ async def test_series_matching_emits_heartbeat_while_comicvine_evaluation_is_pen
     assert heartbeat.status == ImportJobStatus.MATCHING
     assert heartbeat.current_series == "Saga"
     assert heartbeat.estimated_seconds_remaining == 42
+
+
+async def test_series_matching_emits_heartbeat_while_volume_rebucket_is_pending(
+    async_engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        import_series_matching,
+        "_MATCH_PROGRESS_HEARTBEAT_SECONDS",
+        0.01,
+        raising=False,
+    )
+
+    async with factory() as seed_session:
+        job = ImportJob(
+            source_path="/tmp/imports",
+            source_type=ImportSourceType.FILESYSTEM,
+            status=ImportJobStatus.MATCHING,
+            scan_started_at=datetime.now(UTC),
+        )
+        seed_session.add(job)
+        await seed_session.flush()
+        item = ImportedSeries(
+            import_job_id=job.id,
+            raw_series_name="Marvel Action Spider-Man",
+            raw_year=2019,
+            status=ImportSeriesStatus.PENDING,
+            file_count=1,
+            files_total=1,
+            source_folder="/tmp/imports",
+        )
+        seed_session.add(item)
+        await seed_session.flush()
+        seed_session.add(
+            ImportedFile(
+                import_job_id=job.id,
+                import_series_id=item.id,
+                file_path="/tmp/imports/Marvel Action Spider-Man v01 - New Beginning.cbr",
+                file_name="Marvel Action Spider-Man v01 - New Beginning (2019) (Digital).cbr",
+                file_format="cbr",
+                parsed_series="Marvel Action Spider-Man",
+                parsed_issue_number=1.0,
+                parsed_year=2019,
+                status=ImportedFileStatus.PENDING,
+                diagnostics={"source_issue_type": IssueType.VOLUME.value},
+            )
+        )
+        await seed_session.commit()
+        job_id = job.id
+
+    release_rebucket = asyncio.Event()
+    progress_events: list[ImportProgressEvent] = []
+
+    async def evaluate_match(**kwargs: Any) -> ComicVineMatchEvaluation:
+        raw_name = str(kwargs["raw_name"])
+        if raw_name == "Marvel Action Spider-Man":
+            return _matched_eval(
+                cv_id=124930,
+                title="Marvel Action: Spider-Man",
+                year=2020,
+                issue_count=3,
+                raw_name=raw_name,
+            )
+        await release_rebucket.wait()
+        return _matched_eval(
+            cv_id=119728,
+            title="Marvel Action: Spider-Man: A New Beginning",
+            year=2019,
+            issue_count=1,
+            raw_name=raw_name,
+        )
+
+    async def raise_if_cancelled(_session: AsyncSession, _job_id: int) -> None:
+        return None
+
+    async def reclassify_duplicates(_session: AsyncSession, _job: ImportJob) -> int | None:
+        return None
+
+    async def recompute_series_counters(_session: AsyncSession, _job: ImportJob) -> None:
+        return None
+
+    async def log_event(
+        _session: AsyncSession,
+        _job_id: int,
+        _level: str,
+        _event: str,
+        *,
+        message: str,
+        **_details: Any,
+    ) -> None:
+        return None
+
+    async def emit_progress(
+        _session: AsyncSession,
+        _job: ImportJob,
+        event: ImportProgressEvent,
+        progress_callback,
+    ) -> None:
+        await progress_callback(event)
+
+    async def maybe_slow_item_delay() -> None:
+        return None
+
+    async def progress_callback(event: ImportProgressEvent) -> None:
+        progress_events.append(event)
+        if str(event.message).startswith("Still checking volume subtitle matches"):
+            release_rebucket.set()
+
+    async with factory() as session:
+        job = await session.get(ImportJob, job_id)
+        assert job is not None
+        await asyncio.wait_for(
+            run_import_series_matching(
+                session,
+                job,
+                metadata_provider=None,
+                source_metadata_for_series=source_metadata_for_matching_series,
+                evaluate_match=evaluate_match,
+                raise_if_cancelled=raise_if_cancelled,
+                reclassify_duplicates=reclassify_duplicates,
+                recompute_series_counters=recompute_series_counters,
+                log_event=log_event,
+                emit_progress=emit_progress,
+                phase_progress=phase_progress,
+                estimate_remaining_seconds=lambda *_args: 42,
+                job_stats=lambda _job: {},
+                maybe_slow_item_delay=maybe_slow_item_delay,
+                progress_callback=progress_callback,
+            ),
+            timeout=1,
+        )
+
+    rebucket_events = [event for event in progress_events if event.current_item_stage == "rebucket"]
+    assert rebucket_events
+    assert rebucket_events[0].message == (
+        "Checking volume subtitle matches for Marvel Action Spider-Man..."
+    )
+    assert any(
+        str(event.message).startswith("Still checking volume subtitle matches")
+        for event in rebucket_events
+    )
+    assert all(
+        event.current_item_stage_label == "Checking volume subtitles" for event in rebucket_events
+    )
 
 
 async def test_series_matching_current_item_progress_is_series_local(async_engine) -> None:
@@ -1120,6 +1266,222 @@ async def test_collection_volume_subtitles_rebucket_to_separate_one_issue_series
         rows_by_cv_id[119728].id,
         rows_by_cv_id[122410].id,
     }
+
+
+async def test_collection_volume_rebucket_does_not_block_persistent_cache_writes(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "rebucket-lock.db"
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{db_path}",
+        connect_args={"timeout": 0.05},
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as seed_session:
+        job = ImportJob(
+            source_path="/tmp/imports",
+            source_type=ImportSourceType.FILESYSTEM,
+            status=ImportJobStatus.MATCHING,
+            scan_started_at=datetime.now(UTC),
+        )
+        seed_session.add(job)
+        await seed_session.flush()
+        item = ImportedSeries(
+            import_job_id=job.id,
+            raw_series_name="Marvel Action Spider-Man",
+            raw_year=2019,
+            status=ImportSeriesStatus.PENDING,
+            file_count=1,
+            files_total=1,
+            source_folder="/tmp/imports",
+        )
+        seed_session.add(item)
+        await seed_session.flush()
+        seed_session.add(
+            ImportedFile(
+                import_job_id=job.id,
+                import_series_id=item.id,
+                file_path="/tmp/imports/Marvel Action Spider-Man v01 - New Beginning.cbr",
+                file_name="Marvel Action Spider-Man v01 - New Beginning (2019) (Digital).cbr",
+                file_format="cbr",
+                parsed_series="Marvel Action Spider-Man",
+                parsed_issue_number=1.0,
+                parsed_year=2019,
+                status=ImportedFileStatus.PENDING,
+                diagnostics={"source_issue_type": IssueType.VOLUME.value},
+            )
+        )
+        await seed_session.commit()
+        job_id = job.id
+
+    async def evaluate_match(**kwargs: Any) -> ComicVineMatchEvaluation:
+        raw_name = str(kwargs["raw_name"])
+        if raw_name == "Marvel Action Spider-Man":
+            return _matched_eval(
+                cv_id=124930,
+                title="Marvel Action: Spider-Man",
+                year=2020,
+                issue_count=3,
+                raw_name=raw_name,
+            )
+
+        # This mirrors the persistent ComicVine cache: it writes through a
+        # separate session while the import session is mid-match.
+        async with factory() as cache_like_session:
+            cache_like_session.add(
+                ImportJobLog(
+                    import_job_id=job_id,
+                    logged_at=datetime.now(UTC),
+                    level="DEBUG",
+                    event="cache_like_rebucket_write",
+                    message="cache-like writer committed during rebucket",
+                    data={},
+                )
+            )
+            await cache_like_session.commit()
+
+        return _matched_eval(
+            cv_id=119728,
+            title="Marvel Action: Spider-Man: A New Beginning",
+            year=2019,
+            issue_count=1,
+            raw_name=raw_name,
+        )
+
+    try:
+        await _run_matching_for_test(
+            factory,
+            job_id,
+            evaluate_match=evaluate_match,
+        )
+
+        async with factory() as verify_session:
+            cache_log_count = await verify_session.scalar(
+                select(func.count(ImportJobLog.id)).where(
+                    ImportJobLog.event == "cache_like_rebucket_write"
+                )
+            )
+            split_row = await verify_session.scalar(
+                select(ImportedSeries).where(ImportedSeries.cv_id == 119728)
+            )
+    finally:
+        await engine.dispose()
+
+    assert cache_log_count == 1
+    assert split_row is not None
+    assert split_row.cv_match_method == "volume_subtitle_series_match"
+
+
+async def test_trusted_mylar_series_match_skips_volume_subtitle_rebucket(
+    async_engine,
+) -> None:
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+
+    async with factory() as seed_session:
+        job = ImportJob(
+            source_path="/tmp/imports/mylar3.db",
+            source_type=ImportSourceType.MYLAR3,
+            status=ImportJobStatus.MATCHING,
+            scan_started_at=datetime.now(UTC),
+        )
+        seed_session.add(job)
+        await seed_session.flush()
+        item = ImportedSeries(
+            import_job_id=job.id,
+            raw_series_name="Alien By Shalvey & Broccardo",
+            raw_year=2024,
+            status=ImportSeriesStatus.PENDING,
+            file_count=2,
+            files_total=2,
+            source_folder="/tmp/imports/Alien By Shalvey & Broccardo",
+            cv_id=154680,
+            cv_match_method="mylar3_cv_id",
+        )
+        seed_session.add(item)
+        await seed_session.flush()
+        seed_session.add_all(
+            [
+                ImportedFile(
+                    import_job_id=job.id,
+                    import_series_id=item.id,
+                    file_path="/tmp/imports/Alien by Shalvey & Broccardo v01 - Thaw.cbz",
+                    file_name=(
+                        "Alien by Shalvey & Broccardo v01 - Thaw "
+                        "(2024) (Digital) (dekabro-Empire).cbz"
+                    ),
+                    file_format="cbz",
+                    parsed_series="Alien by Shalvey & Broccardo",
+                    parsed_issue_number=1.0,
+                    parsed_year=2024,
+                    status=ImportedFileStatus.PENDING,
+                    diagnostics={"source_issue_type": IssueType.VOLUME.value},
+                ),
+                ImportedFile(
+                    import_job_id=job.id,
+                    import_series_id=item.id,
+                    file_path="/tmp/imports/Alien by Shalvey & Broccardo v02 - Descendant.cbz",
+                    file_name=(
+                        "Alien by Shalvey & Broccardo v02 - Descendant "
+                        "(2024) (Digital) (Kileko-Empire).cbz"
+                    ),
+                    file_format="cbz",
+                    parsed_series="Alien by Shalvey & Broccardo",
+                    parsed_issue_number=2.0,
+                    parsed_year=2024,
+                    status=ImportedFileStatus.PENDING,
+                    diagnostics={"source_issue_type": IssueType.VOLUME.value},
+                ),
+            ]
+        )
+        await seed_session.commit()
+        job_id = job.id
+        parent_id = item.id
+
+    seen_raw_names: list[str] = []
+
+    async def evaluate_match(**kwargs: Any) -> ComicVineMatchEvaluation:
+        raw_name = str(kwargs["raw_name"])
+        seen_raw_names.append(raw_name)
+        assert kwargs["mylar3_cv_id"] == 154680
+        return ComicVineMatchEvaluation(
+            match={
+                "cv_id": 154680,
+                "cv_title": "Alien By Shalvey & Broccardo",
+                "cv_year": 2024,
+                "cv_publisher": "Marvel",
+                "cv_issue_count": 2,
+                "cv_url": "https://example.com/154680",
+                "cv_match_score": 1.0,
+                "cv_match_method": "mylar3_cv_id",
+            },
+            diagnostics={"kind": "series_match", "reason": "trusted_known_cv_id_unverified"},
+        )
+
+    await _run_matching_for_test(
+        factory,
+        job_id,
+        evaluate_match=evaluate_match,
+    )
+
+    async with factory() as verify_session:
+        rows = (
+            (
+                await verify_session.execute(
+                    select(ImportedSeries).where(ImportedSeries.import_job_id == job_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert seen_raw_names == ["Alien By Shalvey & Broccardo"]
+    assert len(rows) == 1
+    assert rows[0].id == parent_id
+    assert rows[0].cv_match_method == "mylar3_cv_id"
+    assert rows[0].files_total == 2
 
 
 async def test_collection_volume_subtitles_stay_grouped_without_one_issue_series_match(

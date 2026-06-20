@@ -87,6 +87,7 @@ class PullboxSettings(BaseSettings):
     import_debug_slow_mode: bool = False
     import_debug_phase_delay_seconds: float = 1.25
     import_debug_item_delay_seconds: float = 0.4
+    import_file_worker_count: int = 2
 
     # ── Scheduler ──────────────────────────────────────────────────────
     search_interval_hours: int = 6

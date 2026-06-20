@@ -36,8 +36,10 @@ class ImportRuntimeCache:
     trash_dir: Path | None = None
     ingest_policy: LibraryIngestPolicy | None = None
     permission_policy: LibraryPermissionPolicy | None = None
-    comicinfo_payloads: dict[tuple[int, str | None], dict[str, Any]] = field(default_factory=dict)
-    comicinfo_payload_timings: dict[tuple[int, str | None], dict[str, Any]] = field(
+    comicinfo_payloads: dict[tuple[int, str | None, bool], dict[str, Any]] = field(
+        default_factory=dict
+    )
+    comicinfo_payload_timings: dict[tuple[int, str | None, bool], dict[str, Any]] = field(
         default_factory=dict
     )
 

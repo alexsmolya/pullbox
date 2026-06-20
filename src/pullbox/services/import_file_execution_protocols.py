@@ -61,6 +61,7 @@ class BuildComicInfoPayloadFunc(Protocol):
         issue: Issue,
         *,
         source_path: Path | None = None,
+        defer_issue_enrichment: bool = False,
     ) -> dict[str, Any]: ...
 
 

@@ -52,3 +52,5 @@ services:
       # - PULLBOX_HTTPS_CERT_PATH=/config/certs/pullbox.crt
       # - PULLBOX_HTTPS_KEY_PATH=/config/certs/pullbox.key
       # - PULLBOX_HTTPS_CERT_ROOT=/config/certs
+      # Import execution tuning. Use 1 for fully serial file imports on fragile storage.
+      # - PULLBOX_IMPORT_FILE_WORKER_COUNT=2

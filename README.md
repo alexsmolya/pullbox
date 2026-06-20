@@ -204,6 +204,7 @@ read-only or runtime-managed inside Pullbox.
 | `PULLBOX_HEALTH_HISTORY_RETENTION_DAYS` | `1` | Health history retention. |
 | `PULLBOX_NAMING_SERIES_FORMAT` | `{series} ({year})` | Bootstrap default for series folder naming. UI settings are preferred after setup. |
 | `PULLBOX_NAMING_ISSUE_FORMAT` | `{series} ({year}) #{issue:03d}` | Bootstrap default for issue file naming. UI settings are preferred after setup. |
+| `PULLBOX_IMPORT_FILE_WORKER_COUNT` | `2` | Number of files processed concurrently during Step 4 imports. Use `1` for fully serial imports on slow or fragile storage. |
 | `PULLBOX_IMPORT_DEBUG_SLOW_MODE` | `false` | Troubleshooting-only import slow mode. |
 | `PULLBOX_IMPORT_DEBUG_PHASE_DELAY_SECONDS` | `1.25` | Troubleshooting-only import phase delay. |
 | `PULLBOX_IMPORT_DEBUG_ITEM_DELAY_SECONDS` | `0.4` | Troubleshooting-only import item delay. |

@@ -93,6 +93,7 @@ async def test_process_series_files_for_import_wires_job_scoped_callbacks() -> N
         job,
         issue,
         source_path=source_path,
+        defer_issue_enrichment=False,
     )
     register_library_file.assert_awaited_once()
     assert register_library_file.await_args.args[:5] == (
