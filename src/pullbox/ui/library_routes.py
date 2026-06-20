@@ -374,27 +374,55 @@ def build_library_browser_snapshot(
             continue
         catalog_by_path[entry_path] = entry
 
+    folder_children_by_parent: dict[Path, list[tuple[Path, LibraryBrowserCatalogEntry]]] = {}
+    file_children_by_parent: dict[Path, list[tuple[Path, LibraryBrowserCatalogEntry]]] = {}
+    child_entries_by_parent: dict[Path, list[tuple[Path, LibraryBrowserCatalogEntry]]] = {}
+    descendant_file_sizes: dict[Path, int] = {}
+    descendant_modified_at: dict[Path, datetime] = {}
+
+    for entry_path, entry in catalog_by_path.items():
+        child_entries_by_parent.setdefault(entry_path.parent, []).append((entry_path, entry))
+        if entry.kind == "folder":
+            folder_children_by_parent.setdefault(entry_path.parent, []).append((entry_path, entry))
+            continue
+        if entry.kind != "file":
+            continue
+        file_children_by_parent.setdefault(entry_path.parent, []).append((entry_path, entry))
+
+        root_path = _matching_catalog_root(entry_path, enabled_root_paths)
+        if root_path is None:
+            continue
+        cursor = entry_path.parent
+        while True:
+            descendant_file_sizes[cursor] = descendant_file_sizes.get(cursor, 0) + int(
+                entry.size_bytes or 0
+            )
+            if isinstance(entry.modified_at, datetime):
+                current_modified = descendant_modified_at.get(cursor)
+                if current_modified is None or entry.modified_at > current_modified:
+                    descendant_modified_at[cursor] = entry.modified_at
+            if cursor == root_path or cursor == cursor.parent:
+                break
+            cursor = cursor.parent
+
+    for child_entries in (
+        child_entries_by_parent,
+        folder_children_by_parent,
+        file_children_by_parent,
+    ):
+        for entries in child_entries.values():
+            entries.sort(key=lambda item: item[0].name.lower())
+
     def _child_entries(
         path_obj: Path,
         *,
         kind: str | None = None,
     ) -> list[tuple[Path, LibraryBrowserCatalogEntry]]:
-        children = [
-            (entry_path, entry)
-            for entry_path, entry in catalog_by_path.items()
-            if entry_path != path_obj
-            and entry_path.parent == path_obj
-            and (kind is None or entry.kind == kind)
-        ]
-        children.sort(key=lambda item: item[0].name.lower())
-        return children
-
-    def _descendant_file_entries(path_obj: Path) -> list[LibraryBrowserCatalogEntry]:
-        return [
-            entry
-            for entry_path, entry in catalog_by_path.items()
-            if entry.kind == "file" and _path_within_root(entry_path, path_obj)
-        ]
+        if kind == "folder":
+            return list(folder_children_by_parent.get(path_obj, ()))
+        if kind == "file":
+            return list(file_children_by_parent.get(path_obj, ()))
+        return list(child_entries_by_parent.get(path_obj, ()))
 
     def _catalog_modified_at(path_obj: Path, entry: LibraryBrowserCatalogEntry) -> datetime | None:
         if isinstance(entry.modified_at, datetime):
@@ -482,22 +510,13 @@ def build_library_browser_snapshot(
     for index, (entry_path, entry) in enumerate(directories, start=1):
         name = entry_path.name
         metric = series_metrics.get(str(entry_path)) or series_metrics.get(entry.path)
-        descendant_files = _descendant_file_entries(entry_path)
         item_count = metric[0] if metric is not None else len(_child_entries(entry_path))
-        size_bytes = (
-            metric[1]
-            if metric is not None
-            else sum(int(file_entry.size_bytes or 0) for file_entry in descendant_files)
-        )
-        descendant_modified = [
-            file_entry.modified_at
-            for file_entry in descendant_files
-            if isinstance(file_entry.modified_at, datetime)
-        ]
+        size_bytes = metric[1] if metric is not None else descendant_file_sizes.get(entry_path, 0)
+        indexed_modified = descendant_modified_at.get(entry_path)
         modified_value = (
             metric[2]
             if metric and metric[2] is not None
-            else max(descendant_modified, default=_catalog_modified_at(entry_path, entry))
+            else indexed_modified or _catalog_modified_at(entry_path, entry)
         )
         sortable_rows.append(
             LibraryBrowserSortableRow(

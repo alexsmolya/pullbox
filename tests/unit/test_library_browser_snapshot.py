@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from pullbox.models.library import LibraryRoot
+from pullbox.ui import library_routes
 from pullbox.ui.routes import _build_library_browser_snapshot, _library_browser_empty_state
 
 if TYPE_CHECKING:
@@ -227,6 +228,57 @@ def test_library_browser_snapshot_uses_display_datetime_settings(
 
     assert root_available is True
     assert rows[0].modified_label == "2026-04-21, 15:45"
+
+
+def test_library_browser_snapshot_indexes_large_catalog_without_repeated_scans(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Large libraries should not rescan every catalog row for every folder row."""
+    library_root_path = tmp_path / "library"
+    library_root_path.mkdir()
+    catalog_entries = []
+    for index in range(80):
+        folder = library_root_path / f"Series {index:03d}"
+        folder.mkdir()
+        issue = folder / f"Series {index:03d} 001.cbz"
+        issue.write_bytes(b"comic")
+        catalog_entries.append(_catalog_entry(folder, kind="folder"))
+        catalog_entries.append(_catalog_entry(issue, kind="file", size_bytes=index + 1))
+
+    original_path_within_root = library_routes._path_within_root
+    call_count = 0
+
+    def counting_path_within_root(path: Path, root: Path) -> bool:
+        nonlocal call_count
+        call_count += 1
+        return original_path_within_root(path, root)
+
+    monkeypatch.setattr(library_routes, "_path_within_root", counting_path_within_root)
+
+    root = LibraryRoot(name="Primary", path=str(library_root_path), enabled=True)
+
+    (
+        root_available,
+        _current_path_label,
+        _summary_label,
+        tree_nodes,
+        _breadcrumbs,
+        rows,
+    ) = _build_library_browser_snapshot(
+        library_root_path,
+        active_root=library_root_path,
+        library_roots=[root],
+        series_metrics={},
+        catalog_entries=catalog_entries,
+        total_size_bytes=0,
+        browser_sort="name",
+    )
+
+    assert root_available is True
+    assert len(tree_nodes[0].children) == 80
+    assert len(rows) == 80
+    assert call_count < 500
 
 
 def test_library_browser_empty_state_uses_folder_copy_for_empty_subfolder(tmp_path: Path) -> None:
