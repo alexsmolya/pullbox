@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from sqlalchemy import select as sa_select
 
 from pullbox.models.series import IssueCatalogState, Series
 
@@ -29,6 +30,12 @@ class CatalogHydrationPlan:
     search_on_add: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PendingCatalogHydration:
+    series_id: int
+    search_on_add: bool
+
+
 def reset_catalog_hydration_gate() -> None:
     """Reset the app-local hydration gate for tests and loop restarts."""
     global _catalog_hydration_semaphore, _catalog_hydration_semaphore_loop
@@ -44,25 +51,12 @@ def schedule_catalog_hydration(
     search_on_add: bool,
 ) -> None:
     """Queue full catalog hydration after the Step 4 file-placement hot path."""
-    prefetch_descriptor = getattr(type(series_service), "prefetch_comicvine_bundle", None)
-    add_prefetched_descriptor = getattr(
-        type(series_service),
-        "add_from_comicvine_prefetched",
-        None,
-    )
-    if prefetch_descriptor is None or add_prefetched_descriptor is None:
-        return
     if session_factory is None:
         return
-
-    prefetch_comicvine_bundle = prefetch_descriptor.__get__(
-        series_service,
-        type(series_service),
-    )
-    add_from_comicvine_prefetched = add_prefetched_descriptor.__get__(
-        series_service,
-        type(series_service),
-    )
+    hydration_methods = _catalog_hydration_methods(series_service)
+    if hydration_methods is None:
+        return
+    prefetch_comicvine_bundle, add_from_comicvine_prefetched = hydration_methods
 
     async def run_hydration() -> None:
         async with catalog_hydration_gate():
@@ -91,6 +85,79 @@ def schedule_catalog_hydration(
     task.add_done_callback(catalog_hydration_tasks.discard)
 
 
+async def run_pending_catalog_hydration(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    series_service: Any,
+    limit: int | None = None,
+) -> int:
+    """Resume full catalog hydration rows abandoned by restart or task loss."""
+    hydration_methods = _catalog_hydration_methods(series_service)
+    if hydration_methods is None:
+        return 0
+    prefetch_comicvine_bundle, add_from_comicvine_prefetched = hydration_methods
+    pending = await load_pending_catalog_hydration(session_factory, limit=limit)
+    recovered = 0
+
+    async with catalog_hydration_gate():
+        for request in pending:
+            try:
+                await run_catalog_hydration(
+                    session_factory,
+                    series_id=request.series_id,
+                    search_on_add=request.search_on_add,
+                    prefetch_comicvine_bundle=prefetch_comicvine_bundle,
+                    add_from_comicvine_prefetched=add_from_comicvine_prefetched,
+                )
+            except Exception as exc:
+                await mark_catalog_hydration_failed(
+                    session_factory,
+                    series_id=request.series_id,
+                    error=str(exc),
+                )
+                logger.warning(
+                    "import_catalog_hydration_recovery_failed",
+                    series_id=request.series_id,
+                    error=str(exc),
+                )
+                continue
+
+            recovered += 1
+            logger.info(
+                "import_catalog_hydration_recovered",
+                series_id=request.series_id,
+            )
+
+    return recovered
+
+
+async def load_pending_catalog_hydration(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    limit: int | None = None,
+) -> list[PendingCatalogHydration]:
+    """Load incomplete catalog rows that should resume after process restart."""
+    async with session_factory() as session:
+        stmt = (
+            sa_select(Series.id, Series.monitored)
+            .where(
+                Series.issue_catalog_state == IssueCatalogState.HYDRATING,
+                Series.comicvine_id.isnot(None),
+            )
+            .order_by(Series.id.asc())
+        )
+        if limit is not None and limit > 0:
+            stmt = stmt.limit(limit)
+        result = await session.execute(stmt)
+        return [
+            PendingCatalogHydration(
+                series_id=int(series_id),
+                search_on_add=bool(monitored),
+            )
+            for series_id, monitored in result.all()
+        ]
+
+
 def catalog_hydration_gate() -> asyncio.Semaphore:
     """Return the app-local lane for background catalog hydration."""
     global _catalog_hydration_semaphore, _catalog_hydration_semaphore_loop
@@ -100,6 +167,22 @@ def catalog_hydration_gate() -> asyncio.Semaphore:
         _catalog_hydration_semaphore = asyncio.Semaphore(1)
         _catalog_hydration_semaphore_loop = loop
     return _catalog_hydration_semaphore
+
+
+def _catalog_hydration_methods(
+    series_service: Any,
+) -> (
+    tuple[
+        Callable[[int], Awaitable[tuple[Any, list[Any]]]],
+        Callable[..., Awaitable[Series]],
+    ]
+    | None
+):
+    prefetch_comicvine_bundle = getattr(series_service, "prefetch_comicvine_bundle", None)
+    add_from_comicvine_prefetched = getattr(series_service, "add_from_comicvine_prefetched", None)
+    if not callable(prefetch_comicvine_bundle) or not callable(add_from_comicvine_prefetched):
+        return None
+    return prefetch_comicvine_bundle, add_from_comicvine_prefetched
 
 
 async def run_catalog_hydration(

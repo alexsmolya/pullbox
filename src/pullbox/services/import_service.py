@@ -21,6 +21,7 @@ from pullbox.core.file_ops import (
 )
 from pullbox.core.mylar3_reader import Mylar3Reader
 from pullbox.models.import_job import ImportedSeries, ImportJob, ImportJobAction, ImportJobStatus
+from pullbox.services.import_catalog_hydration import run_pending_catalog_hydration
 from pullbox.services.import_comicinfo_enrichment import (
     run_pending_import_comicinfo_enrichment,
     schedule_import_comicinfo_enrichment,
@@ -576,6 +577,16 @@ class ImportService(
             build_comicinfo_payload=self._build_comicinfo_payload_for_issue,
             apply_comicinfo=self._apply_comicinfo_to_imported_artifact,
             log_event=self._log_event,
+        )
+
+    async def recover_pending_catalog_hydration(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> int:
+        """Resume full catalog hydration left pending after a restart."""
+        return await run_pending_catalog_hydration(
+            session_factory,
+            series_service=self._series_service,
         )
 
     async def _process_series_files(

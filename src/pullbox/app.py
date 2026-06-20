@@ -431,37 +431,47 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.warning("import_recovery_failed", subsystem="import_recovery", exc_info=True)
 
-    # Resume any deferred ComicInfo.xml rewrites from imports that completed
-    # before the app stopped. This is background-only so startup stays fast.
+    # Resume deferred import metadata work from imports that completed before
+    # the app stopped. This is background-only so startup stays fast.
     try:
         from pullbox.composition.services import build_import_service
 
         factory = get_session_factory()
 
-        async def _resume_deferred_import_comicinfo() -> int:
+        async def _resume_deferred_import_metadata() -> tuple[int, int]:
             async with factory() as session:
                 import_service = await build_import_service(session)
-            return await import_service.recover_pending_comicinfo_enrichment(factory)
+            comicinfo_jobs = await import_service.recover_pending_comicinfo_enrichment(factory)
+            hydrated_series = await import_service.recover_pending_catalog_hydration(factory)
+            return comicinfo_jobs, hydrated_series
 
-        comicinfo_recovery_task = asyncio.create_task(_resume_deferred_import_comicinfo())
-        _startup_background_tasks.add(comicinfo_recovery_task)
+        import_metadata_recovery_task = asyncio.create_task(_resume_deferred_import_metadata())
+        _startup_background_tasks.add(import_metadata_recovery_task)
 
-        def _cleanup_comicinfo_recovery_task(task: asyncio.Task[object]) -> None:
+        def _cleanup_import_metadata_recovery_task(task: asyncio.Task[object]) -> None:
             _startup_background_tasks.discard(task)
             with suppress(asyncio.CancelledError):
                 exc = task.exception()
                 if exc is not None:
-                    logger.warning("import_comicinfo_recovery_failed", exc_info=exc)
+                    logger.warning("import_metadata_recovery_failed", exc_info=exc)
                     return
 
                 recovered = task.result()
-                if isinstance(recovered, int) and recovered:
-                    logger.info("import_comicinfo_recovered_at_startup", jobs=recovered)
+                if not isinstance(recovered, tuple) or len(recovered) != 2:
+                    return
+                comicinfo_jobs, hydrated_series = recovered
+                if comicinfo_jobs:
+                    logger.info("import_comicinfo_recovered_at_startup", jobs=comicinfo_jobs)
+                if hydrated_series:
+                    logger.info(
+                        "import_catalog_hydration_recovered_at_startup",
+                        series=hydrated_series,
+                    )
 
-        comicinfo_recovery_task.add_done_callback(_cleanup_comicinfo_recovery_task)
+        import_metadata_recovery_task.add_done_callback(_cleanup_import_metadata_recovery_task)
     except Exception:
         logger.warning(
-            "import_comicinfo_recovery_startup_failed",
+            "import_metadata_recovery_startup_failed",
             subsystem="import_recovery",
             exc_info=True,
         )
