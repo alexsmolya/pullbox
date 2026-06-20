@@ -6,9 +6,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import and_, exists, or_, select
 
 from pullbox.models.issue import Issue, IssueStatus, IssueType
+from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series
 
 if TYPE_CHECKING:
@@ -177,8 +178,33 @@ async def load_wanted_issue_search_targets(
     session: AsyncSession,
     *,
     limit: int = 50,
+    after: tuple[int, float, int] | None = None,
 ) -> list[IssueSearchTarget]:
     """Load wanted issue targets for the global sweep."""
+    filters = [
+        Issue.status == IssueStatus.WANTED,
+        Series.monitored.is_(True),
+        ~exists().where(
+            and_(
+                PendingMatch.issue_id == Issue.id,
+                PendingMatch.status == PendingMatchStatus.PENDING,
+            )
+        ),
+    ]
+    if after is not None:
+        series_id, issue_number, issue_id = after
+        filters.append(
+            or_(
+                Issue.series_id > series_id,
+                and_(Issue.series_id == series_id, Issue.issue_number > issue_number),
+                and_(
+                    Issue.series_id == series_id,
+                    Issue.issue_number == issue_number,
+                    Issue.id > issue_id,
+                ),
+            )
+        )
+
     result = await session.execute(
         select(
             Issue.id.label("issue_id"),
@@ -191,9 +217,8 @@ async def load_wanted_issue_search_targets(
             Series.alternate_names.label("alternate_names"),
         )
         .join(Series, Series.id == Issue.series_id)
-        .where(Issue.status == IssueStatus.WANTED)
-        .where(Series.monitored.is_(True))
-        .order_by(Issue.series_id, Issue.issue_number)
+        .where(*filters)
+        .order_by(Issue.series_id, Issue.issue_number, Issue.id)
         .limit(limit)
     )
     return [_target_from_row(row) for row in result.all()]
