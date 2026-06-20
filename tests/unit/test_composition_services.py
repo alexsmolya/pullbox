@@ -7,11 +7,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from pullbox.composition import services
 from pullbox.core import events as core_events
 from pullbox.core.events import get_event_bus
+from pullbox.models import Base
 from pullbox.models.config import SystemConfig
+from pullbox.services.comicvine_persistent_cache import PersistentComicVineCacheProvider
 from pullbox.services.download_service import DownloadService
 from pullbox.services.import_service import ImportService
 from pullbox.services.matching_service import MatchingService
@@ -137,6 +140,42 @@ async def test_build_import_service_falls_back_to_bootstrap_rate_limit_when_unse
     assert import_service._metadata_service._provider is provider
     assert import_service._metadata_service._covers_dir == covers_dir
     assert import_service._metadata_service._refresh_days == 9
+
+
+@pytest.mark.asyncio
+async def test_build_import_service_uses_persistent_cache_for_file_sqlite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'pullbox.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    provider = MagicMock()
+    covers_dir = Path("/tmp/pullbox-import-covers")
+    get_key = AsyncMock(return_value=None)
+    resolve_covers = AsyncMock(return_value=covers_dir)
+    provider_cls = MagicMock(return_value=provider)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    monkeypatch.setattr(
+        services,
+        "get_settings",
+        lambda: SimpleNamespace(comicvine_rate_limit=2.5, metadata_refresh_days=9),
+    )
+    monkeypatch.setattr(services, "get_comicvine_api_key", get_key)
+    monkeypatch.setattr(services, "resolve_covers_dir", resolve_covers)
+    monkeypatch.setattr(services, "ComicVineProvider", provider_cls)
+
+    try:
+        async with session_factory() as session:
+            import_service = await services.build_import_service(session)
+    finally:
+        await engine.dispose()
+
+    wrapped_provider = import_service._metadata_service._provider
+    assert isinstance(wrapped_provider, PersistentComicVineCacheProvider)
+    assert wrapped_provider._provider is provider
 
 
 @pytest.mark.asyncio

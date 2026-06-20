@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from pullbox.models.series import IssueCatalogState, Series
+from pullbox.providers.base import IssueSummary, SeriesMetadata
+from pullbox.services.comicvine_persistent_cache import PersistentComicVineCacheProvider
 from pullbox.services.import_catalog_hydration import (
     mark_catalog_hydration_failed,
     run_pending_catalog_hydration,
 )
+from pullbox.services.metadata_service import MetadataService
+from pullbox.services.series_service import SeriesService
 
 
 class CatalogHydrationSeriesServiceStub:
@@ -49,6 +54,48 @@ class CatalogHydrationSeriesServiceStub:
         series.issue_catalog_error = None
         await hydrate_session.flush()
         return series
+
+
+class CatalogHydrationProviderDouble:
+    name = "comicvine"
+
+    def __init__(self, *, fail_on_fetch: bool = False) -> None:
+        self.fail_on_fetch = fail_on_fetch
+        self.series_calls = 0
+        self.issue_list_calls = 0
+
+    async def get_series(self, series_provider_id: str) -> SeriesMetadata:
+        self.series_calls += 1
+        if self.fail_on_fetch:
+            raise AssertionError("hydration should reuse cached series metadata")
+        return SeriesMetadata(
+            provider_id=str(series_provider_id),
+            title="Cached Hydration",
+            sort_title="Cached Hydration",
+            year_start=2026,
+            year_end=None,
+            status=None,
+            publisher="Pullbox",
+            description="Cached in Step 2",
+            cover_url=None,
+            issue_count=1,
+            comicvine_url=f"https://comicvine.gamespot.com/cached/{series_provider_id}/",
+        )
+
+    async def get_issues_for_series(self, series_provider_id: str) -> list[IssueSummary]:
+        self.issue_list_calls += 1
+        if self.fail_on_fetch:
+            raise AssertionError("hydration should reuse cached issue summaries")
+        return [
+            IssueSummary(
+                provider_id=f"{series_provider_id}001",
+                issue_number=1.0,
+                title="Cached Issue",
+                release_date="2026-01-01",
+                cover_url=None,
+                issue_type="issue",
+            )
+        ]
 
 
 async def test_run_pending_catalog_hydration_recovers_hydrating_series_after_restart(
@@ -109,6 +156,54 @@ async def test_run_pending_catalog_hydration_recovers_hydrating_series_after_res
     await db_session.refresh(no_provider_id)
     assert already_complete.issue_catalog_state == IssueCatalogState.COMPLETE
     assert no_provider_id.issue_catalog_state == IssueCatalogState.HYDRATING
+
+
+async def test_run_pending_catalog_hydration_reuses_step_2_persistent_cache(
+    db_session,
+    tmp_path,
+) -> None:
+    series = Series(
+        title="Partial Cached Hydration",
+        sort_title="partial cached hydration",
+        year_start=2026,
+        comicvine_id=9101,
+        issue_catalog_state=IssueCatalogState.HYDRATING,
+    )
+    db_session.add(series)
+    await db_session.commit()
+
+    session_factory = async_sessionmaker(
+        db_session.bind,
+        class_=type(db_session),
+        expire_on_commit=False,
+    )
+    step_2_provider = CatalogHydrationProviderDouble()
+    step_2_cache = PersistentComicVineCacheProvider(step_2_provider, session_factory)
+    await step_2_cache.get_series("9101")
+    await step_2_cache.get_issues_for_series("9101")
+
+    assert step_2_provider.series_calls == 1
+    assert step_2_provider.issue_list_calls == 1
+
+    hydration_provider = CatalogHydrationProviderDouble(fail_on_fetch=True)
+    hydration_cache = PersistentComicVineCacheProvider(hydration_provider, session_factory)
+    metadata_service = MetadataService(hydration_cache, covers_dir=tmp_path)
+    event_bus = MagicMock()
+    event_bus.emit = AsyncMock()
+    series_service = SeriesService(metadata_service, event_bus)
+
+    recovered = await run_pending_catalog_hydration(
+        session_factory,
+        series_service=series_service,
+    )
+
+    assert recovered == 1
+    assert hydration_provider.series_calls == 0
+    assert hydration_provider.issue_list_calls == 0
+    await db_session.refresh(series)
+    assert series.issue_catalog_state == IssueCatalogState.COMPLETE
+    assert series.title == "Cached Hydration"
+    event_bus.emit.assert_awaited_once()
 
 
 async def test_run_pending_catalog_hydration_continues_after_series_failure(db_session) -> None:
