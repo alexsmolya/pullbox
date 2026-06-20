@@ -96,7 +96,7 @@
                       hx-target="#intervention-queue-results"
                       hx-swap="outerHTML"
                       hx-sync="#intervention-queue-results:replace"
-                      hx-on::after-request="if ($event.detail.successful) { pruneSelection() }"
+                      hx-on::after-request="if ($event.detail.successful) { removeSelection({{ pm.id }}) }"
                     >
                       <input type="hidden" name="reason" value="{{ reason_filter }}">
                       <input type="hidden" name="confidence" value="{{ confidence_filter }}">
@@ -122,7 +122,7 @@
                       hx-target="#intervention-queue-results"
                       hx-swap="outerHTML"
                       hx-sync="#intervention-queue-results:replace"
-                      hx-on::after-request="if ($event.detail.successful) { pruneSelection() }"
+                      hx-on::after-request="if ($event.detail.successful) { removeSelection({{ pm.id }}) }"
                     >
                       <input type="hidden" name="reason" value="{{ reason_filter }}">
                       <input type="hidden" name="confidence" value="{{ confidence_filter }}">

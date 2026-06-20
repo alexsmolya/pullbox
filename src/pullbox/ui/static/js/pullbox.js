@@ -12729,6 +12729,7 @@ function interventionPage() {
     toolbarMode: "browse",
     selectAllMatchingBusy: false,
     totalMatchingCount: Number(cfg.totalMatchingCount || 0),
+    selectionFilterSignature: "",
     afterSettleHandler: null,
 
     csrfToken: function () {
@@ -12773,11 +12774,36 @@ function interventionPage() {
       }
     },
 
+    queueFilterSignature: function () {
+      var params = new URLSearchParams(window.location.search);
+      var signature = new URLSearchParams();
+      ["reason", "confidence", "protocol", "search"].forEach(function (key) {
+        var value = params.get(key);
+        if (value) {
+          signature.set(key, value);
+        }
+      });
+      return signature.toString();
+    },
+
+    resetSelectionForFilterChange: function () {
+      var nextSignature = this.queueFilterSignature();
+      if (
+        this.selectionFilterSignature &&
+        this.selectionFilterSignature !== nextSignature &&
+        this.selectedIds.length > 0
+      ) {
+        this.clearSelection();
+      }
+      this.selectionFilterSignature = nextSignature;
+    },
+
     init: function () {
       var self = this;
       if (Array.isArray(window._interventionSelectedIds)) {
         self.selectedIds = window._interventionSelectedIds.slice();
       }
+      self.selectionFilterSignature = self.queueFilterSignature();
 
       self.afterSettleHandler = function (evt) {
         if (!evt || !evt.detail || !evt.detail.target) {
@@ -12811,6 +12837,7 @@ function interventionPage() {
               return;
             }
           }
+          self.resetSelectionForFilterChange();
           self.pruneSelection();
           self.syncSelectionUi();
         });
@@ -12883,7 +12910,12 @@ function interventionPage() {
 
     allVisibleSelected: function () {
       var visibleIds = this.visibleIds();
-      return visibleIds.length > 0 && this.selectedIds.length === visibleIds.length;
+      return (
+        visibleIds.length > 0 &&
+        visibleIds.every(function (id) {
+          return this.isSelected(id);
+        }, this)
+      );
     },
 
     selectAllVisible: function () {
@@ -12934,6 +12966,7 @@ function interventionPage() {
               })
           : [];
         this.selectedIds = ids;
+        this.selectionFilterSignature = this.queueFilterSignature();
         if (Number.isFinite(payload.total)) {
           this.totalMatchingCount = payload.total;
         }
@@ -13008,6 +13041,7 @@ function interventionPage() {
         if (!this.isSelected(id)) {
           this.selectedIds.push(id);
           this.toolbarMode = "select";
+          this.selectionFilterSignature = this.queueFilterSignature();
           this.persistSelection();
           this.syncSelectionUi();
         }
@@ -13025,8 +13059,15 @@ function interventionPage() {
         this.clearSelection();
         return;
       }
-      this.selectedIds = ids.slice();
+      var merged = this.selectedIds.slice();
+      ids.forEach(function (id) {
+        if (merged.indexOf(id) === -1) {
+          merged.push(id);
+        }
+      });
+      this.selectedIds = merged;
       this.toolbarMode = "select";
+      this.selectionFilterSignature = this.queueFilterSignature();
       this.persistSelection();
       this.syncSelectionUi();
     },
@@ -13039,20 +13080,25 @@ function interventionPage() {
     pruneSelection: function () {
       var list = document.getElementById("intervention-list");
       if (!list) {
-        this.selectedIds = [];
-        this.persistSelection();
-        this.syncSelectionUi();
+        this.clearSelection();
         return;
       }
 
-      var visibleIds = this.visibleIds();
-
-      if (visibleIds.length === 0 && !list.querySelector("[data-testid='intervention-empty']")) {
+      if (list.querySelector("[data-testid='intervention-empty']")) {
+        this.clearSelection();
         return;
       }
+      this.persistSelection();
+      this.syncSelectionUi();
+    },
 
-      this.selectedIds = this.selectedIds.filter(function (id) {
-        return visibleIds.indexOf(id) !== -1;
+    removeSelection: function (id) {
+      var numericId = Number(id);
+      if (!Number.isFinite(numericId)) {
+        return;
+      }
+      this.selectedIds = this.selectedIds.filter(function (itemId) {
+        return itemId !== numericId;
       });
       this.persistSelection();
       this.syncSelectionUi();
