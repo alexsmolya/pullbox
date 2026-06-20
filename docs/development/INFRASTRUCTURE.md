@@ -400,6 +400,13 @@ TZ
 - Fresh-install restores must preserve the original `config.xml` or reuse the
   same env-managed `PULLBOX_SECRET_KEY` before restoring the database, otherwise
   encrypted credentials remain present but cannot be decrypted.
+- After a database restore, Pullbox should mark post-restore recovery pending.
+  The next startup runs derived-state aftercare for cover backfill, ComicVine
+  issue catalog sync, and stale metadata refresh. Recovery status is exposed from
+  System > Backup.
+- Post-restore recovery is metadata aftercare, not filesystem repair. Operators
+  should run Utilities > Database Check after restoring onto different storage,
+  changing library roots, or moving library files.
 - SQLite deployments should use storage that safely supports the configured
   journal mode.
 - Download-client remote paths must map to files visible under `/downloads`
@@ -643,6 +650,10 @@ Development dependency categories:
 
 Useful state-volume commands:
 
+In-app database restore points are useful for app-level rollback, but they are
+not full disaster-recovery archives. For host migration or bare-metal recovery,
+back up the full `/data` appdata folder too.
+
 Create a full `/data` state backup, including `config.xml`, logs, database, and
 database restore-point archives:
 
@@ -657,6 +668,12 @@ the replacement container:
 mkdir -p "$PULLBOX_DATA_PATH"
 tar xzf pullbox-state-backup.tgz -C "$PULLBOX_DATA_PATH"
 ```
+
+After restoring only a database restore point, restart Pullbox and watch System >
+Backup for post-restore recovery. Recovery rebuilds cover cache entries, syncs
+ComicVine issue catalogs, and refreshes stale series metadata. It does not repair
+filesystem path drift, so run Utilities > Database Check when the restored
+library lives on different storage.
 
 ```bash
 ls -la "$PULLBOX_DATA_PATH"
