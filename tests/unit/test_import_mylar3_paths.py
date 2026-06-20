@@ -12,10 +12,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _create_mylar_db(db_path: Path, comic_location: str | None) -> None:
+def _create_mylar_db(db_path: Path, comic_location: str | list[str] | None) -> None:
     conn = sqlite3.connect(str(db_path))
     conn.execute("CREATE TABLE comics (ComicLocation TEXT)")
-    if comic_location is not None:
+    if isinstance(comic_location, list):
+        conn.executemany("INSERT INTO comics VALUES (?)", [(item,) for item in comic_location])
+    elif comic_location is not None:
         conn.execute("INSERT INTO comics VALUES (?)", (comic_location,))
     conn.commit()
     conn.close()
@@ -26,10 +28,55 @@ def test_auto_detect_mylar3_path_map_matches_nearby_directory(tmp_path: Path) ->
     config_dir.mkdir()
     db_path = config_dir / "mylar.db"
     host_comics = tmp_path / "comics"
-    host_comics.mkdir()
+    (host_comics / "Absolute Wonder Woman (2024)").mkdir(parents=True)
     _create_mylar_db(db_path, "/comics/Absolute Wonder Woman (2024)")
 
     assert auto_detect_mylar3_path_map(db_path) == {"/comics": str(host_comics)}
+
+
+def test_auto_detect_mylar3_path_map_prefers_nested_comics_mount(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "imports"
+    config_dir.mkdir()
+    db_path = config_dir / "mylar.db"
+    host_comics = tmp_path / "comics"
+    (host_comics / "Absolute Batman (2024)").mkdir(parents=True)
+    (tmp_path / "data").mkdir()
+    _create_mylar_db(db_path, "/data/comics/Absolute Batman (2024)")
+
+    assert auto_detect_mylar3_path_map(db_path) == {"/data/comics": str(host_comics)}
+
+
+def test_auto_detect_mylar3_path_map_rejects_self_map_without_translated_series(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "imports"
+    config_dir.mkdir()
+    db_path = config_dir / "mylar.db"
+    (tmp_path / "data").mkdir()
+    _create_mylar_db(db_path, "/data/comics/Absolute Batman (2024)")
+
+    assert auto_detect_mylar3_path_map(db_path) is None
+
+
+def test_auto_detect_mylar3_path_map_uses_later_existing_location(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "imports"
+    config_dir.mkdir()
+    db_path = config_dir / "mylar.db"
+    host_comics = tmp_path / "comics"
+    (host_comics / "Absolute Flash (2025)").mkdir(parents=True)
+    _create_mylar_db(
+        db_path,
+        [
+            "/data/comics/Missing Series (2024)",
+            "/data/comics/Absolute Flash (2025)",
+        ],
+    )
+
+    assert auto_detect_mylar3_path_map(db_path) == {"/data/comics": str(host_comics)}
 
 
 def test_auto_detect_mylar3_path_map_returns_none_for_empty_comics_table(
