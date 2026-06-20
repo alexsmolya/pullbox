@@ -669,6 +669,19 @@ class TestImportShellRouteContracts:
         assert 'window.addEventListener("blur", function () {' in script
         assert "dismissTooltip();" in script
 
+    async def test_import_log_viewer_live_mode_tails_newest_page(self) -> None:
+        script = Path("src/pullbox/ui/static/js/pullbox.js").read_text()
+        start = script.index("function importJobLogViewerData")
+        end = script.index("function importProgressData")
+        viewer_controller = script[start:end]
+
+        assert "_shouldFollowLiveTail: function () {" in viewer_controller
+        assert "var shouldFollowTail = this._shouldFollowLiveTail();" in viewer_controller
+        assert "this.currentPage = this.totalPages;" in viewer_controller
+        assert "this.isLive &&" in viewer_controller
+        assert "!this.levelFilter &&" in viewer_controller
+        assert "!this.searchQuery &&" in viewer_controller
+
     async def test_import_review_shell_reprocesses_htmx_after_morph_swaps(self) -> None:
         script = Path("src/pullbox/ui/static/js/pullbox.js").read_text()
         review_template = Path(

@@ -2668,6 +2668,15 @@ function importJobLogViewerData(config) {
       return 0;
     },
 
+    _shouldFollowLiveTail: function () {
+      return (
+        this.isLive &&
+        !this.levelFilter &&
+        !this.searchQuery &&
+        this.currentPage >= this.totalPages
+      );
+    },
+
     prevPage: function () {
       if (this.currentPage > 1) {
         this.currentPage--;
@@ -2743,9 +2752,12 @@ function importJobLogViewerData(config) {
         ) {
           return;
         }
+        var shouldFollowTail = this._shouldFollowLiveTail();
         this.entries.push(this._normalizeStreamEntry(payload));
         this.totalCount += 1;
-        if (this.currentPage > this.totalPages) {
+        if (shouldFollowTail) {
+          this.currentPage = this.totalPages;
+        } else if (this.currentPage > this.totalPages) {
           this.currentPage = this.totalPages;
         }
       } catch (_) {
@@ -2872,9 +2884,12 @@ function importJobLogViewerData(config) {
           page += 1;
         }
 
+        var shouldFollowTail = this._shouldFollowLiveTail();
         this.entries = allEntries;
         this.totalCount = total || allEntries.length;
-        if (this.currentPage > this.totalPages) {
+        if (shouldFollowTail) {
+          this.currentPage = this.totalPages;
+        } else if (this.currentPage > this.totalPages) {
           this.currentPage = this.totalPages;
         }
       } catch (_) {
