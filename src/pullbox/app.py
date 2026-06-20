@@ -513,7 +513,6 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     _pc_secs = max(300, _pc_secs)
     overrides = {
         "search_wanted": {"hours": _search_hrs},
-        "sync_new_issues": {"hours": settings.sync_new_issues_interval_hours},
         "monitor_downloads": {"seconds": _dl_poll},
         "process_completed": {"seconds": _pc_secs},
         "run_scheduler_health_check": {

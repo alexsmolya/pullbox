@@ -186,7 +186,6 @@ read-only or runtime-managed inside Pullbox.
 | `PULLBOX_DATA_API_BASE_URL` | `https://api.pullbox.app` | Pullbox Data API base URL. Leave default unless testing a private deployment. |
 | `PULLBOX_METADATA_REFRESH_DAYS` | `30` | Metadata refresh age threshold. |
 | `PULLBOX_SEARCH_INTERVAL_HOURS` | `6` | Automatic wanted-search scheduler cadence. |
-| `PULLBOX_SYNC_NEW_ISSUES_INTERVAL_HOURS` | `24` | New-issue sync scheduler cadence. |
 | `PULLBOX_SCAN_INTERVAL_HOURS` | `24` | Library scan scheduler cadence. |
 | `PULLBOX_DOWNLOAD_POLL_SECONDS` | `3` | Active download polling cadence. |
 | `PULLBOX_PROCESS_COMPLETED_INTERVAL_SECONDS` | `300` | Completed download post-processing cadence. |
