@@ -954,8 +954,8 @@ jobs:
           name: Install Cosign
           command: |
             set -euo pipefail
-            curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.5.3/cosign-linux-amd64 -o /usr/local/bin/cosign
-            chmod +x /usr/local/bin/cosign
+            curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.5.3/cosign-linux-amd64 -o /tmp/cosign
+            sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
       - run:
           name: Sign and verify release image digest
           command: |
