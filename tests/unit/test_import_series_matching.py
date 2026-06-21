@@ -1268,6 +1268,110 @@ async def test_collection_volume_subtitles_rebucket_to_separate_one_issue_series
     }
 
 
+async def test_collection_volume_rebucket_preserves_each_file_year_when_cv_year_missing(
+    async_engine,
+) -> None:
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+
+    async with factory() as seed_session:
+        job = ImportJob(
+            source_path="/tmp/imports",
+            source_type=ImportSourceType.FILESYSTEM,
+            status=ImportJobStatus.MATCHING,
+            scan_started_at=datetime.now(UTC),
+        )
+        seed_session.add(job)
+        await seed_session.flush()
+        item = ImportedSeries(
+            import_job_id=job.id,
+            raw_series_name="Marvel Action Spider-Man",
+            raw_year=2019,
+            status=ImportSeriesStatus.PENDING,
+            file_count=2,
+            files_total=2,
+            sample_paths=[],
+            source_folder="/tmp/imports",
+        )
+        seed_session.add(item)
+        await seed_session.flush()
+        seed_session.add_all(
+            [
+                ImportedFile(
+                    import_job_id=job.id,
+                    import_series_id=item.id,
+                    file_path="/tmp/imports/Marvel Action Spider-Man v01 - New Beginning.cbr",
+                    file_name="Marvel Action Spider-Man v01 - New Beginning (2019) (Digital).cbr",
+                    file_format="cbr",
+                    parsed_series="Marvel Action Spider-Man",
+                    parsed_issue_number=1.0,
+                    parsed_year=2019,
+                    status=ImportedFileStatus.PENDING,
+                    diagnostics={"source_issue_type": IssueType.VOLUME.value},
+                ),
+                ImportedFile(
+                    import_job_id=job.id,
+                    import_series_id=item.id,
+                    file_path="/tmp/imports/Marvel Action Spider-Man v02 - Spider-Chase.cbr",
+                    file_name="Marvel Action Spider-Man v02 - Spider-Chase (2020) (Digital).cbr",
+                    file_format="cbr",
+                    parsed_series="Marvel Action Spider-Man",
+                    parsed_issue_number=2.0,
+                    parsed_year=2020,
+                    status=ImportedFileStatus.PENDING,
+                    diagnostics={"source_issue_type": IssueType.VOLUME.value},
+                ),
+            ]
+        )
+        await seed_session.commit()
+        job_id = job.id
+
+    async def evaluate_match(**kwargs: Any) -> ComicVineMatchEvaluation:
+        raw_name = str(kwargs["raw_name"])
+        if raw_name == "Marvel Action Spider-Man":
+            return _matched_eval(
+                cv_id=124930,
+                title="Marvel Action: Spider-Man",
+                year=2020,
+                issue_count=3,
+                raw_name=raw_name,
+            )
+        if "New Beginning" in raw_name:
+            return _matched_eval(
+                cv_id=119728,
+                title="Marvel Action: Spider-Man: A New Beginning",
+                year=2019,
+                issue_count=1,
+                raw_name=raw_name,
+            )
+        if "Spider-Chase" in raw_name:
+            evaluation = _matched_eval(
+                cv_id=122410,
+                title="Marvel Action: Spider-Man: Spider-Chase",
+                year=2020,
+                issue_count=1,
+                raw_name=raw_name,
+            )
+            assert evaluation.match is not None
+            evaluation.match["cv_year"] = None
+            return evaluation
+        return ComicVineMatchEvaluation(match=None, diagnostics={"kind": "series_no_match"})
+
+    await _run_matching_for_test(
+        factory,
+        job_id,
+        evaluate_match=evaluate_match,
+    )
+
+    async with factory() as verify_session:
+        split_row = await verify_session.scalar(
+            select(ImportedSeries).where(ImportedSeries.cv_id == 122410)
+        )
+
+    assert split_row is not None
+    assert split_row.cv_year is None
+    assert split_row.raw_year == 2020
+
+
 async def test_collection_volume_rebucket_does_not_block_persistent_cache_writes(
     tmp_path,
 ) -> None:

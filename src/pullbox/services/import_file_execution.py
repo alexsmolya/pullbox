@@ -167,18 +167,26 @@ def _resolve_import_file_issue_id(
     return None
 
 
-async def _requires_serial_skip_existing_processing(
+def _prepared_file_name_collision_key(job: ImportJob, imp_file: ImportedFile) -> str:
+    """Return the basename workers may hand to the library target resolver."""
+    file_name = str(imp_file.file_name or Path(str(imp_file.file_path)).name)
+    path = Path(file_name)
+    if (
+        job.move_to_library
+        and (job.convert_to_preferred_format or job.update_embedded_comicinfo_from_match)
+        and path.suffix.lower() != ".cbz"
+    ):
+        path = path.with_suffix(".cbz")
+    return path.name.casefold()
+
+
+async def _requires_serial_file_processing(
     session: AsyncSession,
     job: ImportJob,
     *,
     resolved_series_id: int,
     importable_files: list[ImportedFile],
-    load_media_settings: LoadMediaSettingsFunc,
 ) -> bool:
-    media_settings = await load_media_settings(session, job)
-    if media_settings["skip_existing_files"].lower() != "true":
-        return False
-
     cv_id_to_issue, number_to_issue = await load_issue_lookup_for_series(
         session,
         resolved_series_id,
@@ -194,7 +202,13 @@ async def _requires_serial_skip_existing_processing(
         if issue.id is not None
     }
     seen_issue_ids: set[int] = set()
+    seen_file_names: set[str] = set()
     for imp_file in importable_files:
+        file_name_key = _prepared_file_name_collision_key(job, imp_file)
+        if file_name_key in seen_file_names:
+            return True
+        seen_file_names.add(file_name_key)
+
         resolved_issue_id = _resolve_import_file_issue_id(
             imp_file,
             cv_id_to_issue_id=cv_id_to_issue_id,
@@ -488,12 +502,11 @@ async def process_import_series_files(
         and effective_worker_count > 1
         and len(importable_file_ids) > 1
     )
-    if parallel_processing_available and not await _requires_serial_skip_existing_processing(
+    if parallel_processing_available and not await _requires_serial_file_processing(
         session,
         job,
         resolved_series_id=resolved_series_id,
         importable_files=importable_files,
-        load_media_settings=load_media_settings,
     ):
         assert session_factory is not None
         await session.commit()
