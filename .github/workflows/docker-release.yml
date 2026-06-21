@@ -302,15 +302,23 @@ jobs:
         run: |
           docker run -d \
             --name pullbox-smoke \
-            -p 8585:8585 \
+            -p 127.0.0.1::8585 \
             -e PULLBOX_SECRET_KEY=smoke-test-secret-key-for-docker-ci \
             -e PULLBOX_LOG_LEVEL=WARNING \
             pullbox:ci-scan
+          smoke_port="$(docker port pullbox-smoke 8585/tcp | awk -F: 'NR == 1 { print $NF }')"
+          if [ -z "${smoke_port}" ]; then
+            echo "::error::Could not determine Pullbox smoke-test port."
+            docker port pullbox-smoke || true
+            exit 1
+          fi
+          echo "PULLBOX_SMOKE_URL=http://127.0.0.1:${smoke_port}" >> "$GITHUB_ENV"
+          echo "Container listening on http://127.0.0.1:${smoke_port}"
 
       - name: Wait for healthy
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:8585/ping > /dev/null 2>&1; then
+            if curl -sf "${PULLBOX_SMOKE_URL}/ping" > /dev/null 2>&1; then
               echo "✅ Container healthy after ${i}s"
               exit 0
             fi
@@ -337,7 +345,7 @@ jobs:
         run: |
           pytest tests/e2e/test_smoke.py \
             -v \
-            --base-url http://localhost:8585
+            --base-url "${PULLBOX_SMOKE_URL}"
         env:
           PULLBOX_SMOKE_TEST: "true"
 

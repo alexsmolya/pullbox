@@ -499,6 +499,33 @@ def test_docker_validation_workflow_never_publishes_images() -> None:
     ]
 
 
+def test_docker_smoke_workflows_use_ephemeral_host_ports() -> None:
+    """Self-hosted runners may already have Pullbox bound on 8585."""
+    contracts = [
+        {
+            "workflow": "docker-validate.yml",
+            "container": "pullbox-validate",
+            "url_env": "PULLBOX_VALIDATE_URL",
+        },
+        {
+            "workflow": "docker-release.yml",
+            "container": "pullbox-smoke",
+            "url_env": "PULLBOX_SMOKE_URL",
+        },
+    ]
+
+    for contract in contracts:
+        workflow_text = (WORKFLOW_DIR / contract["workflow"]).read_text(encoding="utf-8")
+        container = contract["container"]
+        url_env = contract["url_env"]
+
+        assert "-p 8585:8585" not in workflow_text
+        assert "-p 127.0.0.1::8585" in workflow_text
+        assert f"docker port {container} 8585/tcp" in workflow_text
+        assert f"{url_env}=http://127.0.0.1:" in workflow_text
+        assert f"${{{url_env}}}/ping" in workflow_text
+
+
 def test_docker_smoke_workflows_use_valid_application_secrets() -> None:
     """Docker smoke checks should not fail before startup due to weak test secrets."""
     failures: list[str] = []
