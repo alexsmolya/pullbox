@@ -2,6 +2,7 @@
 # Pullbox CodeQL Branch Probe
 # Fast feedback for trusted security-cleanup branches without waiting for a
 # default-branch merge to refresh the Security and quality dashboard.
+# Legacy/manual fallback. CircleCI owns CodeQL for PR checks.
 #
 # Security: All actions pinned to full SHA. No pull_request_target.
 # This workflow intentionally does not run on pull_request.
@@ -9,14 +10,6 @@
 name: CodeQL Branch Probe
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-      - feature/ci-cd-*
-      - feature/code-scanning-*
-      - feature/codeql-*
-      - feature/security-*
   workflow_dispatch:
 
 permissions:

@@ -133,7 +133,7 @@ def test_dependabot_covers_primary_supply_chain_inputs() -> None:
     assert {"pip", "github-actions", "docker", "npm"} <= ecosystems
 
 
-def test_security_workflow_keeps_required_scanners_and_schedule() -> None:
+def test_security_workflow_keeps_required_scanners_as_manual_fallback() -> None:
     security_workflow = WORKFLOW_DIR / "security.yml"
     data = _load_yaml(security_workflow)
     text = security_workflow.read_text(encoding="utf-8")
@@ -141,7 +141,11 @@ def test_security_workflow_keeps_required_scanners_and_schedule() -> None:
     # PyYAML follows YAML 1.1 and parses the key "on" as True.
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
-    assert "schedule" in triggers
+    assert "workflow_dispatch" in triggers
+    assert "schedule" not in triggers
+    assert "pull_request" not in triggers
+    assert "merge_group" not in triggers
+    assert "push" not in triggers
 
     required_markers = [
         "GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:",
@@ -174,7 +178,7 @@ def test_codeql_analysis_uses_product_scope_config() -> None:
     } <= set(config.get("paths-ignore", []))
 
 
-def test_codeql_branch_probe_scans_trusted_push_refs_with_summary() -> None:
+def test_codeql_branch_probe_is_manual_fallback_with_summary() -> None:
     workflow_path = WORKFLOW_DIR / "codeql-branch-probe.yml"
     data = _load_yaml(workflow_path)
     workflow_text = workflow_path.read_text(encoding="utf-8")
@@ -182,18 +186,10 @@ def test_codeql_branch_probe_scans_trusted_push_refs_with_summary() -> None:
     # PyYAML follows YAML 1.1 and parses the key "on" as True.
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
+    assert "workflow_dispatch" in triggers
+    assert "push" not in triggers
     assert "pull_request" not in triggers
-
-    push = triggers.get("push")
-    assert isinstance(push, dict)
-    assert push.get("branches") == [
-        "main",
-        "develop",
-        "feature/ci-cd-*",
-        "feature/code-scanning-*",
-        "feature/codeql-*",
-        "feature/security-*",
-    ]
+    assert "merge_group" not in triggers
 
     jobs = data.get("jobs")
     assert isinstance(jobs, dict)
@@ -247,13 +243,17 @@ def test_ci_uploads_coverage_for_each_python_matrix_version() -> None:
     assert upload_with.get("name") == "coverage-report-py${{ matrix.python-version }}"
 
 
-def test_required_gate_workflows_do_not_rerun_on_main_push() -> None:
-    """PRs and merge queue are the correctness gate; main merges stay quiet."""
-    for workflow_name in ["ci.yml", "security.yml", "workflow-hygiene.yml"]:
+def test_legacy_required_gate_workflows_are_manual_only() -> None:
+    """CircleCI is the automatic correctness gate; legacy Actions stay quiet."""
+    for workflow_name in ["ci.yml", "clean-room.yml", "security.yml", "workflow-hygiene.yml"]:
         data = _load_yaml(WORKFLOW_DIR / workflow_name)
         triggers = data.get(True, data.get("on"))
         assert isinstance(triggers, dict)
+        assert "workflow_dispatch" in triggers
         assert "push" not in triggers
+        assert "pull_request" not in triggers
+        assert "merge_group" not in triggers
+        assert "schedule" not in triggers
 
 
 def test_release_sync_fast_path_requires_next_patch_dev_version() -> None:
@@ -475,11 +475,11 @@ def test_docker_validation_workflow_never_publishes_images() -> None:
     data = _load_yaml(docker_validate_path)
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
-    assert "pull_request" in triggers
+    assert "workflow_dispatch" in triggers
+    assert "pull_request" not in triggers
     assert "push" not in triggers
-    pull_request = triggers.get("pull_request")
-    assert isinstance(pull_request, dict)
-    assert ".grype.yaml" in pull_request.get("paths", [])
+    assert "merge_group" not in triggers
+    assert "schedule" not in triggers
 
     assert "push: true" not in docker_validate
     assert "packages: write" not in docker_validate

@@ -1,6 +1,7 @@
 ---
 # Pullbox CI Pipeline
 # Quality gate — lint, typecheck, test, migration check, accessibility, E2E.
+# Legacy GitHub Actions fallback. CircleCI is the canonical PR CI runner.
 #
 # Security: All actions pinned to full SHA. No pull_request_target.
 # See: docs/development/INFRASTRUCTURE.md
@@ -8,10 +9,6 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main, develop]
-  merge_group:
-    types: [checks_requested]
   workflow_dispatch:
 
 permissions:

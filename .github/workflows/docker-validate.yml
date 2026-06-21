@@ -6,31 +6,18 @@
 # Trusted pull requests run the full production Docker Hardened Images build on
 # the dedicated Docker runner. Untrusted pull requests fall back to a reduced
 # public sanity check that does not require secrets or self-hosted runners.
+# Legacy/manual fallback. CircleCI owns Docker validation for PR checks.
 
 name: Docker Validate
 
 on:
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - "docker/**"
-      - "src/**"
-      - "alembic/**"
-      - "pyproject.toml"
-      - "package.json"
-      - "package-lock.json"
-      - ".grype.yaml"
-      - ".github/workflows/docker-release.yml"
-      - ".github/workflows/docker-validate.yml"
-      - ".github/workflows/release.yml"
-      - ".github/scripts/preflight-runner.sh"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: docker-validate-${{ github.event.pull_request.number || github.ref }}
+  group: docker-validate-${{ github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
