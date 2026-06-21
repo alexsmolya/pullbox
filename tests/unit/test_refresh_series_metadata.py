@@ -25,6 +25,7 @@ from pullbox.models.creator import Creator, IssueCreator
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.base import IssueMetadata, IssueSummary, SeriesMetadata
+from pullbox.providers.metadata.comicvine import ComicVineError
 from pullbox.services.metadata_service import MetadataService
 
 if TYPE_CHECKING:
@@ -101,6 +102,69 @@ def metadata_svc() -> MetadataService:
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_metadata_fetch_wrappers_return_provider_results() -> None:
+    provider = MagicMock()
+    series_meta = SeriesMetadata(
+        provider_id="123",
+        title="Test Series",
+        sort_title="Test Series",
+        year_start=2026,
+        year_end=None,
+        status="continuing",
+        publisher="Test Publisher",
+        description="Series description",
+        cover_url=None,
+        issue_count=2,
+        comicvine_url="https://comicvine.gamespot.com/test/4050-123/",
+    )
+    issue_summary = IssueSummary(
+        provider_id="456",
+        issue_number=1.0,
+        title="Issue One",
+        release_date="2026-06-01",
+        cover_url=None,
+        issue_type="issue",
+    )
+    provider.get_series = AsyncMock(return_value=series_meta)
+    provider.get_issues_for_series = AsyncMock(return_value=[issue_summary])
+    provider.get_recent_issues_for_series = AsyncMock(return_value=[issue_summary])
+    service = MetadataService(provider=provider, covers_dir=MagicMock())
+
+    assert await service.get_series_metadata(123) == series_meta
+    assert await service.get_issue_summaries_for_series(123) == [issue_summary]
+    assert await service.get_recent_issue_summaries_for_series(123, limit=5) == [issue_summary]
+
+    provider.get_series.assert_awaited_once_with("123")
+    provider.get_issues_for_series.assert_awaited_once_with("123")
+    provider.get_recent_issues_for_series.assert_awaited_once_with("123", limit=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        ("get_series_metadata", (123,)),
+        ("get_issue_summaries_for_series", (123,)),
+        ("get_recent_issue_summaries_for_series", (123,)),
+    ],
+)
+async def test_metadata_fetch_wrappers_translate_comicvine_errors(
+    method_name: str,
+    args: tuple[int, ...],
+) -> None:
+    provider = MagicMock()
+    provider.get_series = AsyncMock(side_effect=ComicVineError(107, "rate limited"))
+    provider.get_issues_for_series = AsyncMock(side_effect=ComicVineError(107, "rate limited"))
+    provider.get_recent_issues_for_series = AsyncMock(
+        side_effect=ComicVineError(107, "rate limited")
+    )
+    service = MetadataService(provider=provider, covers_dir=MagicMock())
+
+    with pytest.raises(ProviderError, match="rate limited"):
+        await getattr(service, method_name)(*args)
 
 
 class TestRefreshSeries:

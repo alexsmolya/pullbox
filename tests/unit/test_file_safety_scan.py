@@ -38,3 +38,12 @@ class TestScanDirectoryForDangerousFiles:
     def test_nonexistent_root_returns_empty(self, tmp_path: Path) -> None:
         dangerous = scan_directory_for_dangerous_files(tmp_path / "missing")
         assert dangerous == []
+
+    def test_single_file_root_checks_suffix(self, tmp_path: Path) -> None:
+        dangerous_file = tmp_path / "payload.ps1"
+        dangerous_file.write_text("bad")
+        safe_file = tmp_path / "readme.txt"
+        safe_file.write_text("ok")
+
+        assert scan_directory_for_dangerous_files(dangerous_file) == [dangerous_file]
+        assert scan_directory_for_dangerous_files(safe_file) == []
