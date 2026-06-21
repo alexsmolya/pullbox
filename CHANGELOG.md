@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
-## [0.9.11-rc1] - 2026-06-21
+## [0.9.11-rc2] - 2026-06-21
 
 Release candidate focused on production bug-bash validation, large-library
 import reliability, restore readiness, CircleCI release automation, and pre-v1
@@ -93,6 +93,7 @@ confidence.
 - Kept legacy GitHub Actions workflows as manual fallback only.
 - Added release-candidate container tagging safeguards so RC tags do not update
   `latest`.
+- Fixed Cosign installation in the CircleCI Docker release signing job.
 - Fixed Docker smoke validation to avoid fixed host-port collisions.
 - Added and documented the release-sync fast path for version-only
   post-release sync PRs.
