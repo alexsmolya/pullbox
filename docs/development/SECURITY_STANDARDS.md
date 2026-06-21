@@ -805,7 +805,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
   `docs/development/INFRASTRUCTURE.md`.
 - Container publication uses GHCR and Docker Hub.
 - Published container images are signed with keyless Sigstore/Cosign using
-  GitHub Actions OIDC after registry publication.
+  CircleCI OIDC after registry publication.
 - The Docker Release workflow publishes SBOM/provenance attestations and
   verifies GHCR and Docker Hub signatures by digest before reporting success.
 - Docker metadata rules may publish semver-derived aliases depending on the

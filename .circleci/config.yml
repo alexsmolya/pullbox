@@ -1,0 +1,1270 @@
+version: 2.1
+
+# Design goals:
+# - Preserve existing gates: CI Required, Security Required, Workflow Hygiene Required.
+# - Preserve release-sync fast path, Docker validation, release image publish/sign/verify.
+# - Optimize for speed with timing-based splitting, dependency caches, Playwright cache,
+#   larger resource classes, and Docker Layer Caching for Docker jobs.
+
+parameters:
+  run_docker_release:
+    type: boolean
+    default: false
+  tag_override:
+    type: string
+    default: edge
+  python_test_parallelism:
+    type: integer
+    default: 6
+  python_test_workers:
+    type: integer
+    default: 4
+  e2e_parallelism:
+    type: integer
+    default: 4
+  e2e_workers:
+    type: integer
+    default: 1
+
+executors:
+  python312:
+    docker:
+      - image: cimg/python:3.12
+    working_directory: ~/project
+    environment:
+      PIP_CACHE_DIR: ~/.cache/pip
+      PYTHON_DEFAULT: "3.14"
+
+  python313:
+    docker:
+      - image: cimg/python:3.13
+    working_directory: ~/project
+    environment:
+      PIP_CACHE_DIR: ~/.cache/pip
+      PYTHON_DEFAULT: "3.14"
+
+  python314:
+    docker:
+      - image: cimg/python:3.14
+    working_directory: ~/project
+    environment:
+      PIP_CACHE_DIR: ~/.cache/pip
+      PYTHON_DEFAULT: "3.14"
+
+  python314_node:
+    docker:
+      - image: cimg/python:3.14-node
+    working_directory: ~/project
+    environment:
+      PIP_CACHE_DIR: ~/.cache/pip
+      PYTHON_DEFAULT: "3.14"
+
+  base:
+    docker:
+      - image: cimg/base:current
+    working_directory: ~/project
+
+commands:
+  restore_python_env:
+    description: Restore or build a Python venv and pip cache.
+    parameters:
+      python_version:
+        type: string
+      extras:
+        type: string
+        default: dev
+    steps:
+      - restore_cache:
+          keys:
+            - v4-venv-py<< parameters.python_version >>-<< parameters.extras >>-{{ checksum "pyproject.toml" }}
+      - restore_cache:
+          keys:
+            - v4-pip-py<< parameters.python_version >>-{{ checksum "pyproject.toml" }}
+            - v4-pip-py<< parameters.python_version >>-
+      - run:
+          name: Install Python dependencies
+          command: |
+            set -euo pipefail
+            if [ ! -x .venv/bin/python ]; then
+              python -m venv .venv
+            fi
+            . .venv/bin/activate
+            python -m pip install --upgrade "pip>=26.0" wheel
+            python -m pip install -e ".[<< parameters.extras >>]"
+      - save_cache:
+          key: v4-pip-py<< parameters.python_version >>-{{ checksum "pyproject.toml" }}
+          paths:
+            - ~/.cache/pip
+      - save_cache:
+          key: v4-venv-py<< parameters.python_version >>-<< parameters.extras >>-{{ checksum "pyproject.toml" }}
+          paths:
+            - .venv
+
+  restore_node_deps:
+    description: Restore npm cache and install locked Node dependencies.
+    steps:
+      - restore_cache:
+          keys:
+            - v4-npm-{{ checksum "package-lock.json" }}
+            - v4-npm-
+      - run:
+          name: Install Node dependencies
+          command: npm ci --prefer-offline --no-audit
+      - save_cache:
+          key: v4-npm-{{ checksum "package-lock.json" }}
+          paths:
+            - ~/.npm
+
+  restore_playwright:
+    description: Restore Playwright browser cache and install required browser.
+    parameters:
+      browser:
+        type: string
+    steps:
+      - restore_cache:
+          keys:
+            - v4-playwright-<< parameters.browser >>-{{ checksum "pyproject.toml" }}
+            - v4-playwright-<< parameters.browser >>-
+      - run:
+          name: Install Playwright << parameters.browser >>
+          command: |
+            set -euo pipefail
+            . .venv/bin/activate
+            playwright install --with-deps << parameters.browser >>
+      - save_cache:
+          key: v4-playwright-<< parameters.browser >>-{{ checksum "pyproject.toml" }}
+          paths:
+            - ~/.cache/ms-playwright
+
+  attach_release_sync_state:
+    description: Attach release-sync fast-path decision.
+    steps:
+      - attach_workspace:
+          at: /tmp/pullbox-workspace
+      - run:
+          name: Load release-sync decision
+          command: |
+            set -euo pipefail
+            if [ -f /tmp/pullbox-workspace/release-sync/release_sync.env ]; then
+              cp /tmp/pullbox-workspace/release-sync/release_sync.env /tmp/release_sync.env
+            else
+              printf 'RELEASE_SYNC=false\nRELEASE_SYNC_REASON=missing release sync state\n' > /tmp/release_sync.env
+            fi
+            cat /tmp/release_sync.env
+
+  halt_if_release_sync:
+    description: Halt heavyweight work for trusted release-sync PRs.
+    steps:
+      - run:
+          name: Release-sync fast path
+          command: |
+            set -euo pipefail
+            # shellcheck disable=SC1091
+            . /tmp/release_sync.env
+            if [ "${RELEASE_SYNC:-false}" = "true" ]; then
+              echo "Trusted release-sync PR detected: ${RELEASE_SYNC_REASON:-no reason recorded}"
+              circleci-agent step halt
+            fi
+
+  store_pytest_results:
+    description: Store pytest JUnit output and artifacts.
+    parameters:
+      path:
+        type: string
+    steps:
+      - store_test_results:
+          path: << parameters.path >>
+      - store_artifacts:
+          path: << parameters.path >>
+
+jobs:
+  release-sync-check:
+    executor: python314
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Detect safe post-release sync PR
+          command: |
+            set -euo pipefail
+            mkdir -p /tmp/pullbox-workspace/release-sync
+            git fetch --no-tags origin main:refs/remotes/origin/main develop:refs/remotes/origin/develop || true
+            if git cat-file -e origin/main:.circleci/scripts/release_sync_check.py 2>/dev/null; then
+              git show origin/main:.circleci/scripts/release_sync_check.py > /tmp/pullbox-release-sync-validator.py
+            else
+              cp .circleci/scripts/release_sync_check.py /tmp/pullbox-release-sync-validator.py
+            fi
+            python /tmp/pullbox-release-sync-validator.py > /tmp/pullbox-workspace/release-sync/release_sync.env
+            cat /tmp/pullbox-workspace/release-sync/release_sync.env
+      - persist_to_workspace:
+          root: /tmp/pullbox-workspace
+          paths:
+            - release-sync/release_sync.env
+
+  quality-gate:
+    executor: python314_node
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev
+      - restore_node_deps
+      - run:
+          name: Ruff lint
+          command: .venv/bin/ruff check src/ tests/
+      - run:
+          name: Ruff format check
+          command: .venv/bin/ruff format --check src/ tests/
+      - run:
+          name: Rebuild Tailwind CSS
+          command: npm run css:build
+      - run:
+          name: Check generated CSS
+          command: |
+            set -euo pipefail
+            git diff --exit-code src/pullbox/ui/static/css/tailwind.css || {
+              echo "Tailwind CSS output is stale. Run make css-build and commit the result."
+              exit 1
+            }
+
+  typecheck:
+    executor: python314
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev
+      - run:
+          name: Mypy
+          command: .venv/bin/mypy src/pullbox/
+
+  migration-check:
+    executor: python314
+    resource_class: medium
+    environment:
+      PULLBOX_SECRET_KEY: test-ci-key
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev
+      - run:
+          name: Verify migrations apply from empty DB
+          command: |
+            set -euo pipefail
+            PULLBOX_DB_URL="sqlite+aiosqlite:///test_migration.db" .venv/bin/alembic -c alembic/alembic.ini upgrade head
+            PULLBOX_DB_URL="sqlite+aiosqlite:///test_migration.db" .venv/bin/alembic -c alembic/alembic.ini downgrade base
+      - run:
+          name: Verify app boots after migration
+          command: |
+            set -euo pipefail
+            PULLBOX_DB_URL="sqlite+aiosqlite:///test_boot.db" .venv/bin/alembic -c alembic/alembic.ini upgrade head
+            PULLBOX_DB_URL="sqlite+aiosqlite:///test_boot.db" timeout 10 .venv/bin/python -c "from pullbox.app import create_app; create_app(); print('App factory created successfully')"
+
+  test-python:
+    parameters:
+      python_version:
+        type: string
+      executor_name:
+        type: executor
+      parallelism:
+        type: integer
+      resource_class:
+        type: string
+        default: large
+      pytest_workers:
+        type: integer
+        default: 4
+    executor: << parameters.executor_name >>
+    parallelism: << parameters.parallelism >>
+    resource_class: << parameters.resource_class >>
+    environment:
+      PULLBOX_SECRET_KEY: test-ci-key
+      PYTEST_WORKERS: "<< parameters.pytest_workers >>"
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: << parameters.python_version >>
+          extras: dev
+      - run:
+          name: Run pytest shard with coverage
+          command: |
+            set -euo pipefail
+            mkdir -p test-results/pytest/python-<< parameters.python_version >> coverage/python-<< parameters.python_version >>
+            export COVERAGE_FILE="coverage/python-<< parameters.python_version >>/.coverage.${CIRCLE_NODE_INDEX}"
+            circleci tests glob "tests/**/*.py" \
+              | grep -v '^tests/e2e/' \
+              | circleci tests run \
+                  --command "xargs -r .venv/bin/pytest -n ${PYTEST_WORKERS} --cov=pullbox --cov-report=term-missing --junitxml=test-results/pytest/python-<< parameters.python_version >>/junit-${CIRCLE_NODE_INDEX}.xml -v" \
+                  --split-by=timings \
+                  --timings-type=filename
+      - persist_to_workspace:
+          root: .
+          paths:
+            - coverage/python-<< parameters.python_version >>
+      - store_pytest_results:
+          path: test-results/pytest/python-<< parameters.python_version >>
+
+  coverage-python:
+    parameters:
+      python_version:
+        type: string
+      executor_name:
+        type: executor
+    executor: << parameters.executor_name >>
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - attach_workspace:
+          at: .
+      - restore_python_env:
+          python_version: << parameters.python_version >>
+          extras: dev
+      - run:
+          name: Combine coverage and enforce 90 percent threshold
+          command: |
+            set -euo pipefail
+            . .venv/bin/activate
+            coverage combine coverage/python-<< parameters.python_version >>
+            coverage report --fail-under=90 --show-missing
+            coverage xml -o coverage-python-<< parameters.python_version >>.xml
+      - store_artifacts:
+          path: coverage-python-<< parameters.python_version >>.xml
+          destination: coverage/coverage-python-<< parameters.python_version >>.xml
+
+  accessibility:
+    executor: python314_node
+    resource_class: large
+    environment:
+      PULLBOX_SECRET_KEY: test-ci-key
+      PULLBOX_DB_URL: sqlite+aiosqlite:///test_a11y.db
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_node_deps
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev,e2e
+      - restore_playwright:
+          browser: chromium
+      - run:
+          name: Run contrast audit
+          command: .venv/bin/python scripts/check_ui_contrast.py
+      - run:
+          name: Run accessibility browser tests
+          command: |
+            set -euo pipefail
+            mkdir -p test-results/accessibility test-results/e2e
+            .venv/bin/pytest tests/e2e/ \
+              -v \
+              -m accessibility \
+              --browser chromium \
+              --video retain-on-failure \
+              --screenshot only-on-failure \
+              --full-page-screenshot \
+              --output=test-results/e2e \
+              --junitxml=test-results/accessibility/junit.xml
+      - store_pytest_results:
+          path: test-results/accessibility
+      - store_artifacts:
+          path: test-results/e2e
+          destination: accessibility-artifacts
+
+  e2e:
+    parameters:
+      browser:
+        type: string
+      extra_args:
+        type: string
+        default: ""
+      parallelism:
+        type: integer
+      pytest_workers:
+        type: integer
+        default: 1
+    executor: python314
+    parallelism: << parameters.parallelism >>
+    resource_class: xlarge
+    environment:
+      PULLBOX_SECRET_KEY: test-ci-key
+      PULLBOX_RATE_LIMIT_ENABLED: "false"
+      PYTEST_WORKERS: "<< parameters.pytest_workers >>"
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev,e2e
+      - restore_playwright:
+          browser: << parameters.browser >>
+      - run:
+          name: Run E2E << parameters.browser >> shard
+          command: |
+            set -euo pipefail
+            mkdir -p test-results/e2e/<< parameters.browser >>
+            export PULLBOX_DB_URL="sqlite+aiosqlite:///test_e2e_${CIRCLE_WORKFLOW_ID}_${CIRCLE_NODE_INDEX}_<< parameters.browser >>.db"
+            PYTEST_XDIST_ARGS=""
+            if [ "${PYTEST_WORKERS}" -gt 1 ]; then
+              PYTEST_XDIST_ARGS="-n ${PYTEST_WORKERS}"
+            fi
+            circleci tests glob "tests/e2e/test_*.py" \
+              | grep -v '^tests/e2e/test_accessibility.py$' \
+              | circleci tests run \
+                  --command "xargs -r .venv/bin/pytest ${PYTEST_XDIST_ARGS} -v -m 'not accessibility' --browser << parameters.browser >> << parameters.extra_args >> --video retain-on-failure --screenshot only-on-failure --full-page-screenshot --output=test-results/e2e/<< parameters.browser >> --junitxml=test-results/e2e/<< parameters.browser >>/junit-${CIRCLE_NODE_INDEX}.xml" \
+                  --split-by=timings \
+                  --timings-type=filename
+      - store_pytest_results:
+          path: test-results/e2e/<< parameters.browser >>
+      - store_artifacts:
+          path: test-results/e2e/<< parameters.browser >>
+          destination: playwright-artifacts/<< parameters.browser >>
+
+  ci-required:
+    executor: base
+    resource_class: small
+    steps:
+      - attach_workspace:
+          at: /tmp/pullbox-workspace
+      - run:
+          name: CI Required aggregate
+          command: |
+            set -euo pipefail
+            cat /tmp/pullbox-workspace/release-sync/release_sync.env || true
+            echo "All required CI jobs completed successfully."
+
+  gitleaks:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    environment:
+      GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - run:
+          name: Run gitleaks
+          command: |
+            set -euo pipefail
+            mkdir -p test-results/security
+            if [ -n "${CIRCLE_PULL_REQUEST:-}" ]; then
+              BASE_SHA="$(git merge-base origin/develop HEAD || true)"
+              if [ -n "${BASE_SHA}" ]; then
+                docker run --rm \
+                  --user "$(id -u):$(id -g)" \
+                  -v "$PWD:/repo" \
+                  -w /repo \
+                  "${GITLEAKS_IMAGE}" \
+                  git . \
+                  --log-opts="--no-merges ${BASE_SHA}..HEAD" \
+                  --no-banner \
+                  --redact \
+                  --timeout=300 \
+                  --report-format sarif \
+                  --report-path test-results/security/gitleaks.sarif
+              fi
+            else
+              docker run --rm \
+                --user "$(id -u):$(id -g)" \
+                -v "$PWD:/repo" \
+                -w /repo \
+                "${GITLEAKS_IMAGE}" \
+                dir . \
+                --no-banner \
+                --redact \
+                --timeout=300 \
+                --report-format sarif \
+                --report-path test-results/security/gitleaks.sarif
+            fi
+      - store_artifacts:
+          path: test-results/security/gitleaks.sarif
+          destination: security/gitleaks.sarif
+
+  pip-audit:
+    executor: python314
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev
+      - run:
+          name: Run pip-audit
+          command: |
+            set -euo pipefail
+            . .venv/bin/activate
+            pip freeze --exclude-editable | grep -v "^pullbox==" > /tmp/requirements-audit.txt
+            pip-audit --strict --desc on -r /tmp/requirements-audit.txt \
+              --ignore-vuln GHSA-rf74-v2fm-23pw \
+              --ignore-vuln CVE-2026-33230 \
+              --ignore-vuln CVE-2026-33231 \
+              --ignore-vuln CVE-2026-4539
+
+  safety-check:
+    executor: python314
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev
+      - run:
+          name: Run Safety advisory scan
+          command: .venv/bin/safety check --save-json safety-report.json || true
+      - store_artifacts:
+          path: safety-report.json
+          destination: security/safety-report.json
+
+  bandit:
+    executor: python314
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev
+      - run:
+          name: Run Bandit advisory scan
+          command: .venv/bin/bandit -r src/pullbox/ -ll -f json -o bandit-report.json || true
+      - store_artifacts:
+          path: bandit-report.json
+          destination: security/bandit-report.json
+
+  codeql:
+    executor: base
+    resource_class: large
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - restore_cache:
+          keys:
+            - v1-codeql-cli-v2.25.6
+      - run:
+          name: Install CodeQL CLI
+          command: |
+            set -euo pipefail
+            CODEQL_VERSION="v2.25.6"
+            CODEQL_HOME="${HOME}/.cache/codeql/${CODEQL_VERSION}"
+            CODEQL_BIN="${CODEQL_HOME}/codeql/codeql"
+            if [ ! -x "${CODEQL_BIN}" ]; then
+              sudo apt-get update
+              sudo apt-get install -y unzip
+              rm -rf "${CODEQL_HOME}"
+              mkdir -p "${CODEQL_HOME}"
+              curl -sSfL "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" -o /tmp/codeql-linux64.zip
+              unzip -q /tmp/codeql-linux64.zip -d "${CODEQL_HOME}"
+              rm -f /tmp/codeql-linux64.zip
+            fi
+            echo "export CODEQL_BIN=${CODEQL_BIN}" >> "${BASH_ENV}"
+      - save_cache:
+          key: v1-codeql-cli-v2.25.6
+          paths:
+            - ~/.cache/codeql/v2.25.6
+      - run:
+          name: Create and analyze CodeQL database
+          command: |
+            set -euo pipefail
+            # shellcheck disable=SC1090
+            . "${BASH_ENV}"
+            mkdir -p codeql-results
+            "${CODEQL_BIN}" database create codeql-db \
+              --language=python \
+              --source-root=. \
+              --build-mode=none \
+              --codescanning-config=.github/codeql/codeql-config.yml \
+              --overwrite
+            "${CODEQL_BIN}" database analyze codeql-db \
+              --format=sarifv2.1.0 \
+              --output=codeql-results/codeql-results.sarif \
+              --sarif-category="/language:python" \
+              --threads=0
+      - run:
+          name: Upload CodeQL SARIF to GitHub
+          command: |
+            set -euo pipefail
+            # shellcheck disable=SC1090
+            . "${BASH_ENV}"
+            : "${GITHUB_CODEQL_TOKEN:?GITHUB_CODEQL_TOKEN with security_events write access is required}"
+            if [ -n "${CIRCLE_TAG:-}" ]; then
+              CODEQL_REF="refs/tags/${CIRCLE_TAG}"
+            elif [ -n "${CIRCLE_PULL_REQUEST:-}" ]; then
+              PR_NUMBER="${CIRCLE_PULL_REQUEST##*/}"
+              if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+                CODEQL_REF="refs/pull/${PR_NUMBER}/head"
+              else
+                CODEQL_REF="refs/heads/${CIRCLE_BRANCH}"
+              fi
+            else
+              CODEQL_REF="refs/heads/${CIRCLE_BRANCH}"
+            fi
+            printf '%s' "${GITHUB_CODEQL_TOKEN}" | "${CODEQL_BIN}" github upload-results \
+              --sarif=codeql-results/codeql-results.sarif \
+              --repository="${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" \
+              --ref="${CODEQL_REF}" \
+              --commit="${CIRCLE_SHA1}" \
+              --github-auth-stdin \
+              --wait-for-processing-timeout=120
+      - store_artifacts:
+          path: codeql-results/codeql-results.sarif
+          destination: security/codeql-results.sarif
+
+  security-required:
+    executor: base
+    resource_class: small
+    steps:
+      - run:
+          name: Security Required aggregate
+          command: echo "All required security jobs completed successfully."
+
+  workflow-hygiene:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - run:
+          name: Run actionlint
+          command: |
+            set -euo pipefail
+            docker run --rm \
+              --user "$(id -u):$(id -g)" \
+              -v "$PWD:/repo" \
+              -w /repo \
+              docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+              -shellcheck= -pyflakes=
+
+  workflow-hygiene-required:
+    executor: base
+    resource_class: small
+    steps:
+      - run:
+          name: Workflow Hygiene Required aggregate
+          command: echo "Workflow hygiene completed successfully."
+
+  docker-validate:
+    machine:
+      image: ubuntu-2404:current
+      docker_layer_caching: true
+    resource_class: xlarge
+    environment:
+      PYTHON_DEFAULT: "3.14"
+      GRYPE_IMAGE: docker.io/anchore/grype@sha256:7a9fc7f89ccef78ae5a7691a115d3f0d41b1f319d589dd8cc1dcb9ab3f01dd28
+    steps:
+      - checkout
+      - attach_release_sync_state
+      - halt_if_release_sync
+      - run:
+          name: Decide Docker validation mode
+          command: |
+            set -euo pipefail
+            python .circleci/scripts/docker_validate_gate.py > /tmp/docker_validate.env
+            cat /tmp/docker_validate.env
+      - run:
+          name: Run Docker validation
+          command: |
+            set -euo pipefail
+            # shellcheck disable=SC1091
+            . /tmp/docker_validate.env
+            if [ "${DOCKER_VALIDATE_REQUIRED}" != "true" ]; then
+              echo "Docker-sensitive files did not change; halting Docker Validate."
+              circleci-agent step halt
+            fi
+
+            if [ "${DOCKER_VALIDATE_MODE}" = "untrusted" ]; then
+              docker build -f docker/Dockerfile.dev -t pullbox:pr-sanity .
+              docker image inspect pullbox:pr-sanity >/dev/null
+              exit 0
+            fi
+
+            if [ -z "${DHI_USERNAME:-}" ] || [ -z "${DHI_TOKEN:-}" ]; then
+              echo "DHI_USERNAME and DHI_TOKEN are required for trusted Docker validation."
+              exit 1
+            fi
+            echo "${DHI_TOKEN}" | docker login dhi.io -u "${DHI_USERNAME}" --password-stdin
+            BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            GIT_SHA="${CIRCLE_SHA1}"
+            docker build \
+              -f docker/Dockerfile \
+              -t pullbox:validate \
+              --build-arg BUILD_DATE="${BUILD_DATE}" \
+              --build-arg GIT_SHA="${GIT_SHA}" \
+              --build-arg GIT_BRANCH="${CIRCLE_BRANCH}" \
+              --build-arg VERSION="validate-${GIT_SHA:0:7}" \
+              .
+            docker image inspect pullbox:validate >/dev/null
+      - run:
+          name: Scan and smoke-test production image
+          command: |
+            set -euo pipefail
+            # shellcheck disable=SC1091
+            . /tmp/docker_validate.env
+            if [ "${DOCKER_VALIDATE_REQUIRED}" != "true" ] || [ "${DOCKER_VALIDATE_MODE}" = "untrusted" ]; then
+              circleci-agent step halt
+            fi
+            docker save pullbox:validate -o /tmp/pullbox-validate.tar
+            docker run --rm \
+              -v "$PWD/.grype.yaml:/workspace/.grype.yaml:ro" \
+              -v /tmp/pullbox-validate.tar:/workspace/pullbox-validate.tar:ro \
+              "${GRYPE_IMAGE}" \
+              docker-archive:/workspace/pullbox-validate.tar \
+              --config /workspace/.grype.yaml \
+              --fail-on high
+            docker run --rm --entrypoint python pullbox:validate -c '
+            import pullbox.app
+            assets = [
+                pullbox.app.STATIC_DIR / "css" / "tailwind.css",
+                pullbox.app.STATIC_DIR / "js" / "htmx.min.js",
+            ]
+            missing = [str(asset) for asset in assets if not asset.is_file()]
+            if missing:
+                raise SystemExit("Missing packaged static assets: " + ", ".join(missing))
+            print("Packaged static assets verified")
+            '
+            docker run -d \
+              --name pullbox-validate \
+              -p 127.0.0.1::8585 \
+              -e PULLBOX_SECRET_KEY=docker-validate-secret-key-for-ci \
+              -e PULLBOX_LOG_LEVEL=WARNING \
+              pullbox:validate
+            validate_port="$(docker port pullbox-validate 8585/tcp | awk -F: 'NR == 1 { print $NF }')"
+            for i in $(seq 1 30); do
+              if curl -sf "http://127.0.0.1:${validate_port}/ping" >/dev/null 2>&1; then
+                exit 0
+              fi
+              sleep 1
+            done
+            docker logs pullbox-validate
+            exit 1
+      - run:
+          name: Cleanup Docker Validate
+          when: always
+          command: docker rm -f pullbox-validate || true
+
+  docker-release-build:
+    machine:
+      image: ubuntu-2404:current
+      docker_layer_caching: true
+    resource_class: xlarge
+    steps:
+      - checkout
+      - run:
+          name: Build amd64 image for scan and smoke
+          command: |
+            set -euo pipefail
+            if [ -z "${DHI_USERNAME:-}" ] || [ -z "${DHI_TOKEN:-}" ]; then
+              echo "DHI_USERNAME and DHI_TOKEN are required for Docker release builds."
+              exit 1
+            fi
+            echo "${DHI_TOKEN}" | docker login dhi.io -u "${DHI_USERNAME}" --password-stdin
+            VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pullbox/__init__.py | head -1)"
+            BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            docker buildx create --use --name pullbox-builder || docker buildx use pullbox-builder
+            docker buildx build \
+              -f docker/Dockerfile \
+              --platform linux/amd64 \
+              --load \
+              -t pullbox:ci-scan \
+              --build-arg BUILD_DATE="${BUILD_DATE}" \
+              --build-arg GIT_SHA="${CIRCLE_SHA1}" \
+              --build-arg GIT_BRANCH="${CIRCLE_BRANCH:-${CIRCLE_TAG:-tag}}" \
+              --build-arg VERSION="${VERSION}" \
+              .
+            mkdir -p /tmp/pullbox-workspace/docker-image
+            docker save pullbox:ci-scan | gzip > /tmp/pullbox-workspace/docker-image/pullbox-image.tar.gz
+      - persist_to_workspace:
+          root: /tmp/pullbox-workspace
+          paths:
+            - docker-image/pullbox-image.tar.gz
+
+  docker-release-scan:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: large
+    environment:
+      GRYPE_IMAGE: docker.io/anchore/grype@sha256:7a9fc7f89ccef78ae5a7691a115d3f0d41b1f319d589dd8cc1dcb9ab3f01dd28
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/pullbox-workspace
+      - run:
+          name: Load and scan release image
+          command: |
+            set -euo pipefail
+            docker load < /tmp/pullbox-workspace/docker-image/pullbox-image.tar.gz
+            docker save pullbox:ci-scan -o /tmp/pullbox-ci-scan.tar
+            docker run --rm \
+              -v "$PWD/.grype.yaml:/workspace/.grype.yaml:ro" \
+              -v /tmp/pullbox-ci-scan.tar:/workspace/pullbox-ci-scan.tar:ro \
+              "${GRYPE_IMAGE}" \
+              docker-archive:/workspace/pullbox-ci-scan.tar \
+              --config /workspace/.grype.yaml \
+              --fail-on high
+
+  docker-release-smoke:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: large
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/pullbox-workspace
+      - run:
+          name: Smoke-test release image
+          command: |
+            set -euo pipefail
+            docker load < /tmp/pullbox-workspace/docker-image/pullbox-image.tar.gz
+            docker run --rm --entrypoint python pullbox:ci-scan -c '
+            import pullbox.app
+            assets = [
+                pullbox.app.STATIC_DIR / "css" / "tailwind.css",
+                pullbox.app.STATIC_DIR / "js" / "htmx.min.js",
+            ]
+            missing = [str(asset) for asset in assets if not asset.is_file()]
+            if missing:
+                raise SystemExit("Missing packaged static assets: " + ", ".join(missing))
+            print("Packaged static assets verified")
+            '
+            docker run -d \
+              --name pullbox-smoke \
+              -p 127.0.0.1::8585 \
+              -e PULLBOX_SECRET_KEY=smoke-test-secret-key-for-docker-ci \
+              -e PULLBOX_LOG_LEVEL=WARNING \
+              pullbox:ci-scan
+            smoke_port="$(docker port pullbox-smoke 8585/tcp | awk -F: 'NR == 1 { print $NF }')"
+            for i in $(seq 1 30); do
+              if curl -sf "http://127.0.0.1:${smoke_port}/ping" >/dev/null 2>&1; then
+                exit 0
+              fi
+              sleep 1
+            done
+            docker logs pullbox-smoke
+            exit 1
+      - run:
+          name: Cleanup release smoke container
+          when: always
+          command: docker rm -f pullbox-smoke || true
+
+  docker-release-push:
+    machine:
+      image: ubuntu-2404:current
+      docker_layer_caching: true
+    resource_class: xlarge
+    steps:
+      - checkout
+      - run:
+          name: Build and push multi-arch image
+          command: |
+            set -euo pipefail
+            : "${DHI_USERNAME:?DHI_USERNAME is required}"
+            : "${DHI_TOKEN:?DHI_TOKEN is required}"
+            : "${GHCR_USERNAME:?GHCR_USERNAME is required}"
+            : "${GHCR_TOKEN:?GHCR_TOKEN with package write access is required}"
+            : "${DOCKERHUB_USERNAME:?DOCKERHUB_USERNAME is required}"
+            : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN is required}"
+            echo "${DHI_TOKEN}" | docker login dhi.io -u "${DHI_USERNAME}" --password-stdin
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+            echo "${DOCKERHUB_TOKEN}" | docker login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
+            VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pullbox/__init__.py | head -1)"
+            BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            RELEASE_TAG="${CIRCLE_TAG:-<< pipeline.parameters.tag_override >>}"
+            if [ -n "${CIRCLE_TAG:-}" ] && [[ "${CIRCLE_TAG}" == v* ]]; then
+              SEMVER_TAG="${CIRCLE_TAG#v}"
+            else
+              SEMVER_TAG="<< pipeline.parameters.tag_override >>"
+            fi
+            GHCR_IMAGE="ghcr.io/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
+            DOCKERHUB_IMAGE="docker.io/pullbox/pullbox"
+            SHA_TAG="sha-${CIRCLE_SHA1:0:7}"
+            TAG_ARGS=(
+              -t "${GHCR_IMAGE}:${SEMVER_TAG}"
+              -t "${GHCR_IMAGE}:${SHA_TAG}"
+              -t "${DOCKERHUB_IMAGE}:${SEMVER_TAG}"
+              -t "${DOCKERHUB_IMAGE}:${SHA_TAG}"
+            )
+            if [ -n "${CIRCLE_TAG:-}" ] && [[ "${CIRCLE_TAG}" != *-* ]]; then
+              TAG_ARGS+=(-t "${GHCR_IMAGE}:latest" -t "${DOCKERHUB_IMAGE}:latest")
+            fi
+            docker buildx create --use --name pullbox-builder || docker buildx use pullbox-builder
+            docker buildx build \
+              -f docker/Dockerfile \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              "${TAG_ARGS[@]}" \
+              --label org.opencontainers.image.title=Pullbox \
+              --label "org.opencontainers.image.description=Modern comic book management and acquisition platform" \
+              --label "org.opencontainers.image.source=https://github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" \
+              --label "org.opencontainers.image.revision=${CIRCLE_SHA1}" \
+              --label "org.opencontainers.image.version=${VERSION}" \
+              --build-arg BUILD_DATE="${BUILD_DATE}" \
+              --build-arg GIT_SHA="${CIRCLE_SHA1}" \
+              --build-arg GIT_BRANCH="${CIRCLE_BRANCH:-${RELEASE_TAG}}" \
+              --build-arg VERSION="${VERSION}" \
+              --provenance=mode=max \
+              --sbom=true \
+              --metadata-file /tmp/image-metadata.json \
+              .
+            mkdir -p /tmp/pullbox-workspace/release-image-digest
+            python3 -c '
+            import json
+            from pathlib import Path
+
+            metadata = json.loads(Path("/tmp/image-metadata.json").read_text())
+            digest = metadata.get("containerimage.digest") or metadata.get("image.name", "").split("@")[-1]
+            if not digest.startswith("sha256:"):
+                raise SystemExit(f"Could not determine pushed image digest from metadata: {metadata}")
+            Path("/tmp/pullbox-workspace/release-image-digest/digest.txt").write_text(digest + "\n")
+            '
+      - persist_to_workspace:
+          root: /tmp/pullbox-workspace
+          paths:
+            - release-image-digest/digest.txt
+
+  docker-release-sign:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/pullbox-workspace
+      - run:
+          name: Install Cosign
+          command: |
+            set -euo pipefail
+            curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.5.3/cosign-linux-amd64 -o /usr/local/bin/cosign
+            chmod +x /usr/local/bin/cosign
+      - run:
+          name: Sign and verify release image digest
+          command: |
+            set -euo pipefail
+            : "${CIRCLE_OIDC_TOKEN_V2:?CircleCI OIDC token is required for keyless signing}"
+            : "${GHCR_USERNAME:?GHCR_USERNAME is required}"
+            : "${GHCR_TOKEN:?GHCR_TOKEN is required}"
+            : "${DOCKERHUB_USERNAME:?DOCKERHUB_USERNAME is required}"
+            : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN is required}"
+            mkdir -p /tmp/pullbox-workspace/release-signing
+            python3 .circleci/scripts/circleci_oidc_claims.py > /tmp/pullbox-workspace/release-signing/cosign.env
+            # shellcheck disable=SC1091
+            . /tmp/pullbox-workspace/release-signing/cosign.env
+            DIGEST="$(tr -d '[:space:]' < /tmp/pullbox-workspace/release-image-digest/digest.txt)"
+            GHCR_IMAGE="ghcr.io/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
+            DOCKERHUB_IMAGE="docker.io/pullbox/pullbox"
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+            echo "${DOCKERHUB_TOKEN}" | docker login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
+            cosign sign --yes --identity-token "${CIRCLE_OIDC_TOKEN_V2}" "${GHCR_IMAGE}@${DIGEST}"
+            cosign sign --yes --identity-token "${CIRCLE_OIDC_TOKEN_V2}" "${DOCKERHUB_IMAGE}@${DIGEST}"
+
+            verify_image_signature() {
+              local image_ref="$1"
+              local label="$2"
+              local attempt
+              local max_attempts=6
+
+              for attempt in $(seq 1 "${max_attempts}"); do
+                if cosign verify \
+                  --certificate-identity "${COSIGN_CERTIFICATE_IDENTITY}" \
+                  --certificate-oidc-issuer "${COSIGN_CERTIFICATE_OIDC_ISSUER}" \
+                  "${image_ref}"; then
+                  return 0
+                fi
+
+                if [ "${attempt}" -eq "${max_attempts}" ]; then
+                  echo "Signature for ${label} was not discoverable after ${max_attempts} attempts."
+                  return 1
+                fi
+
+                echo "Signature for ${label} was not discoverable yet; retrying in 10 seconds (${attempt}/${max_attempts})."
+                sleep 10
+              done
+            }
+
+            verify_image_signature "${GHCR_IMAGE}@${DIGEST}" "GHCR"
+            verify_image_signature "${DOCKERHUB_IMAGE}@${DIGEST}" "Docker Hub"
+      - persist_to_workspace:
+          root: /tmp/pullbox-workspace
+          paths:
+            - release-signing/cosign.env
+      - store_artifacts:
+          path: /tmp/pullbox-workspace/release-image-digest/digest.txt
+          destination: release/digest.txt
+      - store_artifacts:
+          path: /tmp/pullbox-workspace/release-signing/cosign.env
+          destination: release/cosign.env
+
+  github-release:
+    executor: python314
+    resource_class: medium
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/pullbox-workspace
+      - restore_python_env:
+          python_version: "3.14"
+          extras: dev
+      - run:
+          name: Create or update GitHub Release
+          command: |
+            set -euo pipefail
+            : "${GITHUB_RELEASE_TOKEN:?GITHUB_RELEASE_TOKEN with contents write access is required}"
+            TAG="${CIRCLE_TAG:?Git tag is required}"
+            VERSION="${TAG#v}"
+            .venv/bin/python scripts/extract_changelog_section.py --version "${VERSION}" --output curated_changelog.md
+            DIGEST="$(tr -d '[:space:]' < /tmp/pullbox-workspace/release-image-digest/digest.txt)"
+            if [ -f /tmp/pullbox-workspace/release-signing/cosign.env ]; then
+              # shellcheck disable=SC1091
+              . /tmp/pullbox-workspace/release-signing/cosign.env
+            fi
+            python .circleci/scripts/github_release.py \
+              --repository "${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" \
+              --tag "${TAG}" \
+              --version "${VERSION}" \
+              --digest "${DIGEST}" \
+              --changelog curated_changelog.md
+
+workflows:
+  pr-and-merge-checks:
+    jobs:
+      - release-sync-check:
+          filters: &pr_checks_filters
+            branches:
+              ignore:
+                - main
+                - develop
+            tags:
+              ignore: /.*/
+      - quality-gate:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - typecheck:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - migration-check:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - test-python:
+          name: test-python-3.12
+          python_version: "3.12"
+          executor_name: python312
+          parallelism: << pipeline.parameters.python_test_parallelism >>
+          resource_class: xlarge
+          pytest_workers: << pipeline.parameters.python_test_workers >>
+          requires:
+            - quality-gate
+            - typecheck
+            - migration-check
+          filters: *pr_checks_filters
+      - test-python:
+          name: test-python-3.13
+          python_version: "3.13"
+          executor_name: python313
+          parallelism: << pipeline.parameters.python_test_parallelism >>
+          resource_class: xlarge
+          pytest_workers: << pipeline.parameters.python_test_workers >>
+          requires:
+            - quality-gate
+            - typecheck
+            - migration-check
+          filters: *pr_checks_filters
+      - test-python:
+          name: test-python-3.14
+          python_version: "3.14"
+          executor_name: python314
+          parallelism: << pipeline.parameters.python_test_parallelism >>
+          resource_class: xlarge
+          pytest_workers: << pipeline.parameters.python_test_workers >>
+          requires:
+            - quality-gate
+            - typecheck
+            - migration-check
+          filters: *pr_checks_filters
+      - coverage-python:
+          name: coverage-python-3.12
+          python_version: "3.12"
+          executor_name: python312
+          requires:
+            - test-python-3.12
+          filters: *pr_checks_filters
+      - coverage-python:
+          name: coverage-python-3.13
+          python_version: "3.13"
+          executor_name: python313
+          requires:
+            - test-python-3.13
+          filters: *pr_checks_filters
+      - coverage-python:
+          name: coverage-python-3.14
+          python_version: "3.14"
+          executor_name: python314
+          requires:
+            - test-python-3.14
+          filters: *pr_checks_filters
+      - accessibility:
+          requires:
+            - quality-gate
+            - typecheck
+            - migration-check
+          filters: *pr_checks_filters
+      - e2e:
+          name: e2e-chromium
+          browser: chromium
+          parallelism: << pipeline.parameters.e2e_parallelism >>
+          pytest_workers: << pipeline.parameters.e2e_workers >>
+          requires:
+            - coverage-python-3.12
+            - coverage-python-3.13
+            - coverage-python-3.14
+          filters: *pr_checks_filters
+      - e2e:
+          name: e2e-firefox
+          browser: firefox
+          extra_args: "--durations=25 --durations-min=1.0"
+          parallelism: << pipeline.parameters.e2e_parallelism >>
+          pytest_workers: << pipeline.parameters.e2e_workers >>
+          requires:
+            - coverage-python-3.12
+            - coverage-python-3.13
+            - coverage-python-3.14
+          filters: *pr_checks_filters
+      - ci-required:
+          requires:
+            - accessibility
+            - e2e-chromium
+            - e2e-firefox
+          filters: *pr_checks_filters
+
+      - gitleaks:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - pip-audit:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - safety-check:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - bandit:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - codeql:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - security-required:
+          requires:
+            - gitleaks
+            - pip-audit
+            - safety-check
+            - bandit
+            - codeql
+          filters: *pr_checks_filters
+
+      - workflow-hygiene:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+      - workflow-hygiene-required:
+          requires:
+            - workflow-hygiene
+          filters: *pr_checks_filters
+
+      - docker-validate:
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+
+  docker-release:
+    jobs:
+      - docker-release-build:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+      - docker-release-scan:
+          requires:
+            - docker-release-build
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+      - docker-release-smoke:
+          requires:
+            - docker-release-build
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+      - docker-release-push:
+          requires:
+            - docker-release-scan
+            - docker-release-smoke
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+      - docker-release-sign:
+          requires:
+            - docker-release-push
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+      - github-release:
+          requires:
+            - docker-release-sign
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+
+  manual-docker-release:
+    when: << pipeline.parameters.run_docker_release >>
+    jobs:
+      - docker-release-build
+      - docker-release-scan:
+          requires:
+            - docker-release-build
+      - docker-release-smoke:
+          requires:
+            - docker-release-build
+      - docker-release-push:
+          requires:
+            - docker-release-scan
+            - docker-release-smoke
+      - docker-release-sign:
+          requires:
+            - docker-release-push

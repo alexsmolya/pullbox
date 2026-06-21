@@ -25,7 +25,7 @@ tags are signed before automation publishes artifacts.
 - TDD is the expected development loop for behavior changes.
 - `make validate`, `make ci-local`, and `make ci-full` are the main local gates.
 - Release tags are signed.
-- Tag pushes trigger release and Docker publication workflows.
+- Tag pushes trigger CircleCI release and Docker publication workflows.
 - After a release, `develop` is bumped back to the next `-dev` version.
 
 ## Table of Contents
@@ -386,7 +386,7 @@ Example PR body:
 - Release PRs merge `develop` into `main`.
 - Release tags are created from `main`.
 - Release tags are signed.
-- Tag pushes trigger:
+- Tag pushes trigger CircleCI:
   - GitHub Release creation
   - Docker Release build, Grype scan, smoke test, GHCR/Docker Hub publish,
     Cosign signing, signature verification, and digest artifact upload
@@ -456,7 +456,7 @@ Pullbox has two release-note artifacts:
 | Artifact | Source | When Updated | Purpose |
 |---|---|---|---|
 | `CHANGELOG.md` | Curated by maintainers | During release prep PR | Human-readable project history in the repo |
-| GitHub Release notes | Curated `CHANGELOG.md` release section plus generated commit details from `.github/workflows/release.yml` | After a signed version tag and successful Docker Release workflow | Public release summary, detailed release event log, Docker pull commands, and image signature verification commands |
+| GitHub Release notes | Curated `CHANGELOG.md` release section plus generated commit details from `.circleci/scripts/github_release.py` | After a signed version tag and successful CircleCI Docker Release workflow | Public release summary, detailed release event log, Docker pull commands, and image signature verification commands |
 
 `CHANGELOG.md` is not generated automatically. Keep it concise and user-facing:
 summarize the release, do not paste every commit. During release prep, move
@@ -491,8 +491,8 @@ Recommended mapping:
 
 - Signed tags let GitHub show verified tag provenance when signing is configured
   correctly.
-- Release images are signed separately from Git tags. Docker Release uses
-  keyless Sigstore/Cosign with GitHub Actions OIDC, verifies GHCR and Docker
+- Release images are signed separately from Git tags. CircleCI Docker Release
+  uses keyless Sigstore/Cosign with CircleCI OIDC, verifies GHCR and Docker
   Hub signatures by digest before the workflow succeeds, and uploads that digest
   for the GitHub Release notes.
 - If `git tag -s` fails, stop and configure a verified GPG or SSH signing key

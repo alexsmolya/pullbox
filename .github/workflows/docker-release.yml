@@ -10,8 +10,8 @@
 # See: docs/development/INFRASTRUCTURE.md
 #
 # Trigger rules:
-#   push tags    → builds semver release images for tagged commits
-#   dispatch     → manual release image builds from the selected ref
+#   dispatch     → legacy/manual release image builds from the selected ref
+# CircleCI is the canonical publisher for release tag pushes.
 # Trusted Docker publish stays on the self-hosted runner. This workflow is not
 # governed by the general checks-runner toggle.
 #
@@ -29,9 +29,6 @@
 name: Docker Release
 
 on:
-  push:
-    tags: ["v*"]
-
   workflow_dispatch:
     inputs:
       tag_override:

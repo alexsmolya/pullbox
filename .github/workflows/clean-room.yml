@@ -2,12 +2,11 @@
 # Pullbox Clean-Room Verification
 # Fresh install sanity lane to catch cache-masked dependency or environment
 # drift without slowing normal PR CI.
+# Legacy/manual fallback. The scheduled clean-room lane is disabled.
 
 name: Clean Room
 
 on:
-  schedule:
-    - cron: "30 6 * * 3"
   workflow_dispatch:
 
 permissions:

@@ -69,6 +69,7 @@ class _VolumeSubtitleRebucketMatch:
 
     imp_file: ImportedFile
     hint: VolumeSubtitleHint
+    raw_year: int | None
     cv_result: dict[str, Any]
     diagnostics: dict[str, Any]
 
@@ -773,6 +774,7 @@ async def _rebucket_collection_volume_subtitle_series(
             _VolumeSubtitleRebucketMatch(
                 imp_file=imp_file,
                 hint=hint,
+                raw_year=raw_year,
                 cv_result=cv_result,
                 diagnostics=dict(evaluation.diagnostics or {}),
             )
@@ -797,7 +799,7 @@ async def _rebucket_collection_volume_subtitle_series(
                 import_job_id=job.id,
                 status=ImportSeriesStatus.MATCHED,
                 raw_series_name=cv_result["cv_title"],
-                raw_year=cv_result["cv_year"] or raw_year,
+                raw_year=cv_result["cv_year"] or rebucket_match.raw_year,
                 raw_publisher=cv_result["cv_publisher"] or item.raw_publisher,
                 file_count=0,
                 files_total=0,

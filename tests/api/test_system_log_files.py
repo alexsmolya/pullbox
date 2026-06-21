@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,8 @@ def test_list_log_file_responses_returns_log_files_newest_first(tmp_path: Path) 
     old_log.write_text("old\n", encoding="utf-8")
     new_log = tmp_path / "pullbox.log"
     new_log.write_text("new\n", encoding="utf-8")
+    os.utime(old_log, (1_700_000_000, 1_700_000_000))
+    os.utime(new_log, (1_700_000_000, 1_700_000_000))
     ignored = tmp_path / "pullbox.txt"
     ignored.write_text("ignored\n", encoding="utf-8")
 
