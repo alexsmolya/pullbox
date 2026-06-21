@@ -747,10 +747,12 @@ jobs:
             if [ "${DOCKER_VALIDATE_REQUIRED}" != "true" ] || [ "${DOCKER_VALIDATE_MODE}" = "untrusted" ]; then
               circleci-agent step halt
             fi
+            docker save pullbox:validate -o /tmp/pullbox-validate.tar
             docker run --rm \
               -v "$PWD/.grype.yaml:/workspace/.grype.yaml:ro" \
+              -v /tmp/pullbox-validate.tar:/workspace/pullbox-validate.tar:ro \
               "${GRYPE_IMAGE}" \
-              pullbox:validate \
+              docker-archive:/workspace/pullbox-validate.tar \
               --config /workspace/.grype.yaml \
               --fail-on high
             docker run --rm --entrypoint python pullbox:validate -c '
@@ -835,10 +837,12 @@ jobs:
           command: |
             set -euo pipefail
             docker load < /tmp/pullbox-workspace/docker-image/pullbox-image.tar.gz
+            docker save pullbox:ci-scan -o /tmp/pullbox-ci-scan.tar
             docker run --rm \
               -v "$PWD/.grype.yaml:/workspace/.grype.yaml:ro" \
+              -v /tmp/pullbox-ci-scan.tar:/workspace/pullbox-ci-scan.tar:ro \
               "${GRYPE_IMAGE}" \
-              pullbox:ci-scan \
+              docker-archive:/workspace/pullbox-ci-scan.tar \
               --config /workspace/.grype.yaml \
               --fail-on high
 
