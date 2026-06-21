@@ -59,3 +59,13 @@ def test_weekly_clean_room_schedule_is_disabled() -> None:
     assert all(
         "triggers" not in workflow for workflow in workflows.values() if isinstance(workflow, dict)
     )
+
+
+def test_release_digest_extraction_avoids_circleci_heredoc_parsing() -> None:
+    config_text = CIRCLECI_CONFIG.read_text(encoding="utf-8")
+
+    assert "python3 -c '" in config_text
+    assert "python3 - <<'PY'" not in config_text
+    assert "python3 - \\<<'PY'" not in config_text
+    assert "/tmp/image-metadata.json" in config_text
+    assert "/tmp/pullbox-workspace/release-image-digest/digest.txt" in config_text
