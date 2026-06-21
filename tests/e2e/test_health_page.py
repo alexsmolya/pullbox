@@ -316,6 +316,24 @@ class TestHealthPage:
         health = HealthPage(authed_page, seeded_server)
         health.goto()
 
+        with (
+            authed_page.expect_response(
+                lambda response: (
+                    response.url.endswith("/api/v1/health/refresh")
+                    and response.request.method == "POST"
+                )
+            ) as refresh_info,
+            authed_page.expect_response(
+                lambda response: (
+                    response.url.endswith("/health/status") and response.request.method == "GET"
+                )
+            ) as status_info,
+        ):
+            health.refresh_button.click()
+
+        assert refresh_info.value.status == 200
+        assert status_info.value.status == 200
+
         system_card = authed_page.locator("[data-testid='health-component-card-system']")
         assert system_card.is_visible()
         assert system_card.locator(

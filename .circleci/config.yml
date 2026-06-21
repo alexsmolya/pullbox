@@ -24,7 +24,7 @@ parameters:
     default: 4
   e2e_workers:
     type: integer
-    default: 2
+    default: 1
 
 executors:
   python312:
@@ -394,7 +394,7 @@ jobs:
         type: integer
       pytest_workers:
         type: integer
-        default: 2
+        default: 1
     executor: python314
     parallelism: << parameters.parallelism >>
     resource_class: xlarge
@@ -417,10 +417,14 @@ jobs:
             set -euo pipefail
             mkdir -p test-results/e2e/<< parameters.browser >>
             export PULLBOX_DB_URL="sqlite+aiosqlite:///test_e2e_${CIRCLE_WORKFLOW_ID}_${CIRCLE_NODE_INDEX}_<< parameters.browser >>.db"
+            PYTEST_XDIST_ARGS=""
+            if [ "${PYTEST_WORKERS}" -gt 1 ]; then
+              PYTEST_XDIST_ARGS="-n ${PYTEST_WORKERS}"
+            fi
             circleci tests glob "tests/e2e/test_*.py" \
               | grep -v '^tests/e2e/test_accessibility.py$' \
               | circleci tests run \
-                  --command "xargs -r .venv/bin/pytest -n ${PYTEST_WORKERS} -v -m 'not accessibility' --browser << parameters.browser >> << parameters.extra_args >> --video retain-on-failure --screenshot only-on-failure --full-page-screenshot --output=test-results/e2e/<< parameters.browser >> --junitxml=test-results/e2e/<< parameters.browser >>/junit-${CIRCLE_NODE_INDEX}.xml" \
+                  --command "xargs -r .venv/bin/pytest ${PYTEST_XDIST_ARGS} -v -m 'not accessibility' --browser << parameters.browser >> << parameters.extra_args >> --video retain-on-failure --screenshot only-on-failure --full-page-screenshot --output=test-results/e2e/<< parameters.browser >> --junitxml=test-results/e2e/<< parameters.browser >>/junit-${CIRCLE_NODE_INDEX}.xml" \
                   --split-by=timings \
                   --timings-type=filename
       - store_pytest_results:
