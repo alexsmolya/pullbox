@@ -16,9 +16,15 @@ parameters:
   python_test_parallelism:
     type: integer
     default: 6
+  python_test_workers:
+    type: integer
+    default: 4
   e2e_parallelism:
     type: integer
     default: 4
+  e2e_workers:
+    type: integer
+    default: 2
 
 executors:
   python312:
@@ -274,12 +280,15 @@ jobs:
       resource_class:
         type: string
         default: large
+      pytest_workers:
+        type: integer
+        default: 4
     executor: << parameters.executor_name >>
     parallelism: << parameters.parallelism >>
     resource_class: << parameters.resource_class >>
     environment:
       PULLBOX_SECRET_KEY: test-ci-key
-      PYTEST_WORKERS: "2"
+      PYTEST_WORKERS: "<< parameters.pytest_workers >>"
     steps:
       - checkout
       - attach_release_sync_state
@@ -383,12 +392,16 @@ jobs:
         default: ""
       parallelism:
         type: integer
+      pytest_workers:
+        type: integer
+        default: 2
     executor: python314
     parallelism: << parameters.parallelism >>
-    resource_class: large
+    resource_class: xlarge
     environment:
       PULLBOX_SECRET_KEY: test-ci-key
       PULLBOX_RATE_LIMIT_ENABLED: "false"
+      PYTEST_WORKERS: "<< parameters.pytest_workers >>"
     steps:
       - checkout
       - attach_release_sync_state
@@ -407,7 +420,7 @@ jobs:
             circleci tests glob "tests/e2e/test_*.py" \
               | grep -v '^tests/e2e/test_accessibility.py$' \
               | circleci tests run \
-                  --command "xargs -r .venv/bin/pytest -v -m 'not accessibility' --browser << parameters.browser >> << parameters.extra_args >> --video retain-on-failure --screenshot only-on-failure --full-page-screenshot --output=test-results/e2e/<< parameters.browser >> --junitxml=test-results/e2e/<< parameters.browser >>/junit-${CIRCLE_NODE_INDEX}.xml" \
+                  --command "xargs -r .venv/bin/pytest -n ${PYTEST_WORKERS} -v -m 'not accessibility' --browser << parameters.browser >> << parameters.extra_args >> --video retain-on-failure --screenshot only-on-failure --full-page-screenshot --output=test-results/e2e/<< parameters.browser >> --junitxml=test-results/e2e/<< parameters.browser >>/junit-${CIRCLE_NODE_INDEX}.xml" \
                   --split-by=timings \
                   --timings-type=filename
       - store_pytest_results:
@@ -1066,7 +1079,8 @@ workflows:
           python_version: "3.12"
           executor_name: python312
           parallelism: << pipeline.parameters.python_test_parallelism >>
-          resource_class: large
+          resource_class: xlarge
+          pytest_workers: << pipeline.parameters.python_test_workers >>
           requires:
             - quality-gate
             - typecheck
@@ -1076,7 +1090,8 @@ workflows:
           python_version: "3.13"
           executor_name: python313
           parallelism: << pipeline.parameters.python_test_parallelism >>
-          resource_class: large
+          resource_class: xlarge
+          pytest_workers: << pipeline.parameters.python_test_workers >>
           requires:
             - quality-gate
             - typecheck
@@ -1086,7 +1101,8 @@ workflows:
           python_version: "3.14"
           executor_name: python314
           parallelism: << pipeline.parameters.python_test_parallelism >>
-          resource_class: large
+          resource_class: xlarge
+          pytest_workers: << pipeline.parameters.python_test_workers >>
           requires:
             - quality-gate
             - typecheck
@@ -1118,6 +1134,7 @@ workflows:
           name: e2e-chromium
           browser: chromium
           parallelism: << pipeline.parameters.e2e_parallelism >>
+          pytest_workers: << pipeline.parameters.e2e_workers >>
           requires:
             - coverage-python-3.12
             - coverage-python-3.13
@@ -1127,6 +1144,7 @@ workflows:
           browser: firefox
           extra_args: "--durations=25 --durations-min=1.0"
           parallelism: << pipeline.parameters.e2e_parallelism >>
+          pytest_workers: << pipeline.parameters.e2e_workers >>
           requires:
             - coverage-python-3.12
             - coverage-python-3.13

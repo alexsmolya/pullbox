@@ -51,8 +51,9 @@ Release helper.
   It is part of `security-required`, so CodeQL setup/upload failures block the
   required security aggregate.
 - `gitleaks`, `actionlint`, and `grype` are pinned to immutable image digests.
-- The initial parallelism defaults are intentionally tunable:
-  `python_test_parallelism=6` and `e2e_parallelism=4`.
+- The parallelism and in-job worker defaults are intentionally tunable:
+  `python_test_parallelism=6`, `python_test_workers=4`,
+  `e2e_parallelism=4`, and `e2e_workers=2`.
 - A custom Pullbox CI image with Python, Node, browser OS deps, actionlint,
   gitleaks, grype, cosign, and gh preinstalled would likely reduce cold-start
   overhead further once the workflow shape is stable.
