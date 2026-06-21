@@ -1,7 +1,7 @@
 {#- System: Backup tab -#}
 {% from "components/settings_shell.html" import section_header, ui_icon %}
 
-<div class="space-y-6 pt-6" x-data="backupManager()" x-init="loadBackups()">
+<div class="space-y-6 pt-6" x-data="backupManager()" x-init="init()">
   <section class="section-card">
     {% call section_header(
       eyebrow="Restore points",
@@ -22,8 +22,74 @@
 
     <div class="section-body space-y-4">
       <p class="text-sm leading-6 text-pb-text-sec">
-        These restore points back up Pullbox's database only. They do not include comics or downloaded media files.
+        These restore points back up Pullbox's database only. They do not include comics,
+        downloaded media files, or <span class="font-mono text-pb-text">/data/config.xml</span>.
       </p>
+      <div class="info-panel border-pb-warning/30 bg-pb-warning-dim">
+        <p class="text-sm leading-6 text-pb-text">
+          Restoring encrypted credentials requires the same application secret used when the
+          backup was created. For normal Docker installs, preserve
+          <span class="font-mono">/data/config.xml</span>. For env-managed installs, keep
+          <span class="font-mono">PULLBOX_SECRET_KEY</span> unchanged.
+        </p>
+      </div>
+
+      <div
+        x-show="restoreRecoveryVisible()"
+        x-cloak
+        data-testid="system-restore-recovery-banner"
+        class="info-panel border-pb-info/30 bg-pb-info-dim"
+      >
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div class="min-w-0 space-y-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span
+                class="pill"
+                :class="restoreRecoveryPillClass()"
+                x-text="restoreRecoveryStatusLabel()"
+              ></span>
+              <span class="text-sm font-semibold text-pb-text">Post-restore recovery</span>
+            </div>
+            <p class="text-sm leading-6 text-pb-text-sec" x-text="restoreRecovery.message"></p>
+            <div
+              x-show="restoreRecovery.restore_filename"
+              class="downloads-mono-dim-cell"
+              x-text="'Restore point: ' + restoreRecovery.restore_filename"
+            ></div>
+          </div>
+          <button
+            type="button"
+            class="btn-ghost btn-sm"
+            @click="loadRestoreRecovery()"
+            :disabled="restoreRecoveryLoading"
+          >
+            <span x-text="restoreRecoveryLoading ? 'Checking...' : 'Refresh status'"></span>
+          </button>
+        </div>
+        <div x-show="restoreRecovery.steps && restoreRecovery.steps.length" class="mt-4 grid gap-2 md:grid-cols-3">
+          <template x-for="step in restoreRecovery.steps" :key="step.key">
+            <div class="rounded-lg border border-pb-border bg-pb-card px-3 py-2">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-semibold text-pb-text" x-text="step.label"></span>
+                <span
+                  class="pill text-[10px]"
+                  :class="restoreRecoveryStepPillClass(step)"
+                  x-text="step.status"
+                ></span>
+              </div>
+              <p x-show="step.message" class="mt-2 text-xs leading-5 text-pb-text-sec" x-text="step.message"></p>
+            </div>
+          </template>
+        </div>
+        <div x-show="restoreRecovery.recommendations && restoreRecovery.recommendations.length" class="mt-4 space-y-1 text-xs leading-5 text-pb-text-sec">
+          <template x-for="item in restoreRecovery.recommendations" :key="item.key">
+            <p>
+              <span class="font-semibold text-pb-text" x-text="item.label + ':'"></span>
+              <span x-text="' ' + item.message"></span>
+            </p>
+          </template>
+        </div>
+      </div>
 
       <div x-show="loading" class="info-panel info-panel-muted py-10 text-center text-sm text-pb-text-dim">
         Loading backups...
@@ -122,6 +188,7 @@
           <div class="space-y-2 text-xs leading-6 text-pb-text-sec">
             <p><span class="font-semibold text-pb-text">Current database:</span> a safety backup is created before overwrite.</p>
             <p><span class="font-semibold text-pb-text">After restore:</span> restart Pullbox before the restored database becomes active.</p>
+            <p><span class="font-semibold text-pb-text">Encrypted credentials:</span> keep the original <span class="font-mono">/data/config.xml</span> or unchanged <span class="font-mono">PULLBOX_SECRET_KEY</span>, otherwise saved API keys and passwords cannot be decrypted.</p>
           </div>
         </div>
       </div>
@@ -170,6 +237,8 @@ function backupManager() {
     backups: [],
     loading: true,
     creating: false,
+    restoreRecoveryLoading: false,
+    restoreRecovery: { status: 'idle', steps: [], recommendations: [] },
 
     restoreModal: false,
     restoreFilename: '',
@@ -178,6 +247,11 @@ function backupManager() {
     deleteModal: false,
     deleteFilename: '',
     deleting: false,
+
+    init() {
+      this.loadBackups();
+      this.loadRestoreRecovery();
+    },
 
     loadBackups() {
       this.loading = true;
@@ -190,6 +264,49 @@ function backupManager() {
           if (typeof showToast === 'function') showToast({ message: 'Failed to load backups.', level: 'error' });
         })
         .finally(() => { this.loading = false; });
+    },
+
+    loadRestoreRecovery() {
+      this.restoreRecoveryLoading = true;
+      fetch('/api/v1/system/restore-recovery', {
+        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+      })
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(data => { this.restoreRecovery = data; })
+        .catch(() => {
+          if (typeof showToast === 'function') showToast({ message: 'Failed to load restore recovery status.', level: 'error' });
+        })
+        .finally(() => { this.restoreRecoveryLoading = false; });
+    },
+
+    restoreRecoveryVisible() {
+      return this.restoreRecovery && this.restoreRecovery.status && this.restoreRecovery.status !== 'idle';
+    },
+
+    restoreRecoveryStatusLabel() {
+      const status = this.restoreRecovery?.status || 'idle';
+      if (status === 'attention') return 'Needs attention';
+      if (status === 'completed') return 'Complete';
+      if (status === 'running') return 'Running';
+      if (status === 'pending') return 'Pending restart';
+      return status;
+    },
+
+    restoreRecoveryPillClass() {
+      const status = this.restoreRecovery?.status || 'idle';
+      if (status === 'attention') return 'pill-warning';
+      if (status === 'completed') return 'pill-success';
+      if (status === 'running') return 'pill-info';
+      if (status === 'pending') return 'pill-neutral';
+      return 'pill-neutral';
+    },
+
+    restoreRecoveryStepPillClass(step) {
+      const status = step?.status || 'pending';
+      if (status === 'failed') return 'pill-error';
+      if (status === 'completed') return 'pill-success';
+      if (status === 'running') return 'pill-info';
+      return 'pill-neutral';
     },
 
     latestBackupLabel() {
@@ -239,6 +356,7 @@ function backupManager() {
         .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
         .then(data => {
           this.restoreModal = false;
+          if (data.restore_recovery) this.restoreRecovery = data.restore_recovery;
           if (typeof showToast === 'function') showToast({ message: data.message, level: 'success' });
         })
         .catch(() => {

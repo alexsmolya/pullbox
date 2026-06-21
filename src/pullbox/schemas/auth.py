@@ -4,7 +4,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from pullbox.core.api_keys import MAX_API_KEY_NAME_LENGTH, normalize_api_key_name
+from pullbox.core.api_keys import (
+    MAX_API_KEY_NAME_LENGTH,
+    api_key_expiration_is_before_today,
+    normalize_api_key_name,
+)
 
 
 class LoginRequest(BaseModel):
@@ -30,6 +34,14 @@ class APIKeyCreate(BaseModel):
     def normalize_name(cls, value: object) -> object:
         if isinstance(value, str):
             return normalize_api_key_name(value)
+        return value
+
+    @field_validator("expires_at")
+    @classmethod
+    def reject_past_expiration_dates(cls, value: datetime | None) -> datetime | None:
+        if value is not None and api_key_expiration_is_before_today(value):
+            msg = "API key expiration date cannot be in the past."
+            raise ValueError(msg)
         return value
 
 

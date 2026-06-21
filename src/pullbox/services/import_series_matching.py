@@ -46,6 +46,7 @@ logger = structlog.get_logger(__name__)
 _MATCH_PROGRESS_HEARTBEAT_SECONDS = 5.0
 _VOLUME_SUBTITLE_SPLIT_THRESHOLD = 0.95
 _TITLE_ARTICLES = frozenset({"a", "an", "the"})
+_DIRECT_CV_ID_MATCH_METHODS = frozenset({"mylar3_cv_id", "comicinfo_cv_id"})
 
 
 def _matching_item_heartbeat_progress(elapsed_seconds: int) -> int:
@@ -59,6 +60,18 @@ class VolumeSubtitleRebucketResult:
 
     created_series_count: int = 0
     removed_source_series: bool = False
+    evaluated_file_count: int = 0
+
+
+@dataclass(frozen=True)
+class _VolumeSubtitleRebucketMatch:
+    """A safe rebucket decision collected before mutating import rows."""
+
+    imp_file: ImportedFile
+    hint: VolumeSubtitleHint
+    raw_year: int | None
+    cv_result: dict[str, Any]
+    diagnostics: dict[str, Any]
 
 
 if TYPE_CHECKING:
@@ -233,6 +246,8 @@ async def run_import_series_matching(
     source_metadata_duration_ms = 0.0
     deferred_metadata_duration_ms = 0.0
     provider_evaluation_duration_ms = 0.0
+    rebucket_duration_ms = 0.0
+    rebucket_evaluated_files = 0
     deferred_metadata_loads = 0
     total_items = len(items)
     runtime_revision_state: dict[str, int] = {"value": int(job.progress_revision or 0)}
@@ -346,6 +361,72 @@ async def run_import_series_matching(
             await asyncio.gather(task, return_exceptions=True)
             raise
 
+    async def _rebucket_collection_volume_subtitle_series_with_progress(
+        item: ImportedSeries,
+        idx: int,
+    ) -> VolumeSubtitleRebucketResult:
+        if progress_callback is None:
+            return await _rebucket_collection_volume_subtitle_series(
+                session,
+                job,
+                item,
+                metadata_provider=metadata_provider,
+                evaluate_match=evaluate_match,
+                match_threshold=job.cv_match_threshold,
+                log_event=log_event,
+            )
+
+        await emit_matching_progress(
+            item,
+            idx,
+            message=f"Checking volume subtitle matches for {item.raw_series_name}...",
+            current_item_stage="rebucket",
+            current_item_progress_pct=10,
+            live_only=True,
+        )
+        task = asyncio.create_task(
+            _rebucket_collection_volume_subtitle_series(
+                session,
+                job,
+                item,
+                metadata_provider=metadata_provider,
+                evaluate_match=evaluate_match,
+                match_threshold=job.cv_match_threshold,
+                log_event=log_event,
+            )
+        )
+        started_at = asyncio.get_running_loop().time()
+        try:
+            while not task.done():
+                done, _pending = await asyncio.wait(
+                    {task},
+                    timeout=_MATCH_PROGRESS_HEARTBEAT_SECONDS,
+                )
+                if done:
+                    break
+                elapsed_seconds = max(
+                    round(asyncio.get_running_loop().time() - started_at),
+                    1,
+                )
+                await emit_matching_progress(
+                    item,
+                    idx,
+                    message=(
+                        f"Still checking volume subtitle matches for {item.raw_series_name} "
+                        f"({elapsed_seconds}s elapsed)..."
+                    ),
+                    current_item_stage="rebucket",
+                    current_item_progress_pct=_matching_item_heartbeat_progress(
+                        elapsed_seconds,
+                    ),
+                    live_only=True,
+                )
+            return await task
+        except (JobPausedError, JobCancelledError):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+
     for idx, item in enumerate(items):
         await raise_if_cancelled(session, job.id)
         try:
@@ -440,15 +521,13 @@ async def run_import_series_matching(
             item.status = ImportSeriesStatus.MATCHED
             item.diagnostics = evaluation.diagnostics if evaluation is not None else {}
             matched_count += 1
-            rebucket_result = await _rebucket_collection_volume_subtitle_series(
-                session,
-                job,
+            rebucket_started_at = time.monotonic()
+            rebucket_result = await _rebucket_collection_volume_subtitle_series_with_progress(
                 item,
-                metadata_provider=metadata_provider,
-                evaluate_match=evaluate_match,
-                match_threshold=job.cv_match_threshold,
-                log_event=log_event,
+                idx,
             )
+            rebucket_duration_ms += (time.monotonic() - rebucket_started_at) * 1000
+            rebucket_evaluated_files += rebucket_result.evaluated_file_count
             if rebucket_result.created_series_count:
                 matched_count += rebucket_result.created_series_count
                 if rebucket_result.removed_source_series:
@@ -579,6 +658,8 @@ async def run_import_series_matching(
             source_metadata_duration_ms=round(source_metadata_duration_ms),
             deferred_metadata_duration_ms=round(deferred_metadata_duration_ms),
             provider_evaluation_duration_ms=round(provider_evaluation_duration_ms),
+            rebucket_duration_ms=round(rebucket_duration_ms),
+            rebucket_evaluated_files=rebucket_evaluated_files,
             deferred_metadata_loads=deferred_metadata_loads,
             provider_cache_metrics=_provider_cache_metrics(metadata_provider),
         )
@@ -607,6 +688,8 @@ async def run_import_series_matching(
         source_metadata_duration_ms=round(source_metadata_duration_ms),
         deferred_metadata_duration_ms=round(deferred_metadata_duration_ms),
         provider_evaluation_duration_ms=round(provider_evaluation_duration_ms),
+        rebucket_duration_ms=round(rebucket_duration_ms),
+        rebucket_evaluated_files=rebucket_evaluated_files,
         deferred_metadata_loads=deferred_metadata_loads,
         provider_cache_metrics=_provider_cache_metrics(metadata_provider),
     )
@@ -625,24 +708,24 @@ async def _rebucket_collection_volume_subtitle_series(
     """Split collection files when ComicVine models each volume subtitle as its own series."""
     if item.cv_id is None:
         return VolumeSubtitleRebucketResult()
+    if item.cv_match_method in _DIRECT_CV_ID_MATCH_METHODS:
+        return VolumeSubtitleRebucketResult()
 
-    files_result = await session.execute(
-        sa_select(ImportedFile)
-        .where(
-            ImportedFile.import_series_id == item.id,
-            ImportedFile.status == ImportedFileStatus.PENDING,
+    with session.no_autoflush:
+        files_result = await session.execute(
+            sa_select(ImportedFile)
+            .where(
+                ImportedFile.import_series_id == item.id,
+                ImportedFile.status == ImportedFileStatus.PENDING,
+            )
+            .order_by(ImportedFile.id.asc())
         )
-        .order_by(ImportedFile.id.asc())
-    )
     files = list(files_result.scalars().all())
     if not files:
         return VolumeSubtitleRebucketResult()
 
-    split_series_by_cv_id: dict[int, ImportedSeries] = {}
-    created_series_count = 0
-    moved_file_paths: list[str] = []
-    moved_file_ids: list[int] = []
-
+    rebucket_matches: list[_VolumeSubtitleRebucketMatch] = []
+    evaluated_file_count = 0
     for imp_file in files:
         hint = volume_subtitle_hint_from_filename(imp_file.file_name)
         if hint is None:
@@ -668,6 +751,7 @@ async def _rebucket_collection_volume_subtitle_series(
                 "rebucket_source_file_id": imp_file.id,
             },
         )
+        evaluated_file_count += 1
         evaluation = await evaluate_match(
             provider=metadata_provider,
             raw_name=subtitle_candidate_name,
@@ -686,7 +770,28 @@ async def _rebucket_collection_volume_subtitle_series(
             match_threshold=match_threshold,
         ):
             continue
+        rebucket_matches.append(
+            _VolumeSubtitleRebucketMatch(
+                imp_file=imp_file,
+                hint=hint,
+                raw_year=raw_year,
+                cv_result=cv_result,
+                diagnostics=dict(evaluation.diagnostics or {}),
+            )
+        )
 
+    if not rebucket_matches:
+        return VolumeSubtitleRebucketResult(evaluated_file_count=evaluated_file_count)
+
+    split_series_by_cv_id: dict[int, ImportedSeries] = {}
+    created_series_count = 0
+    moved_file_paths: list[str] = []
+    moved_file_ids: list[int] = []
+
+    for rebucket_match in rebucket_matches:
+        imp_file = rebucket_match.imp_file
+        hint = rebucket_match.hint
+        cv_result = rebucket_match.cv_result
         split_cv_id = int(cv_result["cv_id"])
         split_series = split_series_by_cv_id.get(split_cv_id)
         if split_series is None:
@@ -694,7 +799,7 @@ async def _rebucket_collection_volume_subtitle_series(
                 import_job_id=job.id,
                 status=ImportSeriesStatus.MATCHED,
                 raw_series_name=cv_result["cv_title"],
-                raw_year=cv_result["cv_year"] or raw_year,
+                raw_year=cv_result["cv_year"] or rebucket_match.raw_year,
                 raw_publisher=cv_result["cv_publisher"] or item.raw_publisher,
                 file_count=0,
                 files_total=0,
@@ -711,7 +816,7 @@ async def _rebucket_collection_volume_subtitle_series(
                 cv_match_method="volume_subtitle_series_match",
                 selected_for_import=False,
                 diagnostics={
-                    **dict(evaluation.diagnostics or {}),
+                    **rebucket_match.diagnostics,
                     "split_reason": "volume_subtitle_series_match",
                     "source_import_series_id": item.id,
                     "source_import_series_name": item.raw_series_name,
@@ -778,6 +883,7 @@ async def _rebucket_collection_volume_subtitle_series(
     return VolumeSubtitleRebucketResult(
         created_series_count=created_series_count,
         removed_source_series=removed_source_series,
+        evaluated_file_count=evaluated_file_count,
     )
 
 

@@ -229,6 +229,12 @@ def test_ui_router_manifest_remains_stable_during_decomposition() -> None:
         ("/health/{component_key}", ("GET",), "health_component_page", "health_component_page"),
         ("/security", ("GET",), "security_page", "security_page"),
         ("/pull-list", ("GET",), "pull_list", "pull_list"),
+        (
+            "/pull-list/{series_id}/monitoring",
+            ("POST",),
+            "update_pull_list_monitoring",
+            "update_pull_list_monitoring",
+        ),
         ("/htmx/series/search", ("GET",), "htmx_search_series", "htmx_search_series"),
         ("/issues/{issue_id}", ("GET",), "issue_detail", "issue_detail"),
         (

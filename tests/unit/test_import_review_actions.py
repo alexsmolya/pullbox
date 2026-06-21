@@ -638,6 +638,48 @@ async def test_allow_safety_blocked_file_once_returns_file_to_pending_without_se
     recompute_series.assert_awaited_once_with(db_session, job)
 
 
+async def test_allow_safety_blocked_file_once_rejects_non_overrideable_blocks(
+    db_session: AsyncSession,
+) -> None:
+    job = await _create_job_row(db_session)
+    imported = await _create_imported_series(db_session, job, selected_for_import=True)
+    imp_file = _make_file(
+        job,
+        imported,
+        name="corrupt.cbz",
+        status=ImportedFileStatus.SAFETY_BLOCKED,
+        include_in_import=True,
+    )
+    imp_file.error_message = "Archive could not be inspected"
+    imp_file.diagnostics = {
+        "safety_block": {
+            "kind": "file_safety_blocked",
+            "reason": "Archive could not be inspected",
+            "details": ["/tmp/comics/corrupt.cbz"],
+            "overrideable": False,
+        }
+    }
+    db_session.add(imp_file)
+    await db_session.flush()
+    recompute_files = AsyncMock()
+    recompute_series = AsyncMock()
+
+    with pytest.raises(ValidationError, match="cannot be overridden"):
+        await allow_safety_blocked_file_once(
+            db_session,
+            job.id,
+            imp_file.id,
+            recompute_file_counters=recompute_files,
+            recompute_series_counters=recompute_series,
+        )
+
+    assert imp_file.status == ImportedFileStatus.SAFETY_BLOCKED
+    assert imp_file.include_in_import is True
+    assert "safety_exception" not in imp_file.diagnostics
+    recompute_files.assert_not_awaited()
+    recompute_series.assert_not_awaited()
+
+
 async def test_allow_safety_blocked_file_once_retry_requeues_terminal_import(
     db_session: AsyncSession,
 ) -> None:

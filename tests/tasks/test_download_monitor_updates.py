@@ -60,6 +60,34 @@ def test_completed_status_builds_completed_update_and_logs_detection() -> None:
     ]
 
 
+def test_finalizing_status_builds_finalizing_update() -> None:
+    """Client-side repair/extract phases should remain active but not downloading."""
+    from pullbox.tasks import download_monitor_updates
+
+    status = SimpleNamespace(
+        state="finalizing",
+        client_state="Repairing",
+        downloaded_path="/downloads/book",
+        error_message=None,
+    )
+
+    update = download_monitor_updates.build_status_update(
+        download_id=14,
+        external_id="nzo123",
+        status=status,
+        existing_path=None,
+        is_stall_state=False,
+        event_logger=_FakeLogger(),
+    )
+
+    assert update == {
+        "id": 14,
+        "client_state": "Repairing",
+        "state": DownloadState.FINALIZING,
+        "downloaded_path": "/downloads/book",
+    }
+
+
 def test_unmapped_status_preserves_existing_no_op_update_shape() -> None:
     """Unmapped client statuses should preserve the existing no-op update shape."""
     from pullbox.tasks import download_monitor_updates

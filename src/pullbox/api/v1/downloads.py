@@ -79,6 +79,7 @@ _QUEUE_STATES = [
     DownloadState.QUEUED,
     DownloadState.SENT,
     DownloadState.DOWNLOADING,
+    DownloadState.FINALIZING,
     DownloadState.PAUSED,
 ]
 
@@ -187,6 +188,7 @@ _CANCELLABLE_STATES = frozenset(
         DownloadState.QUEUED,
         DownloadState.SENT,
         DownloadState.DOWNLOADING,
+        DownloadState.FINALIZING,
         DownloadState.PAUSED,
         DownloadState.RETRY_PENDING,
     }
@@ -402,7 +404,7 @@ async def cancel_download(
 ) -> None:
     """Cancel an active download or remove a history entry.
 
-    For active downloads (QUEUED, SENT, DOWNLOADING, PAUSED, RETRY_PENDING):
+    For active downloads (QUEUED, SENT, DOWNLOADING, FINALIZING, PAUSED, RETRY_PENDING):
     - Cancels on the download client (SABnzbd/qBittorrent)
     - Clears the in-memory progress cache entry
     - Reverts the related issue status from DOWNLOADING → WANTED

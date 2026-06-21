@@ -378,6 +378,12 @@ class TestSeriesPage:
         assert first_card.locator("[data-testid='series-grid-hover-type']").count() == 0
         assert first_card.locator("[data-testid='series-grid-hover-owned']").count() == 1
         assert first_card.locator(".series-wall-monitor-dot").is_visible()
+        assert (
+            first_card.locator("[data-testid='series-monitored-indicator']").get_attribute(
+                "aria-label"
+            )
+            == "Monitored"
+        )
         assert first_card.locator(".series-wall-ring").is_visible()
         assert first_card.locator(".series-wall-overlay").count() == 1
         cover_frame_alignment = authed_page.evaluate(
@@ -506,22 +512,48 @@ class TestSeriesPage:
 
         series.choose_view("grid")
         _wait_for_first_grid_cover_loaded(authed_page)
+        authed_page.locator("[data-testid='series-grid-card']").first.hover()
+        authed_page.wait_for_timeout(220)
 
         cover_alignment = authed_page.evaluate(
             """() => {
                 const frame = document.querySelector("[data-testid='series-grid-cover-frame']");
                 const image = document.querySelector("[data-testid='series-grid-cover']");
-                if (!frame || !image) {
+                const overlay = document.querySelector(".series-wall-overlay");
+                if (!frame || !image || !overlay) {
                     return null;
                 }
                 const frameRect = frame.getBoundingClientRect();
                 const imageRect = image.getBoundingClientRect();
+                const overlayRect = overlay.getBoundingClientRect();
                 const style = getComputedStyle(image);
+                const overlayStyle = getComputedStyle(overlay);
+                const html = document.documentElement;
+                const previousTheme = html.getAttribute("data-theme");
+                html.setAttribute("data-theme", "dark");
+                const darkOverlayEdgeGuard = getComputedStyle(overlay).boxShadow;
+                html.setAttribute("data-theme", "light");
+                const lightOverlayEdgeGuard = getComputedStyle(overlay).boxShadow;
+                if (previousTheme === null) {
+                    html.removeAttribute("data-theme");
+                } else {
+                    html.setAttribute("data-theme", previousTheme);
+                }
                 return {
                     topGap: Math.abs(imageRect.top - frameRect.top),
                     leftGap: Math.abs(imageRect.left - frameRect.left),
                     rightGap: Math.abs(frameRect.right - imageRect.right),
                     bottomGap: Math.abs(frameRect.bottom - imageRect.bottom),
+                    overlayTopInset: overlayRect.top - frameRect.top,
+                    overlayLeftInset: overlayRect.left - frameRect.left,
+                    overlayRightInset: frameRect.right - overlayRect.right,
+                    overlayBottomInset: frameRect.bottom - overlayRect.bottom,
+                    overlayBackgroundColor: overlayStyle.backgroundColor,
+                    overlayBackdropFilter: overlayStyle.backdropFilter,
+                    overlayRadius: overlayStyle.borderTopLeftRadius,
+                    overlayEdgeGuard: overlayStyle.boxShadow,
+                    darkOverlayEdgeGuard,
+                    lightOverlayEdgeGuard,
                     objectFit: style.objectFit,
                     objectPosition: style.objectPosition,
                     paddingTop: style.paddingTop,
@@ -534,6 +566,17 @@ class TestSeriesPage:
         assert cover_alignment["leftGap"] <= 1.5
         assert cover_alignment["rightGap"] <= 1.5
         assert cover_alignment["bottomGap"] <= 1.5
+        assert cover_alignment["overlayTopInset"] <= -3
+        assert cover_alignment["overlayLeftInset"] <= -3
+        assert cover_alignment["overlayRightInset"] <= -3
+        assert cover_alignment["overlayBottomInset"] <= -3
+        assert cover_alignment["overlayBackgroundColor"] == "rgba(30, 26, 23, 0.88)"
+        assert cover_alignment["overlayBackdropFilter"] == "blur(6px)"
+        assert cover_alignment["overlayRadius"] == "18px"
+        assert "inset" in cover_alignment["overlayEdgeGuard"]
+        assert "4.5px" in cover_alignment["overlayEdgeGuard"]
+        assert "rgb(255, 255, 255)" in cover_alignment["darkOverlayEdgeGuard"]
+        assert "rgb(30, 26, 23)" in cover_alignment["lightOverlayEdgeGuard"]
         assert cover_alignment["objectFit"] == "cover"
         assert cover_alignment["objectPosition"] == "50% 0%"
         assert cover_alignment["paddingTop"] == "0px"
@@ -689,7 +732,7 @@ class TestSeriesPage:
                 }
                 return {
                     text: card.textContent || "",
-                    hasOffDot: Boolean(card.querySelector(".series-wall-monitor-dot.off")),
+                    hasMonitorBadge: Boolean(card.querySelector(".series-wall-monitor-dot")),
                 };
             }"""
         )
@@ -697,7 +740,7 @@ class TestSeriesPage:
         assert ended_card is not None
         assert "Batman Beyond" in ended_card["text"]
         assert "Monitored" not in ended_card["text"]
-        assert ended_card["hasOffDot"] is True
+        assert ended_card["hasMonitorBadge"] is False
 
     def test_grid_view_packs_more_cards_per_row_on_wide_screens(
         self,

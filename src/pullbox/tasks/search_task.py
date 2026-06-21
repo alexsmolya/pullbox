@@ -12,6 +12,7 @@ bulk search, and new-issue-sync flows.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from pullbox.providers.base import ProviderRegistry, ReleaseResult
 
 from pullbox.composition.providers import build_registry
+from pullbox.models.config import SystemConfig
 from pullbox.models.issue import IssueType
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series
@@ -65,6 +67,8 @@ _ORIGINAL_SEARCH_FOR_ISSUE = SearchService.search_for_issue
 _ORIGINAL_SEARCH_WANTED = SearchService.search_wanted
 _SEARCH_TWO_PASS_CONFIG_KEY = "search_two_pass_enabled"
 _SEARCH_LOG_RETENTION_CONFIG_KEY = "search_log_retention_days"
+_SEARCH_WANTED_CURSOR_CONFIG_KEY = "search_wanted_cursor"
+_SEARCH_WANTED_BATCH_LIMIT = 50
 _DEFAULT_SEARCH_LOG_RETENTION_DAYS = 7
 
 
@@ -236,6 +240,76 @@ async def _load_search_log_retention_days(session: AsyncSession) -> int:
         _SEARCH_LOG_RETENTION_CONFIG_KEY,
         _DEFAULT_SEARCH_LOG_RETENTION_DAYS,
     )
+
+
+def _search_wanted_cursor_from_target(target: IssueSearchTarget) -> tuple[int, float, int]:
+    """Return the stable global wanted-sweep cursor tuple for a target."""
+    return (target.series_id, target.issue_number, target.issue_id)
+
+
+def _parse_search_wanted_cursor(value: str | None) -> tuple[int, float, int] | None:
+    """Parse the persisted wanted-sweep cursor, ignoring stale malformed values."""
+    if not value:
+        return None
+    try:
+        raw = json.loads(value)
+        if (
+            isinstance(raw, list | tuple)
+            and len(raw) == 3
+            and isinstance(raw[0], int | float | str)
+            and isinstance(raw[1], int | float | str)
+            and isinstance(raw[2], int | float | str)
+        ):
+            return (int(raw[0]), float(raw[1]), int(raw[2]))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return None
+
+
+async def _load_search_wanted_cursor(session: AsyncSession) -> tuple[int, float, int] | None:
+    """Load the last attempted global wanted-search cursor."""
+    row = await session.get(SystemConfig, _SEARCH_WANTED_CURSOR_CONFIG_KEY)
+    return _parse_search_wanted_cursor(row.value if row is not None else None)
+
+
+async def _save_search_wanted_cursor(
+    session: AsyncSession,
+    target: IssueSearchTarget,
+) -> None:
+    """Persist the last attempted global wanted-search target."""
+    value = json.dumps(list(_search_wanted_cursor_from_target(target)))
+    row = await session.get(SystemConfig, _SEARCH_WANTED_CURSOR_CONFIG_KEY)
+    if row is None:
+        session.add(
+            SystemConfig(
+                key=_SEARCH_WANTED_CURSOR_CONFIG_KEY,
+                value=value,
+                value_type="string",
+            )
+        )
+        return
+    row.value = value
+    row.value_type = "string"
+
+
+async def _load_rotated_wanted_issue_targets(
+    session: AsyncSession,
+    *,
+    limit: int = _SEARCH_WANTED_BATCH_LIMIT,
+) -> list[IssueSearchTarget]:
+    """Load a fair global wanted-search batch, continuing after the saved cursor."""
+    cursor = await _load_search_wanted_cursor(session)
+    if cursor is None:
+        return await load_wanted_issue_search_targets(session, limit=limit)
+
+    targets = await load_wanted_issue_search_targets(session, limit=limit, after=cursor)
+    if len(targets) >= limit:
+        return targets
+
+    seen_issue_ids = {target.issue_id for target in targets}
+    wrapped = await load_wanted_issue_search_targets(session, limit=limit - len(targets))
+    targets.extend(target for target in wrapped if target.issue_id not in seen_issue_ids)
+    return targets
 
 
 async def _build_mocked_issue_outcome(
@@ -691,7 +765,7 @@ async def search_wanted() -> None:
                     )
                     return
 
-                targets = await load_wanted_issue_search_targets(session)
+                targets = await _load_rotated_wanted_issue_targets(session)
                 preload_ms = int((time.monotonic() - preload_started_at) * 1000)
                 search_svc = SearchService(
                     local_runtime.registry,
@@ -737,6 +811,8 @@ async def search_wanted() -> None:
                         concurrency=DEFAULT_WANTED_SEARCH_CONCURRENCY,
                     )
                 search_fanout_ms = int((time.monotonic() - search_started_at) * 1000)
+                if targets:
+                    await _save_search_wanted_cursor(session, targets[-1])
 
                 # Persist indexer health updates from the search fan-out before the
                 # per-issue routing phase begins. This keeps those writes short-lived
@@ -766,8 +842,7 @@ async def search_wanted() -> None:
     if runtime is None:
         return
 
-    routable_outcomes = [outcome for outcome in wanted_outcomes if outcome.raw_results]
-    if not routable_outcomes:
+    if not wanted_outcomes:
         logger.debug("search_wanted_no_results")
         return
 
@@ -780,30 +855,39 @@ async def search_wanted() -> None:
     async with factory() as session:
         try:
             routing_started_at = time.monotonic()
-            for outcome in routable_outcomes:
+            for outcome in wanted_outcomes:
                 target = outcome.target
+                issue_grabbed = 0
+                issue_queued = 0
+                best_confidence: str | None = None
+                action_status = "no_results" if not outcome.raw_results else "no_match"
+                run_state = "completed"
+                error_message: str | None = None
                 try:
-                    if outcome.best_validation is None or outcome.best_release is None:
-                        continue
-
-                    validation = outcome.best_validation
-                    best = outcome.best_release
-                    issue_grabbed = 0
-                    issue_queued = 0
-                    if should_auto_grab(
-                        validation.confidence,
-                        target.issue_type,
-                        runtime.type_thresholds,
-                    ):
-                        await download_svc.send_to_client(session, best, target.issue_id)
-                        sent += 1
-                        issue_grabbed = 1
-                    elif not await intervention_svc.has_pending_for_issue(session, target.issue_id):
-                        await intervention_svc.create_pending_match(
-                            session, target.issue_id, best, validation
-                        )
-                        queued += 1
-                        issue_queued = 1
+                    if outcome.best_validation is not None and outcome.best_release is not None:
+                        validation = outcome.best_validation
+                        best = outcome.best_release
+                        best_confidence = validation.confidence.value
+                        if should_auto_grab(
+                            validation.confidence,
+                            target.issue_type,
+                            runtime.type_thresholds,
+                        ):
+                            await download_svc.send_to_client(session, best, target.issue_id)
+                            sent += 1
+                            issue_grabbed = 1
+                            action_status = "downloading"
+                        elif not await intervention_svc.has_pending_for_issue(
+                            session, target.issue_id
+                        ):
+                            await intervention_svc.create_pending_match(
+                                session, target.issue_id, best, validation
+                            )
+                            queued += 1
+                            issue_queued = 1
+                            action_status = "queued"
+                        else:
+                            action_status = "pending_exists"
 
                     session.add(
                         SearchLog(
@@ -818,8 +902,14 @@ async def search_wanted() -> None:
                                 0,
                                 len(outcome.raw_results) - issue_grabbed - issue_queued,
                             ),
-                            details=outcome.search_details,
-                            best_confidence=validation.confidence.value,
+                            details=_merge_search_log_details(
+                                existing_details=None,
+                                next_details=outcome.search_details,
+                                run_state=run_state,
+                                action_status=action_status,
+                                error_message=error_message,
+                            ),
+                            best_confidence=best_confidence,
                         )
                     )
                     # Commit per issue to avoid holding SQLite's writer lock
@@ -828,7 +918,31 @@ async def search_wanted() -> None:
                 except Exception:
                     await session.rollback()
                     failed += 1
+                    run_state = "failed"
+                    action_status = "error"
+                    error_message = "Search processing failed for this issue."
                     logger.exception("search_wanted_issue_failed", issue_id=target.issue_id)
+                    session.add(
+                        SearchLog(
+                            issue_id=target.issue_id,
+                            series_title=target.series_title,
+                            issue_number=target.issue_number,
+                            search_type=SearchType.AUTOMATED,
+                            results_found=len(outcome.raw_results),
+                            results_grabbed=0,
+                            results_queued=0,
+                            results_rejected=len(outcome.raw_results),
+                            details=_merge_search_log_details(
+                                existing_details=None,
+                                next_details=outcome.search_details,
+                                run_state=run_state,
+                                action_status=action_status,
+                                error_message=error_message,
+                            ),
+                            best_confidence=best_confidence,
+                        )
+                    )
+                    await session.commit()
 
             routing_ms = int((time.monotonic() - routing_started_at) * 1000)
 
@@ -837,11 +951,11 @@ async def search_wanted() -> None:
                 sent=sent,
                 queued=queued,
                 failed=failed,
-                total=len(routable_outcomes),
+                total=len(wanted_outcomes),
                 preload_ms=preload_ms,
                 search_fanout_ms=search_fanout_ms,
                 routing_ms=routing_ms,
-                **_search_outcome_log_diagnostics(routable_outcomes),
+                **_search_outcome_log_diagnostics(wanted_outcomes),
             )
         except Exception:
             await session.rollback()

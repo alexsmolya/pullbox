@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,7 @@ from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.services.update_check import UpdateCheckResult
 from pullbox.tasks.blocklist_task import expire_blocklist_entries
+from pullbox.tasks.cover_backfill_task import scheduled_backfill_series_covers
 from pullbox.tasks.download_scheduler_task import (
     scheduled_monitor_downloads,
     scheduled_process_completed,
@@ -415,6 +417,21 @@ class TestRefreshMetadataWrapper:
 class TestMetadataSchedulerWrappers:
     """The metadata scheduler wrappers should delegate to the helper module."""
 
+    def test_daily_metadata_and_cover_tasks_use_fixed_cron_schedules(self) -> None:
+        """Long daily jobs should not reset their next run on every restart."""
+        registered = {task.task_id: task for task in get_registered_tasks()}
+
+        assert registered["sync_new_issues"].trigger == "cron"
+        assert registered["sync_new_issues"].trigger_kwargs == {"hour": 1, "minute": 0}
+        assert registered["backfill_series_covers"].trigger == "cron"
+        assert registered["backfill_series_covers"].trigger_kwargs == {"hour": 2, "minute": 0}
+
+    def test_app_startup_does_not_override_sync_new_issues_to_interval(self) -> None:
+        """The fixed cron schedule should not be replaced by interval-style kwargs."""
+        app_source = Path("src/pullbox/app.py").read_text()
+
+        assert '"sync_new_issues": {"hours"' not in app_source
+
     @pytest.mark.asyncio
     async def test_scheduled_sync_new_issues_delegates_to_helper(
         self,
@@ -424,6 +441,18 @@ class TestMetadataSchedulerWrappers:
         monkeypatch.setattr("pullbox.tasks.metadata_scheduler_task.sync_new_issues", helper)
 
         await scheduled_sync_new_issues()
+
+        helper.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_scheduled_backfill_series_covers_delegates_to_helper(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        helper = AsyncMock()
+        monkeypatch.setattr("pullbox.tasks.cover_backfill_task.backfill_series_covers", helper)
+
+        await scheduled_backfill_series_covers()
 
         helper.assert_awaited_once_with()
 

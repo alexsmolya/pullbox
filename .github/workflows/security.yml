@@ -1,6 +1,7 @@
 ---
 # Pullbox Security Pipeline
 # Dependency audits, secret scanning, and static analysis hardening.
+# Legacy GitHub Actions fallback. CircleCI is the canonical security runner.
 #
 # Security: All actions pinned to full SHA. No pull_request_target.
 # See: docs/development/INFRASTRUCTURE.md
@@ -15,13 +16,6 @@
 name: Security
 
 on:
-  schedule:
-    # Weekly on Monday at 4:30 AM UTC
-    - cron: "30 4 * * 1"
-  pull_request:
-    branches: [main, develop]
-  merge_group:
-    types: [checks_requested]
   workflow_dispatch:
 
 permissions:

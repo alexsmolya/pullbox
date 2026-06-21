@@ -289,7 +289,7 @@ class TestSystemPage:
         assert geometry["noteTop"] > geometry["buttonBottom"] - 1
         assert abs(geometry["noteRight"] - geometry["buttonRight"]) < 12
 
-    def test_system_tasks_renders_precise_subsecond_duration(
+    def test_system_tasks_renders_duration_units(
         self,
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
@@ -320,6 +320,24 @@ class TestSystemPage:
                                 "last_duration_seconds": 0.0,
                                 "last_status": "completed",
                             },
+                            {
+                                "task_id": "sync_recent_issues",
+                                "name": "Sync Recent Issues",
+                                "interval": "interval[1 day, 0:00:00]",
+                                "next_run_time": "2026-04-22T05:22:00+00:00",
+                                "last_execution": "2026-04-21T05:10:59+00:00",
+                                "last_duration_seconds": 65.0,
+                                "last_status": "completed",
+                            },
+                            {
+                                "task_id": "sync_issue_catalog",
+                                "name": "Sync Issue Catalog",
+                                "interval": "interval[14 days, 0:00:00]",
+                                "next_run_time": "2026-05-05T05:22:00+00:00",
+                                "last_execution": "2026-04-21T03:18:36+00:00",
+                                "last_duration_seconds": 7324.0,
+                                "last_status": "completed",
+                            },
                         ]
                     }
                 ),
@@ -344,9 +362,13 @@ class TestSystemPage:
 
         first = rows.nth(0).locator("td")
         second = rows.nth(1).locator("td")
+        third = rows.nth(2).locator("td")
+        fourth = rows.nth(3).locator("td")
 
         assert first.nth(3).inner_text() == "0.21 sec"
         assert second.nth(3).inner_text() == "< 0.01 sec"
+        assert third.nth(3).inner_text() == "1 min 05 sec"
+        assert fourth.nth(3).inner_text() == "2 hrs 02 min 04 sec"
 
     def test_system_tasks_running_state_replaces_never_run(
         self,

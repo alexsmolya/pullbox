@@ -19,7 +19,7 @@ requirements.
 ## Current Baseline Notes
 
 - `make validate`, `make ci-local`, and `make ci-full` are the main local gates.
-- GitHub Actions run lint, format, typecheck, tests, migration checks,
+- CircleCI runs lint, format, typecheck, tests, migration checks,
   accessibility checks, E2E, security scans, Docker validation, and release
   automation.
 - CI tests Python 3.12, 3.13, and 3.14.
@@ -168,18 +168,15 @@ Key gates:
 
 ### 3.1 Current Pullbox implementation
 
-GitHub Actions workflows live in `.github/workflows/`.
+CircleCI workflows live in `.circleci/config.yml`. Legacy GitHub Actions
+workflows remain in `.github/workflows/` only where explicitly retained as
+manual/reference fallback.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to `main` or `develop`, merge queue, manual dispatch | Lint, format, typecheck, tests, migration check, accessibility, E2E, `CI Required` aggregate |
-| `docker-validate.yml` | Docker-relevant PR changes, manual dispatch | Trusted production Docker build, Grype scan, and smoke validation; reduced no-secrets sanity build for untrusted PRs |
-| `docker-release.yml` | Version tag push, manual dispatch | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and digest artifact upload |
-| `security.yml` | PR to `main` or `develop`, merge queue, schedule, manual dispatch | gitleaks, `pip-audit`, Safety, Bandit, public-gated CodeQL, `Security Required` aggregate |
-| `workflow-hygiene.yml` | PR to `main` or `develop`, merge queue, manual dispatch | actionlint, workflow expression validation, `Workflow Hygiene Required` aggregate |
-| `codeql-branch-probe.yml` | Trusted branch push, manual dispatch | Lightweight CodeQL-only branch/default-branch feedback and dashboard refresh |
-| `clean-room.yml` | Schedule, manual dispatch | Fresh install validation outside runner-local cache |
-| `release.yml` | Docker Release success for tagged commits | Changelog and GitHub Release creation |
+| `pr-and-merge-checks` | Open PR source branches and explicit manual pipelines | Lint, format, typecheck, tests, migration check, accessibility, E2E, Docker validation, security, workflow hygiene, and aggregate required checks |
+| `docker-release` | Version tag push | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and GitHub Release creation |
+| `manual-docker-release` | Manual CircleCI pipeline parameter | Explicit release-image build/publish path for controlled operator use |
 
 ### 3.2 Required standard
 
@@ -195,16 +192,20 @@ GitHub Actions workflows live in `.github/workflows/`.
 
 ### 3.3 Current repo nuances
 
-- PR and merge queue checks are the authoritative correctness gate. Ordinary
+- PR checks are the authoritative correctness gate. Ordinary `develop` and
   `main` merges should not rerun full CI or publish container images.
-- Docker validation is a PR/manual workflow. It never logs in to publish
+- Post-release `main` to `develop` sync PRs may use the release-sync fast path
+  only when they are same-repository, version-only `feature/sync-develop-*`
+  PRs that carry `origin/main` forward and bump `src/pullbox/__init__.py` from
+  the released version to the next patch `-dev` version.
+- Docker validation is a PR/manual CircleCI workflow. It never logs in to publish
   registries and never pushes images.
 - Docker publication depends on trusted refs and release tags.
 - DHI credentials are required for Docker builds that pull `dhi.io` base images.
 - Forked or Dependabot PRs may not have repository secrets. PR workflows should
   skip secret-dependent validation in those untrusted contexts rather than fail
   before meaningful validation can start.
-- Ordinary CI, security, workflow hygiene, and clean-room jobs may be routed by
+- Ordinary CI, security, and workflow hygiene jobs may be routed by
   the repository variable `PULLBOX_CHECKS_RUNNER`:
   - `self-hosted` keeps trusted checks on the local runner
   - `github-hosted` moves trusted checks to `ubuntu-latest`
@@ -381,13 +382,28 @@ TZ
 
 ### 6.2 Required standard
 
-- `/data` should be a Docker-managed volume or another durable state mount.
+- `/data` should be a visible durable appdata bind mount on local storage so
+  operators can inspect, copy, back up, and restore database backups and
+  `config.xml` without Docker-volume archaeology.
 - `/comics`, `/downloads`, and `/imports` should be explicit host or network
   mounts when those workflows are used.
 - `/data/config.xml` stores the normal Docker application secret and must be
-  durable and backed up.
+  durable and backed up separately from database restore-point archives.
 - `PULLBOX_SECRET_KEY` is optional in production. When set, it overrides
   `config.xml` and must be stable, secret, and deployment-specific.
+- Database restore points contain the SQLite database and metadata only. They
+  intentionally do not include `config.xml`, comics, downloaded media, or import
+  sources.
+- Fresh-install restores must preserve the original `config.xml` or reuse the
+  same env-managed `PULLBOX_SECRET_KEY` before restoring the database, otherwise
+  encrypted credentials remain present but cannot be decrypted.
+- After a database restore, Pullbox should mark post-restore recovery pending.
+  The next startup runs derived-state aftercare for cover backfill, ComicVine
+  issue catalog sync, and stale metadata refresh. Recovery status is exposed from
+  System > Backup.
+- Post-restore recovery is metadata aftercare, not filesystem repair. Operators
+  should run Utilities > Database Check after restoring onto different storage,
+  changing library roots, or moving library files.
 - SQLite deployments should use storage that safely supports the configured
   journal mode.
 - Download-client remote paths must map to files visible under `/downloads`
@@ -435,19 +451,17 @@ services:
       # - PULLBOX_HTTPS_CERT_PATH=/config/certs/pullbox.crt
       # - PULLBOX_HTTPS_KEY_PATH=/config/certs/pullbox.key
       # - PULLBOX_HTTPS_CERT_ROOT=/config/certs
-      # Optional pullbox-data override. Leave public default for installs.
+      # Optional Pullbox Data API override. Leave public default for installs.
       # - PULLBOX_DATA_API_BASE_URL=https://api.pullbox.app
       - TZ=America/Los_Angeles
     volumes:
-      - pullbox-data:/data
+      # PULLBOX_DATA_PATH should point to a durable local appdata folder.
+      - ${PULLBOX_DATA_PATH}:/data
       - /path/to/comics:/comics
       - /path/to/shared-downloads:/downloads
       - /path/to/imports:/imports
       # Optional native HTTPS cert/key mount.
       # - /path/to/certs:/config/certs:ro
-
-volumes:
-  pullbox-data:
 ```
 
 ### 6.3 Current repo nuances
@@ -462,6 +476,12 @@ volumes:
 - The production image runs as UID/GID `65532:65532`. Deployments should make
   mounted paths writable by that runtime identity, by a compatible group, or by
   the storage layer's normal container mapping.
+- The production image does not consume `PUID` or `PGID` variables. Do not add a
+  compose `user:` override or LinuxServer-style identity variables unless a
+  deployment intentionally departs from the hardened-image contract.
+- Linux hosts can grant access to existing media folders with ACLs such as
+  `setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/comics`; dedicated
+  Pullbox-only folders may instead be owned by `65532:65532`.
 - Native HTTPS settings can be edited in Settings > General, but env vars
   (`PULLBOX_HTTPS_ENABLED`, `PULLBOX_HTTPS_CERT_PATH`,
   `PULLBOX_HTTPS_KEY_PATH`, and `PULLBOX_HTTPS_CERT_ROOT`) take precedence at
@@ -480,6 +500,8 @@ volumes:
       workflows in use.
 - [ ] `/data/config.xml` is backed up, or an env-managed
       `PULLBOX_SECRET_KEY` is stable and not committed.
+- [ ] Fresh-install restore instructions include restoring `config.xml` before
+      the database, or setting the same env-managed `PULLBOX_SECRET_KEY`.
 - [ ] Download client path mapping is verified.
 - [ ] Manual import and Mylar3 paths are verified inside the container, not only
       on the host.
@@ -548,14 +570,15 @@ Development dependency categories:
 
 ### 8.1 Current Pullbox implementation
 
-- Version tags trigger release and Docker automation.
-- `docker-release.yml` builds, scans, smoke-tests, publishes, signs, and verifies
-  release images only for version tags or explicit release dispatches.
-- `docker-validate.yml` validates Docker-sensitive PR changes without publishing.
+- Version tags trigger CircleCI release and Docker automation.
+- CircleCI `docker-release` builds, scans, smoke-tests, publishes, signs, and
+  verifies release images only for version tags or explicit release dispatches.
+- CircleCI Docker Validate validates Docker-sensitive PR changes without
+  publishing.
 - Published container images are signed with keyless Sigstore/Cosign using
-  GitHub Actions OIDC after the registry push completes. `Docker Release`
+  CircleCI OIDC after the registry push completes. `Docker Release`
   verifies GHCR and Docker Hub signatures by digest before reporting success.
-- `release.yml` creates or updates GitHub Releases for tagged commits after the
+- CircleCI creates or updates GitHub Releases for tagged commits after the
   Docker Release workflow succeeds.
 - GitHub Release notes start with the curated `CHANGELOG.md` release section,
   then append generated commit details grouped by conventional commit prefixes.
@@ -586,6 +609,8 @@ Development dependency categories:
 - Docker metadata rules may publish semver aliases in addition to exact version
   and SHA tags during release-tag builds.
 - Pre-release tags can exercise the full pipeline before a stable release.
+- Pre-release tags must not update `latest`; only final release tags should move
+  that alias.
 - If Docker publish succeeds but registry tags look wrong, treat that as release
   hygiene work before moving on.
 
@@ -625,24 +650,37 @@ Development dependency categories:
 
 Useful state-volume commands:
 
+In-app database restore points are useful for app-level rollback, but they are
+not full disaster-recovery archives. For host migration or bare-metal recovery,
+back up the full `/data` appdata folder too.
+
+Create a full `/data` state backup, including `config.xml`, logs, database, and
+database restore-point archives:
+
 ```bash
-docker run --rm \
-  -v pullbox-data:/state \
-  -v "$PWD":/backup \
-  alpine \
-  tar czf /backup/pullbox-state-backup.tgz -C /state .
+tar czf pullbox-state-backup.tgz -C "$PULLBOX_DATA_PATH" .
+```
+
+Restore a full `/data` state backup into an empty appdata folder before starting
+the replacement container:
+
+```bash
+mkdir -p "$PULLBOX_DATA_PATH"
+tar xzf pullbox-state-backup.tgz -C "$PULLBOX_DATA_PATH"
+```
+
+After restoring only a database restore point, restart Pullbox and watch System >
+Backup for post-restore recovery. Recovery rebuilds cover cache entries, syncs
+ComicVine issue catalogs, and refreshes stale series metadata. It does not repair
+filesystem path drift, so run Utilities > Database Check when the restored
+library lives on different storage.
+
+```bash
+ls -la "$PULLBOX_DATA_PATH"
 ```
 
 ```bash
-docker run --rm -it -v pullbox-data:/state alpine sh
-```
-
-```bash
-docker run --rm \
-  -v pullbox-data:/state \
-  -v "$PWD":/out \
-  alpine \
-  sh -lc 'cp -R /state/logs /out/pullbox-logs'
+cp -R "$PULLBOX_DATA_PATH/logs" ./pullbox-logs
 ```
 
 Reset a user's password from a production or production-like container:

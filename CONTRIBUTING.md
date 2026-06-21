@@ -213,9 +213,11 @@ Important notes:
 - Native HTTPS can be configured in Settings > General or through
   `PULLBOX_HTTPS_*` bootstrap values. Environment-managed HTTPS settings are
   shown as runtime-managed in the UI and require restart after changes.
-- `.env.example` documents local bootstrap values only. Do not add CI-only,
+- `.env.dev.example` documents local bootstrap values only. Do not add CI-only,
   build-only, or one-off test variables there unless they are part of the
   contributor runtime contract.
+- `docker/.env.example` documents the production Docker Compose variables users
+  copy into their deployment `.env`.
 
 The local venv data layout:
 

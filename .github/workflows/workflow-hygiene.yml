@@ -1,6 +1,7 @@
 ---
 # Pullbox Workflow Hygiene
 # Validates GitHub Actions workflow syntax and expressions with actionlint.
+# Legacy/manual fallback. CircleCI is the canonical workflow-hygiene runner.
 #
 # Security: All actions pinned to full SHA. actionlint runs from an immutable
 # container image digest.
@@ -8,10 +9,6 @@
 name: Workflow Hygiene
 
 on:
-  pull_request:
-    branches: [main, develop]
-  merge_group:
-    types: [checks_requested]
   workflow_dispatch:
 
 permissions:

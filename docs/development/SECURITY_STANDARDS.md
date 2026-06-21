@@ -751,6 +751,9 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 - Public branch rulesets require the stable aggregate checks `CI Required`,
   `Security Required`, and `Workflow Hygiene Required` rather than brittle
   matrix or path-filtered job names.
+- The post-release sync fast path is intentionally narrow and executes its
+  validator from trusted `origin/main` before honoring any output that skips
+  heavyweight CI, security, workflow hygiene, or Docker validation jobs.
 
 **Required standard**
 
@@ -758,6 +761,9 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
 - `pull_request_target` stays forbidden.
 - Workflows define explicit default permissions.
 - Jobs declare required permissions.
+- Any workflow fast path that can skip required work must be decided by trusted
+  base-ref code or an explicitly verified trusted blob, not by PR-controlled
+  scripts from the checkout.
 - Dependency scanning remains active in CI.
 - Container scanning remains active for Docker artifacts.
 - CodeQL must run on GitHub-hosted runners only.
@@ -799,7 +805,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
   `docs/development/INFRASTRUCTURE.md`.
 - Container publication uses GHCR and Docker Hub.
 - Published container images are signed with keyless Sigstore/Cosign using
-  GitHub Actions OIDC after registry publication.
+  CircleCI OIDC after registry publication.
 - The Docker Release workflow publishes SBOM/provenance attestations and
   verifies GHCR and Docker Hub signatures by digest before reporting success.
 - Docker metadata rules may publish semver-derived aliases depending on the

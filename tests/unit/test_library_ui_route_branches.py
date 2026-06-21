@@ -17,6 +17,22 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _catalog_entry(
+    path: Path,
+    *,
+    kind: str,
+    size_bytes: int = 0,
+    modified_at: datetime | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        path=str(path),
+        kind=kind,
+        size_bytes=size_bytes,
+        modified_at=modified_at,
+        file_format=None,
+    )
+
+
 class RecordingTemplates:
     """Tiny templates stand-in that records the route render contract."""
 
@@ -130,6 +146,7 @@ def test_library_browser_snapshot_handles_missing_root(
             active_root=missing_root,
             library_roots=[LibraryRoot(id=1, name="Main", path=str(missing_root), enabled=True)],
             series_metrics={},
+            catalog_entries=[],
             total_size_bytes=0,
             browser_sort="bogus",
         )
@@ -168,6 +185,13 @@ def test_library_browser_snapshot_builds_tree_rows_and_sorting(
                 LibraryRoot(id=2, name="Disabled", path=str(tmp_path / "off"), enabled=False),
             ],
             series_metrics={str(batman): (7, 4096, modified_at)},
+            catalog_entries=[
+                _catalog_entry(batman, kind="folder"),
+                _catalog_entry(batman / "Year One", kind="folder"),
+                _catalog_entry(saga, kind="folder"),
+                _catalog_entry(root / "issue.pdf", kind="file", size_bytes=3),
+                _catalog_entry(root / "notes.txt", kind="file", size_bytes=5),
+            ],
             total_size_bytes=4096,
             browser_sort="-size",
         )
@@ -206,6 +230,12 @@ def test_library_browser_snapshot_handles_nested_breadcrumb_and_desc_sort(
             active_root=root,
             library_roots=[LibraryRoot(id=1, name="Main", path=str(root), enabled=True)],
             series_metrics={},
+            catalog_entries=[
+                _catalog_entry(root / "A", kind="folder"),
+                _catalog_entry(root / "A" / "B", kind="folder"),
+                _catalog_entry(nested / "tiny.cbz", kind="file", size_bytes=1),
+                _catalog_entry(nested / "large.cbr", kind="file", size_bytes=5),
+            ],
             total_size_bytes=6,
             browser_sort="-modified",
         )
@@ -289,8 +319,42 @@ async def test_build_library_workspace_view_rolls_up_stats(
     assert view.stats[3].value_label == "1024 bytes"
     assert view.stats[4].value_label == "2048 bytes"
     assert [pill.key for pill in view.format_pills] == ["cbz", "pdf"]
+    assert [row.name for row in view.browser_rows] == ["Batman 001.cbz"]
     assert view.browser_empty_title == "Folder is empty"
     assert view.footer_size_label == "2048 bytes"
+
+
+@pytest.mark.asyncio
+async def test_build_library_workspace_view_ignores_untracked_disk_entries(
+    configured_library_routes: RecordingTemplates,
+    db_session,
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "library"
+    root_path.mkdir()
+    (root_path / "Mylar Series").mkdir()
+    (root_path / "Kapowarr Issue.cbz").write_bytes(b"not-pullbox-owned")
+
+    db_session.add(LibraryRoot(name="Main", path=str(root_path), enabled=True))
+    await db_session.commit()
+
+    view = await library_routes.build_library_workspace_view(
+        db_session,
+        comics_dir=root_path,
+        browse_path=None,
+        browser_sort="name",
+        total_files=0,
+        matched_files=0,
+        unmatched_files=0,
+        total_size_bytes=0,
+        format_counts={},
+    )
+
+    assert view.root_configured is True
+    assert view.root_available is True
+    assert view.root_summary_label == "No entries yet"
+    assert view.browser_rows == ()
+    assert view.tree_nodes[0].has_children is False
 
 
 @pytest.mark.asyncio

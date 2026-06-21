@@ -6,31 +6,18 @@
 # Trusted pull requests run the full production Docker Hardened Images build on
 # the dedicated Docker runner. Untrusted pull requests fall back to a reduced
 # public sanity check that does not require secrets or self-hosted runners.
+# Legacy/manual fallback. CircleCI owns Docker validation for PR checks.
 
 name: Docker Validate
 
 on:
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - "docker/**"
-      - "src/**"
-      - "alembic/**"
-      - "pyproject.toml"
-      - "package.json"
-      - "package-lock.json"
-      - ".grype.yaml"
-      - ".github/workflows/docker-release.yml"
-      - ".github/workflows/docker-validate.yml"
-      - ".github/workflows/release.yml"
-      - ".github/scripts/preflight-runner.sh"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: docker-validate-${{ github.event.pull_request.number || github.ref }}
+  group: docker-validate-${{ github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -175,15 +162,23 @@ jobs:
         run: |
           docker run -d \
             --name pullbox-validate \
-            -p 8585:8585 \
+            -p 127.0.0.1::8585 \
             -e PULLBOX_SECRET_KEY=docker-validate-secret-key-for-ci \
             -e PULLBOX_LOG_LEVEL=WARNING \
             pullbox:validate
+          validate_port="$(docker port pullbox-validate 8585/tcp | awk -F: 'NR == 1 { print $NF }')"
+          if [ -z "${validate_port}" ]; then
+            echo "::error::Could not determine Pullbox validation port."
+            docker port pullbox-validate || true
+            exit 1
+          fi
+          echo "PULLBOX_VALIDATE_URL=http://127.0.0.1:${validate_port}" >> "$GITHUB_ENV"
+          echo "Container listening on http://127.0.0.1:${validate_port}"
 
       - name: Wait for healthy
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:8585/ping > /dev/null 2>&1; then
+            if curl -sf "${PULLBOX_VALIDATE_URL}/ping" > /dev/null 2>&1; then
               echo "Container healthy after ${i}s"
               exit 0
             fi

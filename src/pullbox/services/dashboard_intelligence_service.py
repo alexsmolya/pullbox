@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import shutil
 from datetime import UTC, date, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -17,7 +16,6 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-from pullbox.config import get_settings
 from pullbox.core.log_deduper import log_deduped_warning
 from pullbox.core.log_sanitizer import sanitize_log_string
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
@@ -29,6 +27,7 @@ from pullbox.services.dashboard_presentation import (
 from pullbox.services.dashboard_priorities import (
     DashboardPriorityBuilder as _DashboardPriorityBuilder,
 )
+from pullbox.services.dashboard_storage_path import resolve_dashboard_storage_path
 from pullbox.services.dashboard_types import (
     ActiveDownloadItem as ActiveDownloadItem,
 )
@@ -88,6 +87,7 @@ _ACTIVE_DOWNLOAD_STATES = (
     DownloadState.QUEUED,
     DownloadState.SENT,
     DownloadState.DOWNLOADING,
+    DownloadState.FINALIZING,
 )
 _SUCCESS_DOWNLOAD_STATES = (DownloadState.COMPLETED, DownloadState.IMPORTED)
 _ROLLUP_KEYS = (
@@ -122,7 +122,7 @@ class DashboardIntelligenceService:
             log_cache_error=self._log_cache_error,
             run_best_effort_cache_write=self._run_best_effort_cache_write,
             disk_usage_func=shutil.disk_usage,
-            resolve_storage_path_func=_resolve_storage_path,
+            resolve_storage_path_func=lambda: resolve_dashboard_storage_path(self._session),
         )
 
     def _priority_builder(self) -> _DashboardPriorityBuilder:
@@ -447,13 +447,6 @@ class DashboardIntelligenceService:
     ) -> DashboardPriority | None:
         """Compatibility facade for unmatched-growth priority assembly."""
         return self._priority_builder().build_unmatched_growth_priority(snapshot)
-
-
-def _resolve_storage_path() -> Path:
-    settings = get_settings()
-    if settings.data_dir != Path("/data"):
-        return settings.data_dir
-    return Path.cwd()
 
 
 def _download_failure_clause() -> ColumnElement[bool]:

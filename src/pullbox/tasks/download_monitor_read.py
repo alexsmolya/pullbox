@@ -14,6 +14,7 @@ from pullbox.models.download import DownloadHistory, DownloadState
 ACTIVE_DOWNLOAD_STATES = (
     DownloadState.SENT,
     DownloadState.DOWNLOADING,
+    DownloadState.FINALIZING,
     DownloadState.PAUSED,
 )
 

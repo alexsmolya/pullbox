@@ -8,9 +8,10 @@ from pullbox.tasks.metadata_task import refresh_metadata, sync_new_issues
 
 @scheduled_task(
     task_id="sync_new_issues",
-    trigger="interval",
+    trigger="cron",
     display_name="Sync New Issues",
-    hours=24,
+    hour=1,
+    minute=0,
 )
 async def scheduled_sync_new_issues() -> None:
     """Run the monitored-series issue sync on its configured cadence."""

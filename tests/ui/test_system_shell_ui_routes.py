@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 pytest_plugins = ["conftest_security"]
 
 os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-system-ui")
+
+
+def test_system_task_status_pills_center_their_labels() -> None:
+    """Task status labels like Never run should stay centered in their pill."""
+    input_css = Path("src/pullbox/ui/static/css/input.css").read_text(encoding="utf-8")
+
+    assert (
+        "@apply inline-flex items-center justify-center gap-1 rounded-full px-2 py-0.5 "
+        "text-center text-[11px] font-sans font-medium;"
+    ) in input_css
 
 
 @pytest.mark.asyncio
@@ -140,10 +151,14 @@ class TestSystemRouteContracts:
             in response.text
         )
         assert (
-            'class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-auto'
+            'class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden'
             in response.text
         )
-        assert 'class="log-detail min-w-0 max-w-full overflow-x-auto' in response.text
+        assert (
+            'class="log-line flex w-full min-w-0 max-w-full gap-0 overflow-hidden' in response.text
+        )
+        assert "x-bind:title=\"[entry.formatted_timestamp || entry.timestamp || ''" in response.text
+        assert 'class="log-detail min-w-0 max-w-full overflow-hidden' in response.text
 
     async def test_system_logs_tab_accepts_server_rendered_log_rows(
         self,
@@ -224,6 +239,8 @@ class TestSystemRouteContracts:
         assert "<th>Next execution</th>" in tasks.text
 
         assert 'data-testid="system-backups-table"' in backups.text
+        assert 'data-testid="system-restore-recovery-banner"' in backups.text
+        assert "/api/v1/system/restore-recovery" in backups.text
         assert 'class="downloads-table-wrap"' in backups.text
         assert 'class="downloads-table min-w-[880px]"' in backups.text
         assert 'class="downloads-action-group is-hover-reveal justify-end"' in backups.text
@@ -231,7 +248,9 @@ class TestSystemRouteContracts:
         assert 'data-tip="Restore"' in backups.text
         assert 'data-tip="Delete"' in backups.text
         assert "database restore points" in backups.text
-        assert "They do not include comics or downloaded media files." in backups.text
+        assert "They do not include comics," in backups.text
+        assert "/data/config.xml" in backups.text
+        assert "PULLBOX_SECRET_KEY" in backups.text
 
         assert 'data-testid="system-logs-table"' in logs.text
         assert 'class="downloads-table-wrap"' in logs.text

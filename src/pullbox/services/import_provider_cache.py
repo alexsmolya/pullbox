@@ -44,13 +44,26 @@ def build_import_scan_metadata_provider(
     provider: Any,
 ) -> CachedImportMetadataProvider:
     """Return the Step 2 provider stack: persistent cache, then per-job cache."""
+    return CachedImportMetadataProvider(
+        build_persistent_import_metadata_provider(session, provider)
+    )
+
+
+def build_persistent_import_metadata_provider(
+    session: AsyncSession,
+    provider: Any,
+) -> Any:
+    """Return a provider backed by the cross-job ComicVine cache when available."""
+    if isinstance(provider, PersistentComicVineCacheProvider):
+        return provider
+
     bind = getattr(session, "bind", None)
     if isinstance(bind, AsyncEngine) and not is_in_memory_sqlite_engine(bind):
-        provider = PersistentComicVineCacheProvider(
+        return PersistentComicVineCacheProvider(
             provider,
             async_sessionmaker(bind, expire_on_commit=False),
         )
-    return CachedImportMetadataProvider(provider)
+    return provider
 
 
 class CachedImportMetadataProvider:

@@ -87,6 +87,12 @@ class TestSystemBackupRoutes:
             return runtime
 
         monkeypatch.setattr(system, "_get_backup_runtime_service", _fake_get_runtime_service)
+        marker_calls: list[str] = []
+        monkeypatch.setattr(
+            system,
+            "mark_restore_recovery_pending",
+            lambda filename: marker_calls.append(filename) or {"status": "pending"},
+        )
 
         response = await system.restore_backup(
             "pullbox_backup_20260502_120000.zip",
@@ -95,7 +101,10 @@ class TestSystemBackupRoutes:
         )
 
         assert runtime.restore_calls == ["pullbox_backup_20260502_120000.zip"]
+        assert marker_calls == ["pullbox_backup_20260502_120000.zip"]
         assert response.restart_required is True
+        assert response.restore_recovery is not None
+        assert response.restore_recovery["status"] == "pending"
         assert "Restart the application" in response.message
 
     @pytest.mark.asyncio
@@ -129,3 +138,20 @@ class TestSystemBackupRoutes:
 
         with pytest.raises(ValidationError):
             await system.restore_backup("../evil.zip", object(), object())
+
+    @pytest.mark.asyncio
+    async def test_restore_recovery_status_route_reads_status_service(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from pullbox.api.v1 import system
+
+        monkeypatch.setattr(
+            system,
+            "get_restore_recovery_status",
+            lambda: {"status": "completed", "message": "done"},
+        )
+
+        response = await system.restore_recovery_status(object(), object())
+
+        assert response == {"status": "completed", "message": "done"}

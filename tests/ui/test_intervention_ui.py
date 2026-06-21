@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -491,6 +492,20 @@ class TestHandlersDirect:
         payload = resp.json()
         assert payload["total"] == 30
         assert len(payload["ids"]) == 30
+
+    def test_intervention_selection_state_is_not_pruned_to_visible_page(self) -> None:
+        """Pagination should not discard off-page intervention selections."""
+        script = Path("src/pullbox/ui/static/js/pullbox.js").read_text(encoding="utf-8")
+
+        prune_body = re.search(
+            r"pruneSelection: function \(\) \{(?P<body>.*?)\n    removeSelection:",
+            script,
+            flags=re.DOTALL,
+        )
+        assert prune_body is not None
+        assert "visibleIds.indexOf(id)" not in prune_body.group("body")
+        assert "selectedIds = this.selectedIds.filter" not in prune_body.group("body")
+        assert "visibleIds.every" in script
 
     @pytest.mark.asyncio
     async def test_intervention_page_history_tab_renders_standard_table(

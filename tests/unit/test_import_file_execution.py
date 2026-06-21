@@ -1089,6 +1089,493 @@ class TestImportExecutionAutoflushDiscipline:
         assert seen_payloads == [{"Series": "Batman", "PageCount": 2}]
 
     @pytest.mark.asyncio
+    async def test_import_marks_deferred_comicinfo_enrichment_after_file_placement(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from pullbox.models.library import FileFormat
+        from pullbox.services.import_file_execution import process_import_series_files
+
+        job, imp_series, imp_files, _series, issues = await _setup_full_scenario(
+            db_session,
+            num_issues=1,
+        )
+        prepared_path = tmp_path / "Batman 001.cbz"
+        prepared_path.write_text("prepared")
+        final_path = tmp_path / "library" / "Batman (2016) #001.cbz"
+        job.update_embedded_comicinfo_from_match = True
+        await db_session.flush()
+
+        async def _build_payload(
+            session: AsyncSession,
+            issue: Issue,
+            *,
+            source_path: Path | None = None,
+            defer_issue_enrichment: bool = False,
+        ) -> dict[str, object]:
+            assert issue.id == issues[0].id
+            assert source_path == prepared_path
+            assert defer_issue_enrichment is True
+            return {"Series": "Batman", "Number": "1"}
+
+        async def _register_file(
+            session: AsyncSession,
+            source: Path,
+            issue_arg: Issue,
+            confidence: MatchConfidence,
+            **kwargs: object,
+        ) -> LibraryFile:
+            assert kwargs["comicinfo_payload"] == {"Series": "Batman", "Number": "1"}
+            library_file = LibraryFile(
+                file_path=str(final_path),
+                file_name=final_path.name,
+                file_size=prepared_path.stat().st_size,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(tz=UTC),
+                match_confidence=confidence,
+                issue_id=issue_arg.id,
+                library_root_id=1,
+            )
+            session.add(library_file)
+            await session.flush()
+            return library_file
+
+        record_action = AsyncMock()
+        log_event = AsyncMock()
+
+        files_imported, files_failed = await process_import_series_files(
+            db_session,
+            job,
+            imp_series,
+            load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
+            load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
+            load_ingest_policy=AsyncMock(return_value=object()),
+            load_permission_policy=AsyncMock(return_value=object()),
+            raise_if_cancelled=AsyncMock(),
+            prepare_file=AsyncMock(
+                return_value=SimpleNamespace(
+                    registration_source=prepared_path,
+                    original_source=prepared_path,
+                    converted=False,
+                )
+            ),
+            build_comicinfo_payload=_build_payload,
+            apply_comicinfo=lambda *_args, **_kwargs: None,
+            cleanup_prepared_file=lambda *_args, **_kwargs: None,
+            record_action=record_action,
+            log_event=log_event,
+            register_file=_register_file,
+            move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / prepared_path.name,
+            defer_comicinfo_enrichment=True,
+        )
+
+        assert files_imported == 1
+        assert files_failed == 0
+        await db_session.refresh(imp_files[0])
+        pending = imp_files[0].diagnostics["comicinfo_enrichment"]
+        assert pending["status"] == "pending"
+        assert pending["reason"] == "deferred_during_import"
+        assert pending["issue_id"] == issues[0].id
+        assert pending["issue_cv_id"] == issues[0].comicvine_id
+        assert pending["library_file_id"] is not None
+        payload = record_action.await_args.kwargs["payload"]
+        assert payload["embedded_comicinfo_enrichment_deferred"] is True
+        events = [call.args[3] for call in log_event.await_args_list]
+        assert "import_file_comicinfo_enrichment_deferred" in events
+
+    @pytest.mark.asyncio
+    async def test_series_file_processing_uses_bounded_parallel_file_workers(
+        self,
+        async_engine,
+        tmp_path: Path,
+    ) -> None:
+        import asyncio
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from pullbox.models.library import FileFormat
+        from pullbox.services.import_file_execution import process_import_series_files
+
+        session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        async with session_factory() as setup_session:
+            job, imp_series, imp_files, _series, _issues = await _setup_full_scenario(
+                setup_session,
+                num_issues=2,
+            )
+            await setup_session.commit()
+            job_id = job.id
+            item_id = imp_series.id
+            imported_file_ids = [imp_file.id for imp_file in imp_files]
+
+        current_concurrency = 0
+        max_concurrency = 0
+
+        async def _prepare_file(
+            session: AsyncSession,
+            current_job: ImportJob,
+            imp_file: ImportedFile,
+            *,
+            progress_callback=None,
+        ) -> SimpleNamespace:
+            _ = session, current_job, progress_callback
+            nonlocal current_concurrency, max_concurrency
+            current_concurrency += 1
+            max_concurrency = max(max_concurrency, current_concurrency)
+            try:
+                await asyncio.sleep(0.05)
+                source_path = tmp_path / imp_file.file_name
+                source_path.write_text("prepared")
+                return SimpleNamespace(
+                    registration_source=source_path,
+                    original_source=source_path,
+                    converted=False,
+                )
+            finally:
+                current_concurrency -= 1
+
+        async def _register_file(
+            session: AsyncSession,
+            source: Path,
+            issue_arg: Issue,
+            confidence: MatchConfidence,
+            **kwargs: object,
+        ) -> LibraryFile:
+            _ = kwargs
+            final_path = tmp_path / "library" / source.name
+            final_path.parent.mkdir(exist_ok=True)
+            final_path.write_text("library")
+            library_file = LibraryFile(
+                file_path=str(final_path),
+                file_name=final_path.name,
+                file_size=final_path.stat().st_size,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(tz=UTC),
+                match_confidence=confidence,
+                issue_id=issue_arg.id,
+                library_root_id=1,
+            )
+            session.add(library_file)
+            await session.flush()
+            return library_file
+
+        async with session_factory() as session:
+            job = await session.get(ImportJob, job_id)
+            imp_series = await session.get(ImportedSeries, item_id)
+            assert job is not None
+            assert imp_series is not None
+            files_imported, files_failed = await process_import_series_files(
+                session,
+                job,
+                imp_series,
+                load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
+                load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
+                load_ingest_policy=AsyncMock(return_value=object()),
+                load_permission_policy=AsyncMock(return_value=object()),
+                raise_if_cancelled=AsyncMock(),
+                prepare_file=_prepare_file,
+                build_comicinfo_payload=AsyncMock(return_value={}),
+                apply_comicinfo=lambda *_args, **_kwargs: None,
+                cleanup_prepared_file=lambda *_args, **_kwargs: None,
+                record_action=AsyncMock(),
+                log_event=AsyncMock(),
+                register_file=_register_file,
+                move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
+                session_factory=session_factory,
+                file_worker_count=2,
+            )
+            await session.commit()
+
+        assert files_imported == 2
+        assert files_failed == 0
+        assert max_concurrency == 2
+        async with session_factory() as session:
+            statuses = (
+                (
+                    await session.execute(
+                        sa_select(ImportedFile.status)
+                        .where(ImportedFile.id.in_(imported_file_ids))
+                        .order_by(ImportedFile.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            imported_series = await session.get(ImportedSeries, item_id)
+            assert statuses == [ImportedFileStatus.IMPORTED, ImportedFileStatus.IMPORTED]
+            assert imported_series is not None
+            assert imported_series.files_imported == 2
+            assert imported_series.files_failed == 0
+
+    @pytest.mark.asyncio
+    async def test_parallel_processing_serializes_duplicate_targets_when_skipping_existing(
+        self,
+        async_engine,
+        tmp_path: Path,
+    ) -> None:
+        import asyncio
+        from datetime import UTC, datetime
+
+        from sqlalchemy import func as sa_func
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from pullbox.models.library import FileFormat
+        from pullbox.services.import_file_execution import process_import_series_files
+
+        session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        async with session_factory() as setup_session:
+            job, imp_series, imp_files, _series, issues = await _setup_full_scenario(
+                setup_session,
+                num_issues=2,
+            )
+            imp_files[1].matched_issue_id = issues[0].id
+            imp_files[1].matched_issue_cv_id = issues[0].comicvine_id
+            imp_files[1].parsed_issue_number = issues[0].issue_number
+            await setup_session.commit()
+            job_id = job.id
+            item_id = imp_series.id
+            duplicate_issue_id = issues[0].id
+            imported_file_ids = [imp_file.id for imp_file in imp_files]
+
+        current_concurrency = 0
+        max_concurrency = 0
+
+        async def _prepare_file(
+            session: AsyncSession,
+            current_job: ImportJob,
+            imp_file: ImportedFile,
+            *,
+            progress_callback=None,
+        ) -> SimpleNamespace:
+            _ = session, current_job, progress_callback
+            nonlocal current_concurrency, max_concurrency
+            current_concurrency += 1
+            max_concurrency = max(max_concurrency, current_concurrency)
+            try:
+                await asyncio.sleep(0.05)
+                source_path = tmp_path / imp_file.file_name
+                source_path.write_text("prepared")
+                return SimpleNamespace(
+                    registration_source=source_path,
+                    original_source=source_path,
+                    converted=False,
+                )
+            finally:
+                current_concurrency -= 1
+
+        async def _register_file(
+            session: AsyncSession,
+            source: Path,
+            issue_arg: Issue,
+            confidence: MatchConfidence,
+            **kwargs: object,
+        ) -> LibraryFile:
+            _ = kwargs
+            final_path = tmp_path / "library" / source.name
+            final_path.parent.mkdir(exist_ok=True)
+            final_path.write_text("library")
+            library_file = LibraryFile(
+                file_path=str(final_path),
+                file_name=final_path.name,
+                file_size=final_path.stat().st_size,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(tz=UTC),
+                match_confidence=confidence,
+                issue_id=issue_arg.id,
+                library_root_id=1,
+            )
+            session.add(library_file)
+            await session.flush()
+            return library_file
+
+        async with session_factory() as session:
+            job = await session.get(ImportJob, job_id)
+            imp_series = await session.get(ImportedSeries, item_id)
+            assert job is not None
+            assert imp_series is not None
+            files_imported, files_failed = await process_import_series_files(
+                session,
+                job,
+                imp_series,
+                load_media_settings=AsyncMock(return_value={"skip_existing_files": "true"}),
+                load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
+                load_ingest_policy=AsyncMock(return_value=object()),
+                load_permission_policy=AsyncMock(return_value=object()),
+                raise_if_cancelled=AsyncMock(),
+                prepare_file=_prepare_file,
+                build_comicinfo_payload=AsyncMock(return_value={}),
+                apply_comicinfo=lambda *_args, **_kwargs: None,
+                cleanup_prepared_file=lambda *_args, **_kwargs: None,
+                record_action=AsyncMock(),
+                log_event=AsyncMock(),
+                register_file=_register_file,
+                move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
+                session_factory=session_factory,
+                file_worker_count=2,
+            )
+            await session.commit()
+
+        assert files_imported == 1
+        assert files_failed == 0
+        assert max_concurrency == 1
+        async with session_factory() as session:
+            statuses = (
+                (
+                    await session.execute(
+                        sa_select(ImportedFile.status)
+                        .where(ImportedFile.id.in_(imported_file_ids))
+                        .order_by(ImportedFile.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            library_file_count = await session.scalar(
+                sa_select(sa_func.count())
+                .select_from(LibraryFile)
+                .where(LibraryFile.issue_id == duplicate_issue_id)
+            )
+            imported_series = await session.get(ImportedSeries, item_id)
+            assert statuses == [ImportedFileStatus.IMPORTED, ImportedFileStatus.SKIPPED]
+            assert library_file_count == 1
+            assert imported_series is not None
+            assert imported_series.files_imported == 1
+            assert imported_series.files_failed == 0
+
+    @pytest.mark.asyncio
+    async def test_parallel_processing_serializes_duplicate_issue_targets_without_skip_existing(
+        self,
+        async_engine,
+        tmp_path: Path,
+    ) -> None:
+        import asyncio
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from pullbox.models.library import FileFormat
+        from pullbox.services.import_file_execution import process_import_series_files
+
+        session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        async with session_factory() as setup_session:
+            job, imp_series, imp_files, _series, issues = await _setup_full_scenario(
+                setup_session,
+                num_issues=2,
+            )
+            imp_files[1].matched_issue_id = issues[0].id
+            imp_files[1].matched_issue_cv_id = issues[0].comicvine_id
+            imp_files[1].parsed_issue_number = issues[0].issue_number
+            await setup_session.commit()
+            job_id = job.id
+            item_id = imp_series.id
+            imported_file_ids = [imp_file.id for imp_file in imp_files]
+
+        current_concurrency = 0
+        max_concurrency = 0
+
+        async def _prepare_file(
+            session: AsyncSession,
+            current_job: ImportJob,
+            imp_file: ImportedFile,
+            *,
+            progress_callback=None,
+        ) -> SimpleNamespace:
+            _ = session, current_job, progress_callback
+            nonlocal current_concurrency, max_concurrency
+            current_concurrency += 1
+            max_concurrency = max(max_concurrency, current_concurrency)
+            try:
+                await asyncio.sleep(0.05)
+                source_path = tmp_path / imp_file.file_name
+                source_path.write_text("prepared")
+                return SimpleNamespace(
+                    registration_source=source_path,
+                    original_source=source_path,
+                    converted=False,
+                )
+            finally:
+                current_concurrency -= 1
+
+        async def _register_file(
+            session: AsyncSession,
+            source: Path,
+            issue_arg: Issue,
+            confidence: MatchConfidence,
+            **kwargs: object,
+        ) -> LibraryFile:
+            _ = kwargs
+            final_path = tmp_path / "library" / source.name
+            final_path.parent.mkdir(exist_ok=True)
+            final_path.write_text("library")
+            library_file = LibraryFile(
+                file_path=str(final_path),
+                file_name=final_path.name,
+                file_size=final_path.stat().st_size,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(tz=UTC),
+                match_confidence=confidence,
+                issue_id=issue_arg.id,
+                library_root_id=1,
+            )
+            session.add(library_file)
+            await session.flush()
+            return library_file
+
+        async with session_factory() as session:
+            job = await session.get(ImportJob, job_id)
+            imp_series = await session.get(ImportedSeries, item_id)
+            assert job is not None
+            assert imp_series is not None
+            files_imported, files_failed = await process_import_series_files(
+                session,
+                job,
+                imp_series,
+                load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
+                load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
+                load_ingest_policy=AsyncMock(return_value=object()),
+                load_permission_policy=AsyncMock(return_value=object()),
+                raise_if_cancelled=AsyncMock(),
+                prepare_file=_prepare_file,
+                build_comicinfo_payload=AsyncMock(return_value={}),
+                apply_comicinfo=lambda *_args, **_kwargs: None,
+                cleanup_prepared_file=lambda *_args, **_kwargs: None,
+                record_action=AsyncMock(),
+                log_event=AsyncMock(),
+                register_file=_register_file,
+                move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
+                session_factory=session_factory,
+                file_worker_count=2,
+            )
+            await session.commit()
+
+        assert files_imported == 2
+        assert files_failed == 0
+        assert max_concurrency == 1
+        async with session_factory() as session:
+            statuses = (
+                (
+                    await session.execute(
+                        sa_select(ImportedFile.status)
+                        .where(ImportedFile.id.in_(imported_file_ids))
+                        .order_by(ImportedFile.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            imported_series = await session.get(ImportedSeries, item_id)
+            assert statuses == [ImportedFileStatus.IMPORTED, ImportedFileStatus.IMPORTED]
+            assert imported_series is not None
+            assert imported_series.files_imported == 2
+            assert imported_series.files_failed == 0
+
+    @pytest.mark.asyncio
     async def test_series_file_processing_emits_comicinfo_metadata_heartbeat(
         self,
         db_session: AsyncSession,

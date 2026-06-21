@@ -39,6 +39,7 @@
             data-entry-kind="{{ node.kind }}"
             data-entry-root-path="{{ node.root_path }}"
             data-entry-convertible="false"
+            data-entry-can-mutate="{{ 'true' if node.can_mutate else 'false' }}"
             x-on:contextmenu.prevent.stop="openContextMenu($event)"
             x-bind:class="{ 'library-browser__tree-row--context': isContextTarget($el.dataset.entryPath) }"
           >
@@ -71,6 +72,7 @@
           data-entry-kind="{{ node.kind }}"
           data-entry-root-path="{{ node.root_path }}"
           data-entry-convertible="false"
+          data-entry-can-mutate="{{ 'true' if node.can_mutate else 'false' }}"
           x-on:contextmenu.prevent.stop="openContextMenu($event)"
           x-bind:class="{ 'library-browser__tree-row--context': isContextTarget($el.dataset.entryPath) }"
         >
@@ -240,6 +242,7 @@
                     data-entry-root-path="{{ row.root_path }}"
                     data-entry-format="{{ row.file_format or '' }}"
                     data-entry-convertible="{{ 'true' if row.is_convertible else 'false' }}"
+                    data-entry-can-mutate="{{ 'true' if row.can_mutate else 'false' }}"
                     x-on:contextmenu.prevent.stop="openContextMenu($event)"
                     x-bind:class="{ 'library-browser__table-row--context': isContextTarget($el.dataset.entryPath) }"
                   >
@@ -297,7 +300,7 @@
         <span>Properties</span>
       </button>
 
-      <template x-if="contextTarget && contextTarget.kind !== 'root'">
+      <template x-if="contextTarget && contextTarget.canMutate">
         <div class="library-context-menu__group">
           <div class="library-context-menu__sep"></div>
           <button type="button" class="library-context-menu__item" data-testid="library-context-action-rename" x-on:click="openRename()">

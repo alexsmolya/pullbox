@@ -174,6 +174,99 @@ class TestSettingsPage:
         assert gap is not None
         assert gap >= 12
 
+    def test_general_toggles_do_not_expand_footers(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.set_viewport_size({"width": 900, "height": 760})
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("general")
+
+        def settings_viewport_metrics() -> dict[str, object]:
+            return authed_page.evaluate(
+                """
+                () => {
+                  const content = document.querySelector("#content");
+                  const dock = document.querySelector("#page-footer-dock");
+                  const footers = Array.from(
+                    document.querySelectorAll("[data-testid='settings-panel-general'] .settings-footer")
+                  );
+                  const cards = Array.from(
+                    document.querySelectorAll("[data-testid='settings-panel-general'] .section-card")
+                  );
+                  return {
+                    scrollTop: content ? Math.round(content.scrollTop) : -1,
+                    dockHeight: dock ? Math.round(dock.getBoundingClientRect().height) : -1,
+                    maxCardFooterHeight: Math.max(
+                      0,
+                      ...footers.map((footer) => Math.round(footer.getBoundingClientRect().height))
+                    ),
+                    visibleCardCount: cards.filter((card) => {
+                      const box = card.getBoundingClientRect();
+                      return box.bottom > 0 && box.top < window.innerHeight;
+                    }).length,
+                  };
+                }
+                """
+            )
+
+        authed_page.locator(
+            "[data-testid='settings-general-https-card']"
+        ).scroll_into_view_if_needed()
+        before = settings_viewport_metrics()
+        assert before["dockHeight"] <= 90
+        assert before["maxCardFooterHeight"] <= 90
+        assert before["visibleCardCount"] >= 1
+
+        authed_page.locator("[data-testid='settings-general-https-enabled']").evaluate(
+            "el => el.click()"
+        )
+        authed_page.wait_for_function(
+            """
+            () => {
+              const input = document.querySelector("[data-testid='settings-general-https-enabled']");
+              const reset = input
+                ?.closest(".section-card")
+                ?.querySelector(".settings-footer button[type='button']");
+              return !!reset && window.getComputedStyle(reset).display !== "none";
+            }
+            """,
+            timeout=5000,
+        )
+
+        https_metrics = settings_viewport_metrics()
+        assert abs(int(https_metrics["scrollTop"]) - int(before["scrollTop"])) <= 1
+        assert https_metrics["dockHeight"] <= 90
+        assert https_metrics["maxCardFooterHeight"] <= 90
+        assert https_metrics["visibleCardCount"] >= 1
+
+        authed_page.locator(
+            "[data-testid='settings-general-usage-stats-toggle']"
+        ).scroll_into_view_if_needed()
+        before_usage = settings_viewport_metrics()
+        authed_page.locator("[data-testid='settings-general-usage-stats-toggle']").evaluate(
+            "el => el.click()"
+        )
+        authed_page.wait_for_function(
+            """
+            () => {
+              const input = document.querySelector("[data-testid='settings-general-usage-stats-toggle']");
+              const reset = input
+                ?.closest(".section-card")
+                ?.querySelector(".settings-footer button[type='button']");
+              return !!reset && window.getComputedStyle(reset).display !== "none";
+            }
+            """,
+            timeout=5000,
+        )
+
+        usage_metrics = settings_viewport_metrics()
+        assert abs(int(usage_metrics["scrollTop"]) - int(before_usage["scrollTop"])) <= 1
+        assert usage_metrics["dockHeight"] <= 90
+        assert usage_metrics["maxCardFooterHeight"] <= 90
+        assert usage_metrics["visibleCardCount"] >= 1
+
     def test_settings_direct_tab_load_renders_matching_panel(
         self,
         authed_page,
@@ -579,6 +672,110 @@ class TestSettingsPage:
             """
         )
         assert abs(after_scroll - 500) <= 1, f"media toggle scrolled content to {after_scroll}"
+
+    def test_media_naming_preview_edit_keeps_layout_stable(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.set_viewport_size({"width": 900, "height": 900})
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("media")
+
+        authed_page.wait_for_function(
+            """
+            () => Array.from(document.querySelectorAll(".settings-media-preview-panel"))
+              .every((el) => el.dataset.previewReady === "true")
+            """,
+            timeout=5000,
+        )
+
+        preview = authed_page.locator("#preview-standard").first
+        standard_input = authed_page.locator('input[name="comic_file_template"]').first
+        standard_input.scroll_into_view_if_needed()
+
+        before = authed_page.evaluate(
+            """
+            () => {
+              const content = document.getElementById("content");
+              const preview = document.getElementById("preview-standard");
+              return {
+                scrollTop: content ? content.scrollTop : -1,
+                height: preview ? preview.getBoundingClientRect().height : -1,
+                text: preview ? preview.textContent || "" : "",
+              };
+            }
+            """
+        )
+        assert "Loading" not in before["text"]
+
+        def handle_preview(route) -> None:  # type: ignore[no-untyped-def]
+            authed_page.wait_for_timeout(350)
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "examples": [
+                            {
+                                "input": "Batman #1",
+                                "output": "Batman (2016) #001 — revised.cbz",
+                            }
+                        ]
+                    }
+                ),
+            )
+
+        authed_page.route("**/api/v1/config/naming/preview?*", handle_preview)
+
+        standard_input.fill("{Series} ({Year}) #{Issue:03d} — revised")
+
+        authed_page.wait_for_function(
+            """
+            () => document.getElementById("preview-standard")?.getAttribute("aria-busy") === "true"
+            """,
+            timeout=5000,
+        )
+
+        pending = authed_page.evaluate(
+            """
+            () => {
+              const content = document.getElementById("content");
+              const preview = document.getElementById("preview-standard");
+              return {
+                scrollTop: content ? content.scrollTop : -1,
+                height: preview ? preview.getBoundingClientRect().height : -1,
+                text: preview ? preview.textContent || "" : "",
+                busy: preview ? preview.getAttribute("aria-busy") : null,
+              };
+            }
+            """
+        )
+
+        assert pending["busy"] == "true"
+        assert "Loading" not in pending["text"]
+        assert abs(pending["scrollTop"] - before["scrollTop"]) <= 1
+        assert abs(pending["height"] - before["height"]) <= 1
+
+        preview.locator("text=revised.cbz").wait_for(state="visible", timeout=5000)
+
+        after = authed_page.evaluate(
+            """
+            () => {
+              const content = document.getElementById("content");
+              const preview = document.getElementById("preview-standard");
+              return {
+                scrollTop: content ? content.scrollTop : -1,
+                height: preview ? preview.getBoundingClientRect().height : -1,
+                busy: preview ? preview.getAttribute("aria-busy") : null,
+              };
+            }
+            """
+        )
+
+        assert after["busy"] == "false"
+        assert abs(after["scrollTop"] - before["scrollTop"]) <= 1
+        assert abs(after["height"] - before["height"]) <= 1
 
     def test_settings_media_library_permissions_save_posts_chmod_only_policy(
         self,

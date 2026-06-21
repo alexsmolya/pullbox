@@ -1558,6 +1558,8 @@ class TestImportLogPanel:
         assert "Job #" in html
         assert f"jobId: {job_id}" in html
         assert 'data-testid="import-history-log-viewer-' in html
+        assert "overflow-x-hidden" in html
+        assert "x-bind:title=\"[entry.formatted_timestamp || entry.timestamp || ''" in html
 
     @pytest.mark.asyncio
     async def test_log_panel_uses_live_toggle_for_active_jobs(

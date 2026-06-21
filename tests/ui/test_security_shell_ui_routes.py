@@ -49,6 +49,8 @@ class TestSecurityRouteContracts:
         assert 'data-testid="security-authentication-password-form"' in response.text
         assert "Bypass Account" in response.text
         assert "full operator access without login" in response.text
+        assert "Current request appears as" in response.text
+        assert 'data-testid="security-current-client-ip"' in response.text
 
     async def test_security_htmx_tab_returns_content_bundle(
         self,
@@ -126,10 +128,38 @@ class TestSecurityRouteContracts:
         assert response.status_code == 200
         assert 'data-testid="security-api-access-registry-card"' in response.text
         assert 'data-testid="security-api-access-table"' in response.text
-        assert 'class="downloads-table-wrap"' in response.text
-        assert 'class="downloads-table"' in response.text
+        assert 'class="downloads-table-wrap is-clipped"' in response.text
+        assert 'class="downloads-table min-w-[760px]"' in response.text
         assert 'class="downloads-action-btn is-danger"' in response.text
         assert 'data-testid="security-api-access-revoke-btn"' in response.text
+        assert 'data-testid="security-api-key-copy-btn"' in response.text
+        assert 'data-testid="security-api-key-dismiss-btn"' in response.text
+        assert 'data-testid="security-api-access-sort-name"' in response.text
+        assert 'data-testid="security-api-access-sort-created"' in response.text
+        assert 'data-testid="security-api-access-sort-last-used"' in response.text
+        assert 'data-testid="security-api-access-sort-expires"' in response.text
+        assert 'x-for="key in sortedApiKeys"' in response.text
+        assert 'data-testid="security-api-key-action-panel"' in response.text
+        assert 'data-testid="security-api-key-create-form"' in response.text
+        assert 'data-testid="security-api-key-created-panel"' in response.text
+        assert 'x-show="showKeyActionPanel()"' in response.text
+        assert 'x-show="!showKeyActionPanel()"' in response.text
+        assert 'x-show="showNewKeyForm && !createdKey"' in response.text
+        assert 'x-show="createdKey"' in response.text
+        assert 'x-show="showNewKeyForm" x-transition' not in response.text
+        assert "showKeyActionPanel()" in response.text
+        assert 'x-show="apiKeys.length > 0"' in response.text
+        assert 'x-show="apiKeys.length === 0 && !keysLoading"' in response.text
+        assert 'x-show="keysLoading"' in response.text
+        assert "this.upsertApiKey(data.api_key);" in response.text
+        assert (
+            "this.loadKeys();"
+            not in response.text.split("    generateKey() {")[1].split("copyKey(key)")[0]
+        )
+        assert ':min="todayDate()"' in response.text
+        assert "expiryDateToEndOfDayIso" in response.text
+        assert "Cannot create an API key that expires in the past." in response.text
+        assert "apiKeyGenerationErrorMessage" in response.text
         assert "active keys" not in response.text
         assert "expiring soon" not in response.text
         assert "unused" not in response.text

@@ -91,6 +91,7 @@ if TYPE_CHECKING:
             session: AsyncSession,
             issue: Issue,
             *,
+            defer_provider_fetch: bool = False,
             timing: dict[str, Any] | None = None,
         ) -> Issue: ...
 
@@ -100,6 +101,7 @@ if TYPE_CHECKING:
             issue: Issue,
             *,
             source_path: Path | None = None,
+            defer_issue_enrichment: bool = False,
             timing: dict[str, Any] | None = None,
         ) -> dict[str, Any]: ...
 
@@ -269,12 +271,14 @@ class ImportServiceFileOperationsMixin:
         issue: Issue,
         *,
         source_path: Path | None = None,
+        defer_issue_enrichment: bool = False,
         timing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build authoritative ComicInfo.xml fields for a chosen issue."""
         enriched_issue = await self._enrich_issue_for_comicinfo(
             session,
             issue,
+            defer_provider_fetch=defer_issue_enrichment,
             timing=timing,
         )
         page_count = None
@@ -308,10 +312,15 @@ class ImportServiceFileOperationsMixin:
         issue: Issue,
         *,
         source_path: Path | None = None,
+        defer_issue_enrichment: bool = False,
     ) -> dict[str, Any]:
         """Build authoritative ComicInfo.xml fields for a chosen issue."""
         cache = self._import_runtime_cache(job.id)
-        cache_key = (issue.id, str(source_path) if source_path is not None else None)
+        cache_key = (
+            issue.id,
+            str(source_path) if source_path is not None else None,
+            defer_issue_enrichment,
+        )
         payload = cache.comicinfo_payloads.get(cache_key)
         if payload is None:
             timing: dict[str, Any] = {
@@ -319,12 +328,14 @@ class ImportServiceFileOperationsMixin:
                 "issue_cv_id": issue.comicvine_id,
                 "source_path": str(source_path) if source_path is not None else None,
                 "source_file_name": source_path.name if source_path is not None else None,
+                "comicvine_issue_fetch_deferred": defer_issue_enrichment,
             }
             payload_started_at = time.monotonic()
             payload = await self._build_comicinfo_payload_for_issue(
                 session,
                 issue,
                 source_path=source_path,
+                defer_issue_enrichment=defer_issue_enrichment,
                 timing=timing,
             )
             timing["comicinfo_payload_duration_ms"] = round(
@@ -339,6 +350,7 @@ class ImportServiceFileOperationsMixin:
         session: AsyncSession,
         issue: Issue,
         *,
+        defer_provider_fetch: bool = False,
         timing: dict[str, Any] | None = None,
     ) -> Issue:
         """Fetch full issue metadata once when ComicInfo needs authoritative fields."""
@@ -346,6 +358,7 @@ class ImportServiceFileOperationsMixin:
             session,
             issue,
             metadata_service=self._metadata_service,
+            defer_provider_fetch=defer_provider_fetch,
             timing=timing,
             log_warning=logger.warning,
         )
@@ -360,8 +373,16 @@ class ImportServiceFileOperationsMixin:
     ) -> None:
         """Write Step 4 timing diagnostics after slow file work is complete."""
         cache = self._import_runtime_cache(job.id)
-        timing_key = (issue.id, str(source_path))
-        metadata_timing = cache.comicinfo_payload_timings.pop(timing_key, None)
+        source_key = str(source_path)
+        metadata_timing = cache.comicinfo_payload_timings.pop(
+            (issue.id, source_key, True),
+            None,
+        )
+        if metadata_timing is None:
+            metadata_timing = cache.comicinfo_payload_timings.pop(
+                (issue.id, source_key, False),
+                None,
+            )
         await log_import_file_timing_events(
             session,
             job_id=job.id,

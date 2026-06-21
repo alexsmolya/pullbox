@@ -716,6 +716,7 @@ class SeriesService:
                 DownloadState.QUEUED,
                 DownloadState.SENT,
                 DownloadState.DOWNLOADING,
+                DownloadState.FINALIZING,
                 DownloadState.PAUSED,
                 DownloadState.RETRY_PENDING,
             }

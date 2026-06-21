@@ -2321,10 +2321,97 @@ class TestMetadataRepair:
         assert other_payload["PageCount"] == 1
         assert issue.page_count == 30
         timings = service._import_runtime_cache(job.id).comicinfo_payload_timings
-        assert timings[(issue.id, str(archive_path))]["comicvine_issue_fetch_status"] == "fetched"
-        assert timings[(issue.id, str(archive_path))]["archive_page_count"] == 2
-        assert timings[(issue.id, str(other_archive_path))]["archive_page_count"] == 1
-        assert "comicinfo_payload_duration_ms" in timings[(issue.id, str(archive_path))]
+        assert (
+            timings[(issue.id, str(archive_path), False)]["comicvine_issue_fetch_status"]
+            == "fetched"
+        )
+        assert timings[(issue.id, str(archive_path), False)]["archive_page_count"] == 2
+        assert timings[(issue.id, str(other_archive_path), False)]["archive_page_count"] == 1
+        assert "comicinfo_payload_duration_ms" in timings[(issue.id, str(archive_path), False)]
+
+    @pytest.mark.asyncio
+    async def test_cached_comicinfo_payload_can_defer_cold_issue_enrichment(
+        self,
+        db_session: AsyncSession,
+        service: ImportService,
+        tmp_path: Path,
+    ) -> None:
+        """Step 4 can write known ComicInfo fields without waiting on ComicVine."""
+        job = await _create_job_row(db_session, status=ImportJobStatus.REVIEW)
+        publisher = Publisher(name="Boom", comicvine_id=42)
+        db_session.add(publisher)
+        await db_session.flush()
+        library_series = Series(
+            title="King Dracula",
+            sort_title="king dracula",
+            year_start=2024,
+            comicvine_id=171911,
+            issue_count=4,
+            publisher_id=publisher.id,
+            series_type=SeriesType.STANDARD,
+        )
+        db_session.add(library_series)
+        await db_session.flush()
+        issue = Issue(
+            series_id=library_series.id,
+            issue_number=4.0,
+            comicvine_id=1234567,
+            title="",
+            issue_type=IssueType.ISSUE,
+            status=IssueStatus.WANTED,
+        )
+        db_session.add(issue)
+        await db_session.flush()
+
+        archive_path = tmp_path / "king-dracula-004.cbz"
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("001.jpg", b"page one")
+            archive.writestr("002.jpg", b"page two")
+
+        async def _fetch_issue(
+            session: AsyncSession,
+            comicvine_issue_id: int,
+        ) -> Issue:
+            assert session is db_session
+            assert comicvine_issue_id == 1234567
+            issue.description = "A newly enriched issue summary."
+            issue.release_date = date(2026, 6, 17)
+            issue.comicvine_url = "https://comicvine.gamespot.com/king-dracula-4/4000-1234567/"
+            return issue
+
+        service._metadata_service.fetch_issue = AsyncMock(side_effect=_fetch_issue)
+
+        deferred_payload = await service._build_cached_comicinfo_payload_for_issue(
+            db_session,
+            job,
+            issue,
+            source_path=archive_path,
+            defer_issue_enrichment=True,
+        )
+
+        assert service._metadata_service.fetch_issue.await_count == 0
+        assert deferred_payload["Series"] == "King Dracula"
+        assert deferred_payload["Number"] == "4"
+        assert deferred_payload["Summary"] is None
+        assert deferred_payload["PageCount"] == 2
+        assert deferred_payload["Notes"] == "[cv_vol_id:171911] [cv_issue_id:1234567]"
+
+        enriched_payload = await service._build_cached_comicinfo_payload_for_issue(
+            db_session,
+            job,
+            issue,
+            source_path=archive_path,
+        )
+
+        assert service._metadata_service.fetch_issue.await_count == 1
+        assert enriched_payload["Summary"] == "A newly enriched issue summary."
+        timings = service._import_runtime_cache(job.id).comicinfo_payload_timings
+        assert timings[(issue.id, str(archive_path), True)]["comicvine_issue_fetch_status"] == (
+            "deferred"
+        )
+        assert timings[(issue.id, str(archive_path), False)]["comicvine_issue_fetch_status"] == (
+            "fetched"
+        )
 
     @pytest.mark.asyncio
     async def test_repair_cbz_metadata_in_place(

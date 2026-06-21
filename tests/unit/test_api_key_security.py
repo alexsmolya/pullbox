@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 
 from pullbox.core.api_keys import (
@@ -18,6 +19,7 @@ from pullbox.core.api_keys import (
     legacy_hash_api_key,
     normalize_api_key_name,
 )
+from pullbox.core.exceptions import ValidationError
 from pullbox.models.user import APIKey, User
 from pullbox.schemas.auth import APIKeyCreate
 from pullbox.services.auth_service import AuthService
@@ -102,6 +104,40 @@ class TestAPIKeyNameNormalization:
         body = APIKeyCreate(name="  Kitchen   Display  ")
 
         assert body.name == "Kitchen Display"
+
+
+class TestAPIKeyExpirationValidation:
+    def test_schema_rejects_expiration_dates_before_today(self) -> None:
+        with pytest.raises(PydanticValidationError, match="cannot be in the past"):
+            APIKeyCreate(
+                name="Expired Before Birth",
+                expires_at=datetime.now(UTC) - timedelta(days=1),
+            )
+
+    def test_schema_allows_current_calendar_date(self) -> None:
+        body = APIKeyCreate(
+            name="Expires Today",
+            expires_at=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
+        )
+
+        assert body.expires_at is not None
+
+    @pytest.mark.asyncio
+    async def test_service_rejects_expiration_dates_before_today(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        user = User(username="api-user", password_hash=AuthService.hash_password("Test@1234"))
+        db_session.add(user)
+        await db_session.flush()
+
+        with pytest.raises(ValidationError, match="cannot be in the past"):
+            await AuthService.generate_api_key(
+                db_session,
+                user.id,
+                "Expired Before Birth",
+                expires_at=datetime.now(UTC) - timedelta(days=1),
+            )
 
 
 class TestAPIKeyServiceLifecycle:
@@ -197,8 +233,9 @@ class TestAPIKeyServiceLifecycle:
             db_session,
             user.id,
             "Expired",
-            expires_at=datetime.now(UTC) - timedelta(days=1),
         )
+        api_key.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await db_session.flush()
 
         assert await AuthService.validate_api_key(db_session, raw_key) is None
         await db_session.refresh(api_key)

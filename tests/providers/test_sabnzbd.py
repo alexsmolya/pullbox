@@ -204,7 +204,7 @@ class TestDownloadStatus:
         assert status.client_state is None
         client._request.assert_awaited_once_with({"mode": "queue"})  # type: ignore[attr-defined]
 
-    async def test_get_download_status_falls_back_to_history_post_processing(self) -> None:
+    async def test_get_download_status_falls_back_to_history_finalizing(self) -> None:
         client = _make_client()
         client._request = AsyncMock(  # type: ignore[method-assign]
             side_effect=[
@@ -228,7 +228,7 @@ class TestDownloadStatus:
         status = await client.get_download_status("nzo-2")
 
         assert status.external_id == "nzo-2"
-        assert status.state == "downloading"
+        assert status.state == "finalizing"
         assert status.progress == 1.0
         assert status.size_bytes == 2048
         assert status.downloaded_path == "/downloads/Absolute Superman 014.cbz"
@@ -251,7 +251,7 @@ class TestDownloadStatus:
         with pytest.raises(SABnzbdError, match="Download not found: missing"):
             await client.get_download_status("missing")
 
-    async def test_get_queue_maps_post_download_phase_to_complete_progress(self) -> None:
+    async def test_get_queue_maps_post_download_phase_to_finalizing_progress(self) -> None:
         client = _make_client()
         client._request = AsyncMock(  # type: ignore[method-assign]
             return_value={
@@ -274,8 +274,8 @@ class TestDownloadStatus:
         queue = await client.get_queue()
 
         assert len(queue) == 1
-        assert queue[0].state == "downloading"
-        assert queue[0].progress == 1.0
+        assert queue[0].state == "finalizing"
+        assert queue[0].progress == pytest.approx(0.123)
         assert queue[0].client_state == "Repairing"
 
 

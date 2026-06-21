@@ -407,31 +407,31 @@ class TestQueueStatusMapping:
         assert _map_group_status("PAUSED") == "paused"
 
     def test_pp_queued(self) -> None:
-        assert _map_group_status("PP_QUEUED") == "downloading"
+        assert _map_group_status("PP_QUEUED") == "finalizing"
 
     def test_loading_pars(self) -> None:
-        assert _map_group_status("LOADING_PARS") == "downloading"
+        assert _map_group_status("LOADING_PARS") == "finalizing"
 
     def test_verifying_sources(self) -> None:
-        assert _map_group_status("VERIFYING_SOURCES") == "downloading"
+        assert _map_group_status("VERIFYING_SOURCES") == "finalizing"
 
     def test_repairing(self) -> None:
-        assert _map_group_status("REPAIRING") == "downloading"
+        assert _map_group_status("REPAIRING") == "finalizing"
 
     def test_verifying_repaired(self) -> None:
-        assert _map_group_status("VERIFYING_REPAIRED") == "downloading"
+        assert _map_group_status("VERIFYING_REPAIRED") == "finalizing"
 
     def test_renaming(self) -> None:
-        assert _map_group_status("RENAMING") == "downloading"
+        assert _map_group_status("RENAMING") == "finalizing"
 
     def test_unpacking(self) -> None:
-        assert _map_group_status("UNPACKING") == "downloading"
+        assert _map_group_status("UNPACKING") == "finalizing"
 
     def test_moving(self) -> None:
-        assert _map_group_status("MOVING") == "downloading"
+        assert _map_group_status("MOVING") == "finalizing"
 
     def test_executing_script(self) -> None:
-        assert _map_group_status("EXECUTING_SCRIPT") == "downloading"
+        assert _map_group_status("EXECUTING_SCRIPT") == "finalizing"
 
     def test_unknown_status_lowercased(self) -> None:
         assert _map_group_status("SOME_NEW_STATUS") == "some_new_status"
@@ -458,7 +458,7 @@ class TestHistoryStatusMapping:
 
 @pytest.mark.asyncio
 class TestPostProcessingPhases:
-    """PP phases should map to downloading with progress=1.0."""
+    """PP phases should map to finalizing with progress=1.0."""
 
     @pytest.mark.parametrize(
         "status",
@@ -490,7 +490,7 @@ class TestPostProcessingPhases:
             mock_call.side_effect = [[group]]
             result = await client.get_download_status("50")
 
-        assert result.state == "downloading"
+        assert result.state == "finalizing"
         assert result.progress == 1.0
         assert result.client_state is not None
 

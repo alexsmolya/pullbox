@@ -7,15 +7,19 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
+from sqlalchemy import select
 
 from pullbox.api.v1 import config as config_api
 from pullbox.core.exceptions import ValidationError
 from pullbox.models.config import DEFAULT_SYSTEM_CONFIG, SystemConfig
+from pullbox.models.library import LibraryRoot
 from pullbox.models.user import User
 from pullbox.schemas.config import ConfigUpdate
 from pullbox.services.auth_service import AuthService
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -209,6 +213,50 @@ async def test_update_config_rejects_local_bypass_without_safe_target(
                 "local_auth_bypass_addresses": "127.0.0.1",
             },
         )
+
+
+@pytest.mark.asyncio
+async def test_update_config_enables_local_bypass_with_default_addresses(
+    db_session: AsyncSession,
+) -> None:
+    """Fresh installs should honor default trusted addresses when toggling bypass."""
+    db_session.add(User(username="admin", password_hash=AuthService.hash_password("Test@1234")))
+    await db_session.flush()
+
+    response = await _call_update(
+        db_session,
+        {
+            "local_auth_bypass_enabled": "true",
+            "local_auth_bypass_username": "admin",
+        },
+    )
+
+    configs = {item["key"]: item["value"] for item in response["configs"]}
+    assert configs["local_auth_bypass_enabled"] == "true"
+    assert configs["local_auth_bypass_username"] == "admin"
+    assert configs["local_auth_bypass_addresses"] == "127.0.0.1, ::1"
+
+
+@pytest.mark.asyncio
+async def test_update_config_syncs_comics_directory_to_library_root(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    comics_dir = tmp_path / "comics"
+    comics_dir.mkdir()
+
+    response = await _call_update(db_session, {"comics_directory": str(comics_dir)})
+
+    configs = {item["key"]: item["value"] for item in response["configs"]}
+    assert configs["comics_directory"] == str(comics_dir.resolve())
+
+    root = (
+        await db_session.execute(
+            select(LibraryRoot).where(LibraryRoot.path == str(comics_dir.resolve()))
+        )
+    ).scalar_one()
+    assert root.name == "Comics Directory"
+    assert root.enabled is True
 
 
 @pytest.mark.asyncio

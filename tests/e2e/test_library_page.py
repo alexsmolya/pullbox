@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from playwright.sync_api import expect
 
@@ -38,64 +36,48 @@ class TestLibraryPage:
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
     ) -> None:
-        review_root = Path("/tmp/pullbox-e2e-library")
-        seeded_dirs = [review_root / f"zz-alignment-{index:02d}" for index in range(18)]
-        for path in seeded_dirs:
-            path.mkdir(exist_ok=True)
-        try:
-            library = LibraryPage(authed_page, seeded_server)
-            library.goto()
+        library = LibraryPage(authed_page, seeded_server)
+        library.goto()
 
-            tree_header_box = library.tree_header.bounding_box()
-            toolbar_box = library.browser_toolbar.bounding_box()
-            assert tree_header_box is not None
-            assert toolbar_box is not None
-            assert abs(tree_header_box["y"] - toolbar_box["y"]) <= 1.0
-            assert round(tree_header_box["height"]) == round(toolbar_box["height"])
+        tree_header_box = library.tree_header.bounding_box()
+        toolbar_box = library.browser_toolbar.bounding_box()
+        assert tree_header_box is not None
+        assert toolbar_box is not None
+        assert abs(tree_header_box["y"] - toolbar_box["y"]) <= 1.0
+        assert round(tree_header_box["height"]) == round(toolbar_box["height"])
 
-            initial_top = tree_header_box["y"]
-            library.tree_list.evaluate("(node) => { node.scrollTop = node.scrollHeight; }")
-            authed_page.wait_for_timeout(150)
+        initial_top = tree_header_box["y"]
+        library.tree_list.evaluate("(node) => { node.scrollTop = node.scrollHeight; }")
+        authed_page.wait_for_timeout(150)
 
-            scrolled_tree_header_box = library.tree_header.bounding_box()
-            assert scrolled_tree_header_box is not None
-            assert abs(scrolled_tree_header_box["y"] - initial_top) <= 1.0
-        finally:
-            for path in seeded_dirs:
-                path.rmdir()
+        scrolled_tree_header_box = library.tree_header.bounding_box()
+        assert scrolled_tree_header_box is not None
+        assert abs(scrolled_tree_header_box["y"] - initial_top) <= 1.0
 
     def test_library_right_pane_scrolls_with_mouse_wheel(
         self,
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
     ) -> None:
-        review_root = Path("/tmp/pullbox-e2e-library")
-        seeded_dirs = [review_root / f"zz-scroll-{index:03d}" for index in range(90)]
-        for path in seeded_dirs:
-            path.mkdir(exist_ok=True)
-        try:
-            library = LibraryPage(authed_page, seeded_server)
-            library.goto()
+        library = LibraryPage(authed_page, seeded_server)
+        library.goto()
 
-            metrics = library.browser_table_wrap.evaluate(
-                """(node) => ({
-                  scrollHeight: node.scrollHeight,
-                  clientHeight: node.clientHeight,
-                  scrollTop: node.scrollTop,
-                })"""
-            )
-            assert metrics["scrollHeight"] > metrics["clientHeight"]
-            assert metrics["scrollTop"] == 0
+        metrics = library.browser_table_wrap.evaluate(
+            """(node) => ({
+              scrollHeight: node.scrollHeight,
+              clientHeight: node.clientHeight,
+              scrollTop: node.scrollTop,
+            })"""
+        )
+        assert metrics["scrollHeight"] > metrics["clientHeight"]
+        assert metrics["scrollTop"] == 0
 
-            library.browser_table_wrap.hover()
-            authed_page.mouse.wheel(0, 1200)
-            authed_page.wait_for_timeout(150)
+        library.browser_table_wrap.hover()
+        authed_page.mouse.wheel(0, 1200)
+        authed_page.wait_for_timeout(150)
 
-            after_scroll = library.browser_table_wrap.evaluate("(node) => node.scrollTop")
-            assert after_scroll > 0
-        finally:
-            for path in seeded_dirs:
-                path.rmdir()
+        after_scroll = library.browser_table_wrap.evaluate("(node) => node.scrollTop")
+        assert after_scroll > 0
 
     def test_library_browse_navigates_into_folder(
         self,
@@ -109,7 +91,7 @@ class TestLibraryPage:
 
         assert library.current_breadcrumb.is_visible()
         assert library.current_breadcrumb.inner_text().endswith("/01-batman")
-        assert library.row_text("cover.png").is_visible()
+        assert library.row_text("Batman 001 (2016).cbz").is_visible()
 
     def test_library_context_menu_shows_folder_actions_and_properties_modal(
         self,
@@ -157,7 +139,7 @@ class TestLibraryPage:
         library = LibraryPage(authed_page, seeded_server)
         library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-        library.right_click_row("cover.png")
+        library.right_click_row("Batman 001 (2016).cbz")
 
         assert library.context_action("properties").is_visible()
         assert library.context_action("rename").is_visible()
@@ -170,17 +152,12 @@ class TestLibraryPage:
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
     ) -> None:
-        sample_file = Path("/tmp/pullbox-e2e-library/01-batman/library-context-test.cbr")
-        sample_file.write_bytes(b"rar-ish")
-        try:
-            library = LibraryPage(authed_page, seeded_server)
-            library.goto_path("/tmp/pullbox-e2e-library/01-batman")
+        library = LibraryPage(authed_page, seeded_server)
+        library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-            library.right_click_row("library-context-test.cbr")
+        library.right_click_row("library-context-test.cbr")
 
-            assert library.context_action("convert").is_visible()
-        finally:
-            sample_file.unlink(missing_ok=True)
+        assert library.context_action("convert").is_visible()
 
     def test_library_delete_action_opens_file_delete_modal(
         self,
@@ -190,7 +167,7 @@ class TestLibraryPage:
         library = LibraryPage(authed_page, seeded_server)
         library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-        library.right_click_row("cover.png")
+        library.right_click_row("Batman 001 (2016).cbz")
         library.context_action("delete").click()
 
         library.delete_file_modal.wait_for(state="visible", timeout=5000)
@@ -257,7 +234,7 @@ class TestLibraryPage:
         library = LibraryPage(authed_page, seeded_server)
         library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-        library.right_click_row("cover.png")
+        library.right_click_row("Batman 001 (2016).cbz")
         library.context_action("rename").click()
 
         library.rename_modal.wait_for(state="visible", timeout=5000)
@@ -272,8 +249,8 @@ class TestLibraryPage:
             == "Final Path"
         )
         assert library.rename_modal.get_by_test_id("library-rename-path-panel").is_visible()
-        assert library.rename_input.input_value() == "cover"
-        assert library.rename_path_preview.inner_text().endswith("/cover.png")
+        assert library.rename_input.input_value() == "Batman 001 (2016)"
+        assert library.rename_path_preview.inner_text().endswith("/Batman 001 (2016).cbz")
         assert (
             library.rename_modal.get_by_text(
                 "Keep the existing file extension when renaming a library file.",
@@ -284,7 +261,7 @@ class TestLibraryPage:
 
         library.rename_input.fill("Batman cover")
 
-        assert library.rename_path_preview.inner_text().endswith("/Batman cover.png")
+        assert library.rename_path_preview.inner_text().endswith("/Batman cover.cbz")
 
     def test_library_file_rename_preserves_extension_on_submit(
         self,
@@ -297,7 +274,7 @@ class TestLibraryPage:
                 status=200,
                 content_type="application/json",
                 body="""
-{"status":"ok","kind":"file","source_path":"/tmp/pullbox-e2e-library/01-batman/cover.png","target_path":"/tmp/pullbox-e2e-library/01-batman/Batman cover.png"}
+{"status":"ok","kind":"file","source_path":"/tmp/pullbox-e2e-library/01-batman/Batman 001 (2016).cbz","target_path":"/tmp/pullbox-e2e-library/01-batman/Batman cover.cbz"}
 """.strip(),
             ),
         )
@@ -305,7 +282,7 @@ class TestLibraryPage:
         library = LibraryPage(authed_page, seeded_server)
         library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-        library.right_click_row("cover.png")
+        library.right_click_row("Batman 001 (2016).cbz")
         library.context_action("rename").click()
 
         library.rename_modal.wait_for(state="visible", timeout=5000)
@@ -322,9 +299,9 @@ class TestLibraryPage:
         payload = rename_response.value.request.post_data_json or {}
 
         library.rename_modal.wait_for(state="hidden", timeout=5000)
-        assert payload["path"].endswith("/pullbox-e2e-library/01-batman/cover.png")
-        assert payload["proposed_name"] == "Batman cover.png"
-        assert authed_page.get_by_text("Rename completed.", exact=True).is_visible()
+        assert payload["path"].endswith("/pullbox-e2e-library/01-batman/Batman 001 (2016).cbz")
+        assert payload["proposed_name"] == "Batman cover.cbz"
+        expect(authed_page.get_by_text("Rename completed.", exact=True)).to_be_visible()
 
     def test_library_folder_rename_submits_on_enter(
         self,
@@ -364,7 +341,7 @@ class TestLibraryPage:
         library.rename_modal.wait_for(state="hidden", timeout=5000)
         assert payload["path"].endswith("/pullbox-e2e-library/01-batman")
         assert payload["proposed_name"] == "01-batman deluxe"
-        assert authed_page.get_by_text("Rename completed.", exact=True).is_visible()
+        expect(authed_page.get_by_text("Rename completed.", exact=True)).to_be_visible()
 
     def test_library_rename_blocked_modal_uses_structured_contract(
         self,
@@ -569,7 +546,7 @@ class TestLibraryPage:
         library.auto_rename_modal.wait_for(state="hidden", timeout=5000)
         assert payload["path"].endswith("/pullbox-e2e-library/01-batman")
         assert payload["proposed_name"] == "Batman (2016)"
-        assert authed_page.get_by_text("Rename completed.", exact=True).is_visible()
+        expect(authed_page.get_by_text("Rename completed.", exact=True)).to_be_visible()
 
     def test_library_file_auto_rename_modal_uses_structured_modal_contract(
         self,
@@ -589,9 +566,9 @@ class TestLibraryPage:
   "actionable_count":1,
   "items":[
     {
-      "file_path":"/tmp/pullbox-e2e-library/01-batman/cover.png",
-      "current_name":"cover.png",
-      "proposed_name":"Batman (2016) cover.png",
+      "file_path":"/tmp/pullbox-e2e-library/01-batman/Batman 001 (2016).cbz",
+      "current_name":"Batman 001 (2016).cbz",
+      "proposed_name":"Batman (2016) #001.cbz",
       "template_key":"issue_file_template",
       "template_label":"Issue File",
       "actionable":true,
@@ -609,7 +586,7 @@ class TestLibraryPage:
                 status=200,
                 content_type="application/json",
                 body="""
-{"status":"ok","kind":"file","source_path":"/tmp/pullbox-e2e-library/01-batman/cover.png","target_path":"/tmp/pullbox-e2e-library/01-batman/Batman (2016) cover.png"}
+{"status":"ok","kind":"file","source_path":"/tmp/pullbox-e2e-library/01-batman/Batman 001 (2016).cbz","target_path":"/tmp/pullbox-e2e-library/01-batman/Batman (2016) #001.cbz"}
 """.strip(),
             ),
         )
@@ -617,7 +594,7 @@ class TestLibraryPage:
         library = LibraryPage(authed_page, seeded_server)
         library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-        library.right_click_row("cover.png")
+        library.right_click_row("Batman 001 (2016).cbz")
         library.context_action("auto-rename").click()
 
         library.auto_rename_modal.wait_for(state="visible", timeout=5000)
@@ -750,7 +727,7 @@ class TestLibraryPage:
         library = LibraryPage(authed_page, seeded_server)
         library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-        library.right_click_row("cover.png")
+        library.right_click_row("Batman 001 (2016).cbz")
         library.context_action("delete").click()
 
         library.delete_file_modal.wait_for(state="visible", timeout=5000)
@@ -794,8 +771,6 @@ class TestLibraryPage:
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
     ) -> None:
-        sample_file = Path("/tmp/pullbox-e2e-library/01-batman/library-context-test.cbr")
-        sample_file.write_bytes(b"rar-ish")
         authed_page.route(
             "**/api/v1/utilities/mass-convert/preview",
             lambda route: route.fulfill(
@@ -820,41 +795,32 @@ class TestLibraryPage:
             ),
         )
 
-        try:
-            library = LibraryPage(authed_page, seeded_server)
-            library.goto_path("/tmp/pullbox-e2e-library/01-batman")
+        library = LibraryPage(authed_page, seeded_server)
+        library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-            library.right_click_row("library-context-test.cbr")
-            library.context_action("convert").click()
+        library.right_click_row("library-context-test.cbr")
+        library.context_action("convert").click()
 
-            library.convert_modal.wait_for(state="visible", timeout=5000)
-            assert library.convert_modal.get_by_test_id("library-convert-summary-row").is_visible()
-            assert library.convert_action_note.is_visible()
-            assert "converts this file now" in library.convert_action_note.inner_text().lower()
-            assert (
-                library.convert_modal.locator(
-                    "[data-testid='library-convert-modal'] .settings-row"
-                ).count()
-                == 0
-            )
-            assert library.convert_modal.get_by_test_id(
-                "library-convert-preview-header"
-            ).is_visible()
-            expect(
-                library.convert_modal.locator(
-                    "[data-testid='library-convert-preview-grid'] tbody tr"
-                )
-            ).to_have_count(3)
-        finally:
-            sample_file.unlink(missing_ok=True)
+        library.convert_modal.wait_for(state="visible", timeout=5000)
+        assert library.convert_modal.get_by_test_id("library-convert-summary-row").is_visible()
+        assert library.convert_action_note.is_visible()
+        assert "converts this file now" in library.convert_action_note.inner_text().lower()
+        assert (
+            library.convert_modal.locator(
+                "[data-testid='library-convert-modal'] .settings-row"
+            ).count()
+            == 0
+        )
+        assert library.convert_modal.get_by_test_id("library-convert-preview-header").is_visible()
+        expect(
+            library.convert_modal.locator("[data-testid='library-convert-preview-grid'] tbody tr")
+        ).to_have_count(3)
 
     def test_library_convert_submits_immediately(
         self,
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
     ) -> None:
-        sample_file = Path("/tmp/pullbox-e2e-library/01-batman/library-context-test.cbr")
-        sample_file.write_bytes(b"rar-ish")
         authed_page.route(
             "**/api/v1/utilities/mass-convert/preview",
             lambda route: route.fulfill(
@@ -889,28 +855,23 @@ class TestLibraryPage:
             ),
         )
 
-        try:
-            library = LibraryPage(authed_page, seeded_server)
-            library.goto_path("/tmp/pullbox-e2e-library/01-batman")
+        library = LibraryPage(authed_page, seeded_server)
+        library.goto_path("/tmp/pullbox-e2e-library/01-batman")
 
-            library.right_click_row("library-context-test.cbr")
-            library.context_action("convert").click()
+        library.right_click_row("library-context-test.cbr")
+        library.context_action("convert").click()
 
-            library.convert_modal.wait_for(state="visible", timeout=5000)
-            with authed_page.expect_response(
-                lambda response: (
-                    response.request.method == "POST"
-                    and "/api/v1/library/browser/convert" in response.url
-                )
-            ) as convert_response:
-                library.convert_modal.get_by_test_id("library-convert-submit").click()
-
-            payload = convert_response.value.request.post_data_json or {}
-
-            library.convert_modal.wait_for(state="hidden", timeout=5000)
-            assert payload["path"].endswith(
-                "/pullbox-e2e-library/01-batman/library-context-test.cbr"
+        library.convert_modal.wait_for(state="visible", timeout=5000)
+        with authed_page.expect_response(
+            lambda response: (
+                response.request.method == "POST"
+                and "/api/v1/library/browser/convert" in response.url
             )
-            assert authed_page.get_by_text("Conversion completed.", exact=True).is_visible()
-        finally:
-            sample_file.unlink(missing_ok=True)
+        ) as convert_response:
+            library.convert_modal.get_by_test_id("library-convert-submit").click()
+
+        payload = convert_response.value.request.post_data_json or {}
+
+        library.convert_modal.wait_for(state="hidden", timeout=5000)
+        assert payload["path"].endswith("/pullbox-e2e-library/01-batman/library-context-test.cbr")
+        assert authed_page.get_by_text("Conversion completed.", exact=True).is_visible()

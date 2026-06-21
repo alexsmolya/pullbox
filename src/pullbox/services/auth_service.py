@@ -11,13 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pullbox.core.api_keys import (
     API_KEY_PREFIX,
+    api_key_expiration_is_before_today,
     api_key_hash_candidates,
     hash_api_key,
     is_legacy_api_key_hash,
     is_well_formed_api_key,
 )
 from pullbox.core.config_resolver import get_application_secret
-from pullbox.core.exceptions import AuthenticationError
+from pullbox.core.exceptions import AuthenticationError, ValidationError
 from pullbox.core.password_policy import MAX_PASSWORD_BYTES
 from pullbox.models.user import APIKey, User
 
@@ -112,6 +113,9 @@ class AuthService:
         expires_at: datetime | None = None,
     ) -> tuple[str, APIKey]:
         """Generate a new API key. Returns (raw_key, api_key_model)."""
+        if expires_at is not None and api_key_expiration_is_before_today(expires_at):
+            raise ValidationError("API key expiration date cannot be in the past.")
+
         raw_key = f"{API_KEY_PREFIX}{secrets.token_hex(32)}"
         key_hash = hash_api_key(raw_key)
 

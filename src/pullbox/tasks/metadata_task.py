@@ -1,7 +1,7 @@
 """Metadata background tasks — syncs new issues and refreshes stale metadata.
 
 Two scheduled tasks:
-- ``sync_new_issues`` (interval, default 24h) — fetches issue lists for
+- ``sync_new_issues`` (daily cron) — fetches issue lists for
   ComicVine-backed series, creates new Issue records, and refreshes stale
   series metadata changes (status, description, publisher).  When new issues
   are set to WANTED by monitoring criteria, a one-shot search is scheduled.

@@ -126,6 +126,48 @@ async def _seed_download_history_contract_data(sec_db) -> None:  # type: ignore[
         await session.commit()
 
 
+async def _seed_post_processing_only_history_data(sec_db) -> None:  # type: ignore[no-untyped-def]
+    """Seed successful/processing-failed rows that do not belong to Downloads History."""
+    async with sec_db() as session:
+        series = Series(title="Wolverine", sort_title="wolverine")
+        session.add(series)
+        await session.flush()
+
+        issue_one = Issue(series_id=series.id, issue_number=1.0)
+        issue_two = Issue(series_id=series.id, issue_number=2.0)
+        session.add_all([issue_one, issue_two])
+        await session.flush()
+
+        session.add_all(
+            [
+                DownloadHistory(
+                    title="Wolverine 001 (2026) (Digital).cbz",
+                    state=DownloadState.COMPLETED,
+                    download_client=DownloadClientType.SABNZBD,
+                    download_url="https://example.com/wolverine-001.nzb",
+                    issue_id=issue_one.id,
+                    downloaded_path="/downloads/wolverine-001.cbz",
+                    final_path="/comics/Wolverine/Wolverine 001.cbz",
+                    imported_at=datetime(2026, 4, 3, 20, 10, tzinfo=UTC),
+                    file_size=42_000_000,
+                    updated_at=datetime(2026, 4, 3, 20, 10, tzinfo=UTC),
+                ),
+                DownloadHistory(
+                    title="Wolverine 002 (2026) (Digital).cbz",
+                    state=DownloadState.FAILED,
+                    download_client=DownloadClientType.SABNZBD,
+                    download_url="https://example.com/wolverine-002.nzb",
+                    issue_id=issue_two.id,
+                    downloaded_path="/downloads/wolverine-002.cbz",
+                    error_message="Move failed: destination is not writable",
+                    file_size=43_000_000,
+                    updated_at=datetime(2026, 4, 3, 20, 20, tzinfo=UTC),
+                ),
+            ]
+        )
+        await session.commit()
+
+
 async def _seed_download_queue_contract_data(sec_db) -> None:  # type: ignore[no-untyped-def]
     """Seed an active queue row so the shared queue card contract can be asserted."""
     async with sec_db() as session:
@@ -401,10 +443,8 @@ class TestDownloadsRouteContracts:
         assert response.status_code == 200
         assert 'style="width: 100.0%"' in response.text
         assert "Finalizing in client" in response.text
-        assert "Finalizing" in response.text
+        assert "Repairing" in response.text
         assert 'data-testid="downloads-queue-item-status"' in response.text
-        assert "Repairing" not in response.text
-        assert 'data-testid="downloads-queue-item-phase-detail"' not in response.text
 
     async def test_download_history_partial_returns_panel_only(
         self,
@@ -544,6 +584,30 @@ class TestDownloadsRouteContracts:
         assert response.status_code == 200
         assert "Clear History" in response.text
         assert ">Clear<" not in response.text
+
+    async def test_download_history_empty_state_points_to_post_processing_history(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        await _seed_post_processing_only_history_data(sec_db)
+
+        response = await authenticated_client.get(
+            "/htmx/downloads/history",
+            headers={"HX-Request": "true"},
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="downloads-history-empty"' in response.text
+        assert "0 download-client records" in response.text
+        assert "2 post-processing records" in response.text
+        assert (
+            "Downloads that completed and moved into import/post-processing are shown in "
+            "Post-processing History." in response.text
+        )
+        assert 'href="/post-processing?tab=history"' in response.text
+        assert "Wolverine 001 (2026) (Digital).cbz" not in response.text
+        assert "Wolverine 002 (2026) (Digital).cbz" not in response.text
 
     async def test_download_history_supports_search_and_preserves_query_in_contract(
         self,
@@ -721,6 +785,66 @@ class TestDownloadsRouteContracts:
         assert progress_map[queue_items[1].id].client_state == "Extracting"
         assert progress_map[queue_items[1].id].speed_bytes is None
         assert progress_map[queue_items[1].id].eta_seconds is None
+
+    async def test_download_progress_map_falls_back_to_usenet_status_when_queue_misses(
+        self,
+        sec_db,
+        monkeypatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        import pullbox.composition.providers as registry_module
+
+        await _seed_multi_active_download_queue_data(sec_db)
+
+        fake_client = SimpleNamespace(
+            client_type=DownloadClientType.SABNZBD.value,
+            get_queue=AsyncMock(return_value=[]),
+            get_download_status=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(
+                        external_id="queue-batch-a",
+                        progress=1.0,
+                        speed_bytes=None,
+                        eta_seconds=None,
+                        size_bytes=90_000_000,
+                        client_state="Extracting",
+                        state="finalizing",
+                    ),
+                    RuntimeError("not found"),
+                ]
+            ),
+        )
+
+        async def _fake_register(session, registry):  # type: ignore[no-untyped-def]
+            del session
+            registry.register_download_client(1, fake_client)
+            return []
+
+        monkeypatch.setattr(registry_module, "register_download_clients", _fake_register)
+
+        async with sec_db() as session:
+            queue_items = list(
+                (
+                    await session.execute(
+                        select(DownloadHistory)
+                        .where(DownloadHistory.state == DownloadState.DOWNLOADING)
+                        .order_by(DownloadHistory.id.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            progress_map = await ui_routes._load_download_progress_map(
+                session,
+                queue_items,
+                fallback_progress={},
+            )
+
+        fake_client.get_queue.assert_awaited_once()
+        assert fake_client.get_download_status.await_count == 2
+        assert progress_map[queue_items[0].id].progress == pytest.approx(1.0)
+        assert progress_map[queue_items[0].id].client_state == "Extracting"
+        assert queue_items[1].id not in progress_map
 
     async def test_download_progress_map_keeps_scheduler_fallback_when_client_fetch_fails(
         self,

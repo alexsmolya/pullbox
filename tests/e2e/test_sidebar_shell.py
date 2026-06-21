@@ -162,6 +162,33 @@ class TestSidebarShell:
         assert "pb-interactive" in downloads_classes
         assert "pb-interactive" not in series_classes
 
+    def test_boosted_sidebar_navigation_keeps_standard_browser_title_casing(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        shell = AppShellPage(authed_page, seeded_server)
+        shell.goto("/settings")
+
+        for link_key, expected_url, expected_title in (
+            ("series", "/series", "Series — Pullbox"),
+            ("pull-list", "/pull-list", "Pull List — Pullbox"),
+            ("downloads", "/downloads", "Downloads — Pullbox"),
+            ("system", "/system", "System — Pullbox"),
+        ):
+            shell.link(link_key).click()
+            wait_for_htmx(authed_page)
+            authed_page.wait_for_function(
+                """
+                ([path, title]) => (
+                  window.location.pathname === path &&
+                  document.title === title
+                )
+                """,
+                arg=[expected_url, expected_title],
+                timeout=5000,
+            )
+
     def test_sidebar_navigation_replaces_stale_page_footer_dock(
         self,
         authed_page,

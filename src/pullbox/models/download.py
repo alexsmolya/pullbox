@@ -30,6 +30,7 @@ class DownloadState(enum.StrEnum):
     QUEUED = "queued"
     SENT = "sent"
     DOWNLOADING = "downloading"
+    FINALIZING = "finalizing"
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"

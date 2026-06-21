@@ -19,6 +19,7 @@ from pullbox.models.matching_suggestion import MatchingSuggestion, SuggestionSta
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series, SeriesStatus
+from pullbox.ui import dashboard_routes
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -331,6 +332,38 @@ class TestDashboardRouteContracts:
         assert 'data-testid="dashboard-downloads-panel"' not in response.text
         assert 'data-testid="dashboard-download-exceptions"' not in response.text
         assert 'data-testid="dashboard-recent-activity"' in response.text
+
+    async def test_dashboard_storage_strip_measures_enabled_library_root(
+        self,
+        sec_db,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:  # type: ignore[no-untyped-def]
+        library_root = tmp_path / "comics"
+        library_root.mkdir()
+        async with sec_db() as session:
+            session.add(LibraryRoot(name="Primary", path=str(library_root), enabled=True))
+            await session.commit()
+
+            measured_paths: list[str] = []
+
+            def _disk_usage(path):  # type: ignore[no-untyped-def]
+                measured_paths.append(str(path))
+                return SimpleNamespace(total=10_000, used=2_000, free=8_000)
+
+            monkeypatch.setattr(dashboard_routes.shutil, "disk_usage", _disk_usage)
+            dashboard = SimpleNamespace(
+                scorecards=(SimpleNamespace(key="storage-runway", value_label="8 TB runway"),)
+            )
+
+            free_bytes, delta = await dashboard_routes.load_dashboard_storage_strip(
+                session,
+                dashboard,
+            )
+
+        assert measured_paths == [str(library_root)]
+        assert free_bytes == 8_000
+        assert delta == "8 TB runway"
 
     async def test_dashboard_shows_download_exception_all_clear_banner_when_needed(
         self,

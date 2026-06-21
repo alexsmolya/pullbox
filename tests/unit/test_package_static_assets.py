@@ -19,3 +19,13 @@ def test_production_package_includes_only_served_runtime_css() -> None:
     assert "ui/static/css/tailwind.css" in package_data
     assert "ui/static/css/input.css" not in package_data
     assert "ui/static/css/*.css" not in package_data
+
+
+def test_production_package_includes_donation_qr_codes() -> None:
+    """Donation QR codes live in a nested static directory that must ship."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    package_data = pyproject["tool"]["setuptools"]["package-data"]["pullbox"]
+
+    assert "ui/static/img/donations/*.png" in package_data
+    assert (REPO_ROOT / "src/pullbox/ui/static/img/donations/buy-me-a-coffee-qr.png").is_file()
+    assert (REPO_ROOT / "src/pullbox/ui/static/img/donations/liberapay-qr.png").is_file()

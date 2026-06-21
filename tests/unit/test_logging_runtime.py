@@ -9,10 +9,16 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from pullbox.logging import _ApschedulerNoiseFilter, configure_logging
+from pullbox.logging import (
+    _ApschedulerNoiseFilter,
+    configure_logging,
+    reconfigure_logging_runtime,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 def _read_json_lines(path: Path) -> list[dict[str, object]]:
@@ -107,3 +113,75 @@ class TestLoggingRuntime:
         assert "api_key=***REDACTED***" in exception
         assert "\\nnext-line" in exception
         assert "\nnext-line" not in exception
+
+    def test_runtime_reconfigure_updates_root_and_import_log_rotation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        configure_logging("INFO", debug=False, logs_dir=tmp_path)
+
+        reconfigure_logging_runtime("DEBUG", log_size_limit_mb=3, log_backup_count=9)
+
+        assert logging.getLogger().level == logging.DEBUG
+        root_rotating = [
+            handler
+            for handler in logging.getLogger().handlers
+            if isinstance(handler, RotatingFileHandler)
+        ]
+        assert root_rotating
+        assert root_rotating[0].maxBytes == 3 * 1024 * 1024
+        assert root_rotating[0].backupCount == 9
+
+        imports_rotating = [
+            handler
+            for handler in logging.getLogger("pullbox.imports").handlers
+            if isinstance(handler, RotatingFileHandler)
+        ]
+        assert imports_rotating
+        assert imports_rotating[0].maxBytes == 3 * 1024 * 1024
+        assert imports_rotating[0].backupCount == 9
+        assert logging.getLogger("pullbox.imports").level == logging.DEBUG
+
+    def test_configure_logging_disables_import_log_when_file_logging_is_disabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        configure_logging("INFO", debug=False, logs_dir=tmp_path)
+        assert any(
+            isinstance(handler, RotatingFileHandler)
+            for handler in logging.getLogger("pullbox.imports").handlers
+        )
+
+        configure_logging("WARNING", debug=True, logs_dir=None)
+
+        assert logging.getLogger().level == logging.WARNING
+        assert not any(
+            isinstance(handler, RotatingFileHandler)
+            for handler in logging.getLogger("pullbox.imports").handlers
+        )
+
+    def test_configure_logging_falls_back_when_log_directory_is_unwritable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        configure_logging("INFO", debug=False, logs_dir=tmp_path)
+        warnings: list[str] = []
+
+        def fail_mkdir(*_args: object, **_kwargs: object) -> None:
+            raise OSError("read-only")
+
+        monkeypatch.setattr(type(tmp_path), "mkdir", fail_mkdir)
+        monkeypatch.setattr(
+            logging.getLogger(),
+            "warning",
+            lambda message, *_args: warnings.append(str(message)),
+        )
+
+        configure_logging("INFO", debug=False, logs_dir=tmp_path)
+
+        assert warnings == ["Failed to configure file logging — directory %s is not writable"]
+        assert not any(
+            isinstance(handler, RotatingFileHandler)
+            for handler in logging.getLogger("pullbox.imports").handlers
+        )

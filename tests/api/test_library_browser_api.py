@@ -72,6 +72,18 @@ async def seeded_library_browser_data(
     loose_file = root_path / "Loose File.cbz"
     loose_file.write_bytes(b"loose")
 
+    loose_folder = root_path / "Loose Folder"
+    loose_folder.mkdir()
+    loose_folder_file = loose_folder / "Loose Folder 001.cbz"
+    loose_folder_file.write_bytes(b"loose-folder")
+
+    untracked_file = root_path / "Not Pullbox Owned.cbz"
+    untracked_file.write_bytes(b"external")
+
+    untracked_folder = root_path / "External Manager Folder"
+    untracked_folder.mkdir()
+    (untracked_folder / "External Issue.cbz").write_bytes(b"external")
+
     convertible_file = root_path / "Convert Me.cbr"
     _write_zip_archive(convertible_file)
 
@@ -153,6 +165,18 @@ async def seeded_library_browser_data(
                     match_confidence=MatchConfidence.UNMATCHED,
                     has_comicinfo=False,
                 ),
+                LibraryFile(
+                    library_root_id=root.id,
+                    file_path=str(loose_folder_file),
+                    file_name=loose_folder_file.name,
+                    file_size=loose_folder_file.stat().st_size,
+                    file_format=FileFormat.CBZ,
+                    file_modified_at=datetime.fromtimestamp(
+                        loose_folder_file.stat().st_mtime, tz=UTC
+                    ),
+                    match_confidence=MatchConfidence.UNMATCHED,
+                    has_comicinfo=False,
+                ),
             ]
         )
         await session.commit()
@@ -165,6 +189,10 @@ async def seeded_library_browser_data(
         "series_without_issues_folder": series_without_issues_folder,
         "stale_series_file": stale_series_file,
         "loose_file": loose_file,
+        "loose_folder": loose_folder,
+        "loose_folder_file": loose_folder_file,
+        "untracked_file": untracked_file,
+        "untracked_folder": untracked_folder,
         "convertible_file": convertible_file,
         "trash_dir": trash_dir,
     }
@@ -196,6 +224,115 @@ async def test_library_browser_entry_returns_real_metadata_and_actions(
     assert data["delete_context"]["has_linked_issue"] is False
     assert data["delete_context"]["issue_status_after_delete"] is None
     assert data["rename_context"]["stale_reference"] is False
+
+
+@pytest.mark.asyncio
+async def test_library_browser_entry_allows_direct_tracked_file_parent_folder(
+    authenticated_client,
+    seeded_library_browser_data: dict[str, Path],
+) -> None:  # type: ignore[no-untyped-def]
+    response = await authenticated_client.get(
+        "/api/v1/library/browser/entry",
+        params={"path": str(seeded_library_browser_data["loose_folder"])},
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Loose Folder"
+    assert data["kind"] == "folder"
+    assert data["actions"]["can_properties"] is True
+    assert data["actions"]["can_rename"] is True
+    assert data["actions"]["can_auto_rename"] is True
+    assert data["actions"]["can_convert"] is False
+    assert data["actions"]["can_delete"] is True
+    assert data["delete_context"]["mode"] == "folder"
+    assert data["delete_context"]["tracked_file_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_folder_descendant_detection_uses_normalized_library_file_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    sec_db: async_sessionmaker,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "visible-root"
+    target.mkdir()
+    stored_path = "/private/tmp/pullbox-visible-root/Series/Issue 001.cbz"
+
+    def fake_normalize(path_value: str | Path | None) -> str | None:
+        if path_value is None:
+            return None
+        path_text = str(path_value)
+        if path_text == str(target):
+            return "/tmp/pullbox-visible-root"
+        if path_text == stored_path:
+            return "/tmp/pullbox-visible-root/Series/Issue 001.cbz"
+        return path_text
+
+    monkeypatch.setattr(library_api, "_normalize_library_path", fake_normalize)
+
+    async with sec_db() as session:
+        root = LibraryRoot(name="Primary Root", path=str(target), enabled=True)
+        session.add(root)
+        await session.flush()
+        session.add(
+            LibraryFile(
+                library_root_id=root.id,
+                file_path=stored_path,
+                file_name="Issue 001.cbz",
+                file_size=12,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(UTC),
+                match_confidence=MatchConfidence.UNMATCHED,
+                has_comicinfo=False,
+            )
+        )
+        await session.commit()
+
+    async with sec_db() as session:
+        assert await library_api._folder_has_tracked_descendants(session, target) is True
+
+
+@pytest.mark.asyncio
+async def test_folder_descendant_detection_uses_normalized_series_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    sec_db: async_sessionmaker,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "visible-root"
+    target.mkdir()
+    stored_path = "/private/tmp/pullbox-visible-root/Series"
+
+    def fake_normalize(path_value: str | Path | None) -> str | None:
+        if path_value is None:
+            return None
+        path_text = str(path_value)
+        if path_text == str(target):
+            return "/tmp/pullbox-visible-root"
+        if path_text == stored_path:
+            return "/tmp/pullbox-visible-root/Series"
+        return path_text
+
+    monkeypatch.setattr(library_api, "_normalize_library_path", fake_normalize)
+
+    async with sec_db() as session:
+        root = LibraryRoot(name="Primary Root", path=str(target), enabled=True)
+        session.add(root)
+        await session.flush()
+        session.add(
+            Series(
+                title="Series",
+                sort_title="series",
+                path=stored_path,
+                library_root_id=root.id,
+                monitored=True,
+            )
+        )
+        await session.commit()
+
+    async with sec_db() as session:
+        assert await library_api._folder_has_tracked_descendants(session, target) is True
 
 
 @pytest.mark.asyncio
@@ -260,7 +397,7 @@ async def test_library_browser_entry_detects_series_folder_without_issues(
 
 
 @pytest.mark.asyncio
-async def test_library_browser_entry_detects_stale_series_file_for_rename(
+async def test_library_browser_entry_rejects_untracked_file_inside_stale_series_folder(
     authenticated_client,
     seeded_library_browser_data: dict[str, Path],
 ) -> None:  # type: ignore[no-untyped-def]
@@ -270,11 +407,23 @@ async def test_library_browser_entry_detects_stale_series_file_for_rename(
         headers=_csrf_header_for(authenticated_client),
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["kind"] == "file"
-    assert data["rename_context"]["stale_reference"] is True
-    assert data["rename_context"]["reason_code"] == "stale_series_path"
+    assert response.status_code == 422
+    assert "not tracked by Pullbox" in response.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_library_browser_entry_rejects_untracked_disk_file(
+    authenticated_client,
+    seeded_library_browser_data: dict[str, Path],
+) -> None:  # type: ignore[no-untyped-def]
+    response = await authenticated_client.get(
+        "/api/v1/library/browser/entry",
+        params={"path": str(seeded_library_browser_data["untracked_file"])},
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert response.status_code == 422
+    assert "not tracked by Pullbox" in response.json()["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -382,8 +531,7 @@ async def test_library_manual_rename_validation_rejects_file_inside_stale_series
     )
 
     assert response.status_code == 422
-    message = response.json()["error"]["message"].lower()
-    assert "stale database path" in message or "series folder with a stale database path" in message
+    assert "not tracked by Pullbox" in response.json()["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -428,10 +576,9 @@ async def test_library_folder_rename_updates_descendant_series_and_file_paths(
     seeded_library_browser_data: dict[str, Path],
     sec_db: async_sessionmaker,
 ) -> None:  # type: ignore[no-untyped-def]
-    original_folder = seeded_library_browser_data["collection_folder"]
-    original_series_folder = seeded_library_browser_data["series_folder"]
+    original_folder = seeded_library_browser_data["series_folder"]
     original_series_file = seeded_library_browser_data["series_file"]
-    renamed_folder = original_folder.with_name("Collections Deluxe")
+    renamed_folder = original_folder.with_name("Series Folder Deluxe")
 
     response = await authenticated_client.post(
         "/api/v1/library/browser/rename",
@@ -449,17 +596,11 @@ async def test_library_folder_rename_updates_descendant_series_and_file_paths(
     assert payload["target_path"] == str(renamed_folder)
     assert original_folder.exists() is False
     assert renamed_folder.exists() is True
-    assert (renamed_folder / original_series_folder.name).exists() is True
-    assert (
-        renamed_folder / original_series_folder.name / original_series_file.name
-    ).exists() is True
+    assert (renamed_folder / original_series_file.name).exists() is True
 
     async with sec_db() as session:
         series = (
             await session.execute(select(Series).where(Series.title == "Series Folder"))
-        ).scalar_one()
-        stale_series = (
-            await session.execute(select(Series).where(Series.title == "Series Without Issues"))
         ).scalar_one()
         library_file = (
             await session.execute(
@@ -467,11 +608,8 @@ async def test_library_folder_rename_updates_descendant_series_and_file_paths(
             )
         ).scalar_one()
 
-        assert series.path == str(renamed_folder / original_series_folder.name)
-        assert stale_series.path == str(renamed_folder / "Series Without Issues (2012)")
-        assert library_file.file_path == str(
-            renamed_folder / original_series_folder.name / original_series_file.name
-        )
+        assert series.path == str(renamed_folder)
+        assert library_file.file_path == str(renamed_folder / original_series_file.name)
         assert library_file.file_name == original_series_file.name
 
 
@@ -507,10 +645,9 @@ async def test_library_delete_moves_tracked_file_and_updates_issue_status(
 
 
 @pytest.mark.asyncio
-async def test_library_delete_generic_folder_clears_series_tracking(
+async def test_library_delete_catalog_ancestor_folder_is_rejected(
     authenticated_client,
     seeded_library_browser_data: dict[str, Path],
-    sec_db: async_sessionmaker,
 ) -> None:  # type: ignore[no-untyped-def]
     folder = seeded_library_browser_data["collection_folder"]
     child_file = seeded_library_browser_data["series_file"]
@@ -521,27 +658,10 @@ async def test_library_delete_generic_folder_clears_series_tracking(
         headers=_csrf_header_for(authenticated_client),
     )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["kind"] == "folder"
-    assert payload["mode"] == "folder"
-    assert folder.exists() is False
-    assert child_file.exists() is False
-    assert Path(payload["result_path"]).exists() is True
-
-    async with sec_db() as session:
-        series = (
-            await session.execute(select(Series).where(Series.title == "Series Folder"))
-        ).scalar_one()
-        issue = (await session.execute(select(Issue).where(Issue.issue_number == 1.0))).scalar_one()
-        library_file = (
-            await session.execute(
-                select(LibraryFile).where(LibraryFile.file_path == str(child_file))
-            )
-        ).scalar_one_or_none()
-        assert series.path is None
-        assert library_file is None
-        assert issue.status == IssueStatus.WANTED
+    assert response.status_code == 422
+    assert "tracked series folders" in response.json()["error"]["message"]
+    assert folder.exists() is True
+    assert child_file.exists() is True
 
 
 @pytest.mark.asyncio
@@ -643,9 +763,26 @@ def test_library_browser_helper_branches(tmp_path: Path, monkeypatch: pytest.Mon
     assert library_api._entry_size_bytes(child) == 3
     assert library_api._entry_modified_at(visible) is not None
     assert library_api._entry_permissions_label(visible)
-    assert library_api._build_library_actions(kind="root", file_format=None).can_rename is False
-    assert library_api._build_library_actions(kind="file", file_format="cbr").can_convert is True
-    assert library_api._build_library_actions(kind="folder", file_format=None).can_convert is False
+    assert (
+        library_api._build_library_actions(
+            kind="root", file_format=None, tracking_scope="root"
+        ).can_rename
+        is False
+    )
+    assert (
+        library_api._build_library_actions(
+            kind="file", file_format="cbr", tracking_scope="tracked_file"
+        ).can_convert
+        is True
+    )
+    assert (
+        library_api._build_library_actions(
+            kind="folder",
+            file_format=None,
+            tracking_scope="tracked_descendant_folder",
+        ).can_delete
+        is False
+    )
     assert library_api._kind_label("root") == "Library Root"
     assert library_api._kind_label("folder") == "Folder"
     assert library_api._kind_label("file") == "File"
@@ -780,6 +917,31 @@ async def test_library_browser_validation_and_wrapper_branches(
 
     root = LibraryRoot(name="Root", path=str(root_path), enabled=True)
     db_session.add(root)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            LibraryFile(
+                library_root_id=root.id,
+                file_path=str(source),
+                file_name=source.name,
+                file_size=source.stat().st_size,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.fromtimestamp(source.stat().st_mtime, tz=UTC),
+                match_confidence=MatchConfidence.UNMATCHED,
+                has_comicinfo=False,
+            ),
+            LibraryFile(
+                library_root_id=root.id,
+                file_path=str(convertible),
+                file_name=convertible.name,
+                file_size=convertible.stat().st_size,
+                file_format=FileFormat.CBR,
+                file_modified_at=datetime.fromtimestamp(convertible.stat().st_mtime, tz=UTC),
+                match_confidence=MatchConfidence.UNMATCHED,
+                has_comicinfo=False,
+            ),
+        ]
+    )
     await db_session.flush()
 
     with pytest.raises(ValidationError, match="Library roots cannot be renamed"):
