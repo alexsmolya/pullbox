@@ -167,6 +167,47 @@ def _resolve_import_file_issue_id(
     return None
 
 
+async def _requires_serial_skip_existing_processing(
+    session: AsyncSession,
+    job: ImportJob,
+    *,
+    resolved_series_id: int,
+    importable_files: list[ImportedFile],
+    load_media_settings: LoadMediaSettingsFunc,
+) -> bool:
+    media_settings = await load_media_settings(session, job)
+    if media_settings["skip_existing_files"].lower() != "true":
+        return False
+
+    cv_id_to_issue, number_to_issue = await load_issue_lookup_for_series(
+        session,
+        resolved_series_id,
+    )
+    cv_id_to_issue_id = {
+        comicvine_id: issue.id
+        for comicvine_id, issue in cv_id_to_issue.items()
+        if issue.id is not None
+    }
+    number_to_issue_id = {
+        issue_number: issue.id
+        for issue_number, issue in number_to_issue.items()
+        if issue.id is not None
+    }
+    seen_issue_ids: set[int] = set()
+    for imp_file in importable_files:
+        resolved_issue_id = _resolve_import_file_issue_id(
+            imp_file,
+            cv_id_to_issue_id=cv_id_to_issue_id,
+            number_to_issue_id=number_to_issue_id,
+        )
+        if resolved_issue_id is None:
+            continue
+        if resolved_issue_id in seen_issue_ids:
+            return True
+        seen_issue_ids.add(resolved_issue_id)
+    return False
+
+
 def _placeholder_issue_target_from_diagnostics(
     imp_file: ImportedFile,
 ) -> _PlaceholderIssueTarget | None:
@@ -441,12 +482,20 @@ async def process_import_series_files(
         )
 
     effective_worker_count = max(int(file_worker_count or 1), 1)
-    if (
+    parallel_processing_available = (
         _file_ids_override is None
         and session_factory is not None
         and effective_worker_count > 1
         and len(importable_file_ids) > 1
+    )
+    if parallel_processing_available and not await _requires_serial_skip_existing_processing(
+        session,
+        job,
+        resolved_series_id=resolved_series_id,
+        importable_files=importable_files,
+        load_media_settings=load_media_settings,
     ):
+        assert session_factory is not None
         await session.commit()
         file_index_by_id = {
             int(imp_file_id): index
