@@ -77,7 +77,9 @@ async def test_search_wanted_retries_search_phase_after_sqlite_lock(monkeypatch)
 
     await search_task.search_wanted()
 
-    assert factory.commit_attempts == 2
+    # One failed fan-out commit, one successful retry, then one per-attempt
+    # search-history commit for the now-visible no-match result.
+    assert factory.commit_attempts == 3
     assert factory.rollback_attempts == 1
     assert factory.session_count == 3
     assert search_mock.await_count == 2

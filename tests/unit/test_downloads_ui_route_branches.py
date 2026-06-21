@@ -182,6 +182,8 @@ def test_downloads_normalizers_and_filter_helpers_cover_edge_values() -> None:
     assert downloads_routes.normalize_download_queue_client_state(" Repairing ") == "Repairing"
     assert downloads_routes.normalize_download_queue_client_state("   ") is None
     assert downloads_routes.download_queue_client_state_token("Loading PARs") == "loadingpars"
+    assert downloads_routes.is_download_queue_pollable_state(DownloadState.FINALIZING) is True
+    assert downloads_routes.is_download_queue_pollable_state(DownloadState.COMPLETED) is False
     assert downloads_routes.is_download_queue_finalization_state("Loading PARs") is True
     assert downloads_routes.is_download_queue_finalization_state(None) is False
     assert len(downloads_routes.get_download_history_filters("cancelled", "sabnzbd")) == 3

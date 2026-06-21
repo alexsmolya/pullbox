@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
 
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from pullbox.core.file_ops import LibraryFileRegistrationOutcome
     from pullbox.core.library_permissions import LibraryPermissionPolicy
@@ -52,6 +52,9 @@ async def process_series_files_for_import(
     duplicate_mode: bool = False,
     series_id_override: int | None = None,
     report_file_progress: ReportFileProgressFunc | None = None,
+    defer_comicinfo_enrichment: bool = True,
+    file_worker_count: int = 1,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
     load_media_settings: LoadMediaSettingsFunc,
     load_trash_dir: LoadTrashDirFunc,
     load_ingest_policy: LoadIngestPolicyFunc,
@@ -74,12 +77,14 @@ async def process_series_files_for_import(
         issue: Issue,
         *,
         source_path: Path | None = None,
+        defer_issue_enrichment: bool = False,
     ) -> dict[str, Any]:
         return await build_cached_comicinfo_payload(
             session,
             job,
             issue,
             source_path=source_path,
+            defer_issue_enrichment=defer_issue_enrichment,
         )
 
     async def register_import_file(
@@ -141,4 +146,7 @@ async def process_series_files_for_import(
         register_file=register_import_file,
         move_to_trash=move_to_trash,
         report_file_progress=report_file_progress,
+        defer_comicinfo_enrichment=defer_comicinfo_enrichment,
+        file_worker_count=file_worker_count,
+        session_factory=session_factory,
     )

@@ -18,6 +18,20 @@ os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-series-detail-u
 _EN_DASH = "\u2013"
 
 
+def _series_monitor_control_html(html: str) -> str:
+    """Return the isolated monitor toggle markup from the rendered series page."""
+    start = html.index('data-testid="series-action-monitor-control"')
+    end = html.index('data-testid="series-action-search"', start)
+    return html[start:end]
+
+
+def _series_alternate_names_html(html: str) -> str:
+    """Return the isolated alternate names panel markup from the rendered series page."""
+    start = html.index('data-testid="series-detail-alternate-names"')
+    end = html.index('data-testid="series-detail-hero-actions-panel"', start)
+    return html[start:end]
+
+
 @pytest.fixture
 async def seeded_series_detail_ui_data(sec_db) -> dict[str, int]:  # type: ignore[no-untyped-def]
     """Seed a series-detail dataset with issues, related series, and file data."""
@@ -108,7 +122,7 @@ async def seeded_series_detail_ui_data(sec_db) -> dict[str, int]:  # type: ignor
         )
 
         await session.commit()
-        return {"series_id": series.id}
+        return {"series_id": series.id, "paused_series_id": child.id}
 
 
 @pytest.mark.asyncio
@@ -174,11 +188,24 @@ class TestSeriesDetailRouteContracts:
         assert 'data-testid="series-detail-meta-grid"' in response.text
         assert 'data-testid="series-detail-alternate-names"' in response.text
         assert 'data-testid="series-detail-alternate-names-list"' in response.text
+        alternate_names_html = _series_alternate_names_html(response.text)
+        form_index = alternate_names_html.index('class="series-domain-alt-form"')
+        list_index = alternate_names_html.index('data-testid="series-detail-alternate-names-list"')
+        assert form_index < list_index
+        assert "The Bat" in alternate_names_html
+        assert "Dark Knight" in alternate_names_html
+        assert ">None<" not in alternate_names_html
         assert 'data-testid="series-detail-actions"' in response.text
         assert 'data-testid="series-detail-actions-title"' in response.text
         assert 'data-testid="series-action-monitor-control"' in response.text
         assert 'data-testid="series-action-monitor-label"' in response.text
+        monitor_control_html = _series_monitor_control_html(response.text)
+        assert ">Monitored</span>" in monitor_control_html
+        assert "Toggle monitoring for this series" in monitor_control_html
         assert 'data-testid="series-action-monitor-toggle"' in response.text
+        assert ':checked="monitored"' in monitor_control_html
+        assert ":aria-checked=\"monitored ? 'true' : 'false'\"" in monitor_control_html
+        assert '@change="toggleMonitoring($event.target.checked)"' in monitor_control_html
         assert 'data-testid="series-action-refresh"' in response.text
         assert 'data-testid="series-action-search"' in response.text
         assert 'data-testid="series-action-delete"' in response.text
@@ -217,6 +244,57 @@ class TestSeriesDetailRouteContracts:
         assert "window.location.reload()" not in response.text
         assert "window.__autoSearching" not in response.text
         assert "htmx.ajax('POST', '/htmx/series/" not in response.text
+
+    async def test_unmonitored_series_action_switch_uses_positive_monitoring_semantics(
+        self,
+        authenticated_client,
+        seeded_series_detail_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(
+            f"/series/{seeded_series_detail_ui_data['paused_series_id']}"
+        )
+
+        assert response.status_code == 200
+        assert "monitored: false" in response.text
+        assert 'data-testid="series-action-monitor-label"' in response.text
+        monitor_control_html = _series_monitor_control_html(response.text)
+        assert ">Monitored</span>" in monitor_control_html
+        assert "Toggle monitoring for this series" in monitor_control_html
+        assert 'class="pill pill-neutral">Paused</span>' in response.text
+        assert ':checked="monitored"' in monitor_control_html
+        assert ":aria-checked=\"monitored ? 'true' : 'false'\"" in monitor_control_html
+        assert '@change="toggleMonitoring($event.target.checked)"' in monitor_control_html
+
+    async def test_alternate_names_empty_state_has_no_none_placeholder(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.library import LibraryRoot
+        from pullbox.models.series import Series
+
+        async with sec_db() as session:
+            root = LibraryRoot(name="Series UI Test Library", path="/tmp/series-ui", enabled=True)
+            session.add(root)
+            await session.flush()
+            series = Series(
+                title="No Alternates",
+                sort_title="No Alternates",
+                monitored=True,
+                library_root_id=root.id,
+                alternate_names=[],
+            )
+            session.add(series)
+            await session.commit()
+            series_id = series.id
+
+        response = await authenticated_client.get(f"/series/{series_id}")
+
+        assert response.status_code == 200
+        alternate_names_html = _series_alternate_names_html(response.text)
+        assert 'data-testid="series-detail-alternate-names-list"' in alternate_names_html
+        assert ">None<" not in alternate_names_html
+        assert 'class="series-domain-alt-form"' in alternate_names_html
 
     @pytest.mark.parametrize(
         ("catalog_state", "expected_copy"),

@@ -110,11 +110,12 @@
                 </button>
 
                 <button
-                  hx-put="/api/v1/series/{{ s.id }}"
+                  hx-post="/pull-list/{{ s.id }}/monitoring"
                   hx-vals='{"monitored": {{ "false" if s.monitored else "true" }}}'
-                  hx-swap="none"
-                  hx-on::after-request="window.location.reload()"
-                  class="downloads-action-btn{% if s.monitored %} is-warn{% endif %}"
+                  hx-include="#pull-list-filter-form"
+                  hx-target="#pull-list-results-body"
+                  hx-swap="outerHTML"
+                  class="series-monitor-badge pull-list-monitor-toggle{% if not s.monitored %} is-paused{% endif %}"
                   data-testid="pull-list-toggle-monitor-{{ s.id }}"
                   data-tip="{{ 'Pause monitoring' if s.monitored else 'Resume monitoring' }}"
                   data-tip-pos="left"
@@ -122,12 +123,12 @@
                   type="button"
                 >
                   {% if s.monitored %}
-                    <svg fill="currentColor" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-                      <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z"/>
+                    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+                      <path d="M5 10.6 8.2 14 15 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>
                     </svg>
                   {% else %}
                     <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z"/>
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M10 4v12m6-6H4"></path>
                     </svg>
                   {% endif %}
                 </button>

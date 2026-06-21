@@ -58,6 +58,18 @@ class _TargetedIssueSummaryProvider(_IssueSummaryProvider):
         return [summary for summary in self.summaries if summary.issue_number in requested]
 
 
+class _ExplodingIssueSummaryProvider:
+    async def get_issues_for_series(self, series_provider_id: str) -> list[IssueSummary]:
+        raise AssertionError("ComicVine full issue fetch should not be called")
+
+    async def get_issues_for_series_by_numbers(
+        self,
+        series_provider_id: str,
+        issue_numbers: list[float],
+    ) -> list[IssueSummary]:
+        raise AssertionError("ComicVine targeted issue fetch should not be called")
+
+
 async def _create_job(session: AsyncSession) -> ImportJob:
     job = ImportJob(
         source_path="/tmp/comics",
@@ -261,6 +273,62 @@ async def test_load_file_match_target_index_fetches_only_requested_issue_numbers
     assert provider.requested_issue_numbers == [2483.0]
     assert provider.full_fetch_called is False
     assert target_index.number_map == {2483.0: (None, 1248300, False, None, "Prog 2483")}
+
+
+async def test_load_file_match_target_index_uses_trusted_mylar_issue_targets_without_provider(
+    db_session: AsyncSession,
+) -> None:
+    job = await _create_job(db_session)
+    imported_series = ImportedSeries(
+        import_job_id=job.id,
+        raw_series_name="Batman",
+        status=ImportSeriesStatus.MATCHED,
+        cv_id=47050,
+        cv_issue_count=85,
+    )
+    db_session.add(imported_series)
+    await db_session.flush()
+    imp_file = ImportedFile(
+        import_job_id=job.id,
+        import_series_id=imported_series.id,
+        file_path="/tmp/Batman 001 (2016).cbz",
+        file_name="Batman 001 (2016).cbz",
+        file_size=1024,
+        file_format="cbz",
+        parsed_series="Batman",
+        parsed_issue_number=1.0,
+        comicvine_issue_id=500001,
+        status=ImportedFileStatus.PENDING,
+        diagnostics={
+            "comicvine_series_id": 47050,
+            "metadata_signals": {
+                "comicvine_issue_id": "mylar3",
+                "comicvine_series_id": "mylar3",
+            },
+            "source_metadata": {
+                "mylar3_issue": {
+                    "issue_id": 500001,
+                    "issue_number": "1",
+                    "title": "I Am Gotham",
+                    "release_date": "2016-08-01",
+                }
+            },
+        },
+    )
+    db_session.add(imp_file)
+    await db_session.flush()
+
+    target_index = await load_file_match_target_index(
+        db_session,
+        imported_series,
+        duplicate_series=False,
+        metadata_provider=_ExplodingIssueSummaryProvider(),
+        files=[imp_file],
+    )
+
+    assert target_index.existing_series is None
+    assert target_index.cv_id_map == {500001: (None, 500001, False, None, "I Am Gotham")}
+    assert target_index.number_map == {1.0: (None, 500001, False, None, "I Am Gotham")}
 
 
 async def test_load_file_match_target_index_full_fetches_single_issue_volume_subtitle(

@@ -39,6 +39,10 @@ def build_status_update(
         update["state"] = DownloadState.DOWNLOADING
         if status.downloaded_path and not existing_path:
             update["downloaded_path"] = status.downloaded_path
+    elif status.state == "finalizing":
+        update["state"] = DownloadState.FINALIZING
+        if status.downloaded_path and not existing_path:
+            update["downloaded_path"] = status.downloaded_path
     elif status.state == "paused":
         update["state"] = DownloadState.PAUSED
 

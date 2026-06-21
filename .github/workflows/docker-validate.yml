@@ -175,15 +175,23 @@ jobs:
         run: |
           docker run -d \
             --name pullbox-validate \
-            -p 8585:8585 \
+            -p 127.0.0.1::8585 \
             -e PULLBOX_SECRET_KEY=docker-validate-secret-key-for-ci \
             -e PULLBOX_LOG_LEVEL=WARNING \
             pullbox:validate
+          validate_port="$(docker port pullbox-validate 8585/tcp | awk -F: 'NR == 1 { print $NF }')"
+          if [ -z "${validate_port}" ]; then
+            echo "::error::Could not determine Pullbox validation port."
+            docker port pullbox-validate || true
+            exit 1
+          fi
+          echo "PULLBOX_VALIDATE_URL=http://127.0.0.1:${validate_port}" >> "$GITHUB_ENV"
+          echo "Container listening on http://127.0.0.1:${validate_port}"
 
       - name: Wait for healthy
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:8585/ping > /dev/null 2>&1; then
+            if curl -sf "${PULLBOX_VALIDATE_URL}/ping" > /dev/null 2>&1; then
               echo "Container healthy after ${i}s"
               exit 0
             fi

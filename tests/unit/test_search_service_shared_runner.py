@@ -16,6 +16,7 @@ from pullbox.models.config import SystemConfig
 from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import MatchConfidence
+from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.base import ProviderRegistry, ReleaseResult
 from pullbox.services import search_service
@@ -212,6 +213,120 @@ async def test_load_issue_and_wanted_targets_filter_and_shape(
 
         wanted_targets = await load_wanted_issue_search_targets(session, limit=10)
         assert [item.issue_id for item in wanted_targets] == [ids["wanted_issue_id"]]
+
+
+@pytest.mark.asyncio
+async def test_global_wanted_targets_skip_pending_intervention_matches(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with db_factory() as session:
+        series = Series(
+            comicvine_id=301,
+            title="Fair Sweep",
+            sort_title="fair sweep",
+            year_start=2026,
+            status=SeriesStatus.CONTINUING,
+            series_type=SeriesType.STANDARD,
+            monitored=True,
+            issue_count=2,
+        )
+        session.add(series)
+        await session.flush()
+        pending_issue = Issue(
+            series_id=series.id,
+            comicvine_id=401,
+            issue_number=1.0,
+            title="Issue #1",
+            status=IssueStatus.WANTED,
+            issue_type=IssueType.ISSUE,
+        )
+        next_issue = Issue(
+            series_id=series.id,
+            comicvine_id=402,
+            issue_number=2.0,
+            title="Issue #2",
+            status=IssueStatus.WANTED,
+            issue_type=IssueType.ISSUE,
+        )
+        session.add_all([pending_issue, next_issue])
+        await session.flush()
+        session.add(
+            PendingMatch(
+                issue_id=pending_issue.id,
+                release_title="Fair Sweep 001",
+                download_url="https://example.test/fair-sweep-001",
+                confidence="medium",
+                status=PendingMatchStatus.PENDING,
+            )
+        )
+        await session.commit()
+
+        targets = await load_wanted_issue_search_targets(session, limit=10)
+
+    assert [target.issue_id for target in targets] == [next_issue.id]
+
+
+@pytest.mark.asyncio
+async def test_global_wanted_targets_resume_after_cursor(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with db_factory() as session:
+        first_series = Series(
+            comicvine_id=501,
+            title="First Sweep",
+            sort_title="first sweep",
+            year_start=2026,
+            status=SeriesStatus.CONTINUING,
+            series_type=SeriesType.STANDARD,
+            monitored=True,
+            issue_count=2,
+        )
+        second_series = Series(
+            comicvine_id=502,
+            title="Second Sweep",
+            sort_title="second sweep",
+            year_start=2026,
+            status=SeriesStatus.CONTINUING,
+            series_type=SeriesType.STANDARD,
+            monitored=True,
+            issue_count=1,
+        )
+        session.add_all([first_series, second_series])
+        await session.flush()
+        first_issue = Issue(
+            series_id=first_series.id,
+            comicvine_id=601,
+            issue_number=1.0,
+            title="Issue #1",
+            status=IssueStatus.WANTED,
+            issue_type=IssueType.ISSUE,
+        )
+        second_issue = Issue(
+            series_id=first_series.id,
+            comicvine_id=602,
+            issue_number=2.0,
+            title="Issue #2",
+            status=IssueStatus.WANTED,
+            issue_type=IssueType.ISSUE,
+        )
+        third_issue = Issue(
+            series_id=second_series.id,
+            comicvine_id=603,
+            issue_number=1.0,
+            title="Issue #1",
+            status=IssueStatus.WANTED,
+            issue_type=IssueType.ISSUE,
+        )
+        session.add_all([first_issue, second_issue, third_issue])
+        await session.commit()
+
+        targets = await load_wanted_issue_search_targets(
+            session,
+            limit=2,
+            after=(first_series.id, first_issue.issue_number, first_issue.id),
+        )
+
+    assert [target.issue_id for target in targets] == [second_issue.id, third_issue.id]
 
 
 def test_issue_query_builders_cover_fast_deep_and_fallback_variants() -> None:

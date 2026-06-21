@@ -79,7 +79,18 @@ class TestSeriesDetailPage:
         assert refresh_box is not None
         assert abs(monitor_box["height"] - refresh_box["height"]) <= 2
         assert series.monitor_label.text_content() == "Monitored"
-        assert "Unmonitored" not in (series.monitor_control.text_content() or "")
+        assert "Paused" not in (series.monitor_control.text_content() or "")
+
+    def test_unmonitored_series_renders_monitor_switch_off(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series = SeriesDetailPage(authed_page, seeded_server)
+        series.goto(2)
+
+        assert series.monitor_label.text_content() == "Monitored"
+        assert not series.monitor_toggle.is_checked()
 
     def test_status_row_uses_real_pill_contracts(
         self,

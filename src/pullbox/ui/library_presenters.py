@@ -61,7 +61,20 @@ class LibraryBrowserTreeNodeView:
     has_children: bool = False
     is_active: bool = False
     is_open: bool = False
+    can_mutate: bool = False
     children: tuple[LibraryBrowserTreeNodeView, ...] = ()
+
+
+@dataclass(frozen=True)
+class LibraryBrowserCatalogEntry:
+    """DB-backed entry that is safe to expose in the Library browser."""
+
+    path: str
+    kind: str
+    size_bytes: int = 0
+    modified_at: datetime | None = None
+    file_format: str | None = None
+    can_mutate: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +95,7 @@ class LibraryBrowserRowView:
     type_label: str
     type_tone: str
     modified_label: str
+    can_mutate: bool = False
 
 
 @dataclass(frozen=True)

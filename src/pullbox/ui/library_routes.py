@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import os
 import shutil
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, date, datetime
@@ -21,6 +20,7 @@ from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchCo
 from pullbox.models.series import Series
 from pullbox.ui.library_presenters import (
     LibraryBreadcrumbView,
+    LibraryBrowserCatalogEntry,
     LibraryBrowserRowView,
     LibraryBrowserSortableRow,
     LibraryBrowserTreeNodeView,
@@ -45,6 +45,7 @@ router = APIRouter()
 
 __all__ = [
     "LibraryBreadcrumbView",
+    "LibraryBrowserCatalogEntry",
     "LibraryBrowserRowView",
     "LibraryBrowserSortableRow",
     "LibraryBrowserTreeNodeView",
@@ -65,6 +66,7 @@ __all__ = [
     "library_is_convertible_file_format",
     "library_mix_label",
     "library_stat_tone",
+    "load_library_browser_catalog_entries",
     "load_library_series_preview_metrics",
     "normalize_library_browser_sort",
 ]
@@ -219,12 +221,124 @@ async def load_library_series_preview_metrics(
     return metrics
 
 
+def _path_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_catalog_path(path_value: str | None) -> Path | None:
+    if not path_value:
+        return None
+    with contextlib.suppress(OSError, RuntimeError, ValueError):
+        return Path(path_value).expanduser().resolve(strict=False)
+    return None
+
+
+def _matching_catalog_root(path: Path, roots: Sequence[Path]) -> Path | None:
+    sorted_roots = sorted(roots, key=lambda root: len(root.parts), reverse=True)
+    return next(
+        (root for root in sorted_roots if path == root or _path_within_root(path, root)),
+        None,
+    )
+
+
+def _add_catalog_folder_path(
+    entries: dict[str, LibraryBrowserCatalogEntry],
+    *,
+    folder_path: Path,
+    root_path: Path,
+    can_mutate: bool = False,
+) -> None:
+    """Add a folder and its ancestors, excluding the library root itself."""
+    with contextlib.suppress(ValueError):
+        relative_parts = folder_path.relative_to(root_path).parts
+        cursor = root_path
+        for part in relative_parts:
+            cursor = cursor / part
+            key = str(cursor)
+            existing = entries.get(key)
+            entries[key] = LibraryBrowserCatalogEntry(
+                path=key,
+                kind="folder",
+                size_bytes=existing.size_bytes if existing else 0,
+                modified_at=existing.modified_at if existing else None,
+                file_format=existing.file_format if existing else None,
+                can_mutate=(existing.can_mutate if existing else False)
+                or (cursor == folder_path and can_mutate),
+            )
+
+
+async def load_library_browser_catalog_entries(
+    session: AsyncSession,
+    library_roots: Sequence[LibraryRoot],
+) -> tuple[LibraryBrowserCatalogEntry, ...]:
+    """Load the DB-backed Library browser catalog without scanning arbitrary disk entries."""
+    root_paths = tuple(
+        Path(root.path).expanduser().resolve(strict=False) for root in library_roots if root.enabled
+    )
+    if not root_paths:
+        return ()
+
+    entries: dict[str, LibraryBrowserCatalogEntry] = {}
+
+    series_result = await session.execute(select(Series.path).where(Series.path.is_not(None)))
+    for series_path in series_result.scalars().all():
+        resolved_path = _resolve_catalog_path(series_path)
+        if resolved_path is None:
+            continue
+        root_path = _matching_catalog_root(resolved_path, root_paths)
+        if root_path is None:
+            continue
+        _add_catalog_folder_path(
+            entries,
+            folder_path=resolved_path,
+            root_path=root_path,
+            can_mutate=True,
+        )
+
+    file_result = await session.execute(
+        select(
+            LibraryFile.file_path,
+            LibraryFile.file_size,
+            LibraryFile.file_modified_at,
+            LibraryFile.file_format,
+        )
+    )
+    for file_path, file_size, modified_at, file_format in file_result.all():
+        resolved_path = _resolve_catalog_path(file_path)
+        if resolved_path is None:
+            continue
+        root_path = _matching_catalog_root(resolved_path, root_paths)
+        if root_path is None:
+            continue
+        _add_catalog_folder_path(
+            entries,
+            folder_path=resolved_path.parent,
+            root_path=root_path,
+            can_mutate=True,
+        )
+        entries[str(resolved_path)] = LibraryBrowserCatalogEntry(
+            path=str(resolved_path),
+            kind="file",
+            size_bytes=int(file_size or 0),
+            modified_at=modified_at if isinstance(modified_at, datetime) else None,
+            file_format=file_format.value.upper() if file_format else None,
+            can_mutate=True,
+        )
+
+    return tuple(entries.values())
+
+
 def build_library_browser_snapshot(
     current_path: Path | None,
     *,
     active_root: Path | None,
     library_roots: Sequence[LibraryRoot],
     series_metrics: Mapping[str, tuple[int, int, datetime | None]],
+    catalog_entries: Sequence[LibraryBrowserCatalogEntry],
     total_size_bytes: int,
     browser_sort: str,
 ) -> tuple[
@@ -248,62 +362,77 @@ def build_library_browser_snapshot(
     sort_field = normalized_sort.lstrip("-")
     sort_desc = normalized_sort.startswith("-")
 
-    def _scan() -> tuple[
-        list[tuple[str, str, bool, int | None, datetime | None]],
-        list[tuple[str, str, bool, int | None, datetime | None]],
-    ]:
-        directories: list[tuple[str, str, bool, int | None, datetime | None]] = []
-        files: list[tuple[str, str, bool, int | None, datetime | None]] = []
-        with os.scandir(resolved_current) as entries:
-            for entry in entries:
-                if entry.name.startswith("."):
-                    continue
-                try:
-                    is_dir = entry.is_dir(follow_symlinks=False)
-                    stat = entry.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                modified_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
-                record = (
-                    entry.name,
-                    entry.path,
-                    is_dir,
-                    stat.st_size if not is_dir else None,
-                    modified_at,
-                )
-                if is_dir:
-                    directories.append(record)
-                else:
-                    files.append(record)
-        directories.sort(key=lambda row: row[0].lower())
-        files.sort(key=lambda row: row[0].lower())
-        return directories, files
+    enabled_root_paths = tuple(
+        Path(root.path).expanduser().resolve(strict=False) for root in library_roots if root.enabled
+    )
+    catalog_by_path: dict[Path, LibraryBrowserCatalogEntry] = {}
+    for entry in catalog_entries:
+        entry_path = _resolve_catalog_path(entry.path)
+        if entry_path is None or entry_path.name.startswith("."):
+            continue
+        if _matching_catalog_root(entry_path, enabled_root_paths) is None:
+            continue
+        catalog_by_path[entry_path] = entry
 
-    def _count_children(path_str: str) -> int:
-        try:
-            with os.scandir(path_str) as children:
-                return sum(1 for child in children if not child.name.startswith("."))
-        except OSError:
-            return 0
+    folder_children_by_parent: dict[Path, list[tuple[Path, LibraryBrowserCatalogEntry]]] = {}
+    file_children_by_parent: dict[Path, list[tuple[Path, LibraryBrowserCatalogEntry]]] = {}
+    child_entries_by_parent: dict[Path, list[tuple[Path, LibraryBrowserCatalogEntry]]] = {}
+    descendant_file_sizes: dict[Path, int] = {}
+    descendant_modified_at: dict[Path, datetime] = {}
 
-    directories, files = _scan()
+    for entry_path, entry in catalog_by_path.items():
+        child_entries_by_parent.setdefault(entry_path.parent, []).append((entry_path, entry))
+        if entry.kind == "folder":
+            folder_children_by_parent.setdefault(entry_path.parent, []).append((entry_path, entry))
+            continue
+        if entry.kind != "file":
+            continue
+        file_children_by_parent.setdefault(entry_path.parent, []).append((entry_path, entry))
 
-    def _scan_visible_directories(path_obj: Path) -> list[Path]:
-        directories: list[Path] = []
-        try:
-            with os.scandir(path_obj) as entries:
-                for entry in entries:
-                    if entry.name.startswith("."):
-                        continue
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            directories.append(Path(entry.path))
-                    except OSError:
-                        continue
-        except OSError:
-            return []
-        directories.sort(key=lambda item: item.name.lower())
-        return directories
+        root_path = _matching_catalog_root(entry_path, enabled_root_paths)
+        if root_path is None:
+            continue
+        cursor = entry_path.parent
+        while True:
+            descendant_file_sizes[cursor] = descendant_file_sizes.get(cursor, 0) + int(
+                entry.size_bytes or 0
+            )
+            if isinstance(entry.modified_at, datetime):
+                current_modified = descendant_modified_at.get(cursor)
+                if current_modified is None or entry.modified_at > current_modified:
+                    descendant_modified_at[cursor] = entry.modified_at
+            if cursor == root_path or cursor == cursor.parent:
+                break
+            cursor = cursor.parent
+
+    for child_entries in (
+        child_entries_by_parent,
+        folder_children_by_parent,
+        file_children_by_parent,
+    ):
+        for entries in child_entries.values():
+            entries.sort(key=lambda item: item[0].name.lower())
+
+    def _child_entries(
+        path_obj: Path,
+        *,
+        kind: str | None = None,
+    ) -> list[tuple[Path, LibraryBrowserCatalogEntry]]:
+        if kind == "folder":
+            return list(folder_children_by_parent.get(path_obj, ()))
+        if kind == "file":
+            return list(file_children_by_parent.get(path_obj, ()))
+        return list(child_entries_by_parent.get(path_obj, ()))
+
+    def _catalog_modified_at(path_obj: Path, entry: LibraryBrowserCatalogEntry) -> datetime | None:
+        if isinstance(entry.modified_at, datetime):
+            return entry.modified_at
+        with contextlib.suppress(OSError):
+            return datetime.fromtimestamp(path_obj.stat().st_mtime, tz=UTC)
+        return None
+
+    directories = _child_entries(resolved_current, kind="folder")
+    files = _child_entries(resolved_current, kind="file")
 
     def _build_tree_node(
         node_path: Path,
@@ -312,7 +441,9 @@ def build_library_browser_snapshot(
         node_name: str,
         root_path: Path,
     ) -> LibraryBrowserTreeNodeView:
-        child_paths = _scan_visible_directories(node_path)
+        child_paths = [
+            child_path for child_path, _entry in _child_entries(node_path, kind="folder")
+        ]
         children = tuple(
             _build_tree_node(
                 child_path,
@@ -323,6 +454,7 @@ def build_library_browser_snapshot(
             for index, child_path in enumerate(child_paths, start=1)
         )
         is_open = node_path == resolved_current or node_path in resolved_current.parents
+        node_entry = catalog_by_path.get(node_path)
         return LibraryBrowserTreeNodeView(
             key=node_key,
             name=node_name,
@@ -334,6 +466,7 @@ def build_library_browser_snapshot(
             has_children=bool(children),
             is_active=node_path == resolved_current,
             is_open=is_open,
+            can_mutate=bool(getattr(node_entry, "can_mutate", False)),
             children=children,
         )
 
@@ -374,13 +507,17 @@ def build_library_browser_snapshot(
 
     sortable_rows: list[LibraryBrowserSortableRow] = []
 
-    for index, (name, entry_path, _is_dir, _file_size, modified_at) in enumerate(
-        directories, start=1
-    ):
-        metric = series_metrics.get(entry_path)
-        item_count = metric[0] if metric is not None else _count_children(entry_path)
-        size_bytes = metric[1] if metric is not None else 0
-        modified_value = metric[2] if metric and metric[2] is not None else modified_at
+    for index, (entry_path, entry) in enumerate(directories, start=1):
+        name = entry_path.name
+        metric = series_metrics.get(str(entry_path)) or series_metrics.get(entry.path)
+        item_count = metric[0] if metric is not None else len(_child_entries(entry_path))
+        size_bytes = metric[1] if metric is not None else descendant_file_sizes.get(entry_path, 0)
+        indexed_modified = descendant_modified_at.get(entry_path)
+        modified_value = (
+            metric[2]
+            if metric and metric[2] is not None
+            else indexed_modified or _catalog_modified_at(entry_path, entry)
+        )
         sortable_rows.append(
             LibraryBrowserSortableRow(
                 group=0,
@@ -392,7 +529,7 @@ def build_library_browser_snapshot(
                 row=LibraryBrowserRowView(
                     key=f"row-dir-{index}",
                     name=name,
-                    path=entry_path,
+                    path=str(entry_path),
                     kind="folder",
                     root_path=str(resolved_root),
                     href=library_href(entry_path, normalized_sort),
@@ -406,25 +543,29 @@ def build_library_browser_snapshot(
                     modified_label=(
                         _localtime(modified_value) if isinstance(modified_value, datetime) else "—"
                     ),
+                    can_mutate=bool(getattr(entry, "can_mutate", False)),
                 ),
             )
         )
 
-    for index, (name, entry_path, _is_dir, file_size, modified_at) in enumerate(files, start=1):
-        file_format = library_file_format_label(name)
+    for index, (entry_path, entry) in enumerate(files, start=1):
+        name = entry_path.name
+        file_size = int(entry.size_bytes or 0)
+        modified_at = _catalog_modified_at(entry_path, entry)
+        file_format = entry.file_format or library_file_format_label(name)
         type_label = file_format or "FILE"
         sortable_rows.append(
             LibraryBrowserSortableRow(
                 group=1,
                 name=name.lower(),
                 items=0,
-                size=int(file_size or 0),
+                size=file_size,
                 type=type_label.lower(),
                 modified=modified_at or datetime.min.replace(tzinfo=UTC),
                 row=LibraryBrowserRowView(
                     key=f"row-file-{index}",
                     name=name,
-                    path=entry_path,
+                    path=str(entry_path),
                     kind="file",
                     root_path=str(resolved_root),
                     href="",
@@ -432,12 +573,13 @@ def build_library_browser_snapshot(
                     file_format=file_format,
                     is_convertible=library_is_convertible_file_format(file_format),
                     item_count_label="—",
-                    size_label=_filesize(int(file_size or 0)),
+                    size_label=_filesize(file_size),
                     type_label=type_label,
                     type_tone=library_file_type_tone(type_label),
                     modified_label=(
                         _localtime(modified_at) if isinstance(modified_at, datetime) else "—"
                     ),
+                    can_mutate=bool(getattr(entry, "can_mutate", True)),
                 ),
             )
         )
@@ -521,12 +663,14 @@ async def build_library_workspace_view(
             disk_free_bytes = 0
 
     series_metrics = await load_library_series_preview_metrics(session, root_path)
+    catalog_entries = await load_library_browser_catalog_entries(session, enabled_roots)
     snapshot = await asyncio.to_thread(
         build_library_browser_snapshot,
         current_path,
         active_root=root_path,
         library_roots=enabled_roots,
         series_metrics=series_metrics,
+        catalog_entries=catalog_entries,
         total_size_bytes=total_size_bytes,
         browser_sort=normalized_browser_sort,
     )

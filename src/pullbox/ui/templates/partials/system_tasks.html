@@ -376,11 +376,15 @@ function taskManager(initialTasks) {
       const h = Math.floor(seconds / 3600);
       const m = Math.floor((seconds % 3600) / 60);
       const s = Math.floor(seconds % 60);
-      const parts = [];
-      if (h > 0) parts.push(h.toString().padStart(2, '0'));
-      parts.push(m.toString().padStart(2, '0'));
-      parts.push(s.toString().padStart(2, '0'));
-      return parts.join(':');
+      if (h > 0) {
+        const hourUnit = h === 1 ? 'hr' : 'hrs';
+        return (
+          h + ' ' + hourUnit + ' ' +
+          m.toString().padStart(2, '0') + ' min ' +
+          s.toString().padStart(2, '0') + ' sec'
+        );
+      }
+      return m + ' min ' + s.toString().padStart(2, '0') + ' sec';
     },
 
     timeAgo(isoStr) {

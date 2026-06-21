@@ -519,7 +519,7 @@ class TestAddSeriesPage:
         assert backdrop_box["y"] <= 1
         assert backdrop_box["height"] >= 1098
         assert root_field.is_disabled()
-        assert "Library" in (root_field.input_value() or "")
+        assert "Comics Directory" in (root_field.input_value() or "")
         assert "/" not in (folder_preview.text_content() or "")
         assert (folder_preview.text_content() or "").strip() == "Ultimate Spider-Man (2024)"
         for theme in ("dark", "light"):

@@ -58,6 +58,7 @@ _STAGE_LABELS: dict[str, str] = {
     "scanning": "Scanning files",
     "analyzing": "Analyzing discovered files",
     "matching": "Matching series against ComicVine",
+    "rebucket": "Checking volume subtitles",
     "file_matching": "Matching files to issues",
     "metadata_fetch": "Fetching ComicVine metadata",
     "metadata_fetch_wait": "Fetching ComicVine metadata",

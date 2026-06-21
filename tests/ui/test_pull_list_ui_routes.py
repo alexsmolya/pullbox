@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import pytest
@@ -12,15 +13,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.publisher import Publisher
 from pullbox.models.series import Series
+from pullbox.services.auth_service import SESSION_COOKIE_NAME, AuthService
 
 pytest_plugins = ["conftest_security"]
 
 os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-pull-list-ui")
 
 
+def _csrf_header_for(client) -> dict[str, str]:  # type: ignore[no-untyped-def]
+    token = client.cookies.get(SESSION_COOKIE_NAME) or ""
+    csrf = AuthService.get_csrf_token_from_session(token) or ""
+    return {"X-CSRF-Token": csrf}
+
+
 async def _seed_pull_list_series(
     factory,
-) -> None:
+) -> int:
     """Create a monitored series so the route can render table-level tooltip contracts."""
     async with factory() as session:
         publisher = Publisher(name="Extremely Long Publisher Name For Tooltip Coverage")
@@ -36,6 +44,7 @@ async def _seed_pull_list_series(
         )
         session.add(series)
         await session.flush()
+        series_id = series.id
 
         session.add_all(
             [
@@ -45,6 +54,7 @@ async def _seed_pull_list_series(
             ]
         )
         await session.commit()
+        return series_id
 
 
 @pytest.mark.asyncio
@@ -150,7 +160,44 @@ class TestPullListRouteContracts:
         assert "data-tooltip-auto" in response.text
         assert "data-tooltip-measure" in response.text
         assert 'class="downloads-action-btn"' in response.text
+        assert 'class="series-monitor-badge pull-list-monitor-toggle"' in response.text
         assert 'data-tip="Search wanted issues"' in response.text
         assert 'data-tip="Pause monitoring"' in response.text
         assert 'data-tip="Downloading"' in response.text
         assert 'data-tip-pos="left"' in response.text
+        assert 'hx-post="/pull-list/' in response.text
+        assert 'hx-target="#pull-list-results-body"' in response.text
+        assert 'hx-include="#pull-list-filter-form"' in response.text
+        assert 'hx-put="/api/v1/series/' not in response.text
+
+    async def test_pull_list_pause_action_updates_monitoring_and_removes_row(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        series_id = await _seed_pull_list_series(sec_db)
+
+        response = await authenticated_client.post(
+            f"/pull-list/{series_id}/monitoring",
+            data={"monitored": "false", "page": "1", "sort": "title", "filter": "", "search": ""},
+            headers={"HX-Request": "true", **_csrf_header_for(authenticated_client)},
+        )
+
+        assert response.status_code == 200
+        assert f'data-testid="pull-list-row-{series_id}"' not in response.text
+        assert 'data-testid="pull-list-empty"' in response.text
+        assert re.search(
+            r'<span class="page-dock-status-label">monitored</span>\s*'
+            r'<strong class="page-dock-status-value">0</strong>',
+            response.text,
+        )
+        assert re.search(
+            r'<span class="page-dock-status-label">paused</span>\s*'
+            r'<strong class="page-dock-status-value">1</strong>',
+            response.text,
+        )
+
+        async with sec_db() as session:
+            series = await session.get(Series, series_id)
+            assert series is not None
+            assert series.monitored is False

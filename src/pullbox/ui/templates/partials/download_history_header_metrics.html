@@ -6,7 +6,7 @@
 <div class="downloads-header-copy">
   <h1 class="downloads-title">DOWNLOAD <span>HISTORY</span></h1>
   <p class="downloads-subtitle">
-    {{ history_total }} records · {{ history_completed_count }} completed · {{ history_failed_count }} failed · {{ history_cancelled_count }} cancelled
+    {{ history_total }} download-client records · {{ history_completed_count }} completed · {{ history_failed_count }} failed · {{ history_cancelled_count }} cancelled{% if post_processing_history_total > 0 %} · {{ post_processing_history_total }} post-processing records{% endif %}
   </p>
 </div>
 

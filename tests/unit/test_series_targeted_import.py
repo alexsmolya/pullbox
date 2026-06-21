@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from pullbox.core.events import EventBus, SeriesAdded
+from pullbox.core.exceptions import NotFoundError, ValidationError
 from pullbox.models.import_job import ImportedSeries
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import IssueCatalogState, Series, SeriesStatus
@@ -173,3 +174,70 @@ async def test_hydrate_series_catalog_marks_complete_and_emits_series_added(
     assert series.issue_catalog_last_synced_at is not None
     assert series.issue_catalog_error is None
     assert emitted == [SeriesAdded(series_id=series.id, comicvine_id=166904)]
+
+
+@pytest.mark.asyncio
+async def test_targeted_import_requires_a_comicvine_id(db_session: AsyncSession) -> None:
+    metadata = MagicMock()
+    service = SeriesService(metadata_service=metadata, event_bus=EventBus())
+    import_series = ImportedSeries(raw_series_name="Unknown Candidate")
+
+    with pytest.raises(ValidationError, match="ComicVine ID is required"):
+        await service.add_from_import_review_targeted(
+            db_session,
+            import_series=import_series,
+            issue_summaries=[],
+        )
+
+
+@pytest.mark.asyncio
+async def test_hydrate_series_catalog_validates_series_before_fetching(
+    db_session: AsyncSession,
+) -> None:
+    metadata = MagicMock()
+    metadata.get_series_metadata = AsyncMock()
+    metadata.get_issue_summaries_for_series = AsyncMock()
+    service = SeriesService(metadata_service=metadata, event_bus=EventBus())
+    local_series = Series(
+        title="Local Only",
+        sort_title="local only",
+        issue_catalog_state=IssueCatalogState.PARTIAL,
+    )
+    db_session.add(local_series)
+    await db_session.flush()
+
+    with pytest.raises(NotFoundError):
+        await service.hydrate_series_catalog(db_session, 999999)
+    with pytest.raises(ValidationError, match="no ComicVine ID"):
+        await service.hydrate_series_catalog(db_session, local_series.id)
+
+    assert metadata.get_series_metadata.await_count == 0
+    assert metadata.get_issue_summaries_for_series.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_hydrate_series_catalog_marks_failed_when_provider_fetch_fails(
+    db_session: AsyncSession,
+) -> None:
+    metadata = MagicMock()
+    metadata.get_series_metadata = AsyncMock(side_effect=RuntimeError("ComicVine unavailable"))
+    metadata.get_issue_summaries_for_series = AsyncMock(return_value=[])
+    service = SeriesService(metadata_service=metadata, event_bus=EventBus())
+    series = Series(
+        comicvine_id=166904,
+        title="King Dracula",
+        sort_title="king dracula",
+        issue_catalog_state=IssueCatalogState.PARTIAL,
+        issue_catalog_error="old error",
+    )
+    db_session.add(series)
+    await db_session.flush()
+
+    with pytest.raises(RuntimeError, match="ComicVine unavailable"):
+        await service.hydrate_series_catalog(db_session, series.id)
+    await db_session.refresh(series)
+
+    assert series.issue_catalog_state == IssueCatalogState.FAILED
+    assert series.issue_catalog_error == "ComicVine unavailable"
+    assert series.issue_catalog_last_synced_at is None
+    assert series.issue_catalog_last_checked_at is None

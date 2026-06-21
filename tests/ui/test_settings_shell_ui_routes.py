@@ -181,6 +181,22 @@ class TestSettingsRouteContracts:
         assert "escapeHtml(ex.input || '')" in response.text
         assert "escapeHtml(ex.output || '')" in response.text
 
+    async def test_settings_media_naming_previews_use_stable_panel_contract(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=media")
+
+        assert response.status_code == 200
+        assert response.text.count("settings-media-preview-panel") == 5
+        assert 'data-preview-ready="false"' in response.text
+        assert 'aria-live="polite"' in response.text
+        assert 'aria-busy="false"' in response.text
+        assert "this.namingPreviewRequests" in response.text
+        assert "lockNamingPreviewHeight(el)" in response.text
+        assert "el.dataset.previewReady !==" in response.text
+        assert "settings-media-preview-panel min-h-[2rem]" not in response.text
+
     async def test_settings_renders_standardized_shell(
         self,
         authenticated_client,

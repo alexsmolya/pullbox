@@ -20,7 +20,12 @@ from pullbox.core.file_ops import (
     register_library_file_with_metadata,
 )
 from pullbox.core.mylar3_reader import Mylar3Reader
-from pullbox.models.import_job import ImportedSeries, ImportJob, ImportJobAction
+from pullbox.models.import_job import ImportedSeries, ImportJob, ImportJobAction, ImportJobStatus
+from pullbox.services.import_catalog_hydration import run_pending_catalog_hydration
+from pullbox.services.import_comicinfo_enrichment import (
+    run_pending_import_comicinfo_enrichment,
+    schedule_import_comicinfo_enrichment,
+)
 from pullbox.services.import_confirm_policy import apply_confirm_import_policy
 from pullbox.services.import_confirmation import confirm_import_job
 from pullbox.services.import_counters import job_stats as import_job_stats
@@ -46,6 +51,7 @@ from pullbox.services.import_job_controls import (
 )
 from pullbox.services.import_job_creation import create_job as create_import_job
 from pullbox.services.import_job_execution import execute_import_job
+from pullbox.services.import_job_execution_progress import progress_session_factory_for_runtime
 from pullbox.services.import_matching import (
     ComicVineMatchEvaluation as ComicVineMatchEvaluation,
 )
@@ -114,7 +120,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from pullbox.core.collection_scanner import DiscoveredSeries
     from pullbox.core.events import EventBus
@@ -549,8 +555,39 @@ class ImportService(
                 maybe_slow_item_delay=self._maybe_slow_item_delay,
                 progress_callback=progress_callback,
             )
+            completed_job = await session.get(ImportJob, job_id)
+            if completed_job is not None and completed_job.status == ImportJobStatus.COMPLETED:
+                schedule_import_comicinfo_enrichment(
+                    progress_session_factory_for_runtime(session),
+                    job_id=job_id,
+                    build_comicinfo_payload=self._build_comicinfo_payload_for_issue,
+                    apply_comicinfo=self._apply_comicinfo_to_imported_artifact,
+                    log_event=self._log_event,
+                )
         finally:
             self._import_runtime_cache_by_job.pop(job_id, None)
+
+    async def recover_pending_comicinfo_enrichment(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> int:
+        """Resume deferred ComicInfo rewrites left pending after a restart."""
+        return await run_pending_import_comicinfo_enrichment(
+            session_factory,
+            build_comicinfo_payload=self._build_comicinfo_payload_for_issue,
+            apply_comicinfo=self._apply_comicinfo_to_imported_artifact,
+            log_event=self._log_event,
+        )
+
+    async def recover_pending_catalog_hydration(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> int:
+        """Resume full catalog hydration left pending after a restart."""
+        return await run_pending_catalog_hydration(
+            session_factory,
+            series_service=self._series_service,
+        )
 
     async def _process_series_files(
         self,
@@ -590,6 +627,8 @@ class ImportService(
             log_event=self._log_event,
             register_import_library_file=self._register_import_library_file,
             report_file_progress=report_file_progress,
+            file_worker_count=self._settings.import_file_worker_count,
+            session_factory=progress_session_factory_for_runtime(session),
         )
 
     async def override_cv_id(

@@ -226,7 +226,11 @@ class SemanticMatchEngine:
             if metadata.comicvine_issue_id == wanted_issue_cv_id:
                 issue_confirmed = True
                 match_method = "comicvine_issue_id"
-            elif issue_id_signal in {MetadataSignal.COMICINFO, MetadataSignal.SIDECAR}:
+            elif issue_id_signal in {
+                MetadataSignal.COMICINFO,
+                MetadataSignal.SIDECAR,
+                MetadataSignal.MYLAR3,
+            }:
                 return IssueMatchDecision(
                     is_match=False,
                     confidence=MatchConfidence.LOW,

@@ -500,6 +500,9 @@ Recommended mapping:
 - Docker metadata rules may publish semver-derived aliases during release-tag
   builds. Review GHCR and Docker Hub tags after release and delete unwanted
   aliases deliberately.
+- Release-candidate tags publish the RC version tag and SHA tag, but they must
+  not update the `latest` container tag. Only final release tags should move
+  `latest`.
 - GHCR may show extra `unknown/unknown` entries for SBOM/provenance attestation
   manifests. Keep them; they are supply-chain metadata, not runnable Pullbox
   images.

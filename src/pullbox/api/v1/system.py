@@ -51,6 +51,10 @@ from pullbox.core.shutdown import shutdown_manager
 from pullbox.models.config import DEFAULT_SYSTEM_CONFIG, SystemConfig
 from pullbox.services.backup_runtime_service import BackupRuntimeService
 from pullbox.services.backup_service import BackupService
+from pullbox.services.restore_recovery_service import (
+    get_restore_recovery_status,
+    mark_restore_recovery_pending,
+)
 from pullbox.services.usage_stats_telemetry import queue_usage_stats_ping
 
 __all__ = [
@@ -99,6 +103,7 @@ class RestoreResponse(BaseModel):
 
     message: str = Field(description="Status message")
     restart_required: bool = True
+    restore_recovery: dict[str, Any] | None = None
 
 
 class UsageStatsPreferenceResponse(BaseModel):
@@ -301,6 +306,15 @@ async def list_backups(
     ]
 
 
+@router.get("/restore-recovery")
+async def restore_recovery_status(
+    _user: InteractiveOperatorUser,
+    _session: DbSession,
+) -> dict[str, Any]:
+    """Return post-restore aftercare status for the Backup page."""
+    return get_restore_recovery_status()
+
+
 @router.get("/backups/{filename}")
 async def download_backup(
     filename: str,
@@ -365,12 +379,15 @@ async def restore_backup(
         from pullbox.core.exceptions import NotFoundError
 
         raise NotFoundError("Backup", filename)
+    recovery_status = mark_restore_recovery_pending(filename)
     return RestoreResponse(
         message=(
             f"Database restored from {filename}. "
-            "Restart the application for changes to take effect."
+            "Restart the application for changes to take effect. "
+            "Post-restore recovery will run after restart."
         ),
         restart_required=True,
+        restore_recovery=recovery_status,
     )
 
 

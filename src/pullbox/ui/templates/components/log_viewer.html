@@ -226,29 +226,30 @@
     </div>
 
     <div
-      class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-auto font-mono text-[11px] leading-[1.6]"
+      class="log-terminal w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden font-mono text-[11px] leading-[1.6]"
       style="max-height: {{ max_height }};"
       {% if body_testid %}data-testid="{{ body_testid }}"{% endif %}
       {% if body_scroll_action %}@scroll="{{ body_scroll_action }}"{% endif %}
     >
       <template x-for="(entry, idx) in {{ entries_expr }}" :key="entry.id || idx">
-        <div>
+        <div class="min-w-0 max-w-full overflow-hidden">
           <div
-            class="log-line flex w-full min-w-0 gap-0 cursor-pointer select-none transition-colors"
+            class="log-line flex w-full min-w-0 max-w-full gap-0 overflow-hidden cursor-pointer select-none transition-colors"
             style="align-items: center;"
             :data-level="(entry.level || '').toLowerCase()"
             :class="expandedIdx === idx ? 'expanded' : ''"
+            x-bind:title="[entry.formatted_timestamp || entry.timestamp || '', (entry.level || '').toUpperCase(), entry.message || ''].filter(Boolean).join(' ')"
             @click="expandedIdx = expandedIdx === idx ? null : idx"
           >
-            <span class="shrink-0 w-[140px] px-3 py-[3px] text-pb-text-sec tabular-nums" x-text="entry.formatted_timestamp || entry.timestamp || ''"></span>
-            <span class="shrink-0 w-[52px] py-[3px]">
+            <span class="shrink-0 w-[140px] min-w-0 overflow-hidden truncate px-3 py-[3px] text-pb-text-sec tabular-nums" x-text="entry.formatted_timestamp || entry.timestamp || ''"></span>
+            <span class="shrink-0 w-[52px] min-w-0 overflow-hidden py-[3px]">
               <span
                 class="log-badge"
                 :class="'badge-' + ((entry.level || 'info').toLowerCase())"
                 x-text="(entry.level || '').toLowerCase() === 'warning' ? 'WARN' : ((entry.level || '—').toUpperCase())"
               ></span>
             </span>
-            <span class="min-w-0 flex-1 py-[3px] pr-3 text-pb-text-sec truncate" x-text="entry.message || ''"></span>
+            <span class="min-w-0 flex-1 overflow-hidden py-[3px] pr-3 text-pb-text-sec truncate" x-text="entry.message || ''"></span>
             <span class="log-line-chevron shrink-0 text-pb-text-dim" style="width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; align-self: center;">
               <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path stroke-linecap="round" stroke-linejoin="round" :d="expandedIdx === idx ? 'M6.75 9.75 12 15l5.25-5.25' : 'M9 6.75 14.25 12 9 17.25'"/>
@@ -256,7 +257,7 @@
             </span>
           </div>
 
-          <div x-show="expandedIdx === idx" x-cloak x-transition.duration.150ms class="log-detail min-w-0 max-w-full overflow-x-auto bg-pb-surface/80 border-t border-pb-border px-4 py-3 ml-[140px]">
+          <div x-show="expandedIdx === idx" x-cloak x-transition.duration.150ms class="log-detail min-w-0 max-w-full overflow-hidden bg-pb-surface/80 border-t border-pb-border px-4 py-3 ml-[140px]">
             <div class="text-[11px] leading-relaxed space-y-1">
               <div x-show="entry.file_path" class="log-path min-w-0 text-pb-text-dim">
                 <span class="text-pb-text-sec">Path:</span>
@@ -264,7 +265,7 @@
               </div>
               <pre x-show="entry.extra && entry.extra !== '{}'" class="text-[10px] whitespace-pre-wrap break-all text-pb-text-dim" x-text="formatExtra(entry.extra)"></pre>
               <div x-show="!entry.file_path && (!entry.extra || entry.extra === '{}')" class="text-pb-text-dim">
-                <span x-text="entry.message"></span>
+                <span class="whitespace-pre-wrap break-all" x-text="entry.message"></span>
               </div>
             </div>
           </div>

@@ -12,6 +12,7 @@ from pullbox.models.config import SystemConfig
 from pullbox.providers.metadata.comicvine import ComicVineProvider
 from pullbox.services import download_service
 from pullbox.services.cover_resolver import resolve_covers_dir
+from pullbox.services.import_provider_cache import build_persistent_import_metadata_provider
 from pullbox.services.import_service import ImportService
 from pullbox.services.matching_service import MatchingService
 from pullbox.services.metadata_service import MetadataService
@@ -86,6 +87,7 @@ async def build_import_service(
         rate_limit=rate_limit,
         burst_limit=burst_limit,
     )
+    provider = build_persistent_import_metadata_provider(session, provider)
     metadata_svc = MetadataService(
         provider,
         covers_dir=await resolve_covers_dir(session),

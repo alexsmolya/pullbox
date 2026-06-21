@@ -1,5 +1,7 @@
 """Configuration API routes — get/update system config and naming preview."""
 
+from pathlib import Path
+
 import structlog
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
@@ -306,6 +308,19 @@ async def update_config(
             old_values[key] = config.value
             config.value = value
 
+    if "comics_directory" in body.values and body.values["comics_directory"].strip():
+        from pullbox.core.exceptions import ValidationError
+        from pullbox.services.library_service import set_comics_directory
+
+        try:
+            root = await set_comics_directory(
+                session,
+                Path(body.values["comics_directory"]),
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        body.values["comics_directory"] = root.path
+
     https_keys = set(HTTPS_CONFIG_KEYS)
     if https_keys & body.values.keys():
         effective_https = await _effective_config_values(session, body.values, HTTPS_CONFIG_KEYS)
@@ -320,36 +335,19 @@ async def update_config(
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
 
-    existing_local_bypass_enabled = await session.get(SystemConfig, "local_auth_bypass_enabled")
-    existing_local_bypass_addresses = await session.get(SystemConfig, "local_auth_bypass_addresses")
-    existing_local_bypass_username = await session.get(SystemConfig, "local_auth_bypass_username")
-    effective_local_bypass_enabled = (
-        body.values.get("local_auth_bypass_enabled")
-        if "local_auth_bypass_enabled" in body.values
-        else (
-            existing_local_bypass_enabled.value
-            if existing_local_bypass_enabled is not None
-            else "false"
-        )
+    local_bypass_keys = (
+        "local_auth_bypass_enabled",
+        "local_auth_bypass_addresses",
+        "local_auth_bypass_username",
     )
-    effective_local_bypass_addresses = (
-        body.values.get("local_auth_bypass_addresses")
-        if "local_auth_bypass_addresses" in body.values
-        else (
-            existing_local_bypass_addresses.value
-            if existing_local_bypass_addresses is not None
-            else ""
-        )
+    effective_local_bypass = await _effective_config_values(
+        session,
+        body.values,
+        local_bypass_keys,
     )
-    effective_local_bypass_username = (
-        (body.values.get("local_auth_bypass_username") or "")
-        if "local_auth_bypass_username" in body.values
-        else (
-            existing_local_bypass_username.value
-            if existing_local_bypass_username is not None
-            else ""
-        )
-    ).strip()
+    effective_local_bypass_enabled = effective_local_bypass["local_auth_bypass_enabled"]
+    effective_local_bypass_addresses = effective_local_bypass["local_auth_bypass_addresses"]
+    effective_local_bypass_username = effective_local_bypass["local_auth_bypass_username"].strip()
 
     if str(effective_local_bypass_enabled).lower() == "true":
         if not str(effective_local_bypass_addresses).strip():

@@ -23,6 +23,7 @@ from pullbox.models.series import Series
 from pullbox.services.download_history_classification import (
     download_history_clause,
     post_processing_failure_clause,
+    post_processing_history_clause,
 )
 
 logger = structlog.get_logger(__name__)
@@ -49,6 +50,7 @@ _DOWNLOAD_QUEUE_STATES = [
     DownloadState.QUEUED,
     DownloadState.SENT,
     DownloadState.DOWNLOADING,
+    DownloadState.FINALIZING,
     DownloadState.PAUSED,
     DownloadState.RETRY_PENDING,
 ]
@@ -284,6 +286,16 @@ def download_queue_client_state_token(client_state: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", normalized.lower())
 
 
+def is_download_queue_pollable_state(state: DownloadState) -> bool:
+    """Return True when the queue page should ask the client for live status."""
+    return state in {
+        DownloadState.SENT,
+        DownloadState.DOWNLOADING,
+        DownloadState.FINALIZING,
+        DownloadState.PAUSED,
+    }
+
+
 def is_download_queue_finalization_state(client_state: str | None) -> bool:
     """Return True when the client sub-state indicates post-download finalization."""
     token = download_queue_client_state_token(client_state)
@@ -312,18 +324,19 @@ def build_live_progress_snapshot(existing_snapshot: object | None, status: objec
     from pullbox.tasks.download_task import ProgressSnapshot
 
     raw_progress = getattr(status, "progress", 0.0)
-    progress = float(raw_progress) if isinstance(raw_progress, int | float) else 0.0
-    progress = max(progress, snapshot_progress(existing_snapshot))
-
     client_state = normalize_download_queue_client_state(getattr(status, "client_state", None))
     state = str(getattr(status, "state", "") or "").lower()
     is_finalizing = is_download_queue_finalization_state(client_state)
-    if is_finalizing:
-        progress = 1.0
+    raw_progress_value = float(raw_progress) if isinstance(raw_progress, int | float) else 0.0
+    raw_progress_value = max(0.0, min(raw_progress_value, 1.0))
+    if is_finalizing or state == "finalizing":
+        progress = raw_progress_value if raw_progress_value > 0 else 1.0
+    else:
+        progress = max(raw_progress_value, snapshot_progress(existing_snapshot))
 
     speed_bytes = getattr(status, "speed_bytes", None)
     eta_seconds = getattr(status, "eta_seconds", None)
-    if is_finalizing or state != "downloading":
+    if is_finalizing or state not in {"downloading", "finalizing"}:
         speed_bytes = None
         eta_seconds = None
 
@@ -378,14 +391,19 @@ def build_download_queue_row_view(
     elif download.state == DownloadState.QUEUED:
         primary_phase = "Queued"
         status_pill = "pill-info"
-    elif download.state in {DownloadState.SENT, DownloadState.DOWNLOADING}:
+    elif download.state in {
+        DownloadState.SENT,
+        DownloadState.DOWNLOADING,
+        DownloadState.FINALIZING,
+    }:
         is_active = True
-        if is_finalizing:
+        if is_finalizing or download.state == DownloadState.FINALIZING:
             primary_phase = "Finalizing in client"
             status_pill = "pill-warning"
             progress_tone = "is-amber"
-            progress_pct = 100.0
-            progress_label = "Finalizing"
+            if progress_pct <= 0:
+                progress_pct = 100.0
+            progress_label = client_state or "Finalizing"
             speed_bytes = None
             eta_seconds = None
         else:
@@ -495,8 +513,7 @@ async def load_download_progress_map(
     pollable_items = [
         item
         for item in queue_items
-        if item.state in {DownloadState.SENT, DownloadState.DOWNLOADING, DownloadState.PAUSED}
-        and item.external_id
+        if is_download_queue_pollable_state(item.state) and item.external_id
     ]
     if not pollable_items:
         return progress_map
@@ -539,6 +556,7 @@ async def load_download_progress_map(
             if getattr(status, "external_id", None)
         }
         client_matched = 0
+        matched_ids: set[int] = set()
         for item in client_items:
             if not item.external_id:
                 continue
@@ -550,6 +568,22 @@ async def load_download_progress_map(
                 status,
             )
             client_matched += 1
+            matched_ids.add(item.id)
+
+        if client_type in {DownloadClientType.SABNZBD.value, DownloadClientType.NZBGET.value}:
+            for item in client_items:
+                if not item.external_id or item.id in matched_ids:
+                    continue
+                try:
+                    status = await client.get_download_status(str(item.external_id))
+                except Exception:
+                    continue
+                progress_map[item.id] = build_live_progress_snapshot(
+                    progress_map.get(item.id),
+                    status,
+                )
+                client_matched += 1
+                matched_ids.add(item.id)
 
         client_unmatched = len(client_items) - client_matched
         matched_total += client_matched
@@ -632,6 +666,12 @@ async def load_download_history_context(
         )
     ).scalar_one()
 
+    post_processing_history_total: int = (
+        await session.execute(
+            select(func.count(DownloadHistory.id)).where(post_processing_history_clause())
+        )
+    ).scalar_one()
+
     history_completed_count, history_failed_count, history_cancelled_count = (
         await session.execute(
             select(
@@ -693,6 +733,7 @@ async def load_download_history_context(
         "history_completed_count": int(history_completed_count or 0),
         "history_failed_count": int(history_failed_count or 0),
         "history_cancelled_count": int(history_cancelled_count or 0),
+        "post_processing_history_total": post_processing_history_total,
         "history_pages": history_pages,
         "page": page,
         "status_filter": status or "",

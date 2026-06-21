@@ -8,8 +8,6 @@ metadata, indexers, download clients, and a library path, then let the app keep
 wanted issues moving through search, download, post-processing, and library
 organization.
 
-Pullbox is under active development. The app is usable for testing and early
-feedback, but deployments should be backed up and treated as pre-1.0 software.
 
 ## Quick Start With Docker
 
@@ -22,28 +20,44 @@ Pullbox listens on port `8585` and uses four main container paths:
 | `/downloads` | Completed downloads shared with download clients |
 | `/imports` | Manual import/drop-folder sources, including Mylar3 databases |
 
-Keep `/data` durable and backed up. On first startup, Pullbox creates
-`/data/config.xml` and writes a strong `<SecretKey>` used for browser sessions
-and encrypted integration secrets. You do not need to generate this manually
-for normal Docker installs.
 
-If you intentionally manage the application secret outside `config.xml`, set
-`PULLBOX_SECRET_KEY` to a stable, deployment-specific value and never change it
-after saving credentials:
+### Pre-Run Setup
+
+Pullbox was created with maximum application / image security in mind and
+is implemented using a Docker Hardened Image. Based on this, there are a few
+requirements that must be met prior to spinning up the container.
+
+First, you must create or choose host folders for Pullbox data, your comics library, completed
+downloads, and import sources. The `/data` folder should be durable local
+storage because it contains SQLite, `config.xml`, logs, and backups.
+
+If the above folders do not exist create them:
 
 ```bash
-export PULLBOX_SECRET_KEY="$(openssl rand -hex 64)"
+sudo mkdir -p /path/to/pullbox-appdata /path/to/comics /path/to/shared-downloads /path/to/imports
 ```
 
-When `PULLBOX_SECRET_KEY` is set, it overrides the value in `config.xml` at
-runtime. Changing it later prevents Pullbox from decrypting saved integration
-secrets.
+Once created or chosen, make each folder writable by the hardened-image runtime UID/GID `65532:65532`.
+On Linux hosts with ACL support, this avoids changing ownership of existing
+media:
+
+```bash
+sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/pullbox-appdata
+sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/comics
+sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/shared-downloads
+sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/imports
+```
+
+For dedicated Pullbox-only folders, ownership is also acceptable:
+
+```bash
+sudo chown -R 65532:65532 /path/to/pullbox-appdata /path/to/comics /path/to/shared-downloads /path/to/imports
+```
+
 
 ### Docker Run
 
 ```bash
-docker volume create pullbox-data
-
 docker run -d \
   --name pullbox \
   --restart unless-stopped \
@@ -53,7 +67,7 @@ docker run -d \
   -e PULLBOX_SQLITE_JOURNAL_MODE=WAL \
   -e PULLBOX_LIBRARY_ROOT=/comics \
   -e PULLBOX_COVERS_DIR=/comics/.covers \
-  -v pullbox-data:/data \
+  -v /path/to/pullbox-appdata:/data \
   -v /path/to/comics:/comics \
   -v /path/to/shared-downloads:/downloads \
   -v /path/to/imports:/imports \
@@ -62,47 +76,29 @@ docker run -d \
 
 Open `http://localhost:8585` and complete first-run setup.
 
-### Admin Password Reset
-
-If you are locked out of the web UI, reset a user's password through the
-installed management CLI inside the container:
-
-```bash
-printf '%s\n' 'NewPass1!' | docker exec -i pullbox \
-  python -m pullbox.cli reset-password --user admin --password-stdin
-```
-
-Replace `pullbox` with your container name if you changed it. The new password
-must meet the normal password policy, and the reset invalidates existing
-browser sessions for that user.
-
-### Native HTTPS
-
-Pullbox can serve HTTPS directly on the normal Pullbox port. Enable it from
-Settings > General or with `PULLBOX_HTTPS_ENABLED=true`, then point
-`PULLBOX_HTTPS_CERT_PATH` and `PULLBOX_HTTPS_KEY_PATH` at files mounted inside
-the container. The default cert root is `/config/certs`, so a typical Docker
-mount is:
-
-```yaml
-volumes:
-  - /path/to/certs:/config/certs:ro
-```
-
-Certificate files must be readable by the container runtime user `65532`.
 
 ### Docker Compose
 
-Create a `.env` file next to `compose.yml`:
+If you do not have a shared Docker Compose `.env` file, copy the production
+.env example and edit the paths:
+
+```bash
+cp docker/.env.example .env
+```
+
+If you already have a shared Docker Compose `.env` file, add these variables to
+that existing file instead of creating a new one:
 
 ```env
 TZ=America/New_York
+PULLBOX_HOST_PORT=8585
+PULLBOX_DATA_PATH=/path/to/pullbox-appdata
 COMICS_PATH=/path/to/comics
 DOWNLOADS_PATH=/path/to/shared-downloads
 IMPORTS_PATH=/path/to/imports
 ```
 
-Use this compose file:
+Use the below example to create a Docker Compose file:
 
 ```yaml
 services:
@@ -111,7 +107,7 @@ services:
     container_name: pullbox
     restart: unless-stopped
     ports:
-      - "8585:8585"
+      - "${PULLBOX_HOST_PORT}:8585"
     environment:
       TZ: ${TZ}
       PULLBOX_DB_URL: sqlite+aiosqlite:////data/pullbox.db
@@ -119,66 +115,99 @@ services:
       PULLBOX_LIBRARY_ROOT: /comics
       PULLBOX_COVERS_DIR: /comics/.covers
     volumes:
-      - pullbox-data:/data
+      - ${PULLBOX_DATA_PATH}:/data
       - ${COMICS_PATH}:/comics
       - ${DOWNLOADS_PATH}:/downloads
       - ${IMPORTS_PATH}:/imports
-
-volumes:
-  pullbox-data:
-    name: pullbox-data
 ```
 
-Start Pullbox:
+To start pullbox:
 
 ```bash
-docker compose up -d
+docker compose -f docker/docker-compose.yml --env-file .env up -d
 ```
 
 Open `http://localhost:8585` and complete first-run setup.
 
-### Storage Permissions
 
-The production container runs as a non-root user. Make sure the host or network
-paths mounted at `/comics`, `/downloads`, and `/imports` are readable by the
-container runtime identity. `/comics` and `/downloads` also need write access
-for normal library and post-processing work. `/imports` only needs write access
-if the deployment expects Pullbox to move, rewrite, or clean up source files.
+### Docker Environment Variables
 
-Pullbox can normalize file and folder modes with its library permission tools,
-but it does not take ownership of host storage. Ownership, group membership, NAS
-ACLs, and mount options should be fixed in the deployment environment.
+The Docker run and compose examples above are intentionally minimal. For most
+installs, configure the rest of Pullbox in the web UI. If you want a setting to
+be managed by the container environment, add the value to your `.env` file and
+pass it through under the service `environment:` block. For `docker run`, add
+the same value with `-e`.
 
-## Import Source Path Model
+Environment-managed values can override UI/database settings and may appear
+read-only or runtime-managed inside Pullbox.
 
-Docker containers can only scan paths that are mounted into the container. For
-manual folder imports, mount the host drop folder at `/imports` and scan that
-container path from the Import page.
-
-For Mylar3 imports, the Mylar3 database and any referenced comic paths must be
-visible inside the Pullbox container. The simplest setup is to place or mount
-the Mylar3 database under `/imports` and mount the library path with the same
-container path Mylar3 stores, such as `/comics`.
-
-Avoid mounting broad host paths like `/` just to make browsing easier. It works
-against the hardened-container model and gives the app access to far more host
-storage than it needs.
-
-## Download Client Path Model
-
-Pullbox works best when all completed downloads are visible inside the
-container under `/downloads`. Each download client can keep its own remote path,
-but the Pullbox download directory should usually point at `/downloads`.
-
-| Client | Example remote path | Pullbox download directory |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| SABnzbd | `/data/download` | `/downloads` |
-| qBittorrent | `/data/download` | `/downloads` |
-| NZBGet | `/downloads/completed` | `/downloads` |
-| Transmission | `/volume1/downloads` | `/downloads` |
+| `TZ` | host/system default | Container timezone used for logs and displayed times. |
+| `PULLBOX_IMAGE` | `ghcr.io/pullboxapp/pullbox:latest` | Compose helper for selecting the image tag. |
+| `PULLBOX_HOST_PORT` | `8585` | Compose helper for the host-side published port. |
+| `PULLBOX_DATA_PATH` | none | Compose helper for the host appdata folder mounted at `/data`. |
+| `COMICS_PATH` | none | Compose helper for the host comic library mounted at `/comics`. |
+| `DOWNLOADS_PATH` | none | Compose helper for completed downloads mounted at `/downloads`. |
+| `IMPORTS_PATH` | none | Compose helper for manual import/drop folders mounted at `/imports`. |
+| `PULLBOX_RUNTIME_UID` | `65532` | Documentation helper for host ACL/permission commands; not read by Pullbox. |
+| `PULLBOX_RUNTIME_GID` | `65532` | Documentation helper for host ACL/permission commands; not read by Pullbox. |
+| `PULLBOX_DB_URL` | `sqlite+aiosqlite:////data/pullbox.db` | Database URL. SQLite under `/data` is the supported Docker default. |
+| `PULLBOX_SQLITE_JOURNAL_MODE` | `WAL` | SQLite journal mode. Keep `WAL` for normal Docker installs. |
+| `PULLBOX_DATA_DIR` | `/data` | Runtime data directory containing `config.xml` and app state. |
+| `PULLBOX_LIBRARY_ROOT` | `/comics` | Default library root used during first-run/runtime resolution. |
+| `PULLBOX_COVERS_DIR` | `/comics/.covers` | Cover cache directory. |
+| `PULLBOX_LOGS_DIR` | `/data/logs` | Log directory. |
+| `PULLBOX_TEMP_DIR` | `/data/tmp` | Temporary working directory. |
+| `PULLBOX_BACKUP_DIR` | `/data/backups` | Database backup directory. |
+| `PULLBOX_BIND_ADDRESS` | `0.0.0.0` | Interface Pullbox binds inside the container. |
+| `PULLBOX_PORT` | `8585` | Internal listener port. If changed, update the container-side port mapping too. |
+| `PULLBOX_BASE_URL` | `http://localhost:8585` | Public URL used in generated app links and startup output. |
+| `PULLBOX_INSTANCE_NAME` | `Pullbox` | Display name for the instance. |
+| `PULLBOX_SECRET_KEY` | unset | Optional secret override. Leave unset unless you intentionally manage the secret outside `/data/config.xml`. |
+| `PULLBOX_SESSION_LIFETIME_HOURS` | `24` | Login session lifetime. |
+| `PULLBOX_TRUSTED_PROXIES` | unset | Comma-separated trusted reverse-proxy IPs. |
+| `PULLBOX_LOCAL_ADDRESSES` | unset | Legacy bootstrap value; prefer the Security settings UI. |
+| `PULLBOX_HTTPS_ENABLED` | `false` | Enables native HTTPS on the normal Pullbox port. |
+| `PULLBOX_HTTPS_CERT_PATH` | unset | Container path to the TLS certificate file. |
+| `PULLBOX_HTTPS_KEY_PATH` | unset | Container path to the TLS private key file. |
+| `PULLBOX_HTTPS_CERT_ROOT` | `/config/certs` | Directory allowed for HTTPS cert/key browsing and validation. |
+| `PULLBOX_LOG_LEVEL` | `INFO` | Runtime log level. |
+| `PULLBOX_LOG_SIZE_LIMIT_MB` | `1` | Startup log rotation size in MB. |
+| `PULLBOX_LOG_BACKUP_COUNT` | `5` | Number of rotated startup logs to keep. |
+| `PULLBOX_DEBUG` | `false` | Enables debug behavior and more detailed error output. |
+| `PULLBOX_STARTUP_UPDATE_CHECK_ENABLED` | `true` | Enables the startup update check. |
+| `PULLBOX_RATE_LIMIT_ENABLED` | `true` | Enables request rate limiting. |
+| `PULLBOX_RATE_LIMIT_TIER1` | `60` | Expensive-operation requests per minute per IP. |
+| `PULLBOX_RATE_LIMIT_TIER2` | `120` | Write-operation requests per minute per IP. |
+| `PULLBOX_RATE_LIMIT_TIER3` | `300` | Read-operation requests per minute per IP. |
+| `PULLBOX_COMICVINE_API_KEY` | unset | Optional ComicVine API key bootstrap value. The UI is preferred after setup. |
+| `PULLBOX_COMICVINE_RATE_LIMIT` | `200` | ComicVine request budget per hour. |
+| `PULLBOX_DATA_API_BASE_URL` | `https://api.pullbox.app` | Pullbox Data API base URL. Leave default unless testing a private deployment. |
+| `PULLBOX_METADATA_REFRESH_DAYS` | `30` | Metadata refresh age threshold. |
+| `PULLBOX_SEARCH_INTERVAL_HOURS` | `6` | Automatic wanted-search scheduler cadence. |
+| `PULLBOX_SCAN_INTERVAL_HOURS` | `24` | Library scan scheduler cadence. |
+| `PULLBOX_DOWNLOAD_POLL_SECONDS` | `3` | Active download polling cadence. |
+| `PULLBOX_PROCESS_COMPLETED_INTERVAL_SECONDS` | `300` | Completed download post-processing cadence. |
+| `PULLBOX_BACKUP_INTERVAL_DAYS` | `7` | Automatic database backup cadence. |
+| `PULLBOX_BACKUP_RETENTION_DAYS` | `28` | Automatic database backup retention. |
+| `PULLBOX_HISTORY_RETENTION_DAYS` | `90` | General history cleanup retention. |
+| `PULLBOX_HEALTH_CHECK_INTERVAL_MINUTES` | `5` | Main health check scheduler cadence. |
+| `PULLBOX_HEALTH_SCHEDULER_INTERVAL_MINUTES` | `30` | Scheduler health check cadence. |
+| `PULLBOX_HEALTH_DATABASE_INTERVAL_MINUTES` | `15` | Database health check cadence. |
+| `PULLBOX_HEALTH_FILESYSTEM_INTERVAL_MINUTES` | `15` | Filesystem health check cadence. |
+| `PULLBOX_HEALTH_SYSTEM_INTERVAL_MINUTES` | `15` | System resource health check cadence. |
+| `PULLBOX_HEALTH_DOWNLOAD_CLIENTS_INTERVAL_HOURS` | `4` | Download-client health check cadence. |
+| `PULLBOX_HEALTH_INDEXERS_INTERVAL_HOURS` | `8` | Indexer health check cadence. |
+| `PULLBOX_HEALTH_COMICVINE_INTERVAL_HOURS` | `8` | ComicVine health check cadence. |
+| `PULLBOX_HEALTH_HISTORY_RETENTION_DAYS` | `1` | Health history retention. |
+| `PULLBOX_NAMING_SERIES_FORMAT` | `{series} ({year})` | Bootstrap default for series folder naming. UI settings are preferred after setup. |
+| `PULLBOX_NAMING_ISSUE_FORMAT` | `{series} ({year}) #{issue:03d}` | Bootstrap default for issue file naming. UI settings are preferred after setup. |
+| `PULLBOX_IMPORT_FILE_WORKER_COUNT` | `2` | Number of files processed concurrently during Step 4 imports. Use `1` for fully serial imports on slow or fragile storage. |
+| `PULLBOX_IMPORT_DEBUG_SLOW_MODE` | `false` | Troubleshooting-only import slow mode. |
+| `PULLBOX_IMPORT_DEBUG_PHASE_DELAY_SECONDS` | `1.25` | Troubleshooting-only import phase delay. |
+| `PULLBOX_IMPORT_DEBUG_ITEM_DELAY_SECONDS` | `0.4` | Troubleshooting-only import item delay. |
 
-The important rule: completed files must physically exist in storage mounted
-into Pullbox at `/downloads`.
 
 ## Features
 
@@ -194,6 +223,7 @@ into Pullbox at `/downloads`.
 - Health checks, diagnostics, logs, backups, and audit trail.
 - Server-rendered UI with HTMX, Alpine.js, and Tailwind CSS.
 
+
 ## Development
 
 Contributor setup, validation commands, coding standards, and workflow details
@@ -207,10 +237,12 @@ live in the repo docs:
 - `docs/development/INFRASTRUCTURE.md`
 - `docs/development/DESIGN_SYSTEM.md`
 
+
 ## Security
 
 Private vulnerability reporting and deployment security guidance are covered in
 `SECURITY.md`.
+
 
 ## License
 

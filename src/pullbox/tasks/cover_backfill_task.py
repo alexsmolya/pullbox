@@ -85,9 +85,10 @@ async def backfill_series_covers(limit: int | None = None) -> CoverBackfillStats
 
 @scheduled_task(
     task_id="backfill_series_covers",
-    trigger="interval",
+    trigger="cron",
     display_name="Backfill Series Covers",
-    hours=24,
+    hour=2,
+    minute=0,
 )
 async def scheduled_backfill_series_covers() -> None:
     """Periodically warm local cover cache for older series."""

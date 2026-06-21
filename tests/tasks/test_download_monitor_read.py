@@ -41,5 +41,6 @@ def test_active_download_states_match_monitor_contract() -> None:
     assert download_monitor_read.ACTIVE_DOWNLOAD_STATES == (
         DownloadState.SENT,
         DownloadState.DOWNLOADING,
+        DownloadState.FINALIZING,
         DownloadState.PAUSED,
     )

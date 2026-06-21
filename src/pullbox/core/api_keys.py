@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from datetime import UTC, datetime
 
 from pullbox.core.config_resolver import get_application_secret
 
@@ -59,3 +60,23 @@ def normalize_api_key_name(name: str) -> str:
         msg = f"API key name must be at most {MAX_API_KEY_NAME_LENGTH} characters."
         raise ValueError(msg)
     return normalized
+
+
+def api_key_expiration_is_before_today(
+    expires_at: datetime,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether an API-key expiration timestamp falls before today's date."""
+    reference = now or datetime.now(UTC)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    else:
+        reference = reference.astimezone(UTC)
+
+    if expires_at.tzinfo is None:
+        normalized_expiry = expires_at.replace(tzinfo=UTC)
+    else:
+        normalized_expiry = expires_at.astimezone(UTC)
+
+    return normalized_expiry.date() < reference.date()

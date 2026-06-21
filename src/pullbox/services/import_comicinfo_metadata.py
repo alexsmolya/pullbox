@@ -45,6 +45,7 @@ async def enrich_issue_for_comicinfo(
     issue: Issue,
     *,
     metadata_service: Any,
+    defer_provider_fetch: bool = False,
     timing: dict[str, Any] | None = None,
     log_warning: Callable[..., Any] = logger.warning,
     time_monotonic: Callable[[], float] = time.monotonic,
@@ -57,6 +58,11 @@ async def enrich_issue_for_comicinfo(
     if not await issue_needs_comicinfo_enrichment(session, issue):
         if timing is not None:
             timing["comicvine_issue_fetch_status"] = "cached"
+        return issue
+    if defer_provider_fetch:
+        if timing is not None:
+            timing["comicvine_issue_fetch_status"] = "deferred"
+            timing["comicvine_issue_fetch_duration_ms"] = 0
         return issue
 
     fetch_issue = getattr(metadata_service, "fetch_issue", None)

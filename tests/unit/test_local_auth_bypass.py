@@ -195,6 +195,11 @@ class TestAddressNormalization:
         with pytest.raises(ValueError, match="Invalid local bypass address or CIDR"):
             normalize_local_bypass_addresses("127.0.0.1, not-an-ip")
 
+    @pytest.mark.parametrize("entry", ["0.0.0.0", "::", "0.0.0.0/0", "::/0"])
+    def test_wildcard_bind_addresses_are_rejected(self, entry: str) -> None:
+        with pytest.raises(ValueError, match="not valid trusted client addresses"):
+            normalize_local_bypass_addresses(entry)
+
 
 class TestBypassHelpers:
     """Helper functions for explicit local-bypass identity and CSRF."""

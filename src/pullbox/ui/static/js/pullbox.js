@@ -2668,6 +2668,15 @@ function importJobLogViewerData(config) {
       return 0;
     },
 
+    _shouldFollowLiveTail: function () {
+      return (
+        this.isLive &&
+        !this.levelFilter &&
+        !this.searchQuery &&
+        this.currentPage >= this.totalPages
+      );
+    },
+
     prevPage: function () {
       if (this.currentPage > 1) {
         this.currentPage--;
@@ -2743,9 +2752,12 @@ function importJobLogViewerData(config) {
         ) {
           return;
         }
+        var shouldFollowTail = this._shouldFollowLiveTail();
         this.entries.push(this._normalizeStreamEntry(payload));
         this.totalCount += 1;
-        if (this.currentPage > this.totalPages) {
+        if (shouldFollowTail) {
+          this.currentPage = this.totalPages;
+        } else if (this.currentPage > this.totalPages) {
           this.currentPage = this.totalPages;
         }
       } catch (_) {
@@ -2872,9 +2884,12 @@ function importJobLogViewerData(config) {
           page += 1;
         }
 
+        var shouldFollowTail = this._shouldFollowLiveTail();
         this.entries = allEntries;
         this.totalCount = total || allEntries.length;
-        if (this.currentPage > this.totalPages) {
+        if (shouldFollowTail) {
+          this.currentPage = this.totalPages;
+        } else if (this.currentPage > this.totalPages) {
           this.currentPage = this.totalPages;
         }
       } catch (_) {
@@ -7959,6 +7974,7 @@ function libraryBrowserPage(config) {
         rootPath: dataset.entryRootPath || this.rootPath || "",
         fileFormat: (dataset.entryFormat || "").toLowerCase(),
         canConvert: boolValue(dataset.entryConvertible),
+        canMutate: boolValue(dataset.entryCanMutate),
       };
     },
 
@@ -8126,6 +8142,12 @@ function libraryBrowserPage(config) {
         modifiedAt: data.modified_at || "",
         permissionsLabel: data.permissions_label || "",
         actions: data.actions || {},
+        canMutate: !!(
+          data.actions &&
+          (data.actions.can_rename ||
+            data.actions.can_auto_rename ||
+            data.actions.can_delete)
+        ),
         canConvert: !!(data.actions && data.actions.can_convert),
         canDelete: !!(data.actions && data.actions.can_delete),
         deleteContext: data.delete_context || {
@@ -8371,7 +8393,7 @@ function libraryBrowserPage(config) {
     },
 
     openRename: async function () {
-      if (!this.contextTarget || this.contextTarget.kind === "root") return;
+      if (!this.contextTarget || !this.contextTarget.canMutate) return;
       var entry = cloneEntry(this.contextTarget);
       this.closeContextMenu({ preserveTarget: true });
       this.modalLoading = true;
@@ -8397,7 +8419,7 @@ function libraryBrowserPage(config) {
     },
 
     openAutoRename: async function () {
-      if (!this.contextTarget || this.contextTarget.kind === "root") return;
+      if (!this.contextTarget || !this.contextTarget.canMutate) return;
       var entry = cloneEntry(this.contextTarget);
       this.closeContextMenu({ preserveTarget: true });
       this.modalLoading = true;
@@ -8464,7 +8486,7 @@ function libraryBrowserPage(config) {
     },
 
     openDelete: async function () {
-      if (!this.contextTarget || this.contextTarget.kind === "root") return;
+      if (!this.contextTarget || !this.contextTarget.canMutate) return;
       var entry = cloneEntry(this.contextTarget);
       this.closeContextMenu({ preserveTarget: true });
       this.modalLoading = true;
@@ -12707,6 +12729,7 @@ function interventionPage() {
     toolbarMode: "browse",
     selectAllMatchingBusy: false,
     totalMatchingCount: Number(cfg.totalMatchingCount || 0),
+    selectionFilterSignature: "",
     afterSettleHandler: null,
 
     csrfToken: function () {
@@ -12751,11 +12774,36 @@ function interventionPage() {
       }
     },
 
+    queueFilterSignature: function () {
+      var params = new URLSearchParams(window.location.search);
+      var signature = new URLSearchParams();
+      ["reason", "confidence", "protocol", "search"].forEach(function (key) {
+        var value = params.get(key);
+        if (value) {
+          signature.set(key, value);
+        }
+      });
+      return signature.toString();
+    },
+
+    resetSelectionForFilterChange: function () {
+      var nextSignature = this.queueFilterSignature();
+      if (
+        this.selectionFilterSignature &&
+        this.selectionFilterSignature !== nextSignature &&
+        this.selectedIds.length > 0
+      ) {
+        this.clearSelection();
+      }
+      this.selectionFilterSignature = nextSignature;
+    },
+
     init: function () {
       var self = this;
       if (Array.isArray(window._interventionSelectedIds)) {
         self.selectedIds = window._interventionSelectedIds.slice();
       }
+      self.selectionFilterSignature = self.queueFilterSignature();
 
       self.afterSettleHandler = function (evt) {
         if (!evt || !evt.detail || !evt.detail.target) {
@@ -12789,6 +12837,7 @@ function interventionPage() {
               return;
             }
           }
+          self.resetSelectionForFilterChange();
           self.pruneSelection();
           self.syncSelectionUi();
         });
@@ -12861,7 +12910,12 @@ function interventionPage() {
 
     allVisibleSelected: function () {
       var visibleIds = this.visibleIds();
-      return visibleIds.length > 0 && this.selectedIds.length === visibleIds.length;
+      return (
+        visibleIds.length > 0 &&
+        visibleIds.every(function (id) {
+          return this.isSelected(id);
+        }, this)
+      );
     },
 
     selectAllVisible: function () {
@@ -12912,6 +12966,7 @@ function interventionPage() {
               })
           : [];
         this.selectedIds = ids;
+        this.selectionFilterSignature = this.queueFilterSignature();
         if (Number.isFinite(payload.total)) {
           this.totalMatchingCount = payload.total;
         }
@@ -12986,6 +13041,7 @@ function interventionPage() {
         if (!this.isSelected(id)) {
           this.selectedIds.push(id);
           this.toolbarMode = "select";
+          this.selectionFilterSignature = this.queueFilterSignature();
           this.persistSelection();
           this.syncSelectionUi();
         }
@@ -13003,8 +13059,15 @@ function interventionPage() {
         this.clearSelection();
         return;
       }
-      this.selectedIds = ids.slice();
+      var merged = this.selectedIds.slice();
+      ids.forEach(function (id) {
+        if (merged.indexOf(id) === -1) {
+          merged.push(id);
+        }
+      });
+      this.selectedIds = merged;
       this.toolbarMode = "select";
+      this.selectionFilterSignature = this.queueFilterSignature();
       this.persistSelection();
       this.syncSelectionUi();
     },
@@ -13017,20 +13080,25 @@ function interventionPage() {
     pruneSelection: function () {
       var list = document.getElementById("intervention-list");
       if (!list) {
-        this.selectedIds = [];
-        this.persistSelection();
-        this.syncSelectionUi();
+        this.clearSelection();
         return;
       }
 
-      var visibleIds = this.visibleIds();
-
-      if (visibleIds.length === 0 && !list.querySelector("[data-testid='intervention-empty']")) {
+      if (list.querySelector("[data-testid='intervention-empty']")) {
+        this.clearSelection();
         return;
       }
+      this.persistSelection();
+      this.syncSelectionUi();
+    },
 
-      this.selectedIds = this.selectedIds.filter(function (id) {
-        return visibleIds.indexOf(id) !== -1;
+    removeSelection: function (id) {
+      var numericId = Number(id);
+      if (!Number.isFinite(numericId)) {
+        return;
+      }
+      this.selectedIds = this.selectedIds.filter(function (itemId) {
+        return itemId !== numericId;
       });
       this.persistSelection();
       this.syncSelectionUi();
@@ -14511,7 +14579,7 @@ function seriesDetailPage(config) {
           if (!response.ok) throw new Error("Failed to update monitoring");
           self.monitored = enabled;
           self.dispatchToast(
-            enabled ? "Monitoring enabled — searching for issues" : "Monitoring disabled",
+            enabled ? "Monitoring enabled" : "Monitoring disabled",
             enabled ? "success" : "info"
           );
           setTimeout(function () {
@@ -16828,12 +16896,6 @@ document.addEventListener("htmx:afterSettle", function (e) {
       e.detail.target.dispatchEvent(new Event("scroll"));
     }
     syncAppShellNavigation(document);
-    var h1 = document.querySelector("#main-area h1");
-    if (h1) {
-      var title = h1.textContent.trim();
-      var appName = (window._pb && _pb.instanceName) || "Pullbox";
-      document.title = title === "Dashboard" ? appName : title + " \u2014 " + appName;
-    }
 
     _ensureUtilityWorkflowBackstop();
   }

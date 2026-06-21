@@ -30,8 +30,8 @@ setup: ## Create venv, install Python + Node dependencies
 	$(VENV)/bin/pre-commit install
 	npm install
 	@if [ ! -f .env ]; then \
-		cp .env.example .env; \
-		echo "\033[33mℹ️  Created .env from .env.example\033[0m"; \
+		cp .env.dev.example .env; \
+		echo "\033[33mℹ️  Created .env from .env.dev.example\033[0m"; \
 	fi
 	@echo ""
 	@echo "\033[32m✅ Setup complete.\033[0m Run \033[36mmake dev-local\033[0m or \033[36mmake dev-docker\033[0m to start developing."

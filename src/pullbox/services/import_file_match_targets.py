@@ -85,6 +85,10 @@ async def load_file_match_target_index(
             target_index.number_map[issue.issue_number] = entry
         return target_index
 
+    trusted_mylar_index = _trusted_mylar_issue_target_index(imp_series, files or [])
+    if trusted_mylar_index is not None:
+        return trusted_mylar_index
+
     if imp_series.cv_id is not None and metadata_provider is not None:
         try:
             load_result = await _load_provider_issue_summaries(
@@ -127,6 +131,69 @@ async def load_file_match_target_index(
             target_index.number_map[summary.issue_number] = entry
 
     return target_index
+
+
+def _trusted_mylar_issue_target_index(
+    imp_series: ImportedSeries,
+    files: list[ImportedFile],
+) -> FileMatchTargetIndex | None:
+    """Build issue targets from trusted Mylar issue rows when all files have them."""
+    if imp_series.cv_id is None or not files:
+        return None
+
+    target_index = FileMatchTargetIndex()
+    for imp_file in files:
+        target = _trusted_mylar_issue_target(imp_series, imp_file)
+        if target is None:
+            return None
+        issue_cv_id, issue_number, issue_title = target
+        entry = (None, issue_cv_id, False, None, issue_title)
+        target_index.cv_id_map[issue_cv_id] = entry
+        if issue_number is not None:
+            target_index.number_map[issue_number] = entry
+
+    return target_index if target_index.has_targets else None
+
+
+def _trusted_mylar_issue_target(
+    imp_series: ImportedSeries,
+    imp_file: ImportedFile,
+) -> tuple[int, float | None, str | None] | None:
+    """Return a trusted Mylar issue identity when it belongs to the matched series."""
+    if imp_file.comicvine_issue_id is None:
+        return None
+    diagnostics = imp_file.diagnostics if isinstance(imp_file.diagnostics, dict) else {}
+    signals = diagnostics.get("metadata_signals")
+    if not isinstance(signals, dict) or signals.get("comicvine_issue_id") != "mylar3":
+        return None
+    if imp_series.cv_id is None:
+        return None
+    source_series_cv_id = _safe_int(diagnostics.get("comicvine_series_id"))
+    if source_series_cv_id != int(imp_series.cv_id):
+        return None
+
+    issue_title: str | None = None
+    source_metadata = diagnostics.get("source_metadata")
+    if isinstance(source_metadata, dict):
+        mylar_issue = source_metadata.get("mylar3_issue")
+        if isinstance(mylar_issue, dict):
+            raw_title = mylar_issue.get("title")
+            issue_title = str(raw_title) if raw_title else None
+
+    return (
+        int(imp_file.comicvine_issue_id),
+        candidate_issue_number(imp_file),
+        issue_title,
+    )
+
+
+def _safe_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 async def _load_provider_issue_summaries(

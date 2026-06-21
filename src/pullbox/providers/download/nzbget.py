@@ -409,9 +409,9 @@ def _map_group_status(status: str) -> str:
         "PAUSED": "paused",
         "FETCHING": "downloading",
     }
-    # All PP phases map to downloading
+    # All PP phases happen after transfer and before Pullbox post-processing.
     if status in _PP_PHASES:
-        return "downloading"
+        return "finalizing"
     return mapping.get(status, status.lower())
 
 

@@ -167,6 +167,31 @@ class TestReconcileRuntimeLibraryPaths:
     """Test rewriting persisted library paths to the active runtime root."""
 
     @pytest.mark.asyncio
+    async def test_seeds_runtime_root_for_fresh_install(
+        self, db_session: AsyncSession, tmp_path: Path
+    ) -> None:
+        comics_dir = (tmp_path / "comics").resolve()
+        comics_dir.mkdir(parents=True)
+
+        result = await reconcile_runtime_library_paths(db_session, comics_dir)
+
+        assert result is not None
+        assert result["old_root"] == ""
+        assert result["new_root"] == str(comics_dir)
+        assert result["series_updated"] == 0
+        assert result["library_files_updated"] == 0
+
+        comics_directory = await db_session.get(SystemConfig, "comics_directory")
+        assert comics_directory is not None
+        assert comics_directory.value == str(comics_dir)
+
+        root = (
+            await db_session.execute(select(LibraryRoot).where(LibraryRoot.path == str(comics_dir)))
+        ).scalar_one()
+        assert root.name == "Comics Directory"
+        assert root.enabled is True
+
+    @pytest.mark.asyncio
     async def test_rewrites_primary_library_prefix_everywhere(
         self, db_session: AsyncSession, tmp_path: Path
     ) -> None:
@@ -232,6 +257,7 @@ class TestReconcileRuntimeLibraryPaths:
         db_session.add(
             SystemConfig(key="comics_directory", value=str(comics_dir), value_type="string")
         )
+        db_session.add(LibraryRoot(name="Comics Directory", path=str(comics_dir), enabled=True))
         await db_session.flush()
 
         result = await reconcile_runtime_library_paths(db_session, comics_dir)

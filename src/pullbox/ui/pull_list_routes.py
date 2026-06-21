@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping
 from typing import cast as typing_cast
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import ColumnElement, String, and_, asc, case, cast, desc, func, or_, select
@@ -344,4 +344,38 @@ async def pull_list(
         request,
         "pages/pull_list.html",
         ctx,
+    )
+
+
+@router.post(
+    "/pull-list/{series_id}/monitoring",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def update_pull_list_monitoring(
+    request: Request,
+    user: AuthenticatedUser,
+    session: DbSession,
+    series_id: int,
+    monitored: bool = Form(...),
+    filter: str | None = Form(None),
+    search: str | None = Form(None),
+    sort: str | None = Form("title"),
+    page: int = Form(1),
+) -> Response:
+    """Update monitoring from the pull list and return the refreshed list fragment."""
+    from pullbox.composition.services import build_domain_series_service
+
+    series_svc = await build_domain_series_service(session)
+    await series_svc.toggle_monitoring(session, series_id, monitored)
+    await session.commit()
+
+    return await pull_list(
+        request,
+        user=user,
+        session=session,
+        filter=filter,
+        search=search,
+        sort=sort,
+        page=max(page, 1),
     )

@@ -170,6 +170,7 @@ class DownloadService:
                     [
                         DownloadState.SENT,
                         DownloadState.DOWNLOADING,
+                        DownloadState.FINALIZING,
                     ]
                 )
             )
@@ -244,6 +245,11 @@ class DownloadService:
                 if status.downloaded_path and not download.downloaded_path:
                     download.downloaded_path = status.downloaded_path
 
+            elif status.state == "finalizing":
+                download.state = DownloadState.FINALIZING
+                if status.downloaded_path and not download.downloaded_path:
+                    download.downloaded_path = status.downloaded_path
+
             elif status.state == "paused":
                 download.state = DownloadState.PAUSED
 
@@ -266,6 +272,7 @@ class DownloadService:
                         DownloadState.QUEUED,
                         DownloadState.SENT,
                         DownloadState.DOWNLOADING,
+                        DownloadState.FINALIZING,
                         DownloadState.PAUSED,
                     ]
                 )

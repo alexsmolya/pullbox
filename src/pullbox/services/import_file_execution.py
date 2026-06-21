@@ -6,17 +6,19 @@ import asyncio
 import shutil
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import structlog
+from sqlalchemy import func as sa_func
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import joinedload
 
 from pullbox.core.exceptions import JobCancelledError, JobPausedError
 from pullbox.core.file_ops import LibraryFileRegistrationOutcome
 from pullbox.core.file_safety import classify_resource_safety_exception
-from pullbox.models.import_job import ImportedFile, ImportedFileStatus
+from pullbox.models.import_job import ImportedFile, ImportedFileStatus, ImportJobAction
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import LibraryFile, MatchConfidence
 from pullbox.models.series import Series
@@ -33,7 +35,7 @@ from pullbox.utilities.settings import restore_file_from_utility_trash
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from pullbox.models.import_job import ImportedSeries, ImportJob
     from pullbox.services.import_file_execution_protocols import (
@@ -57,6 +59,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 _COMICINFO_METADATA_PROGRESS_HEARTBEAT_SECONDS = 5.0
 _COMICINFO_METADATA_STAGE = "comicinfo_metadata"
+_COMICINFO_ENRICHMENT_DIAGNOSTIC_KEY = "comicinfo_enrichment"
 
 _MATCH_CONFIDENCE_MAP: dict[str, MatchConfidence] = {
     "high": MatchConfidence.HIGH,
@@ -162,6 +165,47 @@ def _resolve_import_file_issue_id(
         return number_to_issue_id.get(imp_file.parsed_issue_number)
 
     return None
+
+
+async def _requires_serial_skip_existing_processing(
+    session: AsyncSession,
+    job: ImportJob,
+    *,
+    resolved_series_id: int,
+    importable_files: list[ImportedFile],
+    load_media_settings: LoadMediaSettingsFunc,
+) -> bool:
+    media_settings = await load_media_settings(session, job)
+    if media_settings["skip_existing_files"].lower() != "true":
+        return False
+
+    cv_id_to_issue, number_to_issue = await load_issue_lookup_for_series(
+        session,
+        resolved_series_id,
+    )
+    cv_id_to_issue_id = {
+        comicvine_id: issue.id
+        for comicvine_id, issue in cv_id_to_issue.items()
+        if issue.id is not None
+    }
+    number_to_issue_id = {
+        issue_number: issue.id
+        for issue_number, issue in number_to_issue.items()
+        if issue.id is not None
+    }
+    seen_issue_ids: set[int] = set()
+    for imp_file in importable_files:
+        resolved_issue_id = _resolve_import_file_issue_id(
+            imp_file,
+            cv_id_to_issue_id=cv_id_to_issue_id,
+            number_to_issue_id=number_to_issue_id,
+        )
+        if resolved_issue_id is None:
+            continue
+        if resolved_issue_id in seen_issue_ids:
+            return True
+        seen_issue_ids.add(resolved_issue_id)
+    return False
 
 
 def _placeholder_issue_target_from_diagnostics(
@@ -301,9 +345,17 @@ async def _build_comicinfo_payload_with_progress(
     imp_file: ImportedFile,
     file_index: int,
     total_files: int,
+    defer_issue_enrichment: bool = False,
 ) -> dict[str, Any]:
     """Build ComicInfo data while keeping Step 4 visibly alive."""
     if report_file_progress is None:
+        if defer_issue_enrichment:
+            return await build_comicinfo_payload(
+                session,
+                issue,
+                source_path=source_path,
+                defer_issue_enrichment=True,
+            )
         return await build_comicinfo_payload(
             session,
             issue,
@@ -323,13 +375,23 @@ async def _build_comicinfo_payload_with_progress(
         )
 
     await _emit_metadata_progress(0)
-    payload_task = asyncio.create_task(
-        build_comicinfo_payload(
-            session,
-            issue,
-            source_path=source_path,
+    if defer_issue_enrichment:
+        payload_task = asyncio.create_task(
+            build_comicinfo_payload(
+                session,
+                issue,
+                source_path=source_path,
+                defer_issue_enrichment=True,
+            )
         )
-    )
+    else:
+        payload_task = asyncio.create_task(
+            build_comicinfo_payload(
+                session,
+                issue,
+                source_path=source_path,
+            )
+        )
     try:
         while True:
             try:
@@ -375,13 +437,28 @@ async def process_import_series_files(
     register_file: RegisterLibraryFileFunc,
     move_to_trash: MoveToTrashFunc,
     report_file_progress: ReportFileProgressFunc | None = None,
+    defer_comicinfo_enrichment: bool = False,
+    file_worker_count: int = 1,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    _file_ids_override: list[int] | None = None,
+    _file_index_by_id: dict[int, int] | None = None,
+    _total_file_count: int | None = None,
+    _update_item_counters: bool = True,
+    _setup_placeholder_targets: bool = True,
 ) -> tuple[int, int]:
     """Register selected import files into the library and update row counters."""
-    importable_files = await load_importable_files(
-        session,
-        item,
-        duplicate_mode=duplicate_mode,
-    )
+    if _file_ids_override is None:
+        importable_files = await load_importable_files(
+            session,
+            item,
+            duplicate_mode=duplicate_mode,
+        )
+    else:
+        importable_files = [
+            imp_file
+            for imp_file_id in _file_ids_override
+            if (imp_file := await session.get(ImportedFile, imp_file_id)) is not None
+        ]
     if not importable_files:
         return 0, 0
     importable_file_ids = [imp_file.id for imp_file in importable_files]
@@ -396,11 +473,133 @@ async def process_import_series_files(
     target_library_root_id = job.target_library_root_id
     update_embedded_comicinfo_from_match = bool(job.update_embedded_comicinfo_from_match)
 
-    placeholder_progress_live_only = await _ensure_placeholder_issue_targets(
-        session,
-        series_id=resolved_series_id,
-        importable_files=importable_files,
+    placeholder_progress_live_only = False
+    if _setup_placeholder_targets:
+        placeholder_progress_live_only = await _ensure_placeholder_issue_targets(
+            session,
+            series_id=resolved_series_id,
+            importable_files=importable_files,
+        )
+
+    effective_worker_count = max(int(file_worker_count or 1), 1)
+    parallel_processing_available = (
+        _file_ids_override is None
+        and session_factory is not None
+        and effective_worker_count > 1
+        and len(importable_file_ids) > 1
     )
+    if parallel_processing_available and not await _requires_serial_skip_existing_processing(
+        session,
+        job,
+        resolved_series_id=resolved_series_id,
+        importable_files=importable_files,
+        load_media_settings=load_media_settings,
+    ):
+        assert session_factory is not None
+        await session.commit()
+        file_index_by_id = {
+            int(imp_file_id): index
+            for index, imp_file_id in enumerate(importable_file_ids, start=1)
+        }
+        record_action_lock = asyncio.Lock()
+        next_action_sequence = int(
+            await session.scalar(
+                sa_select(sa_func.max(ImportJobAction.sequence_no)).where(
+                    ImportJobAction.import_job_id == job_id
+                )
+            )
+            or 0
+        )
+        semaphore = asyncio.Semaphore(min(effective_worker_count, len(importable_file_ids)))
+
+        async def locked_record_action(
+            session: AsyncSession,
+            job: ImportJob,
+            *,
+            phase: str,
+            action_type: str,
+            payload: dict[str, Any],
+        ) -> ImportJobAction:
+            nonlocal next_action_sequence
+            async with record_action_lock:
+                next_action_sequence += 1
+                action = await record_action(
+                    session,
+                    job,
+                    phase=phase,
+                    action_type=action_type,
+                    payload=payload,
+                )
+                action.sequence_no = next_action_sequence
+                await session.flush()
+                return action
+
+        async def process_one_file(imp_file_id: int) -> tuple[int, int]:
+            async with semaphore, session_factory() as worker_session:
+                worker_job = await worker_session.get(type(job), job_id)
+                worker_item = await worker_session.get(type(item), item_id)
+                if worker_job is None or worker_item is None:
+                    raise ValueError("Import job or series disappeared during file processing")
+                return await process_import_series_files(
+                    worker_session,
+                    worker_job,
+                    worker_item,
+                    duplicate_mode=duplicate_mode,
+                    series_id_override=resolved_series_id,
+                    load_media_settings=load_media_settings,
+                    load_trash_dir=load_trash_dir,
+                    load_ingest_policy=load_ingest_policy,
+                    load_permission_policy=load_permission_policy,
+                    raise_if_cancelled=raise_if_cancelled,
+                    prepare_file=prepare_file,
+                    build_comicinfo_payload=build_comicinfo_payload,
+                    apply_comicinfo=apply_comicinfo,
+                    cleanup_prepared_file=cleanup_prepared_file,
+                    record_action=locked_record_action,
+                    log_event=log_event,
+                    register_file=register_file,
+                    move_to_trash=move_to_trash,
+                    report_file_progress=report_file_progress,
+                    defer_comicinfo_enrichment=defer_comicinfo_enrichment,
+                    file_worker_count=1,
+                    session_factory=None,
+                    _file_ids_override=[imp_file_id],
+                    _file_index_by_id=file_index_by_id,
+                    _total_file_count=len(importable_file_ids),
+                    _update_item_counters=False,
+                    _setup_placeholder_targets=False,
+                )
+
+        results = await asyncio.gather(
+            *(process_one_file(int(imp_file_id)) for imp_file_id in importable_file_ids)
+        )
+        files_imported = sum(imported for imported, _failed in results)
+        files_failed = sum(failed for _imported, failed in results)
+        reloaded_item = await session.get(type(item), item_id)
+        if reloaded_item is not None:
+            item = reloaded_item
+        if _update_item_counters:
+            files_safety_blocked = int(
+                await session.scalar(
+                    sa_select(sa_func.count())
+                    .select_from(ImportedFile)
+                    .where(
+                        ImportedFile.import_series_id == item_id,
+                        ImportedFile.status == ImportedFileStatus.SAFETY_BLOCKED,
+                    )
+                )
+                or 0
+            )
+            item.files_imported = files_imported
+            item.files_failed = files_failed
+            diagnostics = dict(item.diagnostics or {})
+            if files_safety_blocked:
+                diagnostics["safety_blocked_files"] = files_safety_blocked
+            else:
+                diagnostics.pop("safety_blocked_files", None)
+            item.diagnostics = diagnostics
+            await session.flush()
+        return files_imported, files_failed
 
     cv_id_to_issue, number_to_issue = await load_issue_lookup_for_series(
         session,
@@ -435,9 +634,14 @@ async def process_import_series_files(
     files_failed = 0
     files_safety_blocked = 0
 
-    total_importable_files = len(importable_file_ids)
+    total_importable_files = _total_file_count or len(importable_file_ids)
 
-    for file_index, imp_file_id in enumerate(importable_file_ids, start=1):
+    for local_file_index, imp_file_id in enumerate(importable_file_ids, start=1):
+        file_index = (
+            _file_index_by_id.get(int(imp_file_id), local_file_index)
+            if _file_index_by_id is not None
+            else local_file_index
+        )
         prepared: PreparedImportFile | None = None
         placed_destination_path: Path | None = None
         placed_series_folder_created = False
@@ -619,6 +823,7 @@ async def process_import_series_files(
                             imp_file=imp_file,
                             file_index=file_index,
                             total_files=total_importable_files,
+                            defer_issue_enrichment=defer_comicinfo_enrichment,
                         )
                         comicinfo_payload_cache[comicinfo_payload_cache_key] = comicinfo_payload
 
@@ -698,6 +903,34 @@ async def process_import_series_files(
             imp_file.matched_issue_id = resolved_issue.id
             imp_file.library_file_id = library_file.id
             imp_file.status = ImportedFileStatus.IMPORTED
+            comicinfo_enrichment_deferred = (
+                bool(defer_comicinfo_enrichment)
+                and comicinfo_payload is not None
+                and resolved_issue.comicvine_id is not None
+            )
+            if comicinfo_enrichment_deferred:
+                diagnostics = dict(imp_file.diagnostics or {})
+                diagnostics[_COMICINFO_ENRICHMENT_DIAGNOSTIC_KEY] = {
+                    "status": "pending",
+                    "reason": "deferred_during_import",
+                    "issue_id": resolved_issue.id,
+                    "issue_cv_id": resolved_issue.comicvine_id,
+                    "library_file_id": library_file.id,
+                    "queued_at": datetime.now(UTC).isoformat(),
+                }
+                imp_file.diagnostics = diagnostics
+                await log_event(
+                    session,
+                    job_id,
+                    "DEBUG",
+                    "import_file_comicinfo_enrichment_deferred",
+                    message=f"Deferred full ComicInfo metadata refresh: {final_file_name}",
+                    source_path=imp_file.file_path,
+                    destination_path=library_file.file_path,
+                    library_file_id=library_file.id,
+                    issue_id=resolved_issue.id,
+                    issue_cv_id=resolved_issue.comicvine_id,
+                )
             if report_file_progress is not None:
                 await report_file_progress(
                     imp_file=imp_file,
@@ -725,6 +958,7 @@ async def process_import_series_files(
                     ),
                     "converted": prepared.converted,
                     "embedded_comicinfo_updated": comicinfo_payload is not None,
+                    "embedded_comicinfo_enrichment_deferred": comicinfo_enrichment_deferred,
                     "created_series_folder": (
                         bool(registration.series_folder_created)
                         if registration is not None
@@ -863,15 +1097,16 @@ async def process_import_series_files(
             )
             await session.commit()
 
-    item.files_imported = files_imported
-    item.files_failed = files_failed
-    diagnostics = dict(item.diagnostics or {})
-    if files_safety_blocked:
-        diagnostics["safety_blocked_files"] = files_safety_blocked
-    else:
-        diagnostics.pop("safety_blocked_files", None)
-    item.diagnostics = diagnostics
-    await session.flush()
+    if _update_item_counters:
+        item.files_imported = files_imported
+        item.files_failed = files_failed
+        diagnostics = dict(item.diagnostics or {})
+        if files_safety_blocked:
+            diagnostics["safety_blocked_files"] = files_safety_blocked
+        else:
+            diagnostics.pop("safety_blocked_files", None)
+        item.diagnostics = diagnostics
+        await session.flush()
 
     return files_imported, files_failed
 

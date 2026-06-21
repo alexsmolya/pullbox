@@ -83,6 +83,26 @@ async def test_build_import_scan_metadata_provider_wraps_file_sqlite_with_persis
     assert isinstance(cached_provider._provider, PersistentComicVineCacheProvider)
 
 
+async def test_build_import_scan_metadata_provider_preserves_existing_persistent_cache(
+    tmp_path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'pullbox.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    provider = AsyncMock()
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    persistent_provider = PersistentComicVineCacheProvider(provider, session_factory)
+
+    try:
+        async with session_factory() as session:
+            cached_provider = build_import_scan_metadata_provider(session, persistent_provider)
+    finally:
+        await engine.dispose()
+
+    assert cached_provider._provider is persistent_provider
+
+
 async def test_cached_import_metadata_provider_normalizes_search_queries() -> None:
     provider = _ProviderDouble()
     cached = CachedImportMetadataProvider(provider)

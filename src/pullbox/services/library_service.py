@@ -170,21 +170,72 @@ async def reconcile_runtime_library_paths(
     runtime_root_str = _normalize_library_path(runtime_root)
     config_row = await session.get(SystemConfig, "comics_directory")
     if config_row is None or not config_row.value.strip():
-        return None
+        if config_row is None:
+            config_row = SystemConfig(
+                key="comics_directory",
+                value=runtime_root_str,
+                value_type="string",
+            )
+            session.add(config_row)
+        else:
+            config_row.value = runtime_root_str
+
+        root_result = await session.execute(
+            select(LibraryRoot).where(LibraryRoot.path == runtime_root_str)
+        )
+        root = root_result.scalar_one_or_none()
+        if root is None:
+            root = LibraryRoot(
+                name="Comics Directory",
+                path=runtime_root_str,
+                enabled=True,
+            )
+            session.add(root)
+        else:
+            root.name = "Comics Directory"
+            root.enabled = True
+
+        await session.flush()
+        return {
+            "old_root": "",
+            "new_root": runtime_root_str,
+            "series_updated": 0,
+            "library_files_updated": 0,
+        }
 
     stored_root_str = _normalize_library_path(config_row.value)
+    roots = list((await session.execute(select(LibraryRoot))).scalars().all())
+    target_root = next(
+        (root for root in roots if _normalize_library_path(root.path) == runtime_root_str),
+        None,
+    )
+
     if stored_root_str == runtime_root_str:
-        return None
+        if target_root is None:
+            target_root = LibraryRoot(
+                name="Comics Directory",
+                path=runtime_root_str,
+                enabled=True,
+            )
+            session.add(target_root)
+        elif not target_root.enabled:
+            target_root.name = "Comics Directory"
+            target_root.enabled = True
+        else:
+            return None
+
+        await session.flush()
+        return {
+            "old_root": stored_root_str,
+            "new_root": runtime_root_str,
+            "series_updated": 0,
+            "library_files_updated": 0,
+        }
 
     config_row.value = runtime_root_str
 
-    roots = list((await session.execute(select(LibraryRoot))).scalars().all())
     old_root = next(
         (root for root in roots if _normalize_library_path(root.path) == stored_root_str),
-        None,
-    )
-    target_root = next(
-        (root for root in roots if _normalize_library_path(root.path) == runtime_root_str),
         None,
     )
 
