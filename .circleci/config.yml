@@ -664,33 +664,6 @@ jobs:
           name: Workflow Hygiene Required aggregate
           command: echo "Workflow hygiene completed successfully."
 
-  clean-room:
-    executor: python314_node
-    resource_class: large
-    steps:
-      - checkout
-      - run:
-          name: Create clean-room venv
-          command: |
-            set -euo pipefail
-            python -m venv /tmp/pullbox-clean-room
-            echo "/tmp/pullbox-clean-room/bin" >> "$BASH_ENV"
-      - run:
-          name: Install clean-room dependencies
-          command: |
-            set -euo pipefail
-            /tmp/pullbox-clean-room/bin/python -m pip install --upgrade "pip>=26.0" wheel
-            /tmp/pullbox-clean-room/bin/python -m pip install -e ".[dev]"
-            npm ci --prefer-offline --no-audit
-      - run:
-          name: Clean-room lint/type/unit checks
-          command: |
-            set -euo pipefail
-            /tmp/pullbox-clean-room/bin/ruff check src/ tests/
-            /tmp/pullbox-clean-room/bin/ruff format --check src/ tests/
-            /tmp/pullbox-clean-room/bin/mypy src/pullbox/
-            PULLBOX_SECRET_KEY=test-ci-key /tmp/pullbox-clean-room/bin/pytest tests/unit/ -n 4 -q
-
   docker-validate:
     machine:
       image: ubuntu-2404:current
@@ -1074,16 +1047,26 @@ jobs:
 workflows:
   pr-and-merge-checks:
     jobs:
-      - release-sync-check
+      - release-sync-check:
+          filters: &pr_checks_filters
+            branches:
+              ignore:
+                - main
+                - develop
+            tags:
+              ignore: /.*/
       - quality-gate:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - typecheck:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - migration-check:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - test-python:
           name: test-python-3.12
           python_version: "3.12"
@@ -1095,6 +1078,7 @@ workflows:
             - quality-gate
             - typecheck
             - migration-check
+          filters: *pr_checks_filters
       - test-python:
           name: test-python-3.13
           python_version: "3.13"
@@ -1106,6 +1090,7 @@ workflows:
             - quality-gate
             - typecheck
             - migration-check
+          filters: *pr_checks_filters
       - test-python:
           name: test-python-3.14
           python_version: "3.14"
@@ -1117,29 +1102,34 @@ workflows:
             - quality-gate
             - typecheck
             - migration-check
+          filters: *pr_checks_filters
       - coverage-python:
           name: coverage-python-3.12
           python_version: "3.12"
           executor_name: python312
           requires:
             - test-python-3.12
+          filters: *pr_checks_filters
       - coverage-python:
           name: coverage-python-3.13
           python_version: "3.13"
           executor_name: python313
           requires:
             - test-python-3.13
+          filters: *pr_checks_filters
       - coverage-python:
           name: coverage-python-3.14
           python_version: "3.14"
           executor_name: python314
           requires:
             - test-python-3.14
+          filters: *pr_checks_filters
       - accessibility:
           requires:
             - quality-gate
             - typecheck
             - migration-check
+          filters: *pr_checks_filters
       - e2e:
           name: e2e-chromium
           browser: chromium
@@ -1149,6 +1139,7 @@ workflows:
             - coverage-python-3.12
             - coverage-python-3.13
             - coverage-python-3.14
+          filters: *pr_checks_filters
       - e2e:
           name: e2e-firefox
           browser: firefox
@@ -1159,27 +1150,34 @@ workflows:
             - coverage-python-3.12
             - coverage-python-3.13
             - coverage-python-3.14
+          filters: *pr_checks_filters
       - ci-required:
           requires:
             - accessibility
             - e2e-chromium
             - e2e-firefox
+          filters: *pr_checks_filters
 
       - gitleaks:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - pip-audit:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - safety-check:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - bandit:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - codeql:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - security-required:
           requires:
             - gitleaks
@@ -1187,29 +1185,21 @@ workflows:
             - safety-check
             - bandit
             - codeql
+          filters: *pr_checks_filters
 
       - workflow-hygiene:
           requires:
             - release-sync-check
+          filters: *pr_checks_filters
       - workflow-hygiene-required:
           requires:
             - workflow-hygiene
+          filters: *pr_checks_filters
 
       - docker-validate:
           requires:
             - release-sync-check
-
-  weekly-clean-room:
-    triggers:
-      - schedule:
-          cron: "30 6 * * 3"
-          filters:
-            branches:
-              only:
-                - develop
-                - main
-    jobs:
-      - clean-room
+          filters: *pr_checks_filters
 
   docker-release:
     jobs:

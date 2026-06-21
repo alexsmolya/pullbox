@@ -27,6 +27,17 @@ signing, and GitHub Release gates.
 - Heavy jobs use larger resource classes by default.
 - Docker publish remains tag/manual only.
 
+## Trigger Policy
+
+- Open pull requests run the full CI/security/workflow-hygiene gate.
+- Pushes to open PR branches rerun that gate.
+- Direct pushes to `develop`, `main`, or unreviewed feature branches do not run
+  the expensive PR workflow.
+- Version tags matching `v*` run the Docker release/sign/GitHub Release
+  workflow.
+- The old weekly clean-room schedule and job are intentionally removed; use
+  local `make ci-full` when clean-room validation is needed.
+
 ## Required CircleCI Environment
 
 Create restricted project environment variables or contexts for:

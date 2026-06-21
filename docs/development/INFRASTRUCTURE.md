@@ -174,7 +174,7 @@ manual/reference fallback.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr-and-merge-checks` | PR, merge, scheduled clean-room, manual pipeline | Lint, format, typecheck, tests, migration check, accessibility, E2E, Docker validation, security, workflow hygiene, and aggregate required checks |
+| `pr-and-merge-checks` | Open PR source branches and explicit manual pipelines | Lint, format, typecheck, tests, migration check, accessibility, E2E, Docker validation, security, workflow hygiene, and aggregate required checks |
 | `docker-release` | Version tag push | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and GitHub Release creation |
 | `manual-docker-release` | Manual CircleCI pipeline parameter | Explicit release-image build/publish path for controlled operator use |
 
@@ -192,7 +192,7 @@ manual/reference fallback.
 
 ### 3.3 Current repo nuances
 
-- PR and merge queue checks are the authoritative correctness gate. Ordinary
+- PR checks are the authoritative correctness gate. Ordinary `develop` and
   `main` merges should not rerun full CI or publish container images.
 - Post-release `main` to `develop` sync PRs may use the release-sync fast path
   only when they are same-repository, version-only `feature/sync-develop-*`
@@ -205,7 +205,7 @@ manual/reference fallback.
 - Forked or Dependabot PRs may not have repository secrets. PR workflows should
   skip secret-dependent validation in those untrusted contexts rather than fail
   before meaningful validation can start.
-- Ordinary CI, security, workflow hygiene, and clean-room jobs may be routed by
+- Ordinary CI, security, and workflow hygiene jobs may be routed by
   the repository variable `PULLBOX_CHECKS_RUNNER`:
   - `self-hosted` keeps trusted checks on the local runner
   - `github-hosted` moves trusted checks to `ubuntu-latest`

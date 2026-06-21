@@ -540,15 +540,17 @@ def test_docker_smoke_workflows_use_valid_application_secrets() -> None:
     assert failures == []
 
 
-def test_docker_release_workflow_runs_grype_before_publish() -> None:
+def test_legacy_docker_release_workflow_is_manual_only_and_scans_before_publish() -> None:
     docker_workflow_path = WORKFLOW_DIR / "docker-release.yml"
     docker_workflow = docker_workflow_path.read_text(encoding="utf-8")
     data = _load_yaml(docker_workflow_path)
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
-    assert triggers.get("push", {}).get("tags") == ["v*"]
+    assert "push" not in triggers
     assert "pull_request" not in triggers
     assert "workflow_run" not in triggers
+    assert "workflow_dispatch" in triggers
+    assert "CircleCI is the canonical publisher for release tag pushes." in docker_workflow
 
     jobs = data.get("jobs")
     assert isinstance(jobs, dict)
