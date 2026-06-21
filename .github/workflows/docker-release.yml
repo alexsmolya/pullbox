@@ -16,7 +16,8 @@
 # governed by the general checks-runner toggle.
 #
 # Tag strategy:
-#   v* tag       → 1.2.3, 1.2, 1, latest, sha-xxxxx
+#   final v* tag → 1.2.3, latest, sha-xxxxx
+#   pre-release  → 1.2.3-rc1, sha-xxxxx
 #   manual       → edge (or custom), sha-xxxxx
 #
 # Versioning:
@@ -113,9 +114,15 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           if [ -n "$TAG" ]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
+            if [[ "$TAG" == *-* ]]; then
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
             echo "Found tag: $TAG"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
             echo "No release tag at this SHA"
           fi
 
@@ -156,7 +163,7 @@ jobs:
             ${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=semver,pattern={{version}},value=${{ steps.resolve-tag.outputs.tag }},enable=${{ steps.resolve-tag.outputs.is_release }}
-            type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release }}
+            type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release == 'true' && steps.resolve-tag.outputs.is_prerelease != 'true' }}
             type=raw,value=${{ inputs.tag_override || 'edge' }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=sha,format=short,prefix=sha-
           labels: |
@@ -380,8 +387,14 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           if [ -n "$TAG" ]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
+            if [[ "$TAG" == *-* ]]; then
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Runner preflight
@@ -444,7 +457,7 @@ jobs:
             ${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=semver,pattern={{version}},value=${{ steps.resolve-tag.outputs.tag }},enable=${{ steps.resolve-tag.outputs.is_release }}
-            type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release }}
+            type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release == 'true' && steps.resolve-tag.outputs.is_prerelease != 'true' }}
             type=raw,value=${{ inputs.tag_override || 'edge' }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=sha,format=short,prefix=sha-
           labels: |

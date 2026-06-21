@@ -611,6 +611,8 @@ Development dependency categories:
 - Docker metadata rules may publish semver aliases in addition to exact version
   and SHA tags during release-tag builds.
 - Pre-release tags can exercise the full pipeline before a stable release.
+- Pre-release tags must not update `latest`; only final release tags should move
+  that alias.
 - If Docker publish succeeds but registry tags look wrong, treat that as release
   hygiene work before moving on.
 

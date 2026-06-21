@@ -534,6 +534,23 @@ def test_docker_release_workflow_runs_grype_before_publish() -> None:
     assert push_job.get("runs-on") == ["self-hosted", "Linux", "X64", "docker"]
 
 
+def test_docker_release_prerelease_tags_do_not_update_latest() -> None:
+    docker_workflow = (WORKFLOW_DIR / "docker-release.yml").read_text(encoding="utf-8")
+
+    assert "is_prerelease" in docker_workflow
+    assert 'echo "is_prerelease=true" >> "$GITHUB_OUTPUT"' in docker_workflow
+    assert 'echo "is_prerelease=false" >> "$GITHUB_OUTPUT"' in docker_workflow
+    latest_guard = (
+        "type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release == 'true' && "
+        "steps.resolve-tag.outputs.is_prerelease != 'true' }}"
+    )
+    assert docker_workflow.count(latest_guard) == 2
+    assert (
+        "type=raw,value=latest,enable=${{ steps.resolve-tag.outputs.is_release }}"
+        not in docker_workflow
+    )
+
+
 def test_grype_config_tracks_current_dhi_runtime() -> None:
     config_text = GRYPE_CONFIG.read_text(encoding="utf-8")
     config = _load_yaml(GRYPE_CONFIG)
