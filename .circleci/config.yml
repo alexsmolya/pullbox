@@ -907,11 +907,12 @@ jobs:
             set -euo pipefail
             : "${DHI_USERNAME:?DHI_USERNAME is required}"
             : "${DHI_TOKEN:?DHI_TOKEN is required}"
+            : "${GHCR_USERNAME:?GHCR_USERNAME is required}"
             : "${GHCR_TOKEN:?GHCR_TOKEN with package write access is required}"
             : "${DOCKERHUB_USERNAME:?DOCKERHUB_USERNAME is required}"
             : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN is required}"
             echo "${DHI_TOKEN}" | docker login dhi.io -u "${DHI_USERNAME}" --password-stdin
-            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${CIRCLE_PROJECT_USERNAME}" --password-stdin
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
             echo "${DOCKERHUB_TOKEN}" | docker login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
             VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pullbox/__init__.py | head -1)"
             BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -987,6 +988,7 @@ jobs:
           command: |
             set -euo pipefail
             : "${CIRCLE_OIDC_TOKEN_V2:?CircleCI OIDC token is required for keyless signing}"
+            : "${GHCR_USERNAME:?GHCR_USERNAME is required}"
             : "${GHCR_TOKEN:?GHCR_TOKEN is required}"
             : "${DOCKERHUB_USERNAME:?DOCKERHUB_USERNAME is required}"
             : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN is required}"
@@ -997,7 +999,7 @@ jobs:
             DIGEST="$(tr -d '[:space:]' < /tmp/pullbox-workspace/release-image-digest/digest.txt)"
             GHCR_IMAGE="ghcr.io/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
             DOCKERHUB_IMAGE="docker.io/pullbox/pullbox"
-            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${CIRCLE_PROJECT_USERNAME}" --password-stdin
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
             echo "${DOCKERHUB_TOKEN}" | docker login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
             cosign sign --yes --identity-token "${CIRCLE_OIDC_TOKEN_V2}" "${GHCR_IMAGE}@${DIGEST}"
             cosign sign --yes --identity-token "${CIRCLE_OIDC_TOKEN_V2}" "${DOCKERHUB_IMAGE}@${DIGEST}"

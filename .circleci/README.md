@@ -33,6 +33,7 @@ Create restricted project environment variables or contexts for:
 
 - `DHI_USERNAME`
 - `DHI_TOKEN`
+- `GHCR_USERNAME`
 - `GHCR_TOKEN` with package write access
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
@@ -53,7 +54,7 @@ Release helper.
 - `gitleaks`, `actionlint`, and `grype` are pinned to immutable image digests.
 - The parallelism and in-job worker defaults are intentionally tunable:
   `python_test_parallelism=6`, `python_test_workers=4`,
-  `e2e_parallelism=4`, and `e2e_workers=2`.
+  `e2e_parallelism=4`, and `e2e_workers=1`.
 - A custom Pullbox CI image with Python, Node, browser OS deps, actionlint,
   gitleaks, grype, cosign, and gh preinstalled would likely reduce cold-start
   overhead further once the workflow shape is stable.
@@ -69,6 +70,5 @@ After migration, branch protection should point at the CircleCI aggregate jobs:
 Docker Validate can remain non-required if it stays path-gated, matching the
 current GitHub Actions behavior.
 
-Keep the existing GitHub Actions workflows enabled until CircleCI has emitted
-these contexts at least once. Then update the branch ruleset and disable the old
-workflows in the same follow-up change.
+The legacy GitHub Actions Docker release workflow must not run on release tag
+pushes after this migration. CircleCI is the release publisher for `v*` tags.

@@ -19,7 +19,7 @@ requirements.
 ## Current Baseline Notes
 
 - `make validate`, `make ci-local`, and `make ci-full` are the main local gates.
-- GitHub Actions run lint, format, typecheck, tests, migration checks,
+- CircleCI runs lint, format, typecheck, tests, migration checks,
   accessibility checks, E2E, security scans, Docker validation, and release
   automation.
 - CI tests Python 3.12, 3.13, and 3.14.
@@ -168,18 +168,15 @@ Key gates:
 
 ### 3.1 Current Pullbox implementation
 
-GitHub Actions workflows live in `.github/workflows/`.
+CircleCI workflows live in `.circleci/config.yml`. Legacy GitHub Actions
+workflows remain in `.github/workflows/` only where explicitly retained as
+manual/reference fallback.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to `main` or `develop`, merge queue, manual dispatch | Lint, format, typecheck, tests, migration check, accessibility, E2E, `CI Required` aggregate |
-| `docker-validate.yml` | Docker-relevant PR changes, manual dispatch | Trusted production Docker build, Grype scan, and smoke validation; reduced no-secrets sanity build for untrusted PRs |
-| `docker-release.yml` | Version tag push, manual dispatch | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and digest artifact upload |
-| `security.yml` | PR to `main` or `develop`, merge queue, schedule, manual dispatch | gitleaks, `pip-audit`, Safety, Bandit, public-gated CodeQL, `Security Required` aggregate |
-| `workflow-hygiene.yml` | PR to `main` or `develop`, merge queue, manual dispatch | actionlint, workflow expression validation, `Workflow Hygiene Required` aggregate |
-| `codeql-branch-probe.yml` | Trusted branch push, manual dispatch | Lightweight CodeQL-only branch/default-branch feedback and dashboard refresh |
-| `clean-room.yml` | Schedule, manual dispatch | Fresh install validation outside runner-local cache |
-| `release.yml` | Docker Release success for tagged commits | Changelog and GitHub Release creation |
+| `pr-and-merge-checks` | PR, merge, scheduled clean-room, manual pipeline | Lint, format, typecheck, tests, migration check, accessibility, E2E, Docker validation, security, workflow hygiene, and aggregate required checks |
+| `docker-release` | Version tag push | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and GitHub Release creation |
+| `manual-docker-release` | Manual CircleCI pipeline parameter | Explicit release-image build/publish path for controlled operator use |
 
 ### 3.2 Required standard
 
@@ -201,7 +198,7 @@ GitHub Actions workflows live in `.github/workflows/`.
   only when they are same-repository, version-only `feature/sync-develop-*`
   PRs that carry `origin/main` forward and bump `src/pullbox/__init__.py` from
   the released version to the next patch `-dev` version.
-- Docker validation is a PR/manual workflow. It never logs in to publish
+- Docker validation is a PR/manual CircleCI workflow. It never logs in to publish
   registries and never pushes images.
 - Docker publication depends on trusted refs and release tags.
 - DHI credentials are required for Docker builds that pull `dhi.io` base images.
@@ -573,14 +570,15 @@ Development dependency categories:
 
 ### 8.1 Current Pullbox implementation
 
-- Version tags trigger release and Docker automation.
-- `docker-release.yml` builds, scans, smoke-tests, publishes, signs, and verifies
-  release images only for version tags or explicit release dispatches.
-- `docker-validate.yml` validates Docker-sensitive PR changes without publishing.
+- Version tags trigger CircleCI release and Docker automation.
+- CircleCI `docker-release` builds, scans, smoke-tests, publishes, signs, and
+  verifies release images only for version tags or explicit release dispatches.
+- CircleCI Docker Validate validates Docker-sensitive PR changes without
+  publishing.
 - Published container images are signed with keyless Sigstore/Cosign using
-  GitHub Actions OIDC after the registry push completes. `Docker Release`
+  CircleCI OIDC after the registry push completes. `Docker Release`
   verifies GHCR and Docker Hub signatures by digest before reporting success.
-- `release.yml` creates or updates GitHub Releases for tagged commits after the
+- CircleCI creates or updates GitHub Releases for tagged commits after the
   Docker Release workflow succeeds.
 - GitHub Release notes start with the curated `CHANGELOG.md` release section,
   then append generated commit details grouped by conventional commit prefixes.
