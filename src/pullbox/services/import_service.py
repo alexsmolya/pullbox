@@ -7,6 +7,7 @@ including series deduplication and ComicVine matching.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -143,6 +144,13 @@ logger = structlog.get_logger(__name__)
 
 register_library_file = register_library_file_with_metadata
 import_detail_logger = structlog.get_logger("pullbox.imports")
+
+
+@dataclass(frozen=True)
+class RunImportResult:
+    """Post-transaction follow-up work requested by import execution."""
+
+    schedule_comicinfo_enrichment: bool = False
 
 
 # ── ImportService class ──────────────────────────────────────────────────
@@ -539,7 +547,7 @@ class ImportService(
         session: AsyncSession,
         job_id: int,
         progress_callback: Callable[[ImportProgressEvent], Awaitable[None]] | None = None,
-    ) -> None:
+    ) -> RunImportResult:
         """Execute confirmed new-series imports plus duplicate-series file merges."""
         try:
             await execute_import_job(
@@ -556,16 +564,27 @@ class ImportService(
                 progress_callback=progress_callback,
             )
             completed_job = await session.get(ImportJob, job_id)
-            if completed_job is not None and completed_job.status == ImportJobStatus.COMPLETED:
-                schedule_import_comicinfo_enrichment(
-                    progress_session_factory_for_runtime(session),
-                    job_id=job_id,
-                    build_comicinfo_payload=self._build_comicinfo_payload_for_issue,
-                    apply_comicinfo=self._apply_comicinfo_to_imported_artifact,
-                    log_event=self._log_event,
-                )
+            return RunImportResult(
+                schedule_comicinfo_enrichment=completed_job is not None
+                and completed_job.status == ImportJobStatus.COMPLETED
+            )
         finally:
             self._import_runtime_cache_by_job.pop(job_id, None)
+
+    def schedule_comicinfo_enrichment(
+        self,
+        session_factory: async_sessionmaker[AsyncSession] | None,
+        *,
+        job_id: int,
+    ) -> None:
+        """Queue deferred ComicInfo rewrites after the import transaction commits."""
+        schedule_import_comicinfo_enrichment(
+            session_factory,
+            job_id=job_id,
+            build_comicinfo_payload=self._build_comicinfo_payload_for_issue,
+            apply_comicinfo=self._apply_comicinfo_to_imported_artifact,
+            log_event=self._log_event,
+        )
 
     async def recover_pending_comicinfo_enrichment(
         self,
