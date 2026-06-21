@@ -73,19 +73,25 @@ def list_log_file_responses(logs_dir: Path) -> list[LogFileResponse]:
     if not logs_dir.is_dir():
         return []
 
-    files: list[LogFileResponse] = []
-    for path in sorted(logs_dir.glob("*.log*"), key=lambda p: p.stat().st_mtime, reverse=True):
+    files: list[tuple[int, str, LogFileResponse]] = []
+    for path in logs_dir.glob("*.log*"):
         if not path.is_file():
             continue
         stat = path.stat()
         files.append(
-            LogFileResponse(
-                filename=path.name,
-                size_bytes=stat.st_size,
-                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+            (
+                stat.st_mtime_ns,
+                path.name,
+                LogFileResponse(
+                    filename=path.name,
+                    size_bytes=stat.st_size,
+                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+                ),
             )
         )
-    return files
+    return [
+        response for _mtime, _filename, response in sorted(files, key=lambda row: (-row[0], row[1]))
+    ]
 
 
 def read_log_content(logs_dir: Path, filename: str, *, tail: int) -> LogContentResponse:
