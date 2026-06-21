@@ -85,6 +85,8 @@ def previous_published_release_tag(repository: str, current_tag: str) -> str:
     for release in releases:
         if not isinstance(release, dict):
             continue
+        if release.get("draft") is True:
+            continue
         tag_name = release.get("tag_name")
         if isinstance(tag_name, str) and tag_name and tag_name != current_tag:
             return tag_name

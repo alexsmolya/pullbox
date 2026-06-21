@@ -57,6 +57,7 @@ def test_release_body_keeps_public_release_note_format(
         assert payload is None
         return [
             {"tag_name": "v0.9.11-rc3"},
+            {"tag_name": "v0.9.12", "draft": True},
             {"tag_name": "v0.9.10"},
         ]
 
