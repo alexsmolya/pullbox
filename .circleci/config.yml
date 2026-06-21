@@ -966,6 +966,8 @@ jobs:
             : "${DOCKERHUB_USERNAME:?DOCKERHUB_USERNAME is required}"
             : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN is required}"
             mkdir -p /tmp/pullbox-workspace/release-signing
+            SIGSTORE_ID_TOKEN="$(circleci run oidc get --claims '{"aud": "sigstore"}')"
+            export SIGSTORE_ID_TOKEN
             python3 .circleci/scripts/circleci_oidc_claims.py > /tmp/pullbox-workspace/release-signing/cosign.env
             # shellcheck disable=SC1091
             . /tmp/pullbox-workspace/release-signing/cosign.env
@@ -974,8 +976,8 @@ jobs:
             DOCKERHUB_IMAGE="docker.io/pullbox/pullbox"
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
             echo "${DOCKERHUB_TOKEN}" | docker login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
-            cosign sign --yes --identity-token "${CIRCLE_OIDC_TOKEN_V2}" "${GHCR_IMAGE}@${DIGEST}"
-            cosign sign --yes --identity-token "${CIRCLE_OIDC_TOKEN_V2}" "${DOCKERHUB_IMAGE}@${DIGEST}"
+            cosign sign --yes --identity-token "${SIGSTORE_ID_TOKEN}" "${GHCR_IMAGE}@${DIGEST}"
+            cosign sign --yes --identity-token "${SIGSTORE_ID_TOKEN}" "${DOCKERHUB_IMAGE}@${DIGEST}"
 
             verify_image_signature() {
               local image_ref="$1"
