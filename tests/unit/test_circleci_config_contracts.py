@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CIRCLECI_CONFIG = REPO_ROOT / ".circleci" / "config.yml"
+CIRCLECI_OIDC_SCRIPT = REPO_ROOT / ".circleci" / "scripts" / "circleci_oidc_claims.py"
 CIRCLECI_RELEASE_SYNC_SCRIPT = REPO_ROOT / ".circleci" / "scripts" / "release_sync_check.py"
 CIRCLECI_FULL_CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "circleci-full-ci.yml"
 
@@ -150,6 +153,15 @@ def test_release_digest_extraction_avoids_circleci_heredoc_parsing() -> None:
     assert "/tmp/pullbox-workspace/release-image-digest/digest.txt" in config_text
 
 
+def test_release_signing_uses_sigstore_audience_oidc_token() -> None:
+    config_text = CIRCLECI_CONFIG.read_text(encoding="utf-8")
+
+    assert 'circleci run oidc get --claims \'{"aud": "sigstore"}\'' in config_text
+    assert "export SIGSTORE_ID_TOKEN" in config_text
+    assert 'cosign sign --yes --identity-token "${SIGSTORE_ID_TOKEN}"' in config_text
+    assert 'cosign sign --yes --identity-token "${CIRCLE_OIDC_TOKEN_V2}"' not in config_text
+
+
 def test_release_sync_check_accepts_pipeline_pr_context(monkeypatch: Any) -> None:
     """API-triggered full-CI pipelines should still be recognized as PR pipelines."""
     spec = importlib.util.spec_from_file_location(
@@ -167,3 +179,35 @@ def test_release_sync_check_accepts_pipeline_pr_context(monkeypatch: Any) -> Non
 
     assert module._pull_request_number() == "48"
     assert module._pull_request_base_branch("pullboxapp/pullbox") == "main"
+
+
+def test_circleci_oidc_claims_emit_fulcio_certificate_identity(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    payload = {
+        "iss": "https://oidc.circleci.com/org/org-123",
+        "oidc.circleci.com/project-id": "project-456",
+        "oidc.circleci.com/pipeline-definition-id": "definition-789",
+        "oidc.circleci.com/vcs-origin": "https://github.com/pullboxapp/pullbox",
+        "oidc.circleci.com/vcs-ref": "refs/tags/v0.9.11-rc3",
+    }
+    encoded_payload = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    token = f"header.{encoded_payload.rstrip('=')}.signature"
+    spec = importlib.util.spec_from_file_location("circleci_oidc_claims", CIRCLECI_OIDC_SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setenv("SIGSTORE_ID_TOKEN", token)
+
+    assert module.main() == 0
+    output = capsys.readouterr().out
+
+    assert "export COSIGN_CERTIFICATE_OIDC_ISSUER=https://oidc.circleci.com/org/org-123" in output
+    assert (
+        "export COSIGN_CERTIFICATE_IDENTITY="
+        "https://circleci.com/api/v2/projects/project-456/"
+        "pipeline-definitions/definition-789"
+    ) in output
+    assert "export CIRCLECI_OIDC_PIPELINE_DEFINITION_ID=definition-789" in output

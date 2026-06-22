@@ -10,8 +10,8 @@ signing, and GitHub Release gates.
   Docker validation, Docker release, image signing, and GitHub Release creation.
 - `scripts/release_sync_check.py` - conservative release-sync fast-path detector.
 - `scripts/docker_validate_gate.py` - Docker-sensitive path and trust detector.
-- `scripts/circleci_oidc_claims.py` - extracts CircleCI OIDC issuer and subject
-  for Cosign signature verification.
+- `scripts/circleci_oidc_claims.py` - extracts CircleCI OIDC issuer and
+  certificate identity for Cosign signature verification.
 - `scripts/github_release.py` - GitHub Release create/update helper.
 
 ## Speed Optimizations Included
@@ -63,10 +63,10 @@ Create the GitHub repository secret `CIRCLECI_TOKEN` with permission to trigger
 CircleCI pipelines. The lightweight GitHub label bridge uses it to start the
 full PR gate after `ci:full` is applied.
 
-Cosign uses CircleCI OIDC through `CIRCLE_OIDC_TOKEN_V2`. The signing job derives
-the certificate issuer and identity from the token used to sign, verifies both
-published registries by digest, and passes the verification values to the GitHub
-Release helper.
+Cosign uses CircleCI OIDC through a job-generated Sigstore-audience token. The
+signing job derives the certificate issuer and CircleCI pipeline-definition
+identity from that token, verifies both published registries by digest, and
+passes the verification values to the GitHub Release helper.
 
 ## Migration Notes
 

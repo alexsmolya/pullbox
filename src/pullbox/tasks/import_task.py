@@ -329,6 +329,11 @@ async def _build_import_service(session: AsyncSession) -> Any:
     return await build_import_service(session)
 
 
+def _should_schedule_comicinfo_enrichment(result: Any) -> bool:
+    """Return True only for the explicit run_import follow-up signal."""
+    return getattr(result, "schedule_comicinfo_enrichment", False) is True
+
+
 class ImportRunner:
     """Single-import durable runner with startup recovery and broadcast progress."""
 
@@ -481,8 +486,17 @@ class ImportRunner:
                     )
                     await session.commit()
                 elif job.status == ImportJobStatus.IMPORTING:
-                    await service.run_import(session, job_id, progress_callback=progress_callback)
+                    result = await service.run_import(
+                        session,
+                        job_id,
+                        progress_callback=progress_callback,
+                    )
                     await session.commit()
+                    if _should_schedule_comicinfo_enrichment(result):
+                        service.schedule_comicinfo_enrichment(
+                            self._session_factory,
+                            job_id=job_id,
+                        )
                 elif job.status == ImportJobStatus.ROLLING_BACK:
                     await service.rollback_import(
                         session,
@@ -558,6 +572,7 @@ async def _run_single_job_once(
     async with session_factory() as session:
         service = await _build_import_service(session)
         terminal_event_override: ImportProgressEvent | None = None
+        run_import_result: Any = None
 
         async def progress_callback(event: ImportProgressEvent) -> None:
             await _publish_progress_event(event)
@@ -587,12 +602,18 @@ async def _run_single_job_once(
                         progress_callback=progress_callback,
                     )
                 else:
-                    await service.run_import(session, job_id, progress_callback=progress_callback)
+                    run_import_result = await service.run_import(
+                        session,
+                        job_id,
+                        progress_callback=progress_callback,
+                    )
             else:
                 logger.info("import_task_noop", job_id=job_id, status=job.status.value)
                 return
 
             await session.commit()
+            if _should_schedule_comicinfo_enrichment(run_import_result):
+                service.schedule_comicinfo_enrichment(session_factory, job_id=job_id)
         except JobPausedError:
             await session.rollback()
             job = await session.get(ImportJob, job_id)
