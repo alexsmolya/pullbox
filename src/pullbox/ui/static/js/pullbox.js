@@ -8107,6 +8107,12 @@ function libraryBrowserPage(config) {
       }
     },
 
+    queueToastForNextPage: function (message, level) {
+      if (typeof queueToastForNextPage === "function") {
+        queueToastForNextPage({ message: message, level: level || "info" });
+      }
+    },
+
     requestJson: async function (url, options) {
       var response = await fetch(url, options || {});
       var data = null;
@@ -8683,6 +8689,7 @@ function libraryBrowserPage(config) {
           result.source_path || this.modalEntry.path,
           result.target_path || this.renameTargetPreviewPath()
         );
+        this.queueToastForNextPage("Rename completed.", "success");
         this.dispatchToast("Rename completed.", "success");
         this.closeModal();
         window.setTimeout(function () {
@@ -8717,6 +8724,7 @@ function libraryBrowserPage(config) {
           result.source_path || this.modalEntry.path,
           result.target_path || this.modalEntry.path
         );
+        this.queueToastForNextPage("Rename completed.", "success");
         this.dispatchToast("Rename completed.", "success");
         this.closeModal();
         window.setTimeout(function () {
@@ -8746,6 +8754,7 @@ function libraryBrowserPage(config) {
         });
         var targetPath = result.target_path || this.modalEntry.path;
         var refreshPath = this.currentPath || parentDirectory(targetPath) || this.rootPath || "";
+        this.queueToastForNextPage("Conversion completed.", "success");
         this.dispatchToast("Conversion completed.", "success");
         this.closeModal();
         window.setTimeout(function () {
@@ -8813,6 +8822,7 @@ function libraryBrowserPage(config) {
             delete_folder: this.deleteFolder,
           }),
         });
+        this.queueToastForNextPage("Delete completed.", "success");
         this.dispatchToast("Delete completed.", "success");
         var refreshUrl = this.refreshUrlAfterDelete(this.modalEntry.path);
         this.closeModal();
@@ -15307,6 +15317,55 @@ function _handleAuthExpiryResponse(response) {
   window.__pbAuthExpiryFetchWrapped = true;
 })();
 
+const PULLBOX_QUEUED_TOAST_KEY = "pullbox:queued-toast";
+const PULLBOX_QUEUED_TOAST_TTL_MS = 30000;
+
+function queueToastForNextPage(detail) {
+  if (!detail || !detail.message) return;
+
+  try {
+    window.sessionStorage.setItem(
+      PULLBOX_QUEUED_TOAST_KEY,
+      JSON.stringify({
+        message: String(detail.message),
+        level: detail.level || "info",
+        id: detail.id || "",
+        persistent: !!detail.persistent,
+        createdAt: Date.now(),
+      })
+    );
+  } catch (_) {
+    // Storage can be unavailable in private browsing or locked-down webviews.
+  }
+}
+
+function replayQueuedToast() {
+  try {
+    var raw = window.sessionStorage.getItem(PULLBOX_QUEUED_TOAST_KEY);
+    if (!raw) return;
+
+    window.sessionStorage.removeItem(PULLBOX_QUEUED_TOAST_KEY);
+    var detail = JSON.parse(raw);
+    if (!detail || !detail.message) return;
+
+    var createdAt = Number(detail.createdAt || 0);
+    if (createdAt && Date.now() - createdAt > PULLBOX_QUEUED_TOAST_TTL_MS) return;
+
+    showToast({
+      message: detail.message,
+      level: detail.level || "info",
+      id: detail.id || undefined,
+      persistent: !!detail.persistent,
+    });
+  } catch (_) {
+    try {
+      window.sessionStorage.removeItem(PULLBOX_QUEUED_TOAST_KEY);
+    } catch (__) {
+      // Ignore storage cleanup failures.
+    }
+  }
+}
+
 /**
  * Show a toast notification.
  * @param {object} detail - { message: string, level: "success"|"error"|"warning"|"info", id?: string, persistent?: boolean, spinner?: boolean }
@@ -15447,6 +15506,12 @@ function dismissToast(el) {
   el.addEventListener("animationend", function () {
     el.remove();
   });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", replayQueuedToast, { once: true });
+} else {
+  replayQueuedToast();
 }
 
 /**
