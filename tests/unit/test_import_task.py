@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from pullbox.core.exceptions import JobCancelledError, JobPausedError
 from pullbox.models.import_job import ImportJob, ImportJobStatus, ImportSourceType
 from pullbox.schemas.import_job import ImportProgressEvent
+from pullbox.services.import_service import RunImportResult
 from pullbox.tasks.import_task import (
     ImportRunner,
     _build_import_service,
@@ -366,6 +367,55 @@ class TestRunImportExecuteTask:
             await run_import_execute_task(job.id)
 
         mock_service.run_import.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_task_schedules_comicinfo_enrichment_after_commit(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Deferred ComicInfo enrichment starts only after Step 4 commits."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        await db_session.commit()
+        events: list[str] = []
+
+        mock_service = AsyncMock()
+
+        async def complete_import(session, job_id, progress_callback=None):
+            import_job = await session.get(ImportJob, job_id)
+            assert import_job is not None
+            import_job.status = ImportJobStatus.COMPLETED
+            await session.flush()
+            return RunImportResult(schedule_comicinfo_enrichment=True)
+
+        async def commit_with_event() -> None:
+            await original_commit()
+            events.append("commit")
+
+        mock_service.run_import.side_effect = complete_import
+        mock_service.schedule_comicinfo_enrichment = Mock(
+            side_effect=lambda *_args, **_kwargs: events.append("schedule")
+        )
+        original_commit = db_session.commit
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        with (
+            patch.object(db_session, "commit", new=commit_with_event),
+            patch("pullbox.tasks.import_task.get_session_factory") as mock_factory,
+            patch(
+                "pullbox.tasks.import_task._build_import_service",
+                return_value=mock_service,
+            ),
+        ):
+            mock_factory.return_value = mock_session_ctx
+            await run_import_execute_task(job.id)
+
+        assert events[:2] == ["commit", "schedule"]
+        mock_service.schedule_comicinfo_enrichment.assert_called_once_with(
+            mock_session_ctx,
+            job_id=job.id,
+        )
 
     @pytest.mark.asyncio
     async def test_execute_task_cancelled_import_runs_automatic_rollback(
@@ -767,6 +817,52 @@ class TestStartupRecovery:
         mock_service.start_scan.assert_not_called()
         await db_session.refresh(job)
         assert job.status == ImportJobStatus.REVIEW
+
+    @pytest.mark.asyncio
+    async def test_runner_schedules_comicinfo_enrichment_after_commit(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The durable runner schedules deferred ComicInfo work post-commit."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        await db_session.commit()
+        events: list[str] = []
+
+        mock_service = AsyncMock()
+
+        async def complete_import(session, job_id, progress_callback=None):
+            import_job = await session.get(ImportJob, job_id)
+            assert import_job is not None
+            import_job.status = ImportJobStatus.COMPLETED
+            await session.flush()
+            return RunImportResult(schedule_comicinfo_enrichment=True)
+
+        async def commit_with_event() -> None:
+            await original_commit()
+            events.append("commit")
+
+        mock_service.run_import.side_effect = complete_import
+        mock_service.schedule_comicinfo_enrichment = Mock(
+            side_effect=lambda *_args, **_kwargs: events.append("schedule")
+        )
+        original_commit = db_session.commit
+
+        @asynccontextmanager
+        async def mock_session_ctx():
+            yield db_session
+
+        runner = ImportRunner(mock_session_ctx)
+        with (
+            patch.object(db_session, "commit", new=commit_with_event),
+            patch("pullbox.tasks.import_task._build_import_service", return_value=mock_service),
+            patch("pullbox.tasks.import_task.publish", new_callable=AsyncMock),
+        ):
+            await runner._run_job(job.id)
+
+        assert events[:2] == ["commit", "schedule"]
+        mock_service.schedule_comicinfo_enrichment.assert_called_once_with(
+            mock_session_ctx,
+            job_id=job.id,
+        )
 
     @pytest.mark.asyncio
     async def test_review_job_untouched(

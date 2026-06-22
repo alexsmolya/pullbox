@@ -30,21 +30,26 @@ def require_string(payload: dict[str, object], key: str) -> str:
 
 
 def main() -> int:
-    token = os.environ.get("CIRCLE_OIDC_TOKEN_V2", "")
+    token = os.environ.get("SIGSTORE_ID_TOKEN") or os.environ.get("CIRCLE_OIDC_TOKEN_V2", "")
     if not token:
-        raise SystemExit("CIRCLE_OIDC_TOKEN_V2 is required")
+        raise SystemExit("SIGSTORE_ID_TOKEN or CIRCLE_OIDC_TOKEN_V2 is required")
 
     payload = decode_payload(token)
     issuer = require_string(payload, "iss")
-    subject = require_string(payload, "sub")
-    project_id = payload.get("oidc.circleci.com/project-id", "")
+    project_id = require_string(payload, "oidc.circleci.com/project-id")
+    pipeline_definition_id = require_string(payload, "oidc.circleci.com/pipeline-definition-id")
     vcs_origin = payload.get("oidc.circleci.com/vcs-origin", "")
     vcs_ref = payload.get("oidc.circleci.com/vcs-ref", "")
+    certificate_identity = (
+        "https://circleci.com/api/v2/projects/"
+        f"{project_id}/pipeline-definitions/{pipeline_definition_id}"
+    )
 
     values = {
         "COSIGN_CERTIFICATE_OIDC_ISSUER": issuer,
-        "COSIGN_CERTIFICATE_IDENTITY": subject,
-        "CIRCLECI_OIDC_PROJECT_ID": project_id if isinstance(project_id, str) else "",
+        "COSIGN_CERTIFICATE_IDENTITY": certificate_identity,
+        "CIRCLECI_OIDC_PROJECT_ID": project_id,
+        "CIRCLECI_OIDC_PIPELINE_DEFINITION_ID": pipeline_definition_id,
         "CIRCLECI_OIDC_VCS_ORIGIN": vcs_origin if isinstance(vcs_origin, str) else "",
         "CIRCLECI_OIDC_VCS_REF": vcs_ref if isinstance(vcs_ref, str) else "",
     }
