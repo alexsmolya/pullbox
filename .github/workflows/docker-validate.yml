@@ -6,11 +6,22 @@
 # Trusted pull requests run the full production Docker Hardened Images build on
 # the dedicated Docker runner. Untrusted pull requests fall back to a reduced
 # public sanity check that does not require secrets or self-hosted runners.
-# Legacy/manual fallback. CircleCI owns Docker validation for PR checks.
+# GitHub Actions owns Docker validation for PR checks.
 
 name: Docker Validate
 
 on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - labeled
+      - unlabeled
   workflow_dispatch:
 
 permissions:
@@ -58,9 +69,30 @@ jobs:
           git show origin/main:.github/scripts/validate-release-sync-pr.py > /tmp/pullbox-release-sync-validator.py
           python /tmp/pullbox-release-sync-validator.py
 
+  full_ci_check:
+    name: Full Docker Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_full: ${{ steps.gate.outputs.run_full }}
+      trusted_full: ${{ steps.gate.outputs.trusted_full }}
+      untrusted_full: ${{ steps.gate.outputs.untrusted_full }}
+      label_required: ${{ steps.gate.outputs.label_required }}
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve Docker validation gate
+        id: gate
+        run: |
+          echo "run_full=${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]' || startsWith(github.event.pull_request.head.ref, 'dependabot/') || contains(github.event.pull_request.labels.*.name, 'ci:full'))) }}" >> "$GITHUB_OUTPUT"
+          echo "trusted_full=${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && !startsWith(github.event.pull_request.head.ref, 'dependabot/') && contains(github.event.pull_request.labels.*.name, 'ci:full')) }}" >> "$GITHUB_OUTPUT"
+          echo "untrusted_full=${{ github.event_name == 'pull_request' && !github.event.pull_request.draft && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]' || startsWith(github.event.pull_request.head.ref, 'dependabot/')) }}" >> "$GITHUB_OUTPUT"
+          echo "label_required=${{ github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && !startsWith(github.event.pull_request.head.ref, 'dependabot/') && !contains(github.event.pull_request.labels.*.name, 'ci:full') }}" >> "$GITHUB_OUTPUT"
+
   untrusted-sanity:
     name: Docker Sanity (untrusted PR)
-    if: github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')
+    needs: [release_sync_check, full_ci_check]
+    if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.untrusted_full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -85,12 +117,8 @@ jobs:
 
   trusted-production-validate:
     name: Production Docker Validate (trusted)
-    needs: release_sync_check
-    if: >-
-      needs.release_sync_check.outputs.is_sync != 'true' &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'dependabot[bot]'))
+    needs: [release_sync_check, full_ci_check]
+    if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.trusted_full == 'true'
     runs-on: [self-hosted, Linux, X64, docker]
     timeout-minutes: 35
     permissions:
@@ -220,3 +248,80 @@ jobs:
         run: |
           docker rm -f pullbox-validate || true
           docker image rm -f pullbox:validate || true
+
+  docker-validate-required:
+    name: Docker Validate Required
+    runs-on: ubuntu-latest
+    needs:
+      - release_sync_check
+      - full_ci_check
+      - untrusted-sanity
+      - trusted-production-validate
+    if: always()
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify Docker validation jobs
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+          RELEASE_SYNC_PR: ${{ needs.release_sync_check.outputs.is_sync }}
+          RUN_FULL: ${{ needs.full_ci_check.outputs.run_full }}
+          TRUSTED_FULL: ${{ needs.full_ci_check.outputs.trusted_full }}
+          UNTRUSTED_FULL: ${{ needs.full_ci_check.outputs.untrusted_full }}
+          LABEL_REQUIRED: ${{ needs.full_ci_check.outputs.label_required }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          release_sync_pr = os.environ["RELEASE_SYNC_PR"].lower() == "true"
+          run_full = os.environ["RUN_FULL"].lower() == "true"
+          trusted_full = os.environ["TRUSTED_FULL"].lower() == "true"
+          untrusted_full = os.environ["UNTRUSTED_FULL"].lower() == "true"
+          label_required = os.environ["LABEL_REQUIRED"].lower() == "true"
+
+          if release_sync_pr:
+              release_sync = needs.get("release_sync_check", {}).get("result")
+              if release_sync != "success":
+                  print(f"Release sync validation failed: {release_sync}", file=sys.stderr)
+                  sys.exit(1)
+              unexpected = {
+                  name: info.get("result")
+                  for name, info in needs.items()
+                  if name != "release_sync_check" and info.get("result") not in {"skipped", "success"}
+              }
+              if unexpected:
+                  print(f"Release sync fast path saw unexpected Docker results: {unexpected}", file=sys.stderr)
+                  sys.exit(1)
+              print("Release sync fast path validated; Docker validation intentionally skipped.")
+              sys.exit(0)
+
+          if not run_full:
+              if label_required:
+                  print("Docker validation is waiting for ci:full before running the required Docker gate.", file=sys.stderr)
+              else:
+                  print("Docker validation was intentionally not requested for this PR state.", file=sys.stderr)
+              sys.exit(1)
+
+          if trusted_full:
+              result = needs.get("trusted-production-validate", {}).get("result")
+              if result != "success":
+                  print(f"Trusted Docker validation did not pass: {result}", file=sys.stderr)
+                  sys.exit(1)
+              print("Trusted Docker validation passed.")
+              sys.exit(0)
+
+          if untrusted_full:
+              result = needs.get("untrusted-sanity", {}).get("result")
+              if result != "success":
+                  print(f"Untrusted Docker sanity validation did not pass: {result}", file=sys.stderr)
+                  sys.exit(1)
+              print("Untrusted Docker sanity validation passed.")
+              sys.exit(0)
+
+          print("Docker validation gate resolved to no runnable validation path.", file=sys.stderr)
+          sys.exit(1)
+          PY

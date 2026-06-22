@@ -2,8 +2,7 @@
 # Pullbox Release Pipeline
 # Creates or updates a GitHub Release after the Docker Release workflow
 # publishes, signs, and verifies images for a tagged commit.
-# Legacy GitHub Actions release creation is retained for reference only.
-# CircleCI is the canonical release creator for current tag pushes.
+# GitHub Actions is the canonical release creator for current tag pushes.
 #
 # Security: All actions pinned to full SHA.
 # See: docs/development/INFRASTRUCTURE.md
