@@ -341,6 +341,7 @@ class TestLibraryPage:
         library.rename_modal.wait_for(state="hidden", timeout=5000)
         assert payload["path"].endswith("/pullbox-e2e-library/01-batman")
         assert payload["proposed_name"] == "01-batman deluxe"
+        authed_page.wait_for_url("**/library?path=*pullbox-e2e-library", timeout=5000)
         expect(authed_page.get_by_text("Rename completed.", exact=True)).to_be_visible()
 
     def test_library_rename_blocked_modal_uses_structured_contract(

@@ -84,17 +84,24 @@ def _github_api_json(url: str) -> dict[str, object] | None:
         return None
 
 
+def _pull_request_number() -> str:
+    pull_request_url = _env("CIRCLE_PULL_REQUEST")
+    if pull_request_url:
+        pr_number = pull_request_url.rstrip("/").split("/")[-1]
+        if pr_number.isdigit():
+            return pr_number
+
+    pr_number = _env("PULLBOX_PR_NUMBER")
+    return pr_number if pr_number.isdigit() else ""
+
+
 def _pull_request_base_branch(repository: str) -> str:
     for key in ("CIRCLE_PR_BASE_BRANCH", "GITHUB_BASE_REF", "PULLBOX_BASE_BRANCH"):
         if _env(key):
             return _env(key)
 
-    pull_request_url = _env("CIRCLE_PULL_REQUEST")
-    if not pull_request_url or not repository:
-        return ""
-
-    pr_number = pull_request_url.rstrip("/").split("/")[-1]
-    if not pr_number.isdigit():
+    pr_number = _pull_request_number()
+    if not pr_number or not repository:
         return ""
 
     data = _github_api_json(f"https://api.github.com/repos/{repository}/pulls/{pr_number}")
@@ -150,8 +157,8 @@ def version_bump_is_release_sync(main_text: str, head_text: str) -> ValidationRe
 
 
 def validate(cwd: Path) -> ValidationResult:
-    pull_request_url = _env("CIRCLE_PULL_REQUEST")
-    if not pull_request_url:
+    pr_number = _pull_request_number()
+    if not pr_number:
         return ValidationResult(False, "not a pull request")
 
     repository = f"{_env('CIRCLE_PROJECT_USERNAME')}/{_env('CIRCLE_PROJECT_REPONAME')}".strip("/")

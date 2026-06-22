@@ -13,6 +13,18 @@ parameters:
   tag_override:
     type: string
     default: edge
+  run_pr_preflight:
+    type: boolean
+    default: true
+  run_full_ci:
+    type: boolean
+    default: false
+  pr_number:
+    type: string
+    default: ""
+  pr_base_branch:
+    type: string
+    default: ""
   python_test_parallelism:
     type: integer
     default: 6
@@ -181,6 +193,9 @@ jobs:
   release-sync-check:
     executor: python314
     resource_class: small
+    environment:
+      PULLBOX_PR_NUMBER: << pipeline.parameters.pr_number >>
+      PULLBOX_BASE_BRANCH: << pipeline.parameters.pr_base_branch >>
     steps:
       - checkout
       - run:
@@ -606,8 +621,11 @@ jobs:
             # shellcheck disable=SC1090
             . "${BASH_ENV}"
             : "${GITHUB_CODEQL_TOKEN:?GITHUB_CODEQL_TOKEN with security_events write access is required}"
+            PIPELINE_PR_NUMBER="<< pipeline.parameters.pr_number >>"
             if [ -n "${CIRCLE_TAG:-}" ]; then
               CODEQL_REF="refs/tags/${CIRCLE_TAG}"
+            elif [ -n "${PIPELINE_PR_NUMBER}" ]; then
+              CODEQL_REF="refs/pull/${PIPELINE_PR_NUMBER}/head"
             elif [ -n "${CIRCLE_PULL_REQUEST:-}" ]; then
               PR_NUMBER="${CIRCLE_PULL_REQUEST##*/}"
               if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -1047,7 +1065,8 @@ jobs:
               --changelog curated_changelog.md
 
 workflows:
-  pr-and-merge-checks:
+  pr-preflight-checks:
+    when: << pipeline.parameters.run_pr_preflight >>
     jobs:
       - release-sync-check:
           filters: &pr_checks_filters
@@ -1057,6 +1076,17 @@ workflows:
                 - develop
             tags:
               ignore: /.*/
+      - quality-gate:
+          name: pr-preflight
+          requires:
+            - release-sync-check
+          filters: *pr_checks_filters
+
+  pr-and-merge-checks:
+    when: << pipeline.parameters.run_full_ci >>
+    jobs:
+      - release-sync-check:
+          filters: *pr_checks_filters
       - quality-gate:
           requires:
             - release-sync-check
