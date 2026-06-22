@@ -22,6 +22,8 @@ requirements.
 - CircleCI runs lint, format, typecheck, tests, migration checks,
   accessibility checks, E2E, security scans, Docker validation, and release
   automation.
+- Pull request pushes run a cheap CircleCI preflight by default. Full PR
+  CI/security/workflow-hygiene checks run after maintainers apply `ci:full`.
 - CI tests Python 3.12, 3.13, and 3.14.
 - Python 3.14 is the production container runtime.
 - The production Docker image uses Docker Hardened Images.
@@ -174,7 +176,8 @@ manual/reference fallback.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr-and-merge-checks` | Open PR source branches and explicit manual pipelines | Lint, format, typecheck, tests, migration check, accessibility, E2E, Docker validation, security, workflow hygiene, and aggregate required checks |
+| `pr-preflight-checks` | Open PR source branches | Cheap lint/format/CSS preflight while review is still in progress |
+| `pr-and-merge-checks` | `ci:full` label dispatch or explicit manual pipeline parameter | Full lint, typecheck, tests, migration check, accessibility, E2E, Docker validation, security, workflow hygiene, and aggregate required checks |
 | `docker-release` | Version tag push | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and GitHub Release creation |
 | `manual-docker-release` | Manual CircleCI pipeline parameter | Explicit release-image build/publish path for controlled operator use |
 
@@ -194,6 +197,12 @@ manual/reference fallback.
 
 - PR checks are the authoritative correctness gate. Ordinary `develop` and
   `main` merges should not rerun full CI or publish container images.
+- The default PR push path intentionally runs only preflight so automated review
+  feedback can land before spending full matrix, E2E, Docker, and security
+  credits. Add `ci:full` when the PR is ready for the required aggregate
+  checks.
+- `ci:full` applies to PRs targeting both `develop` and `main`. Release tags do
+  not use this gate and continue to publish automatically.
 - Post-release `main` to `develop` sync PRs may use the release-sync fast path
   only when they are same-repository, version-only `feature/sync-develop-*`
   PRs that carry `origin/main` forward and bump `src/pullbox/__init__.py` from

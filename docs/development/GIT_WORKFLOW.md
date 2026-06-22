@@ -346,6 +346,11 @@ Main local validation commands:
   `Security Required`, and `Workflow Hygiene Required`.
 - Do not make path-filtered workflows, such as Docker PR validation, required
   branch checks unless they emit an always-present aggregate status.
+- PR pushes run only the cheap CircleCI preflight until a maintainer applies the
+  `ci:full` label. Apply `ci:full` after automated review comments have landed
+  and the PR is ready for the full required gate.
+- If a PR with `ci:full` needs more iteration, remove the label while working or
+  expect every subsequent push to rerun the full CircleCI gate.
 - Prefer squash or merge commits based on what preserves useful history for the
   branch.
 
