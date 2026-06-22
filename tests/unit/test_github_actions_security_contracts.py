@@ -822,6 +822,14 @@ def test_release_workflow_only_runs_for_tag_push_docker_publish() -> None:
     assert "git tag --points-at" not in release_workflow
 
 
+def test_release_workflow_marks_only_hyphenated_tags_as_prereleases() -> None:
+    release_workflow = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
+
+    assert '[[ "$TAG" == *-* ]]' in release_workflow
+    assert '[[ "$TAG" == v0.* ]]' not in release_workflow
+    assert "prerelease: ${{ steps.version.outputs.prerelease == 'true' }}" in release_workflow
+
+
 def test_release_notes_use_curated_changelog_before_commit_details() -> None:
     release_workflow = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
 
