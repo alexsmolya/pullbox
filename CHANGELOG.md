@@ -23,6 +23,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.12] - 2026-06-22
+
+Stable release promoting the validated 0.9.11 release-candidate train and
+moving Pullbox CI/CD back to a cost-controlled GitHub Actions pipeline with
+self-hosted runner support.
+
+### Added
+
+- Added Docker production environment examples, documented runtime variables,
+  and hardened-image-friendly storage guidance.
+- Added restore recovery aftercare so fresh installs can recover metadata and
+  background work after a database restore.
+- Added persistent deferred ComicInfo enrichment and catalog hydration recovery
+  after restarts.
+
+### Changed
+
+- Refined Library, Series, Pull List, Security, Settings, System, and import UI
+  contracts based on production validation.
+- Limited the Library browser to tracked catalog entries so existing external
+  comic folders are not mistaken for Pullbox-managed library content.
+- Clarified local-auth-bypass behavior for Docker bridge clients and local
+  installs.
+
+### Fixed
+
+- Fixed production configuration issues for local-auth-bypass saves, runtime
+  library root seeding, donation QR codes, HTTPS/settings toggles, API-key
+  creation feedback, task status pills, browser title casing, and dashboard
+  storage reporting.
+- Fixed downloads and post-processing visibility, including Usenet finalization
+  progress and downloads history empty-state clarity.
+- Fixed import, rollback, and restore edge cases from Mylar3 and folder imports,
+  including nested Mylar path maps, trusted Mylar issue targets, duplicate
+  skip-existing imports, live import log updates, blocked-file retries, and
+  restore recovery.
+- Fixed pull-list monitoring toggles, series-detail monitored semantics, and
+  Library action feedback after refresh-driven operations.
+
+### Performance
+
+- Sped up Step 2 import scanning, Step 4 file processing, import metadata
+  hydration, large-library browsing, scheduled wanted-search fairness, and daily
+  metadata task cadence.
+- Reused import metadata cache data during hydration to avoid unnecessary
+  ComicVine work.
+
+### Testing
+
+- Raised overall test coverage above the 90% gate.
+- Added coverage for import execution, deferred ComicInfo enrichment, restore
+  recovery, Mylar3 path handling, API keys, local auth bypass, library browsing,
+  settings regressions, and UI shell contracts.
+
+### Documentation
+
+- Updated backup/restore, Docker production setup, environment variable, and
+  restore-aftercare documentation.
+
+### CI / Build
+
+- Migrated CI, security checks, workflow hygiene, Docker validation, Docker
+  release publishing, Cosign signing, and GitHub Release creation back to
+  GitHub Actions.
+- Added self-hosted runner support for trusted Docker work while keeping Python
+  and E2E validation on GitHub-hosted runners.
+- Preserved PR cost controls with lightweight preflight, label-gated full
+  checks, and release-tag-only publishing.
+- Kept final release tags responsible for moving the `latest` container tag
+  while release-candidate tags publish only RC and SHA tags.
+
 ## [0.9.11-rc4] - 2026-06-21
 
 Release candidate focused on release-note polish, PR gate cost control, and
