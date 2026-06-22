@@ -34,6 +34,8 @@ signing, and GitHub Release gates.
   with the `ci:full` label. The GitHub `CircleCI Full CI Trigger` workflow
   dispatches CircleCI with `run_full_ci=true` for same-repository PRs carrying
   that label.
+- Dependabot PRs never use the `ci:full` label bridge, even when they originate
+  from same-repository branches. Keep them on the reduced untrusted path.
 - Pushes to PR branches with `ci:full` rerun the full gate. Remove the label
   while iterating if the PR should return to preflight-only runs.
 - Direct pushes to `develop`, `main`, or unreviewed feature branches do not run

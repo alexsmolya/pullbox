@@ -119,6 +119,8 @@ def test_ci_full_label_bridge_dispatches_circleci_without_privileged_pr_target()
     assert "pull_request_target" not in workflow_text
     assert "contains(github.event.pull_request.labels.*.name, 'ci:full')" in workflow_text
     assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow_text
+    assert "github.event.pull_request.user.login != 'dependabot[bot]'" in workflow_text
+    assert "!startsWith(github.event.pull_request.head.ref, 'dependabot/')" in workflow_text
     assert "CIRCLECI_TOKEN repository secret is required" in workflow_text
     assert "run_pr_preflight: false" in workflow_text
     assert "run_full_ci: true" in workflow_text
