@@ -19,6 +19,7 @@ Pullbox listens on port `8585` and uses four main container paths:
 | `/comics` | Comic library |
 | `/downloads` | Completed downloads shared with download clients |
 | `/imports` | Manual import/drop-folder sources, including Mylar3 databases |
+| `/imports/remote-drop` | Recommended folder for manual folder-import staging |
 
 
 ### Pre-Run Setup
@@ -34,7 +35,7 @@ storage because it contains SQLite, `config.xml`, logs, and backups.
 If the above folders do not exist create them:
 
 ```bash
-sudo mkdir -p /path/to/pullbox-appdata /path/to/comics /path/to/shared-downloads /path/to/imports
+sudo mkdir -p /path/to/pullbox-appdata /path/to/comics /path/to/shared-downloads /path/to/imports/remote-drop
 ```
 
 Pullbox-created files and folders are owned by the hardened-image runtime
@@ -60,6 +61,7 @@ sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/pullbox-appdata
 sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/comics
 sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/shared-downloads
 sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/imports
+sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/imports/remote-drop
 ```
 
 For dedicated Pullbox-only folders, ownership is also acceptable:
@@ -90,6 +92,10 @@ docker run -d \
 
 Open `http://localhost:8585` and complete first-run setup.
 
+For manual folder imports, place files under your host import staging folder
+such as `/path/to/imports/remote-drop`, then select `/imports/remote-drop`
+inside Pullbox.
+
 
 ### Docker Compose
 
@@ -110,6 +116,7 @@ PULLBOX_DATA_PATH=/path/to/pullbox-appdata
 COMICS_PATH=/path/to/comics
 DOWNLOADS_PATH=/path/to/shared-downloads
 IMPORTS_PATH=/path/to/imports
+IMPORTS_DROP_PATH=/path/to/imports/remote-drop
 ```
 
 Use the below example to create a Docker Compose file:
@@ -164,6 +171,7 @@ read-only or runtime-managed inside Pullbox.
 | `COMICS_PATH` | none | Compose helper for the host comic library mounted at `/comics`. |
 | `DOWNLOADS_PATH` | none | Compose helper for completed downloads mounted at `/downloads`. |
 | `IMPORTS_PATH` | none | Compose helper for manual import/drop folders mounted at `/imports`. |
+| `IMPORTS_DROP_PATH` | none | Documentation helper for the recommended folder-import staging path `/imports/remote-drop`; not read by Pullbox. |
 | `PULLBOX_RUNTIME_UID` | `65532` | Documentation helper for host ACL/permission commands; not read by Pullbox. |
 | `PULLBOX_RUNTIME_GID` | `65532` | Documentation helper for host ACL/permission commands; not read by Pullbox. |
 | `PULLBOX_DB_URL` | `sqlite+aiosqlite:////data/pullbox.db` | Database URL. SQLite under `/data` is the supported Docker default. |

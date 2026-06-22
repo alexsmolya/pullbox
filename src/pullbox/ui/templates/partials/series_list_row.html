@@ -1,4 +1,10 @@
 {#- Mission Control row for the series registry. Expects: item, s, owned_count. -#}
+{% set catalog_state = s.issue_catalog_state.value if s.issue_catalog_state else 'complete' %}
+{% set catalog_state_label = {
+  'hydrating': 'Metadata syncing',
+  'partial': 'Metadata incomplete',
+  'failed': 'Metadata needs retry',
+}.get(catalog_state) %}
 <tr
   id="series-list-row-{{ s.id }}"
   data-testid="series-result-row"
@@ -35,6 +41,12 @@
       {% if s.publisher %}{{ s.publisher.name }}{% else %}Unknown publisher{% endif %}
       {% if not s.monitored %}
         · <span class="text-pb-warning">Paused</span>
+      {% endif %}
+      {% if catalog_state_label %}
+        · <span
+          data-testid="series-catalog-state-badge"
+          class="pill {{ 'pill-error' if catalog_state == 'failed' else 'pill-warning' }} justify-center"
+        >{{ catalog_state_label }}</span>
       {% endif %}
     </div>
   </td>

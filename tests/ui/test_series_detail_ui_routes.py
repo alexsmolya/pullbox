@@ -330,6 +330,11 @@ class TestSeriesDetailRouteContracts:
         assert 'data-testid="series-detail-catalog-state-banner"' in response.text
         assert expected_copy in response.text
         assert "issue list and release metadata" in response.text
+        if catalog_state in {"partial", "failed"}:
+            assert 'data-testid="series-detail-catalog-refresh"' in response.text
+            assert "Retry metadata sync" in response.text
+        else:
+            assert 'data-testid="series-detail-catalog-refresh"' not in response.text
 
     async def test_series_detail_omits_catalog_state_banner_when_complete(
         self,

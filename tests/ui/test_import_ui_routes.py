@@ -624,6 +624,10 @@ class TestImportResultsPartial:
             files_no_match=0,
             orphaned_file_no_match_count=0,
             identified_series_file_no_match_count=0,
+            catalog_sync_pending_count=0,
+            catalog_sync_failed_count=0,
+            catalog_sync_attention_count=0,
+            catalog_sync_series=[],
             files_failed=1,
             failed_files=[
                 SimpleNamespace(
@@ -639,6 +643,62 @@ class TestImportResultsPartial:
         assert 'data-testid="import-results-retry-action"' in html
         assert "Retry failed" in html
         assert "2000AD prog 2481.cbz" in html
+
+    def test_results_template_surfaces_background_catalog_sync(self) -> None:
+        from types import SimpleNamespace
+
+        from pullbox.ui.routes import templates
+
+        html = templates.env.get_template("partials/import_results.html").render(
+            job=SimpleNamespace(id=32, status=SimpleNamespace(value="completed")),
+            can_rollback=False,
+            imported_count=3,
+            failed_count=0,
+            duplicate_count=0,
+            no_match_count=0,
+            unmatched_queue_count=0,
+            failed_series=[],
+            files_total=3,
+            files_imported=3,
+            files_matched=3,
+            files_duplicate=0,
+            files_already_owned=0,
+            files_conflict=0,
+            files_no_match=0,
+            orphaned_file_no_match_count=0,
+            identified_series_file_no_match_count=0,
+            catalog_sync_pending_count=2,
+            catalog_sync_failed_count=1,
+            catalog_sync_attention_count=3,
+            catalog_sync_series=[
+                SimpleNamespace(
+                    id=10,
+                    title="Batman",
+                    issue_catalog_state=SimpleNamespace(value="hydrating"),
+                    issue_catalog_error=None,
+                ),
+                SimpleNamespace(
+                    id=11,
+                    title="Daredevil",
+                    issue_catalog_state=SimpleNamespace(value="failed"),
+                    issue_catalog_error="ComicVine timed out",
+                ),
+            ],
+            files_failed=0,
+            failed_files=[],
+            files_safety_blocked=0,
+            safety_blocked_files=[],
+            resume_step=5,
+            resume_job_id=32,
+            resume_progress_snapshot={},
+        )
+
+        assert 'data-testid="import-results-catalog-sync-note"' in html
+        assert "3 series still need ComicVine catalog sync follow-up" in html
+        assert "2 syncing in the background" in html
+        assert "1 needs metadata retry" in html
+        assert "Batman" in html
+        assert "Daredevil" in html
 
     @pytest.mark.asyncio
     async def test_results_partial_rejects_non_result_status(

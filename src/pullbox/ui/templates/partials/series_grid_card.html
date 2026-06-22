@@ -3,6 +3,12 @@
 {% set cover_loading = item.cover_loading %}
 {% set cover_fetchpriority = item.cover_fetchpriority %}
 {% set cover_decoding = item.cover_decoding %}
+{% set catalog_state = s.issue_catalog_state.value if s.issue_catalog_state else 'complete' %}
+{% set catalog_state_label = {
+  'hydrating': 'Metadata syncing',
+  'partial': 'Metadata incomplete',
+  'failed': 'Metadata needs retry',
+}.get(catalog_state) %}
 <article
   id="series-grid-card-{{ s.id }}"
   data-testid="series-grid-card"
@@ -22,6 +28,12 @@
           <path d="M5 10.6 8.2 14 15 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>
         </svg>
       </span>
+    {% endif %}
+    {% if catalog_state_label %}
+      <span
+        data-testid="series-catalog-state-badge"
+        class="series-wall-catalog-state-badge {{ 'is-failed' if catalog_state == 'failed' else 'is-pending' }}"
+      >{{ catalog_state_label }}</span>
     {% endif %}
     <label data-series-selection-control="grid" class="series-wall-selection-control">
       <input
@@ -96,6 +108,12 @@
           <div class="series-wall-overlay-meta-line" data-testid="series-grid-hover-type">
             <span class="series-wall-overlay-meta-label">Type</span>
             <span class="series-wall-overlay-meta-value">{{ s.series_type.ui_display_name }}</span>
+          </div>
+        {% endif %}
+        {% if catalog_state_label %}
+          <div class="series-wall-overlay-meta-line" data-testid="series-grid-hover-catalog-state">
+            <span class="series-wall-overlay-meta-label">Metadata</span>
+            <span class="series-wall-overlay-meta-value">{{ catalog_state_label }}</span>
           </div>
         {% endif %}
         {% if s.status.value != 'continuing' %}

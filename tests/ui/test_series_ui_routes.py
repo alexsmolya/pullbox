@@ -387,6 +387,62 @@ class TestSeriesRouteContracts:
         assert "Visual shelf" not in response.text
         assert "Cover-first browsing" not in response.text
 
+    async def test_series_list_surfaces_catalog_sync_state(
+        self,
+        authenticated_client,
+        sec_db,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.series import IssueCatalogState, Series
+
+        async with sec_db() as session:
+            series = (
+                await session.execute(select(Series).where(Series.title == "Batman"))
+            ).scalar_one()
+            series.issue_catalog_state = IssueCatalogState.HYDRATING
+            await session.commit()
+
+        response = await authenticated_client.get("/series?q=Batman")
+
+        assert response.status_code == 200
+        assert 'data-testid="series-catalog-state-badge"' in response.text
+        assert 'data-catalog-refresh-active="true"' in response.text
+        assert 'hx-trigger="every 10s"' in response.text
+        assert "Metadata syncing" in response.text
+
+    async def test_series_grid_surfaces_catalog_sync_state(
+        self,
+        authenticated_client,
+        sec_db,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.series import IssueCatalogState, Series
+
+        async with sec_db() as session:
+            series = (
+                await session.execute(select(Series).where(Series.title == "Batman"))
+            ).scalar_one()
+            series.issue_catalog_state = IssueCatalogState.FAILED
+            await session.commit()
+
+        authenticated_client.cookies.set("series_view", "grid")
+        response = await authenticated_client.get("/series?q=Batman")
+
+        assert response.status_code == 200
+        assert 'data-testid="series-catalog-state-badge"' in response.text
+        assert 'data-catalog-refresh-active="true"' not in response.text
+        assert "Metadata needs retry" in response.text
+
+    async def test_series_results_do_not_poll_when_catalogs_are_complete(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/series?q=Batman")
+
+        assert response.status_code == 200
+        assert 'data-catalog-refresh-active="true"' not in response.text
+
     async def test_grid_view_hides_cover_monitor_indicator_for_paused_series(
         self,
         authenticated_client,

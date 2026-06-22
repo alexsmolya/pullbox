@@ -129,6 +129,40 @@
   </div>
   {% endif %}
 
+  {% set catalog_sync_attention_count = catalog_sync_attention_count|default(0) %}
+  {% set catalog_sync_pending_count = catalog_sync_pending_count|default(0) %}
+  {% set catalog_sync_failed_count = catalog_sync_failed_count|default(0) %}
+  {% set catalog_sync_series = catalog_sync_series|default([]) %}
+  {% if catalog_sync_attention_count > 0 %}
+  <div data-testid="import-results-catalog-sync-note" class="space-y-3">
+    {% call inline_alert(tone="warning", icon="warning") %}
+      <span>
+        <strong>{{ catalog_sync_attention_count }} series still need ComicVine catalog sync follow-up.</strong>
+        {{ catalog_sync_pending_count }} syncing in the background{% if catalog_sync_failed_count > 0 %};
+        {{ catalog_sync_failed_count }} needs metadata retry{% endif %}.
+      </span>
+    {% endcall %}
+    <div class="rounded-xl border border-pb-warning/30 bg-pb-warning/5 px-4 py-3">
+      <div class="flex flex-wrap gap-2">
+        {% for series in catalog_sync_series[:8] %}
+          {% set catalog_state = series.issue_catalog_state.value if series.issue_catalog_state else 'partial' %}
+          <a
+            href="/series/{{ series.id }}"
+            hx-boost="false"
+            class="pill {{ 'pill-error' if catalog_state == 'failed' else 'pill-warning' }} justify-center"
+            title="{{ series.issue_catalog_error or '' }}"
+          >
+            {{ series.title }}
+          </a>
+        {% endfor %}
+        {% if catalog_sync_series|length > 8 %}
+          <span class="pill pill-neutral justify-center">+{{ catalog_sync_series|length - 8 }} more</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="section-card">
     <div class="section-body space-y-5">
       <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">

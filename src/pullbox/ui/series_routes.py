@@ -19,7 +19,7 @@ from pullbox.api.deps import AuthenticatedUser, DbSession, get_request_session_f
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile, LibraryRoot
 from pullbox.models.publisher import Publisher
-from pullbox.models.series import Series, SeriesStatus
+from pullbox.models.series import IssueCatalogState, Series, SeriesStatus
 from pullbox.services.comicvine_persistent_cache import PersistentComicVineCacheProvider
 from pullbox.services.cover_url_service import build_series_cover_url
 from pullbox.ui.comicvine_series_search import (
@@ -240,6 +240,10 @@ async def series_list(
 
     result = await session.execute(query)
     series_rows = result.unique().all()
+    catalog_sync_refresh_active = any(
+        s.issue_catalog_state == IssueCatalogState.HYDRATING
+        for s, _total_issues, _owned, _wanted, _latest_release_date in series_rows
+    )
 
     for s, total_issues, _owned, _wanted, latest_release_date in series_rows:
         if s.status == SeriesStatus.UNKNOWN and int(total_issues or 0) > 0:
@@ -376,6 +380,7 @@ async def series_list(
         monitored_filter=monitored or "",
         sort=sort,
         filter_query=filter_query,
+        catalog_sync_refresh_active=catalog_sync_refresh_active,
         registry_metrics={
             "monitored_count": int(monitored_count),
             "paused_count": paused_count,

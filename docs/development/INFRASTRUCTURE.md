@@ -368,6 +368,7 @@ Recommended container mount contract:
 | `/comics` | Comic library |
 | `/downloads` | Completed downloads shared with download clients |
 | `/imports` | Manual import/drop-folder sources, including Mylar3 databases |
+| `/imports/remote-drop` | Recommended folder for manual folder-import staging |
 
 Common environment variables:
 
@@ -420,7 +421,8 @@ TZ
 - Download-client remote paths must map to files visible under `/downloads`
   inside the Pullbox container.
 - Manual folder imports and Mylar3 database imports must point at paths visible
-  inside the Pullbox container, usually under `/imports`.
+  inside the Pullbox container, usually under `/imports`. Use
+  `/imports/remote-drop` as the recommended manual folder-import staging path.
 - The app should expose port `8585` unless a deployment deliberately remaps it.
 - Native HTTPS uses the same configured Pullbox listener port. Deployments that
   want a different external HTTPS port should use Docker port mapping or change

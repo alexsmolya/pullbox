@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from pullbox.models.import_job import (
     ImportedFile,
@@ -13,6 +13,7 @@ from pullbox.models.import_job import (
     ImportJob,
     ImportSeriesStatus,
 )
+from pullbox.models.series import IssueCatalogState, Series
 from pullbox.services.import_workflow_state import import_control_state_for_job
 
 if TYPE_CHECKING:
@@ -90,6 +91,41 @@ async def _orphaned_file_no_match_count(session: AsyncSession, job_id: int) -> i
         ).scalar_one()
         or 0
     )
+
+
+async def _load_catalog_sync_series(session: AsyncSession, job_id: int) -> list[Series]:
+    """Return imported series whose full ComicVine issue catalog is not complete yet."""
+    state_rank = {
+        IssueCatalogState.FAILED: 0,
+        IssueCatalogState.PARTIAL: 1,
+        IssueCatalogState.HYDRATING: 2,
+    }
+    result = await session.execute(
+        select(Series)
+        .join(ImportedSeries, ImportedSeries.series_id == Series.id)
+        .where(
+            ImportedSeries.import_job_id == job_id,
+            ImportedSeries.status == ImportSeriesStatus.IMPORTED,
+            Series.issue_catalog_state.in_(
+                [
+                    IssueCatalogState.HYDRATING,
+                    IssueCatalogState.PARTIAL,
+                    IssueCatalogState.FAILED,
+                ]
+            ),
+        )
+        .order_by(
+            case(
+                *[
+                    (Series.issue_catalog_state == state, rank)
+                    for state, rank in state_rank.items()
+                ],
+                else_=99,
+            ),
+            Series.sort_title.asc(),
+        )
+    )
+    return list(result.unique().scalars().all())
 
 
 async def load_import_results_context(
@@ -175,6 +211,13 @@ async def load_import_results_context(
         files_no_match - orphaned_file_no_match_count,
         0,
     )
+    catalog_sync_series = await _load_catalog_sync_series(session, job_id)
+    catalog_sync_failed_count = sum(
+        1
+        for series in catalog_sync_series
+        if series.issue_catalog_state == IssueCatalogState.FAILED
+    )
+    catalog_sync_pending_count = len(catalog_sync_series) - catalog_sync_failed_count
 
     return {
         "can_rollback": bool(import_control_state_for_job(job).get("can_rollback")),
@@ -193,6 +236,10 @@ async def load_import_results_context(
         "files_no_match": files_no_match,
         "orphaned_file_no_match_count": orphaned_file_no_match_count,
         "identified_series_file_no_match_count": identified_series_file_no_match_count,
+        "catalog_sync_pending_count": catalog_sync_pending_count,
+        "catalog_sync_failed_count": catalog_sync_failed_count,
+        "catalog_sync_attention_count": len(catalog_sync_series),
+        "catalog_sync_series": catalog_sync_series,
         "files_failed": files_failed,
         "failed_files": (
             await _load_files_for_status(session, job_id, ImportedFileStatus.FAILED)
