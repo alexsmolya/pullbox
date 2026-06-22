@@ -23,6 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [0.9.11-rc4] - 2026-06-21
+
+Release candidate focused on release-note polish, PR gate cost control, and
+Library action feedback stability before the next production validation pass.
+
+### Fixed
+
+- Kept Library action feedback visible after refresh-driven actions such as
+  file rename operations so the UI confirms completed work consistently.
+- Restored GitHub Release changelog formatting and skipped draft releases when
+  generating full-changelog links.
+
+### CI / Build
+
+- Gated expensive full CircleCI PR checks behind the `ci:full` label while
+  keeping cheap preflight checks on ordinary PR updates.
+- Preserved the reduced untrusted path for Dependabot PRs even when branches
+  originate from the main repository.
+- Updated the GitHub Actions dependency group used by the remaining lightweight
+  workflow bridge.
+
 ## [0.9.11-rc3] - 2026-06-21
 
 Release candidate focused on production bug-bash validation, large-library
