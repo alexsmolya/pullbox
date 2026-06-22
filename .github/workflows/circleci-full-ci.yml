@@ -1,7 +1,7 @@
 ---
 # Pullbox CircleCI Full CI Trigger
 # Triggers the expensive CircleCI PR gate only after maintainers opt in with
-# the ci:full label. Same-repository PRs only.
+# the ci:full label. Same-repository non-Dependabot PRs only.
 
 name: CircleCI Full CI Trigger
 
@@ -25,6 +25,8 @@ jobs:
     name: Trigger CircleCI Full CI
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !startsWith(github.event.pull_request.head.ref, 'dependabot/') &&
       contains(github.event.pull_request.labels.*.name, 'ci:full') &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
