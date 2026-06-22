@@ -18,6 +18,7 @@ from pullbox.models.import_job import (
     ImportJobActionStatus,
 )
 from pullbox.models.library import LibraryFile
+from pullbox.models.series import Series
 from pullbox.utilities.settings import restore_file_from_utility_trash
 
 if TYPE_CHECKING:
@@ -139,6 +140,25 @@ async def rollback_action(
                 # A series-created action can be replayed after a partial rollback or
                 # after multiple import rows converged on the same real series. Missing
                 # here means the rollback objective is already satisfied.
+
+    elif action_type == "series_folder_renamed":
+        series_id = int(payload.get("series_id") or 0)
+        old_folder_path = Path(str(payload.get("old_folder_path") or ""))
+        new_folder_path = Path(str(payload.get("new_folder_path") or ""))
+        old_series_path = str(payload.get("old_series_path") or "")
+        old_library_root_id_raw = payload.get("old_library_root_id")
+
+        if new_folder_path.exists() and not old_folder_path.exists():
+            old_folder_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(new_folder_path), str(old_folder_path))
+
+        if series_id:
+            series = await session.get(Series, series_id)
+            if series is not None:
+                series.path = old_series_path or None
+                series.library_root_id = (
+                    int(old_library_root_id_raw) if old_library_root_id_raw is not None else None
+                )
 
     action = await session.get(ImportJobAction, action_id)
     if action is None:

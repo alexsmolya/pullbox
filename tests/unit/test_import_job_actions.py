@@ -15,6 +15,7 @@ from pullbox.models.import_job import (
     ImportSourceType,
 )
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
+from pullbox.models.series import Series
 from pullbox.services.import_rollback_execution import RollbackActionPlan
 from pullbox.services.import_service import ImportService
 
@@ -367,3 +368,50 @@ async def test_rollback_action_restores_surviving_permission_mode(
     assert not destination_path.exists()
     assert source_path.exists()
     assert source_path.stat().st_mode & 0o777 == 0o600
+
+
+async def test_rollback_action_restores_adopted_series_folder_name(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    old_folder = tmp_path / "library" / "Mylar Folder"
+    new_folder = tmp_path / "library" / "Canonical Folder (2026)"
+    new_folder.mkdir(parents=True)
+    (new_folder / "series.json").write_text("mylar sidecar", encoding="utf-8")
+    root = LibraryRoot(name="Library", path=str(tmp_path / "library"))
+    series = Series(
+        title="Canonical Folder",
+        sort_title="canonical folder",
+        year_start=2026,
+        path=str(new_folder),
+    )
+    db_session.add_all([root, series])
+    await db_session.flush()
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="series_folder_renamed",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "series_id": series.id,
+            "old_folder_path": str(old_folder),
+            "new_folder_path": str(new_folder),
+            "old_series_path": "",
+            "old_library_root_id": None,
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert old_folder.exists()
+    assert not new_folder.exists()
+    assert (old_folder / "series.json").exists()
+    assert series.path is None
+    assert series.library_root_id is None
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None

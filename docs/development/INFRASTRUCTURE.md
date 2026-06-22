@@ -487,6 +487,9 @@ services:
 - The production image runs as UID/GID `65532:65532`. Deployments should make
   mounted paths writable by that runtime identity, by a compatible group, or by
   the storage layer's normal container mapping.
+- Linux deployments that expect the host user to browse or maintain
+  Pullbox-created library folders should create or reuse a host group with GID
+  `65532` and add the operator account to that group before first startup.
 - The production image does not consume `PUID` or `PGID` variables. Do not add a
   compose `user:` override or LinuxServer-style identity variables unless a
   deployment intentionally departs from the hardened-image contract.

@@ -37,9 +37,23 @@ If the above folders do not exist create them:
 sudo mkdir -p /path/to/pullbox-appdata /path/to/comics /path/to/shared-downloads /path/to/imports
 ```
 
-Once created or chosen, make each folder writable by the hardened-image runtime UID/GID `65532:65532`.
-On Linux hosts with ACL support, this avoids changing ownership of existing
-media:
+Pullbox-created files and folders are owned by the hardened-image runtime
+UID/GID `65532:65532`. On Linux hosts, create a matching host group and add
+your user to it before first startup so you can browse Pullbox-created files
+from the host:
+
+```bash
+if ! getent group 65532 >/dev/null; then
+  sudo groupadd --gid 65532 pullbox-runtime
+fi
+sudo usermod -aG "$(getent group 65532 | cut -d: -f1)" "$USER"
+```
+
+Log out and back in after `usermod` so the new group membership is active.
+
+Once created or chosen, make each folder writable by the runtime UID/GID
+`65532:65532`. On Linux hosts with ACL support, this avoids changing ownership
+of existing media:
 
 ```bash
 sudo setfacl -m u:65532:rwx -m d:u:65532:rwx /path/to/pullbox-appdata
