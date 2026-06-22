@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-__version__ = "0.9.12"
+__version__ = "0.9.13-dev"
 
 # Set once at process start; used by System > About for uptime calculation.
 STARTED_AT: datetime = datetime.now(UTC)
