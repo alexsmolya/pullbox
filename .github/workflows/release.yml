@@ -2,8 +2,7 @@
 # Pullbox Release Pipeline
 # Creates or updates a GitHub Release after the Docker Release workflow
 # publishes, signs, and verifies images for a tagged commit.
-# Legacy GitHub Actions release creation is retained for reference only.
-# CircleCI is the canonical release creator for current tag pushes.
+# GitHub Actions is the canonical release creator for current tag pushes.
 #
 # Security: All actions pinned to full SHA.
 # See: docs/development/INFRASTRUCTURE.md
@@ -43,14 +42,33 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Download release image metadata artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-image-digest
+          path: release-image-digest
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Resolve release tag
         id: release
         run: |
-          TAG=$(git tag --points-at "${{ github.event.workflow_run.head_sha }}" | grep '^v' | head -1 || true)
-          if [ -z "$TAG" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "No version tag found at workflow SHA; skipping release creation."
-            exit 0
+          TAG_FILE="release-image-digest/tag.txt"
+          if [ ! -f "${TAG_FILE}" ]; then
+            echo "::error::Docker Release workflow did not publish ${TAG_FILE}."
+            exit 1
+          fi
+
+          TAG=$(tr -d '[:space:]' < "${TAG_FILE}")
+          if ! [[ "${TAG}" =~ ^v.+ ]]; then
+            echo "::error::Unexpected release tag format from Docker Release artifact: ${TAG}"
+            exit 1
+          fi
+
+          TAG_SHA=$(git rev-list -n 1 "${TAG}")
+          if [ "${TAG_SHA}" != "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "::error::Release tag ${TAG} points at ${TAG_SHA}, not Docker Release SHA ${{ github.event.workflow_run.head_sha }}."
+            exit 1
           fi
 
           VERSION="${TAG#v}"
@@ -85,15 +103,6 @@ jobs:
           python3 scripts/extract_changelog_section.py \
             --version "${{ steps.release.outputs.version }}" \
             --output curated_changelog.md
-
-      - name: Download release image digest artifact
-        if: steps.release.outputs.skip != 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-image-digest
-          path: release-image-digest
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Validate release image digest
         if: steps.release.outputs.skip != 'true'

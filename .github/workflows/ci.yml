@@ -1,7 +1,8 @@
 ---
 # Pullbox CI Pipeline
 # Quality gate — lint, typecheck, test, migration check, accessibility, E2E.
-# Legacy GitHub Actions fallback. CircleCI is the canonical PR CI runner.
+# GitHub Actions is the canonical PR CI runner. Pull request pushes run a
+# cheap preflight until same-repository maintainer PRs receive `ci:full`.
 #
 # Security: All actions pinned to full SHA. No pull_request_target.
 # See: docs/development/INFRASTRUCTURE.md
@@ -9,13 +10,24 @@
 name: CI
 
 on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - labeled
+      - unlabeled
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -57,12 +69,28 @@ jobs:
           git show origin/main:.github/scripts/validate-release-sync-pr.py > /tmp/pullbox-release-sync-validator.py
           python /tmp/pullbox-release-sync-validator.py
 
+  full_ci_check:
+    name: Full CI Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_full: ${{ steps.gate.outputs.run_full }}
+      label_required: ${{ steps.gate.outputs.label_required }}
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve full CI gate
+        id: gate
+        run: |
+          echo "run_full=${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]' || startsWith(github.event.pull_request.head.ref, 'dependabot/') || contains(github.event.pull_request.labels.*.name, 'ci:full'))) }}" >> "$GITHUB_OUTPUT"
+          echo "label_required=${{ github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && !startsWith(github.event.pull_request.head.ref, 'dependabot/') && !contains(github.event.pull_request.labels.*.name, 'ci:full') }}" >> "$GITHUB_OUTPUT"
+
   # ──────────────────────────────────────────────
   # Job 1: Quality Gate (~45s)
   # ──────────────────────────────────────────────
   quality-gate:
     name: Quality Gate
-    needs: release_sync_check
+    needs: [release_sync_check, full_ci_check]
     if: needs.release_sync_check.outputs.is_sync != 'true'
     runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
@@ -110,8 +138,8 @@ jobs:
   # ──────────────────────────────────────────────
   typecheck:
     name: Type Check
-    needs: release_sync_check
-    if: needs.release_sync_check.outputs.is_sync != 'true'
+    needs: [release_sync_check, full_ci_check]
+    if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
     runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
@@ -138,8 +166,8 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
-    needs: [release_sync_check, quality-gate, typecheck, alembic-check]
-    if: needs.release_sync_check.outputs.is_sync != 'true'
+    needs: [release_sync_check, full_ci_check, quality-gate, typecheck, alembic-check]
+    if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
     timeout-minutes: 30
     permissions:
       contents: read
@@ -197,8 +225,8 @@ jobs:
   # ──────────────────────────────────────────────
   alembic-check:
     name: Migration Check
-    needs: release_sync_check
-    if: needs.release_sync_check.outputs.is_sync != 'true'
+    needs: [release_sync_check, full_ci_check]
+    if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
     runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
     timeout-minutes: 15
     permissions:
@@ -245,8 +273,8 @@ jobs:
   accessibility:
     name: Accessibility Checks
     runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
-    needs: [release_sync_check, quality-gate, typecheck, alembic-check]
-    if: needs.release_sync_check.outputs.is_sync != 'true'
+    needs: [release_sync_check, full_ci_check, quality-gate, typecheck, alembic-check]
+    if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
     timeout-minutes: 30
     permissions:
       contents: read
@@ -326,8 +354,8 @@ jobs:
   e2e:
     name: E2E Tests (${{ matrix.browser }})
     runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
-    needs: [release_sync_check, test]
-    if: needs.release_sync_check.outputs.is_sync != 'true'
+    needs: [release_sync_check, full_ci_check, test]
+    if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
     timeout-minutes: 30
     permissions:
       contents: read
@@ -406,6 +434,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - release_sync_check
+      - full_ci_check
       - quality-gate
       - typecheck
       - alembic-check
@@ -421,6 +450,8 @@ jobs:
         env:
           NEEDS_CONTEXT: ${{ toJson(needs) }}
           RELEASE_SYNC_PR: ${{ needs.release_sync_check.outputs.is_sync }}
+          RUN_FULL: ${{ needs.full_ci_check.outputs.run_full }}
+          LABEL_REQUIRED: ${{ needs.full_ci_check.outputs.label_required }}
         run: |
           python - <<'PY'
           import json
@@ -429,6 +460,8 @@ jobs:
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
           release_sync_pr = os.environ["RELEASE_SYNC_PR"].lower() == "true"
+          run_full = os.environ["RUN_FULL"].lower() == "true"
+          label_required = os.environ["LABEL_REQUIRED"].lower() == "true"
           if release_sync_pr:
               release_sync = needs.get("release_sync_check", {}).get("result")
               if release_sync != "success":
@@ -444,6 +477,17 @@ jobs:
                   sys.exit(1)
               print("Release sync fast path validated; heavyweight CI jobs intentionally skipped.")
               sys.exit(0)
+
+          if not run_full:
+              preflight = needs.get("quality-gate", {}).get("result")
+              if preflight != "success":
+                  print(f"CI preflight did not pass: {preflight}", file=sys.stderr)
+                  sys.exit(1)
+              if label_required:
+                  print("CI preflight passed. Add the ci:full label when the PR is ready for the full required gate.", file=sys.stderr)
+              else:
+                  print("CI preflight passed, but full CI was intentionally not requested for this PR state.", file=sys.stderr)
+              sys.exit(1)
 
           failed = {
               name: info.get("result")
