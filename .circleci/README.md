@@ -29,8 +29,15 @@ signing, and GitHub Release gates.
 
 ## Trigger Policy
 
-- Open pull requests run the full CI/security/workflow-hygiene gate.
-- Pushes to open PR branches rerun that gate.
+- Open pull requests run the cheap `pr-preflight-checks` workflow by default.
+- Full PR CI/security/workflow-hygiene checks run only when a maintainer opts in
+  with the `ci:full` label. The GitHub `CircleCI Full CI Trigger` workflow
+  dispatches CircleCI with `run_full_ci=true` for same-repository PRs carrying
+  that label.
+- Dependabot PRs never use the `ci:full` label bridge, even when they originate
+  from same-repository branches. Keep them on the reduced untrusted path.
+- Pushes to PR branches with `ci:full` rerun the full gate. Remove the label
+  while iterating if the PR should return to preflight-only runs.
 - Direct pushes to `develop`, `main`, or unreviewed feature branches do not run
   the expensive PR workflow.
 - Version tags matching `v*` run the Docker release/sign/GitHub Release
@@ -51,6 +58,10 @@ Create restricted project environment variables or contexts for:
 - `GITHUB_RELEASE_TOKEN` with contents write access
 - `GITHUB_CODEQL_TOKEN` with `security_events` write access
 - `GITHUB_TOKEN` or `GH_TOKEN` with pull request read access for release-sync base detection
+
+Create the GitHub repository secret `CIRCLECI_TOKEN` with permission to trigger
+CircleCI pipelines. The lightweight GitHub label bridge uses it to start the
+full PR gate after `ci:full` is applied.
 
 Cosign uses CircleCI OIDC through `CIRCLE_OIDC_TOKEN_V2`. The signing job derives
 the certificate issuer and identity from the token used to sign, verifies both
