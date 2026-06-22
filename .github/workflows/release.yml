@@ -9,7 +9,7 @@
 # Trusted release automation stays on the dedicated CI runner. Image publishing
 # stays isolated in the Docker Release workflow.
 #
-# Pre-release detection: v0.x.x or tag containing hyphen (v1.0.0-rc1)
+# Pre-release detection: hyphenated tags such as v1.0.0-rc1.
 
 name: Release
 
@@ -76,7 +76,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-          if [[ "$TAG" == v0.* ]] || [[ "$TAG" == *-* ]]; then
+          if [[ "$TAG" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
@@ -91,7 +91,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-          if [[ "$TAG" == v0.* ]] || [[ "$TAG" == *-* ]]; then
+          if [[ "$TAG" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
