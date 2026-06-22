@@ -127,6 +127,61 @@ async def rollback_action(
             except OSError:
                 pass
 
+    elif action_type == "library_file_placement_started":
+        destination_path_raw = str(payload.get("destination_path") or "")
+        partial_destination_path = Path(destination_path_raw) if destination_path_raw else None
+        original_source_path_raw = str(payload.get("original_source_path") or "")
+        partial_original_source_path = (
+            Path(original_source_path_raw) if original_source_path_raw else None
+        )
+        artifact_source_path_raw = str(payload.get("artifact_source_path") or "")
+        partial_artifact_source_path = (
+            Path(artifact_source_path_raw) if artifact_source_path_raw else None
+        )
+        transfer_method = str(payload.get("transfer_method") or "move")
+        created_series_folder = bool(payload.get("created_series_folder"))
+        created_series_folder_path_raw = str(payload.get("created_series_folder_path") or "")
+        temp_paths = [Path(str(path)) for path in payload.get("temp_paths") or [] if str(path)]
+
+        for temp_path in temp_paths:
+            if temp_path.exists() and temp_path.is_file():
+                temp_path.unlink(missing_ok=True)
+
+        destination_is_original_source = (
+            partial_destination_path is not None
+            and partial_original_source_path is not None
+            and partial_destination_path.resolve(strict=False)
+            == partial_original_source_path.resolve(strict=False)
+        )
+        if (
+            partial_destination_path is not None
+            and partial_destination_path.exists()
+            and not destination_is_original_source
+        ):
+            can_restore_move = (
+                transfer_method == "move"
+                and partial_original_source_path is not None
+                and partial_artifact_source_path is not None
+                and partial_artifact_source_path == partial_original_source_path
+                and not partial_original_source_path.exists()
+            )
+            if can_restore_move:
+                assert partial_original_source_path is not None
+                partial_original_source_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(partial_destination_path), str(partial_original_source_path))
+            elif partial_destination_path.is_file() or partial_destination_path.is_symlink():
+                partial_destination_path.unlink(missing_ok=True)
+
+        if created_series_folder and created_series_folder_path_raw:
+            created_series_folder_path = Path(created_series_folder_path_raw)
+            if created_series_folder_path.exists():
+                try:
+                    next(created_series_folder_path.iterdir())
+                except StopIteration:
+                    created_series_folder_path.rmdir()
+                except OSError:
+                    pass
+
     elif action_type == "series_created":
         series_id = int(payload.get("series_id") or 0)
         if series_id:

@@ -3489,9 +3489,18 @@ class TestRetryJob:
         )
         assert [log.event for log in logs] == [
             "import_rollback_started",
+            "import_rollback_action_started",
+            "import_rollback_action_completed",
+            "import_rollback_action_started",
+            "import_rollback_action_completed",
             "import_rollback_completed",
         ]
-        assert [log.data["action_count"] for log in logs] == [2, 2]
+        assert logs[0].data["action_count"] == 2
+        assert logs[1].data["sequence_no"] == 2
+        assert logs[2].data["sequence_no"] == 2
+        assert logs[3].data["sequence_no"] == 1
+        assert logs[4].data["sequence_no"] == 1
+        assert logs[5].data["action_count"] == 2
 
     @pytest.mark.asyncio
     async def test_rollback_import_recomputes_series_counters_after_restoring_review_state(

@@ -470,6 +470,34 @@ class ImportService(
             ),
         )
 
+        async def placement_started_callback(
+            *,
+            artifact_source_path: Path,
+            target_path: Path,
+            transfer_method: str,
+            series_folder_created: bool,
+            series_folder_path: Path,
+            temp_paths: tuple[Path, ...] = (),
+        ) -> None:
+            await self._record_action(
+                session,
+                job,
+                phase="import",
+                action_type="library_file_placement_started",
+                payload={
+                    "destination_path": str(target_path),
+                    "original_source_path": str(source_path),
+                    "artifact_source_path": str(artifact_source_path),
+                    "transfer_method": transfer_method,
+                    "created_series_folder": series_folder_created,
+                    "created_series_folder_path": str(series_folder_path),
+                    "temp_paths": [str(path) for path in temp_paths],
+                },
+            )
+            # This journal row must survive if archive materialization raises and
+            # the caller rolls back the active session.
+            await session.commit()
+
         result = await register_library_file(
             session,
             source_path,
@@ -479,6 +507,7 @@ class ImportService(
             comicinfo_embedder=adapters.comicinfo_embedder,
             artifact_transfer=adapters.artifact_transfer,
             comicinfo_materializer=adapters.comicinfo_materializer,
+            placement_started_callback=placement_started_callback,
             **kwargs,
         )
         await self._log_import_file_timing_events(

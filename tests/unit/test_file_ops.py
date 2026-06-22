@@ -513,6 +513,55 @@ class TestTransferCompatibility:
         assert not source_file.exists()
 
     @pytest.mark.asyncio
+    async def test_cbz_import_announces_placement_before_materialization(
+        self,
+        session: AsyncSession,
+        issue: Issue,
+        source_file: Path,
+        comics_dir_config: Path,
+    ) -> None:
+        from pullbox.core.file_ops import register_library_file
+
+        placement_events: list[dict[str, object]] = []
+
+        async def placement_started(**kwargs: object) -> None:
+            placement_events.append(dict(kwargs))
+
+        async def materialize_with_comicinfo(
+            _source_path: Path,
+            target_path: Path,
+            _payload: dict[str, object],
+            *,
+            transfer_method: str,
+            progress_callback=None,
+        ) -> bool:
+            target_path.write_text("partial target", encoding="utf-8")
+            raise RuntimeError("materialization failed after target planning")
+
+        with pytest.raises(RuntimeError, match="materialization failed"):
+            await register_library_file(
+                session,
+                source_file,
+                issue,
+                MatchConfidence.HIGH,
+                move_to_library=True,
+                rename=True,
+                transfer_method="move",
+                normalize_to_cbz=False,
+                update_embedded_comicinfo_from_match=True,
+                comicinfo_payload={"Series": "Batman", "Number": "17"},
+                comicinfo_materializer=materialize_with_comicinfo,
+                placement_started_callback=placement_started,
+            )
+
+        assert len(placement_events) == 1
+        event = placement_events[0]
+        assert event["artifact_source_path"] == source_file
+        assert Path(str(event["target_path"])).parent == comics_dir_config / "Batman (2024)"
+        assert event["transfer_method"] == "move"
+        assert event["series_folder_created"] is True
+
+    @pytest.mark.asyncio
     async def test_embedded_comicinfo_payload_uses_inspected_archive_page_count(
         self,
         session: AsyncSession,

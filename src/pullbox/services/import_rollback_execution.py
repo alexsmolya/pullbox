@@ -96,7 +96,49 @@ async def rollback_import_job(
         action_count=total,
     )
     for idx, action in enumerate(actions):
-        await rollback_action(session, action)
+        await log_event(
+            session,
+            job_id,
+            "DEBUG",
+            "import_rollback_action_started",
+            message=(
+                f"Rolling back action {idx + 1}/{total}: "
+                f"{action.action_type} #{action.sequence_no}."
+            ),
+            action_index=idx + 1,
+            action_count=total,
+            action_type=action.action_type,
+            sequence_no=action.sequence_no,
+        )
+        try:
+            await rollback_action(session, action)
+        except Exception as exc:
+            await log_event(
+                session,
+                job_id,
+                "ERROR",
+                "import_rollback_action_failed",
+                message=(f"Rollback action failed: {action.action_type} #{action.sequence_no}."),
+                action_index=idx + 1,
+                action_count=total,
+                action_type=action.action_type,
+                sequence_no=action.sequence_no,
+                error=str(exc),
+            )
+            raise
+        await log_event(
+            session,
+            job_id,
+            "DEBUG",
+            "import_rollback_action_completed",
+            message=(
+                f"Rolled back action {idx + 1}/{total}: {action.action_type} #{action.sequence_no}."
+            ),
+            action_index=idx + 1,
+            action_count=total,
+            action_type=action.action_type,
+            sequence_no=action.sequence_no,
+        )
         if progress_callback:
             progress = int(((idx + 1) / max(total, 1)) * 100)
             await emit_progress(
