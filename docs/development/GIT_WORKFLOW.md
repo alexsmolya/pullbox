@@ -25,7 +25,7 @@ tags are signed before automation publishes artifacts.
 - TDD is the expected development loop for behavior changes.
 - `make validate`, `make ci-local`, and `make ci-full` are the main local gates.
 - Release tags are signed.
-- Tag pushes trigger CircleCI release and Docker publication workflows.
+- Tag pushes trigger GitHub Actions release and Docker publication workflows.
 - After a release, `develop` is bumped back to the next `-dev` version.
 
 ## Table of Contents
@@ -343,14 +343,15 @@ Main local validation commands:
   - follow-up risks, if any
 - Merge only after required checks are green.
 - Protected branches require the stable aggregate checks `CI Required`,
-  `Security Required`, and `Workflow Hygiene Required`.
-- Do not make path-filtered workflows, such as Docker PR validation, required
-  branch checks unless they emit an always-present aggregate status.
-- PR pushes run only the cheap CircleCI preflight until a maintainer applies the
+  `Security Required`, `Workflow Hygiene Required`, and
+  `Docker Validate Required`.
+- Workflows that have conditional execution must emit an always-present
+  aggregate status before they can be branch-protection requirements.
+- PR pushes run only the cheap GitHub Actions preflight until a maintainer applies the
   `ci:full` label. Apply `ci:full` after automated review comments have landed
   and the PR is ready for the full required gate.
 - If a PR with `ci:full` needs more iteration, remove the label while working or
-  expect every subsequent push to rerun the full CircleCI gate.
+  expect every subsequent push to rerun the full GitHub Actions gate.
 - Prefer squash or merge commits based on what preserves useful history for the
   branch.
 
@@ -391,7 +392,7 @@ Example PR body:
 - Release PRs merge `develop` into `main`.
 - Release tags are created from `main`.
 - Release tags are signed.
-- Tag pushes trigger CircleCI:
+- Tag pushes trigger GitHub Actions:
   - GitHub Release creation
   - Docker Release build, Grype scan, smoke test, GHCR/Docker Hub publish,
     Cosign signing, signature verification, and digest artifact upload
@@ -461,7 +462,7 @@ Pullbox has two release-note artifacts:
 | Artifact | Source | When Updated | Purpose |
 |---|---|---|---|
 | `CHANGELOG.md` | Curated by maintainers | During release prep PR | Human-readable project history in the repo |
-| GitHub Release notes | Curated `CHANGELOG.md` release section plus generated commit details from `.circleci/scripts/github_release.py` | After a signed version tag and successful CircleCI Docker Release workflow | Public release summary, detailed release event log, Docker pull commands, and image signature verification commands |
+| GitHub Release notes | Curated `CHANGELOG.md` release section plus generated commit details from `.github/workflows/release.yml` | After a signed version tag and successful GitHub Actions Docker Release workflow | Public release summary, detailed release event log, Docker pull commands, and image signature verification commands |
 
 `CHANGELOG.md` is not generated automatically. Keep it concise and user-facing:
 summarize the release, do not paste every commit. During release prep, move
@@ -496,8 +497,8 @@ Recommended mapping:
 
 - Signed tags let GitHub show verified tag provenance when signing is configured
   correctly.
-- Release images are signed separately from Git tags. CircleCI Docker Release
-  uses keyless Sigstore/Cosign with CircleCI OIDC, verifies GHCR and Docker
+- Release images are signed separately from Git tags. GitHub Actions Docker
+  Release uses keyless Sigstore/Cosign with GitHub Actions OIDC, verifies GHCR and Docker
   Hub signatures by digest before the workflow succeeds, and uploads that digest
   for the GitHub Release notes.
 - If `git tag -s` fails, stop and configure a verified GPG or SSH signing key

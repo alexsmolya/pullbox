@@ -19,10 +19,10 @@ requirements.
 ## Current Baseline Notes
 
 - `make validate`, `make ci-local`, and `make ci-full` are the main local gates.
-- CircleCI runs lint, format, typecheck, tests, migration checks,
+- GitHub Actions runs lint, format, typecheck, tests, migration checks,
   accessibility checks, E2E, security scans, Docker validation, and release
   automation.
-- Pull request pushes run a cheap CircleCI preflight by default. Full PR
+- Pull request pushes run a cheap GitHub Actions preflight by default. Full PR
   CI/security/workflow-hygiene checks run after maintainers apply `ci:full`.
 - CI tests Python 3.12, 3.13, and 3.14.
 - Python 3.14 is the production container runtime.
@@ -170,22 +170,24 @@ Key gates:
 
 ### 3.1 Current Pullbox implementation
 
-CircleCI workflows live in `.circleci/config.yml`. Legacy GitHub Actions
-workflows remain in `.github/workflows/` only where explicitly retained as
-manual/reference fallback.
+GitHub Actions workflows live in `.github/workflows/`. CircleCI config is not
+tracked in the active CI/CD path.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr-preflight-checks` | Open PR source branches | Cheap lint/format/CSS preflight while review is still in progress |
-| `pr-and-merge-checks` | `ci:full` label dispatch or explicit manual pipeline parameter | Full lint, typecheck, tests, migration check, accessibility, E2E, Docker validation, security, workflow hygiene, and aggregate required checks |
-| `docker-release` | Version tag push | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, signature verification, and GitHub Release creation |
-| `manual-docker-release` | Manual CircleCI pipeline parameter | Explicit release-image build/publish path for controlled operator use |
+| `CI` | Pull requests and manual dispatch | Cheap preflight by default; full lint, typecheck, tests, migration, accessibility, and E2E after `ci:full` |
+| `Security` | Pull requests and manual dispatch | gitleaks, dependency audits, Bandit, CodeQL, and aggregate security gate after `ci:full` |
+| `Workflow Hygiene` | Pull requests and manual dispatch | actionlint and aggregate workflow gate after `ci:full` |
+| `Docker Validate` | Pull requests and manual dispatch | Trusted DHI production image validation or reduced public sanity validation |
+| `Docker Release` | Version tag push and manual dispatch | Release image build, Grype scan, smoke test, GHCR/Docker Hub publish, Cosign signing, and signature verification |
+| `Release` | Successful `Docker Release` workflow run | GitHub Release creation with curated changelog, generated commit details, Docker pull commands, signature verification, and full changelog link |
 
 ### 3.2 Required standard
 
 - Required CI checks must pass before merge.
 - Branch rulesets should require only stable aggregate checks:
-  `CI Required`, `Security Required`, and `Workflow Hygiene Required`.
+  `CI Required`, `Security Required`, `Workflow Hygiene Required`, and
+  `Docker Validate Required`.
 - Python tests run across the supported matrix.
 - Migration checks must validate upgrade and downgrade behavior.
 - Accessibility checks must stay separate from functional browser checks.
@@ -207,8 +209,8 @@ manual/reference fallback.
   only when they are same-repository, version-only `feature/sync-develop-*`
   PRs that carry `origin/main` forward and bump `src/pullbox/__init__.py` from
   the released version to the next patch `-dev` version.
-- Docker validation is a PR/manual CircleCI workflow. It never logs in to publish
-  registries and never pushes images.
+- Docker validation is a PR/manual GitHub Actions workflow. It never logs in to
+  publish registries and never pushes images.
 - Docker publication depends on trusted refs and release tags.
 - DHI credentials are required for Docker builds that pull `dhi.io` base images.
 - Forked or Dependabot PRs may not have repository secrets. PR workflows should
@@ -227,12 +229,12 @@ manual/reference fallback.
   `PULLBOX_CHECKS_RUNNER`.
 - Untrusted Docker PRs run a reduced public sanity check (`Dockerfile.dev`
   build) instead of the full DHI-backed production build.
-- `Docker Validate` stays active for Docker-sensitive changes, but it is not a
-  required ruleset check because path-filtered workflows may be absent on
-  unrelated pull requests.
+- `Docker Validate Required` is the stable aggregate check for Docker
+  validation. Same-repository maintainer PRs wait for `ci:full`; untrusted and
+  Dependabot PRs use the reduced public Docker sanity path.
 - The public-readiness ruleset targets both `main` and `develop`, blocks branch
   deletion and non-fast-forward pushes, requires pull requests, requires
-  conversation resolution, and requires the three aggregate checks above.
+  conversation resolution, and requires the aggregate checks above.
 
 ### 3.4 Audit checks
 
@@ -579,16 +581,16 @@ Development dependency categories:
 
 ### 8.1 Current Pullbox implementation
 
-- Version tags trigger CircleCI release and Docker automation.
-- CircleCI `docker-release` builds, scans, smoke-tests, publishes, signs, and
+- Version tags trigger GitHub Actions release and Docker automation.
+- GitHub Actions `Docker Release` builds, scans, smoke-tests, publishes, signs, and
   verifies release images only for version tags or explicit release dispatches.
-- CircleCI Docker Validate validates Docker-sensitive PR changes without
+- GitHub Actions `Docker Validate` validates Docker-sensitive PR changes without
   publishing.
 - Published container images are signed with keyless Sigstore/Cosign using
-  CircleCI OIDC after the registry push completes. `Docker Release`
+  GitHub Actions OIDC after the registry push completes. `Docker Release`
   verifies GHCR and Docker Hub signatures by digest before reporting success.
-- CircleCI creates or updates GitHub Releases for tagged commits after the
-  Docker Release workflow succeeds.
+- GitHub Actions creates or updates GitHub Releases for tagged commits after
+  the Docker Release workflow succeeds.
 - GitHub Release notes start with the curated `CHANGELOG.md` release section,
   then append generated commit details grouped by conventional commit prefixes.
 - The root `CHANGELOG.md` is curated manually during release prep.

@@ -133,7 +133,7 @@ def test_dependabot_covers_primary_supply_chain_inputs() -> None:
     assert {"pip", "github-actions", "docker", "npm"} <= ecosystems
 
 
-def test_security_workflow_keeps_required_scanners_as_manual_fallback() -> None:
+def test_security_workflow_runs_required_scanners_on_pr_full_gate() -> None:
     security_workflow = WORKFLOW_DIR / "security.yml"
     data = _load_yaml(security_workflow)
     text = security_workflow.read_text(encoding="utf-8")
@@ -142,10 +142,21 @@ def test_security_workflow_keeps_required_scanners_as_manual_fallback() -> None:
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
     assert "workflow_dispatch" in triggers
+    pull_request = triggers.get("pull_request")
+    assert isinstance(pull_request, dict)
+    assert pull_request.get("branches") == ["develop", "main"]
+    assert {
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+        "labeled",
+        "unlabeled",
+    } <= set(pull_request.get("types", []))
     assert "schedule" not in triggers
-    assert "pull_request" not in triggers
     assert "merge_group" not in triggers
     assert "push" not in triggers
+    assert "contains(github.event.pull_request.labels.*.name, 'ci:full')" in text
 
     required_markers = [
         "GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:",
@@ -243,17 +254,41 @@ def test_ci_uploads_coverage_for_each_python_matrix_version() -> None:
     assert upload_with.get("name") == "coverage-report-py${{ matrix.python-version }}"
 
 
-def test_legacy_required_gate_workflows_are_manual_only() -> None:
-    """CircleCI is the automatic correctness gate; legacy Actions stay quiet."""
-    for workflow_name in ["ci.yml", "clean-room.yml", "security.yml", "workflow-hygiene.yml"]:
+def test_required_gate_workflows_are_pr_triggered_and_label_gated() -> None:
+    """Required PR gates should stay cheap until maintainers request full CI."""
+    for workflow_name in ["ci.yml", "security.yml", "workflow-hygiene.yml", "docker-validate.yml"]:
+        workflow_path = WORKFLOW_DIR / workflow_name
+        workflow_text = workflow_path.read_text(encoding="utf-8")
         data = _load_yaml(WORKFLOW_DIR / workflow_name)
         triggers = data.get(True, data.get("on"))
         assert isinstance(triggers, dict)
         assert "workflow_dispatch" in triggers
+        pull_request = triggers.get("pull_request")
+        assert isinstance(pull_request, dict)
+        assert pull_request.get("branches") == ["develop", "main"]
+        assert {
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review",
+            "labeled",
+            "unlabeled",
+        } <= set(pull_request.get("types", []))
         assert "push" not in triggers
-        assert "pull_request" not in triggers
         assert "merge_group" not in triggers
         assert "schedule" not in triggers
+        assert "full_ci_check:" in workflow_text
+        assert "contains(github.event.pull_request.labels.*.name, 'ci:full')" in workflow_text
+
+
+def test_clean_room_workflow_stays_manual_only_without_schedule() -> None:
+    data = _load_yaml(WORKFLOW_DIR / "clean-room.yml")
+    triggers = data.get(True, data.get("on"))
+    assert isinstance(triggers, dict)
+    assert "workflow_dispatch" in triggers
+    assert "pull_request" not in triggers
+    assert "push" not in triggers
+    assert "schedule" not in triggers
 
 
 def test_release_sync_fast_path_requires_next_patch_dev_version() -> None:
@@ -401,8 +436,9 @@ def test_docker_validation_skips_trusted_docker_runner_for_release_sync_prs() ->
 
     trusted = jobs.get("trusted-production-validate")
     assert isinstance(trusted, dict)
-    assert trusted.get("needs") == "release_sync_check"
+    assert trusted.get("needs") == ["release_sync_check", "full_ci_check"]
     assert "needs.release_sync_check.outputs.is_sync != 'true'" in trusted.get("if", "")
+    assert "needs.full_ci_check.outputs.trusted_full == 'true'" in trusted.get("if", "")
     assert "git show origin/main:.github/scripts/validate-release-sync-pr.py" in workflow_text
     assert "python /tmp/pullbox-release-sync-validator.py" in workflow_text
     assert "python .github/scripts/validate-release-sync-pr.py" not in workflow_text
@@ -476,7 +512,9 @@ def test_docker_validation_workflow_never_publishes_images() -> None:
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
     assert "workflow_dispatch" in triggers
-    assert "pull_request" not in triggers
+    pull_request = triggers.get("pull_request")
+    assert isinstance(pull_request, dict)
+    assert pull_request.get("branches") == ["develop", "main"]
     assert "push" not in triggers
     assert "merge_group" not in triggers
     assert "schedule" not in triggers
@@ -540,17 +578,18 @@ def test_docker_smoke_workflows_use_valid_application_secrets() -> None:
     assert failures == []
 
 
-def test_legacy_docker_release_workflow_is_manual_only_and_scans_before_publish() -> None:
+def test_docker_release_workflow_is_tag_or_manual_only_and_scans_before_publish() -> None:
     docker_workflow_path = WORKFLOW_DIR / "docker-release.yml"
     docker_workflow = docker_workflow_path.read_text(encoding="utf-8")
     data = _load_yaml(docker_workflow_path)
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
-    assert "push" not in triggers
+    push = triggers.get("push")
+    assert isinstance(push, dict)
+    assert push.get("tags") == ["v*"]
     assert "pull_request" not in triggers
     assert "workflow_run" not in triggers
     assert "workflow_dispatch" in triggers
-    assert "CircleCI is the canonical publisher for release tag pushes." in docker_workflow
 
     jobs = data.get("jobs")
     assert isinstance(jobs, dict)
@@ -561,6 +600,31 @@ def test_legacy_docker_release_workflow_is_manual_only_and_scans_before_publish(
     assert "config: .grype.yaml" in docker_workflow
     assert push_job.get("needs") == ["build", "scan", "smoke-test"]
     assert push_job.get("runs-on") == ["self-hosted", "Linux", "X64", "docker"]
+
+
+def test_docker_release_uses_trigger_tag_without_sha_rediscovery() -> None:
+    docker_workflow_path = WORKFLOW_DIR / "docker-release.yml"
+    docker_workflow = docker_workflow_path.read_text(encoding="utf-8")
+    data = _load_yaml(docker_workflow_path)
+    jobs = data.get("jobs")
+    assert isinstance(jobs, dict)
+
+    gate = jobs.get("gate")
+    assert isinstance(gate, dict)
+    assert gate.get("outputs", {}).get("release-tag") == (
+        "${{ steps.resolve-sha.outputs.release_tag }}"
+    )
+
+    build = jobs.get("build")
+    assert isinstance(build, dict)
+    assert build.get("outputs", {}).get("release-tag") == "${{ steps.resolve-tag.outputs.tag }}"
+
+    assert "GITHUB_REF_NAME" in docker_workflow
+    assert "GITHUB_REF_TYPE" in docker_workflow
+    assert 'TAG="${{ needs.gate.outputs.release-tag }}"' in docker_workflow
+    assert 'TAG="${{ needs.build.outputs.release-tag }}"' in docker_workflow
+    assert "git tag --points-at" not in docker_workflow
+    assert "tag.txt" in docker_workflow
 
 
 def test_docker_release_prerelease_tags_do_not_update_latest() -> None:
@@ -679,6 +743,7 @@ def test_docker_workflow_signs_and_verifies_published_images() -> None:
     assert "needs.push.outputs.image-digest" in docker_workflow
     assert "release-image-digest" in docker_workflow
     assert "digest.txt" in docker_workflow
+    assert "tag.txt" in docker_workflow
     assert "actions/upload-artifact@" in docker_workflow
     assert "Validate pushed image metadata" in docker_workflow
     assert "python3 - <<'PY'" in docker_workflow
@@ -727,6 +792,7 @@ def test_release_notes_include_image_signature_verification() -> None:
 
 def test_release_workflow_only_runs_for_tag_push_docker_publish() -> None:
     release_workflow_path = WORKFLOW_DIR / "release.yml"
+    release_workflow = release_workflow_path.read_text(encoding="utf-8")
     data = _load_yaml(release_workflow_path)
     triggers = data.get(True, data.get("on"))
     assert isinstance(triggers, dict)
@@ -750,6 +816,18 @@ def test_release_workflow_only_runs_for_tag_push_docker_publish() -> None:
     assert isinstance(release_if, str)
     assert "github.event.workflow_run.conclusion == 'success'" in release_if
     assert "github.event.workflow_run.event == 'push'" in release_if
+    assert "release-image-digest/tag.txt" in release_workflow
+    assert "TAG=$(tr -d '[:space:]' < \"${TAG_FILE}\")" in release_workflow
+    assert 'TAG_SHA=$(git rev-list -n 1 "${TAG}")' in release_workflow
+    assert "git tag --points-at" not in release_workflow
+
+
+def test_release_workflow_marks_only_hyphenated_tags_as_prereleases() -> None:
+    release_workflow = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
+
+    assert '[[ "$TAG" == *-* ]]' in release_workflow
+    assert '[[ "$TAG" == v0.* ]]' not in release_workflow
+    assert "prerelease: ${{ steps.version.outputs.prerelease == 'true' }}" in release_workflow
 
 
 def test_release_notes_use_curated_changelog_before_commit_details() -> None:
