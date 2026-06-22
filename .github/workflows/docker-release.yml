@@ -63,11 +63,17 @@ jobs:
     outputs:
       should-run: ${{ steps.decide.outputs.should_run }}
       build-sha: ${{ steps.resolve-sha.outputs.sha }}
+      release-tag: ${{ steps.resolve-sha.outputs.release_tag }}
     steps:
       - name: Resolve correct SHA
         id: resolve-sha
         run: |
           echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "release_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -98,6 +104,7 @@ jobs:
       image-labels: ${{ steps.meta.outputs.labels }}
       image-version: ${{ steps.version.outputs.version }}
       build-sha: ${{ needs.gate.outputs.build-sha }}
+      release-tag: ${{ steps.resolve-tag.outputs.tag }}
       is-release: ${{ steps.resolve-tag.outputs.is_release }}
     steps:
       - name: Checkout
@@ -107,10 +114,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Resolve tag from SHA
+      - name: Resolve tag from trigger
         id: resolve-tag
         run: |
-          TAG=$(git tag --points-at ${{ needs.gate.outputs.build-sha }} | grep '^v' | head -1 || true)
+          TAG="${{ needs.gate.outputs.release-tag }}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           if [ -n "$TAG" ]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
@@ -123,7 +130,7 @@ jobs:
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "No release tag at this SHA"
+            echo "No release tag for this trigger"
           fi
 
       - name: Runner preflight
@@ -388,10 +395,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Resolve tag from SHA
+      - name: Resolve tag from trigger
         id: resolve-tag
         run: |
-          TAG=$(git tag --points-at ${{ needs.build.outputs.build-sha }} | grep '^v' | head -1 || true)
+          TAG="${{ needs.build.outputs.release-tag }}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           if [ -n "$TAG" ]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
@@ -664,20 +671,26 @@ jobs:
       - name: Write release image digest artifact
         env:
           DIGEST: ${{ needs.push.outputs.image-digest }}
+          TAG: ${{ needs.build.outputs.release-tag }}
         run: |
           if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::Unexpected release image digest format: ${DIGEST}"
             exit 1
           fi
+          if [ "${{ needs.build.outputs.is-release }}" = "true" ] && ! [[ "${TAG}" =~ ^v.+ ]]; then
+            echo "::error::Release image digest artifact requires the triggering release tag."
+            exit 1
+          fi
 
           mkdir -p "${RUNNER_TEMP}/release-image-digest"
           printf '%s\n' "${DIGEST}" > "${RUNNER_TEMP}/release-image-digest/digest.txt"
+          printf '%s\n' "${TAG}" > "${RUNNER_TEMP}/release-image-digest/tag.txt"
 
       - name: Upload release image digest artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-image-digest
-          path: ${{ runner.temp }}/release-image-digest/digest.txt
+          path: ${{ runner.temp }}/release-image-digest/
           retention-days: 30
 
       - name: Summary
