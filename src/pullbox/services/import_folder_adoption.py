@@ -95,7 +95,7 @@ async def plan_import_series_folder_adoption(
         return None
     if not resolved_target_folder.is_relative_to(root_path):
         return None
-    if target_folder.exists():
+    if _target_folder_has_blocking_content(target_folder):
         return None
 
     if not _all_importable_files_are_inside_source(source_folder, importable_files):
@@ -138,9 +138,6 @@ async def apply_import_series_folder_adoption(
     if plan is None:
         return False
 
-    await asyncio.to_thread(plan.target_folder.parent.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread(plan.source_folder.rename, plan.target_folder)
-
     series = await session.get(Series, plan.series_id)
     if series is not None:
         series.path = str(plan.target_folder)
@@ -178,6 +175,10 @@ async def apply_import_series_folder_adoption(
         new_folder_path=str(plan.target_folder),
     )
     await session.flush()
+    await asyncio.to_thread(plan.target_folder.parent.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(_remove_empty_target_folder_if_present, plan.target_folder)
+    await asyncio.to_thread(plan.source_folder.rename, plan.target_folder)
+    await session.commit()
     return True
 
 
@@ -210,6 +211,35 @@ def _target_folder_for_series(
     if series.path:
         return Path(series.path)
     return Path(root.path) / build_series_folder_name(series, ingest_policy)
+
+
+def _target_folder_has_blocking_content(target_folder: Path) -> bool:
+    """Return true when an existing target would be unsafe to adopt into."""
+    if not target_folder.exists():
+        return False
+    if not target_folder.is_dir():
+        return True
+    try:
+        next(target_folder.iterdir())
+    except StopIteration:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _remove_empty_target_folder_if_present(target_folder: Path) -> None:
+    """Remove an empty pre-created target folder before an atomic source rename."""
+    if not target_folder.exists():
+        return
+    if not target_folder.is_dir():
+        raise FileExistsError(f"Target path exists and is not a directory: {target_folder}")
+    try:
+        target_folder.rmdir()
+    except OSError as exc:
+        raise FileExistsError(
+            f"Target folder is not empty and cannot be adopted into: {target_folder}"
+        ) from exc
 
 
 def _resolved_path(path: Path) -> Path:

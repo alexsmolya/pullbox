@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import select as sa_select
+
 from pullbox.core.library_policy import LibraryIngestPolicy
 from pullbox.models.import_job import (
     ImportedFile,
@@ -161,6 +163,52 @@ async def test_does_not_adopt_when_source_folder_is_shared_by_multiple_series(
     assert plan is None
 
 
+async def test_plans_adoption_when_target_folder_exists_but_is_empty(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    job, item, imp_file, series, _source_folder, target_folder = await _seed_import_row(
+        db_session,
+        tmp_path,
+    )
+    target_folder.mkdir(parents=True)
+
+    plan = await plan_import_series_folder_adoption(
+        db_session,
+        job,
+        item,
+        [imp_file],
+        resolved_series_id=series.id,
+        ingest_policy=_ingest_policy(),
+    )
+
+    assert plan is not None
+    assert plan.target_folder == target_folder
+
+
+async def test_does_not_adopt_when_target_folder_has_existing_content(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    job, item, imp_file, series, _source_folder, target_folder = await _seed_import_row(
+        db_session,
+        tmp_path,
+    )
+    target_folder.mkdir(parents=True)
+    (target_folder / "existing.cbz").write_text("already there", encoding="utf-8")
+
+    plan = await plan_import_series_folder_adoption(
+        db_session,
+        job,
+        item,
+        [imp_file],
+        resolved_series_id=series.id,
+        ingest_policy=_ingest_policy(),
+    )
+
+    assert plan is None
+
+
 async def test_apply_folder_adoption_renames_folder_preserves_sidecars_and_records_action(
     db_session: AsyncSession,
     tmp_path: Path,
@@ -196,6 +244,10 @@ async def test_apply_folder_adoption_renames_folder_preserves_sidecars_and_recor
     async def log_event(*args: Any, **kwargs: Any) -> None:
         log_events.append(kwargs)
 
+    imp_file_id = imp_file.id
+    series_id = series.id
+    job_id = job.id
+
     adopted = await apply_import_series_folder_adoption(
         db_session,
         job,
@@ -227,3 +279,18 @@ async def test_apply_folder_adoption_renames_folder_preserves_sidecars_and_recor
         )
     ]
     assert log_events
+
+    await db_session.rollback()
+    persisted_file = await db_session.get(ImportedFile, imp_file_id)
+    persisted_series = await db_session.get(Series, series_id)
+    persisted_action = await db_session.scalar(
+        sa_select(ImportJobAction).where(
+            ImportJobAction.import_job_id == job_id,
+            ImportJobAction.action_type == "series_folder_renamed",
+        )
+    )
+    assert persisted_file is not None
+    assert persisted_file.file_path == str(target_folder / "Mylar Series 001.cbz")
+    assert persisted_series is not None
+    assert persisted_series.path == str(target_folder)
+    assert persisted_action is not None
