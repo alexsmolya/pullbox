@@ -8,13 +8,18 @@ from unittest.mock import AsyncMock
 
 from pullbox.core.exceptions import NotFoundError
 from pullbox.models.import_job import (
+    ImportedFile,
+    ImportedFileStatus,
+    ImportedSeries,
     ImportJob,
     ImportJobAction,
     ImportJobActionStatus,
     ImportJobStatus,
+    ImportSeriesStatus,
     ImportSourceType,
 )
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
+from pullbox.models.series import Series
 from pullbox.services.import_rollback_execution import RollbackActionPlan
 from pullbox.services.import_service import ImportService
 
@@ -315,6 +320,197 @@ async def test_rollback_action_preserves_preexisting_series_folder(
     assert series_folder.exists()
 
 
+async def test_rollback_action_removes_partial_file_placement_and_empty_folder(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    original_path = tmp_path / "incoming" / "Batwoman 002.cbz"
+    original_path.parent.mkdir(parents=True)
+    original_path.write_text("source", encoding="utf-8")
+    series_folder = tmp_path / "library" / "Batwoman (2026)"
+    series_folder.mkdir(parents=True)
+    destination_path = series_folder / "Batwoman (2026) #002.cbz"
+    destination_path.write_text("rewritten target", encoding="utf-8")
+    temp_path = series_folder / "Batwoman (2026) #002.cbz.pullbox-write.tmp"
+    temp_path.write_text("temp", encoding="utf-8")
+    progress_path = series_folder / "pullbox-archive-progress-deadbeef.json"
+    progress_path.write_text("{}", encoding="utf-8")
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="library_file_placement_started",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "destination_path": str(destination_path),
+            "original_source_path": str(original_path),
+            "artifact_source_path": str(original_path),
+            "transfer_method": "move",
+            "created_series_folder": True,
+            "created_series_folder_path": str(series_folder),
+            "temp_paths": [str(temp_path), str(progress_path)],
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert original_path.exists()
+    assert not destination_path.exists()
+    assert not temp_path.exists()
+    assert not progress_path.exists()
+    assert not series_folder.exists()
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
+async def test_rollback_action_restores_partial_move_when_source_was_removed(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    original_path = tmp_path / "incoming" / "Saga 001.cbz"
+    original_path.parent.mkdir(parents=True)
+    series_folder = tmp_path / "library" / "Saga (2012)"
+    series_folder.mkdir(parents=True)
+    destination_path = series_folder / "Saga (2012) #001.cbz"
+    destination_path.write_text("moved target", encoding="utf-8")
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="library_file_placement_started",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "destination_path": str(destination_path),
+            "original_source_path": str(original_path),
+            "artifact_source_path": str(original_path),
+            "transfer_method": "move",
+            "created_series_folder": True,
+            "created_series_folder_path": str(series_folder),
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert original_path.read_text(encoding="utf-8") == "moved target"
+    assert not destination_path.exists()
+    assert not series_folder.exists()
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
+async def test_rollback_action_restores_adopted_import_file_paths(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    old_folder = tmp_path / "library" / "Mylar Folder"
+    new_folder = tmp_path / "library" / "Canonical Series (2024)"
+    new_folder.mkdir(parents=True)
+    (new_folder / "cover.jpg").write_text("sidecar", encoding="utf-8")
+    renamed_file = new_folder / "Mylar Series 001.cbz"
+    renamed_file.write_text("comic", encoding="utf-8")
+    series = Series(
+        title="Canonical Series",
+        sort_title="Canonical Series",
+        year_start=2024,
+        path=str(new_folder),
+    )
+    db_session.add(series)
+    await db_session.flush()
+    imported_series = ImportedSeries(
+        import_job_id=job.id,
+        status=ImportSeriesStatus.CONFIRMED,
+        raw_series_name="Mylar Series",
+        file_count=1,
+        files_total=1,
+        source_folder=str(old_folder),
+        series_id=series.id,
+    )
+    db_session.add(imported_series)
+    await db_session.flush()
+    imported_file = ImportedFile(
+        import_job_id=job.id,
+        import_series_id=imported_series.id,
+        file_path=str(renamed_file),
+        file_name=renamed_file.name,
+        file_size=renamed_file.stat().st_size,
+        file_format="cbz",
+        status=ImportedFileStatus.MATCHED,
+        include_in_import=True,
+    )
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="series_folder_renamed",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "series_id": series.id,
+            "import_series_id": imported_series.id,
+            "old_folder_path": str(old_folder),
+            "new_folder_path": str(new_folder),
+            "old_series_path": str(old_folder),
+            "old_library_root_id": None,
+        },
+    )
+    db_session.add_all([imported_file, action])
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    restored_file_path = old_folder / "Mylar Series 001.cbz"
+    assert old_folder.exists()
+    assert not new_folder.exists()
+    assert restored_file_path.exists()
+    assert imported_file.file_path == str(restored_file_path)
+    assert series.path == str(old_folder)
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
+async def test_rollback_action_preserves_source_when_partial_destination_is_same_path(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    original_path = tmp_path / "library" / "Saga (2012)" / "Saga (2012) #001.cbz"
+    original_path.parent.mkdir(parents=True)
+    original_path.write_text("already in place", encoding="utf-8")
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="library_file_placement_started",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "destination_path": str(original_path),
+            "original_source_path": str(original_path),
+            "artifact_source_path": str(original_path),
+            "transfer_method": "move",
+            "created_series_folder": False,
+            "created_series_folder_path": str(original_path.parent),
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert original_path.read_text(encoding="utf-8") == "already in place"
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
 async def test_rollback_action_restores_surviving_permission_mode(
     db_session: AsyncSession,
     tmp_path: Path,
@@ -367,3 +563,50 @@ async def test_rollback_action_restores_surviving_permission_mode(
     assert not destination_path.exists()
     assert source_path.exists()
     assert source_path.stat().st_mode & 0o777 == 0o600
+
+
+async def test_rollback_action_restores_adopted_series_folder_name(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    old_folder = tmp_path / "library" / "Mylar Folder"
+    new_folder = tmp_path / "library" / "Canonical Folder (2026)"
+    new_folder.mkdir(parents=True)
+    (new_folder / "series.json").write_text("mylar sidecar", encoding="utf-8")
+    root = LibraryRoot(name="Library", path=str(tmp_path / "library"))
+    series = Series(
+        title="Canonical Folder",
+        sort_title="canonical folder",
+        year_start=2026,
+        path=str(new_folder),
+    )
+    db_session.add_all([root, series])
+    await db_session.flush()
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="series_folder_renamed",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "series_id": series.id,
+            "old_folder_path": str(old_folder),
+            "new_folder_path": str(new_folder),
+            "old_series_path": "",
+            "old_library_root_id": None,
+        },
+    )
+    db_session.add(action)
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    assert old_folder.exists()
+    assert not new_folder.exists()
+    assert (old_folder / "series.json").exists()
+    assert series.path is None
+    assert series.library_root_id is None
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None

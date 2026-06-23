@@ -290,40 +290,41 @@ async def monitor_downloads() -> None:
             await session.rollback()
             raise
 
-    if not poll_items:
-        return
+    download_svc = _build_download_service(registry)
 
     # ── Phase 2: Poll — HTTP calls to download clients (no DB session) ──
-    download_svc = _build_download_service(registry)
-    updates = await _poll_download_clients(
-        poll_items,
-        download_svc,
-        record_download_progress=_record_download_progress,
-        build_status_update=_build_status_update,
-        build_status_check_error_update=_build_status_check_error_update,
-        event_logger=logger,
-    )
-
-    # ── Phase 3: Write — apply updates in a short session ──
     checked = len(poll_items)
     completed = 0
     failed = 0
     retried = 0
     recovered = 0
+    updates = []
 
+    if poll_items:
+        updates = await _poll_download_clients(
+            poll_items,
+            download_svc,
+            record_download_progress=_record_download_progress,
+            build_status_update=_build_status_update,
+            build_status_check_error_update=_build_status_check_error_update,
+            event_logger=logger,
+        )
+
+    # ── Phase 3: Write — apply updates and run throttled recovery checks ──
     async with factory() as session:
         try:
-            apply_result = await _apply_monitor_updates(
-                session,
-                updates,
-                first_active_observed_at=_first_active_observed_at,
-                clear_progress=_clear_progress,
-                handle_download_failure=_handle_download_failure,
-                emit_download_lifecycle_summary=_emit_download_lifecycle_summary,
-                event_logger=logger,
-            )
-            completed = apply_result.completed
-            failed = apply_result.failed
+            if updates:
+                apply_result = await _apply_monitor_updates(
+                    session,
+                    updates,
+                    first_active_observed_at=_first_active_observed_at,
+                    clear_progress=_clear_progress,
+                    handle_download_failure=_handle_download_failure,
+                    emit_download_lifecycle_summary=_emit_download_lifecycle_summary,
+                    event_logger=logger,
+                )
+                completed = apply_result.completed
+                failed = apply_result.failed
 
             # Throttle expensive recovery checks to ~every 30s
             now_mono = time.monotonic()

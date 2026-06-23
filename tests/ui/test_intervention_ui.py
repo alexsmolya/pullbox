@@ -439,6 +439,10 @@ class TestHandlersDirect:
         body = resp.body.decode()
         assert "Batman 001 (2016)" in body
         assert "NZBgeek" in body
+        assert re.search(
+            r'<a\s+href="/issues/\d+"\s+hx-boost="false"\s+class="downloads-issue-link">',
+            body,
+        )
         assert not re.search(
             r'data-testid="intervention-select-mode-toggle"[^>]*\sdisabled(?:\s|>|=)', body
         )
@@ -534,6 +538,10 @@ class TestHandlersDirect:
         assert 'data-testid="intervention-history-detail-content"' not in body
         assert "Wrong cover scan" not in body
         assert 'class="table-detail-row"' not in body
+        assert re.search(
+            r'<a\s+href="/issues/\d+"\s+hx-boost="false"\s+class="downloads-issue-link">',
+            body,
+        )
         assert "Approved" in body
         assert "Rejected" in body
         assert "Expired" in body

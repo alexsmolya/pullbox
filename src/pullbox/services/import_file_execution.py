@@ -30,6 +30,7 @@ from pullbox.services.import_file_resolution import (
     load_importable_files,
     load_issue_lookup_for_series,
 )
+from pullbox.services.import_folder_adoption import apply_import_series_folder_adoption
 from pullbox.utilities.settings import restore_file_from_utility_trash
 
 if TYPE_CHECKING:
@@ -486,6 +487,19 @@ async def process_import_series_files(
     transfer_method = job.transfer_method
     target_library_root_id = job.target_library_root_id
     update_embedded_comicinfo_from_match = bool(job.update_embedded_comicinfo_from_match)
+    ingest_policy = await load_ingest_policy(session, job)
+
+    if _file_ids_override is None:
+        await apply_import_series_folder_adoption(
+            session,
+            job,
+            item,
+            importable_files,
+            resolved_series_id=resolved_series_id,
+            ingest_policy=ingest_policy,
+            record_action=record_action,
+            log_event=log_event,
+        )
 
     placeholder_progress_live_only = False
     if _setup_placeholder_targets:
@@ -632,7 +646,6 @@ async def process_import_series_files(
     media_settings = await load_media_settings(session, job)
     skip_existing_enabled = media_settings["skip_existing_files"].lower() == "true"
     trash_dir = await load_trash_dir(session, job)
-    ingest_policy = await load_ingest_policy(session, job)
     permission_policy = await load_permission_policy(session, job)
     trash_dir.mkdir(parents=True, exist_ok=True)
     issue_ids = {

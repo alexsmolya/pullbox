@@ -901,6 +901,142 @@ class TestImportExecutionAutoflushDiscipline:
         assert all(call["update_embedded_comicinfo_from_match"] is True for call in seen_kwargs)
 
     @pytest.mark.asyncio
+    async def test_series_file_processing_adopts_source_folder_under_library_root(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from pullbox.models.library import FileFormat
+        from pullbox.services.import_file_execution import process_import_series_files
+
+        library_root_path = tmp_path / "comics"
+        source_folder = library_root_path / "Old Mylar Folder"
+        target_folder = library_root_path / "Batman (2016)"
+        source_folder.mkdir(parents=True)
+        source_path = source_folder / "Batman 001.cbz"
+        source_path.write_text("comic", encoding="utf-8")
+        (source_folder / "series.json").write_text("mylar", encoding="utf-8")
+
+        root = LibraryRoot(name="Comics", path=str(library_root_path), enabled=True)
+        series = Series(
+            title="Batman",
+            sort_title="batman",
+            year_start=2016,
+            comicvine_id=97508,
+            path=str(target_folder),
+        )
+        db_session.add_all([root, series])
+        await db_session.flush()
+        issue = Issue(
+            series_id=series.id,
+            issue_number=1.0,
+            comicvine_id=100001,
+            title="Issue #1",
+            status=IssueStatus.WANTED,
+        )
+        job = ImportJob(
+            source_path=str(library_root_path),
+            source_type=ImportSourceType.FILESYSTEM,
+            status=ImportJobStatus.IMPORTING,
+            target_library_root_id=root.id,
+            move_to_library=True,
+            transfer_method="move",
+        )
+        db_session.add_all([issue, job])
+        await db_session.flush()
+        imp_series = ImportedSeries(
+            import_job_id=job.id,
+            raw_series_name="Batman",
+            status=ImportSeriesStatus.CONFIRMED,
+            series_id=series.id,
+            source_folder=str(source_folder),
+            file_count=1,
+            files_total=1,
+        )
+        db_session.add(imp_series)
+        await db_session.flush()
+        imp_file = ImportedFile(
+            import_job_id=job.id,
+            import_series_id=imp_series.id,
+            file_path=str(source_path),
+            file_name=source_path.name,
+            file_size=source_path.stat().st_size,
+            file_format="cbz",
+            parsed_series="Batman",
+            parsed_issue_number=1.0,
+            status=ImportedFileStatus.CONFIRMED,
+            matched_issue_id=issue.id,
+            match_confidence="high",
+            include_in_import=True,
+        )
+        db_session.add(imp_file)
+        await db_session.flush()
+
+        async def _prepare_file(
+            _session: AsyncSession,
+            _job: ImportJob,
+            current_file: ImportedFile,
+            **_kwargs: object,
+        ) -> SimpleNamespace:
+            return SimpleNamespace(
+                registration_source=current_file.file_path,
+                original_source=Path(current_file.file_path),
+                converted=False,
+            )
+
+        async def _register_file(
+            session: AsyncSession,
+            source: Path,
+            issue_arg: Issue,
+            confidence: MatchConfidence,
+            **_kwargs: object,
+        ) -> LibraryFile:
+            assert source == target_folder / "Batman 001.cbz"
+            library_file = LibraryFile(
+                file_path=str(source),
+                file_name=source.name,
+                file_size=source.stat().st_size,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(tz=UTC),
+                match_confidence=confidence,
+                issue_id=issue_arg.id,
+                library_root_id=root.id,
+            )
+            session.add(library_file)
+            await session.flush()
+            return library_file
+
+        record_action = AsyncMock()
+
+        files_imported, files_failed = await process_import_series_files(
+            db_session,
+            job,
+            imp_series,
+            load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
+            load_trash_dir=AsyncMock(return_value=tmp_path / "trash"),
+            load_ingest_policy=AsyncMock(return_value=SimpleNamespace(rename_on_import=True)),
+            load_permission_policy=AsyncMock(return_value=SimpleNamespace(enabled=False)),
+            raise_if_cancelled=AsyncMock(),
+            prepare_file=_prepare_file,
+            build_comicinfo_payload=AsyncMock(),
+            apply_comicinfo=lambda *_args, **_kwargs: None,
+            cleanup_prepared_file=lambda *_args, **_kwargs: None,
+            record_action=record_action,
+            log_event=AsyncMock(),
+            register_file=_register_file,
+            move_to_trash=lambda *args, **kwargs: Path("/tmp/trash.cbz"),
+        )
+
+        assert files_imported == 1
+        assert files_failed == 0
+        assert not source_folder.exists()
+        assert (target_folder / "series.json").exists()
+        assert imp_file.file_path == str(target_folder / "Batman 001.cbz")
+        assert record_action.await_args_list[0].kwargs["action_type"] == "series_folder_renamed"
+
+    @pytest.mark.asyncio
     async def test_import_logs_conversion_comicinfo_and_final_destination_name(
         self,
         db_session: AsyncSession,
@@ -1263,36 +1399,42 @@ class TestImportExecutionAutoflushDiscipline:
             await session.flush()
             return library_file
 
+        adoption_mock = AsyncMock(return_value=True)
         async with session_factory() as session:
             job = await session.get(ImportJob, job_id)
             imp_series = await session.get(ImportedSeries, item_id)
             assert job is not None
             assert imp_series is not None
-            files_imported, files_failed = await process_import_series_files(
-                session,
-                job,
-                imp_series,
-                load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
-                load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
-                load_ingest_policy=AsyncMock(return_value=object()),
-                load_permission_policy=AsyncMock(return_value=object()),
-                raise_if_cancelled=AsyncMock(),
-                prepare_file=_prepare_file,
-                build_comicinfo_payload=AsyncMock(return_value={}),
-                apply_comicinfo=lambda *_args, **_kwargs: None,
-                cleanup_prepared_file=lambda *_args, **_kwargs: None,
-                record_action=AsyncMock(),
-                log_event=AsyncMock(),
-                register_file=_register_file,
-                move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
-                session_factory=session_factory,
-                file_worker_count=2,
-            )
+            with patch(
+                "pullbox.services.import_file_execution.apply_import_series_folder_adoption",
+                adoption_mock,
+            ):
+                files_imported, files_failed = await process_import_series_files(
+                    session,
+                    job,
+                    imp_series,
+                    load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
+                    load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
+                    load_ingest_policy=AsyncMock(return_value=object()),
+                    load_permission_policy=AsyncMock(return_value=object()),
+                    raise_if_cancelled=AsyncMock(),
+                    prepare_file=_prepare_file,
+                    build_comicinfo_payload=AsyncMock(return_value={}),
+                    apply_comicinfo=lambda *_args, **_kwargs: None,
+                    cleanup_prepared_file=lambda *_args, **_kwargs: None,
+                    record_action=AsyncMock(),
+                    log_event=AsyncMock(),
+                    register_file=_register_file,
+                    move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
+                    session_factory=session_factory,
+                    file_worker_count=2,
+                )
             await session.commit()
 
         assert files_imported == 2
         assert files_failed == 0
         assert max_concurrency == 2
+        adoption_mock.assert_awaited_once()
         async with session_factory() as session:
             statuses = (
                 (

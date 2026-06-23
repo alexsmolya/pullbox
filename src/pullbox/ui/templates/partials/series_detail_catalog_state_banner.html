@@ -19,6 +19,22 @@
       {% if is_failed_catalog and series.issue_catalog_error %}
       <p class="mt-2 font-mono text-xs text-pb-error">{{ series.issue_catalog_error }}</p>
       {% endif %}
+      {% if catalog_state in ('partial', 'failed') %}
+      <button
+        type="button"
+        data-testid="series-detail-catalog-refresh"
+        class="btn-warning btn-sm mt-3 inline-flex items-center gap-2"
+        :disabled="refreshing"
+        @click="refreshMetadata()"
+      >
+        <svg x-show="refreshing" x-cloak class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+        </svg>
+        <span x-show="!refreshing">Retry metadata sync</span>
+        <span x-show="refreshing" x-cloak>Retrying...</span>
+      </button>
+      {% endif %}
     </div>
   </div>
 </section>

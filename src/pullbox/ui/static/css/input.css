@@ -5191,6 +5191,32 @@
     left: 9px;
     z-index: 3;
   }
+  .series-wall-catalog-state-badge {
+    position: absolute;
+    top: 46px;
+    right: 9px;
+    z-index: 4;
+    max-width: calc(100% - 18px);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid var(--pb-warning);
+    background: color-mix(in srgb, var(--pb-warning) 92%, black);
+    color: var(--pb-text-inverse);
+    box-shadow: 0 8px 18px color-mix(in srgb, black 34%, transparent);
+    padding: 0.2rem 0.5rem;
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    line-height: 1.15;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .series-wall-catalog-state-badge.is-failed {
+    border-color: var(--pb-error);
+    background: color-mix(in srgb, var(--pb-error) 92%, black);
+  }
   .pull-list-monitor-toggle {
     width: 28px;
     height: 28px;

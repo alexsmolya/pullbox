@@ -7,6 +7,14 @@
 <section
   id="series-results-body"
   data-testid="series-results-body"
+  {% if catalog_sync_refresh_active|default(false) %}
+  data-catalog-refresh-active="true"
+  hx-get="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"
+  hx-trigger="every 10s"
+  hx-target="#series-results-body"
+  hx-select="#series-results-body"
+  hx-swap="outerHTML"
+  {% endif %}
   class="series-results-body-shell"
 >
   {% include "partials/series_results_body.html" %}
