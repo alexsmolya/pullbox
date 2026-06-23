@@ -23,6 +23,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.0-rc1] - 2026-06-23
+
+Release candidate for the v1.0 production burn-in, focused on Mylar3 migration
+correctness, rollback safety, metadata recovery, download retry handling, and
+large-library UI stability.
+
+### Changed
+
+- Adopted matching source folders during Mylar3 and folder imports when the
+  source already lives inside the Pullbox library root, preserving adjacent
+  Mylar artifacts instead of creating duplicate target folders.
+- Surfaced catalog hydration state in series views so missing post-import
+  metadata is visible while background recovery catches up.
+
+### Fixed
+
+- Fixed import rollback cleanup for adopted folders, renamed folders, failed
+  files, empty target directories, and rollback details that were previously
+  not persisted early enough for later recovery.
+- Fixed a stale intervention issue link interaction that could swap an issue
+  detail page into the intervention table instead of navigating normally.
+- Fixed pending download retries that could remain in `retry pending` without
+  being failed and blocklisted when no active downloads were polling.
+- Fixed import result retry visibility for file failures that need recovery
+  after review or rollback.
+
+### Performance
+
+- Reused catalog hydration indicators and import metadata recovery paths to
+  keep large-library views responsive after production-scale imports.
+
+### Testing
+
+- Added coverage for folder adoption, rollback edge cases, pending download
+  retry processing, intervention navigation, import result recovery, catalog
+  hydration banners, and reviewed template-safe macro attributes.
+
 ## [0.9.12] - 2026-06-22
 
 Stable release promoting the validated 0.9.11 release-candidate train and
