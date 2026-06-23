@@ -16,6 +16,7 @@
   results_testid="",
   results_body_id="",
   results_body_testid="",
+  results_body_attrs="",
   results_html=""
 ) %}
   <section data-testid="{{ header_testid }}" class="series-registry-header">
@@ -61,6 +62,7 @@
     <section
       {% if results_body_id %}id="{{ results_body_id }}"{% endif %}
       {% if results_body_testid %}data-testid="{{ results_body_testid }}"{% endif %}
+      {{ results_body_attrs | safe }}
       class="series-results-body-shell"
     >
       {{ results_html | safe }}

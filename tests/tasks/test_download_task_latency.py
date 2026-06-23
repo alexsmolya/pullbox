@@ -86,6 +86,35 @@ async def _seed_active_download(factory: async_sessionmaker[AsyncSession]) -> in
         return download.id
 
 
+async def _seed_retry_pending_download(factory: async_sessionmaker[AsyncSession]) -> int:
+    """Seed a retry-pending download that is due for retry."""
+    async with factory() as session:
+        series = Series(title="Wolverine", sort_title="wolverine")
+        session.add(series)
+        await session.flush()
+
+        issue = Issue(series_id=series.id, issue_number=15.0, status=IssueStatus.DOWNLOADING)
+        session.add(issue)
+        await session.flush()
+
+        download = DownloadHistory(
+            title="Wolverine #15",
+            state=DownloadState.RETRY_PENDING,
+            download_client=DownloadClientType.QBITTORRENT,
+            download_url="magnet:?xt=urn:btih:retry",
+            external_id="retry-hash",
+            issue_id=issue.id,
+            retry_count=1,
+            max_retries=3,
+            next_retry_at=datetime(2026, 4, 7, 14, 0, tzinfo=UTC),
+            sent_at=datetime(2026, 4, 7, 13, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 4, 7, 13, 45, tzinfo=UTC),
+        )
+        session.add(download)
+        await session.commit()
+        return download.id
+
+
 async def _seed_post_processing_retry_pair(
     factory: async_sessionmaker[AsyncSession],
 ) -> tuple[int, int]:
@@ -144,6 +173,44 @@ def _create_inspectable_bad_release_cbz(path: Path) -> Path:
 
 class TestMonitorDownloadsImmediateHandoff:
     """Completed downloads should immediately trigger post-processing."""
+
+    @pytest.mark.asyncio
+    async def test_retry_pending_recovery_runs_without_active_downloads(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import pullbox.tasks.download_task as download_task
+
+        await _seed_retry_pending_download(db_factory)
+
+        fake_service = MagicMock()
+        retry_pending = AsyncMock(return_value=1)
+        recover_orphans = AsyncMock(return_value=0)
+        poll_clients = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(download_task, "get_session_factory", lambda: db_factory)
+        monkeypatch.setattr(
+            download_task,
+            "_build_download_registry",
+            AsyncMock(return_value=object()),
+        )
+        monkeypatch.setattr(
+            download_task,
+            "DownloadService",
+            lambda registry, event_bus: fake_service,
+        )
+        monkeypatch.setattr(download_task, "_process_retry_pending", retry_pending)
+        monkeypatch.setattr(download_task, "_recover_orphaned_downloads", recover_orphans)
+        monkeypatch.setattr(download_task, "_poll_download_clients", poll_clients)
+        monkeypatch.setattr(download_task, "_last_recovery_check", 0.0)
+        monkeypatch.setattr(download_task, "logger", _FakeLogger())
+
+        await download_task.monitor_downloads()
+
+        retry_pending.assert_awaited_once()
+        recover_orphans.assert_awaited_once()
+        poll_clients.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_completed_download_triggers_immediate_post_processing(

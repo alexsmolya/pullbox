@@ -187,6 +187,7 @@ async def register_library_file(
     comicinfo_progress_callback: Callable[[str, int, int, str], Any] | None = None,
     artifact_transfer: Callable[..., Any] | None = None,
     comicinfo_materializer: Callable[..., Any] | None = None,
+    placement_started_callback: Callable[..., Any] | None = None,
     allow_resource_safety_exception: bool = False,
 ) -> LibraryFile:
     """Register a file in the library, optionally moving/renaming it."""
@@ -212,6 +213,7 @@ async def register_library_file(
         comicinfo_progress_callback=comicinfo_progress_callback,
         artifact_transfer=artifact_transfer,
         comicinfo_materializer=comicinfo_materializer,
+        placement_started_callback=placement_started_callback,
         allow_resource_safety_exception=allow_resource_safety_exception,
     )
     return outcome.library_file
@@ -240,6 +242,7 @@ async def register_library_file_with_metadata(
     comicinfo_progress_callback: Callable[[str, int, int, str], Any] | None = None,
     artifact_transfer: Callable[..., Any] | None = None,
     comicinfo_materializer: Callable[..., Any] | None = None,
+    placement_started_callback: Callable[..., Any] | None = None,
     allow_resource_safety_exception: bool = False,
 ) -> LibraryFileRegistrationOutcome:
     """Register a file in the library, optionally moving/renaming it.
@@ -269,6 +272,35 @@ async def register_library_file_with_metadata(
     transfer_artifact = artifact_transfer or _materialize_library_artifact
     materialize_with_comicinfo = comicinfo_materializer
     comicinfo_already_embedded = False
+
+    async def notify_placement_started(
+        *,
+        artifact_source: Path,
+        target_path: Path,
+        effective_transfer_method: str,
+        series_folder_created: bool,
+    ) -> None:
+        if placement_started_callback is None:
+            return
+        temp_paths: list[Path] = []
+        if (
+            update_embedded_comicinfo_from_match
+            and artifact_source.suffix.lower() == ".cbz"
+            and target_path.suffix.lower() == ".cbz"
+            and effective_transfer_method in {"move", "copy"}
+        ):
+            temp_paths.append(target_path.with_name(f"{target_path.name}.pullbox-write.tmp"))
+        callback_result = placement_started_callback(
+            artifact_source_path=artifact_source,
+            target_path=target_path,
+            transfer_method=effective_transfer_method,
+            series_folder_created=series_folder_created,
+            series_folder_path=target_path.parent,
+            temp_paths=tuple(temp_paths),
+        )
+        if inspect.isawaitable(callback_result):
+            await callback_result
+
     try:
         # Prevent callers with dirty ORM state from opening a SQLite write
         # transaction before we finish the slow planning/materialization work.
@@ -382,6 +414,12 @@ async def register_library_file_with_metadata(
                         update_embedded_comicinfo=update_embedded_comicinfo_from_match,
                     )
                     transfer_method = materialization_plan.materialization_method
+                    await notify_placement_started(
+                        artifact_source=prepared_source,
+                        target_path=target_path,
+                        effective_transfer_method=transfer_method,
+                        series_folder_created=target.series_folder_created,
+                    )
                     final_path = await transfer_artifact(
                         prepared_source,
                         target_path,
@@ -415,6 +453,12 @@ async def register_library_file_with_metadata(
                             effective_issue,
                             source_path=prepared_source,
                         )
+                        await notify_placement_started(
+                            artifact_source=prepared_source,
+                            target_path=target.path,
+                            effective_transfer_method=transfer_method,
+                            series_folder_created=target.series_folder_created,
+                        )
                         materialize_result = materializer(
                             prepared_source,
                             target.path,
@@ -429,6 +473,12 @@ async def register_library_file_with_metadata(
                         series_folder_created = target.series_folder_created
                         comicinfo_already_embedded = True
                     else:
+                        await notify_placement_started(
+                            artifact_source=prepared_source,
+                            target_path=target.path,
+                            effective_transfer_method=transfer_method,
+                            series_folder_created=target.series_folder_created,
+                        )
                         final_path = await transfer_artifact(
                             prepared_source,
                             target.path,

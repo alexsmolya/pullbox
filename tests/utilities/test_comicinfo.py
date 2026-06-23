@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 import zipfile
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
 import pytest
 
-from pullbox.utilities.comicinfo import embed_comicinfo_in_cbz, generate_comicinfo_xml
+from pullbox.utilities.comicinfo import (
+    embed_comicinfo_in_cbz,
+    generate_comicinfo_xml,
+    materialize_cbz_with_comicinfo,
+)
 
 # ── XML Generation ─────────────────────────────────────────────
 
@@ -117,6 +121,34 @@ class TestGenerateXml:
     def test_xml_declaration_present(self) -> None:
         xml_str = generate_comicinfo_xml({"Series": "Batman"})
         assert xml_str.startswith("<?xml")
+
+
+def test_materialize_cbz_cleans_target_when_source_unlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A move import must not leave a duplicate target if source cleanup fails."""
+    source = _create_test_cbz(tmp_path / "source.cbz")
+    target = tmp_path / "library" / "target.cbz"
+    original_unlink = Path.unlink
+
+    def fail_source_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == source:
+            raise PermissionError("source cleanup denied")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_source_unlink)
+
+    with pytest.raises(PermissionError, match="source cleanup denied"):
+        materialize_cbz_with_comicinfo(
+            source,
+            target,
+            {"Series": "Batman", "Number": "1"},
+            transfer_method="move",
+        )
+
+    assert source.exists()
+    assert not target.exists()
 
     def test_minimal_valid_xml(self) -> None:
         """No fields at all still produces valid XML."""

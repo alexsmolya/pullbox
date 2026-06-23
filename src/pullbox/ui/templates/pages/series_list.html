@@ -912,6 +912,16 @@
   {% set series_results_html %}
     {% include "partials/series_results_body.html" %}
   {% endset %}
+  {% set series_results_body_attrs %}
+    {% if catalog_sync_refresh_active|default(false) %}
+      data-catalog-refresh-active="true"
+      hx-get="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"
+      hx-trigger="every 10s"
+      hx-target="#series-results-body"
+      hx-select="#series-results-body"
+      hx-swap="outerHTML"
+    {% endif %}
+  {% endset %}
 
   {{ mission_control_workspace(
     header_testid="series-registry-header",
@@ -928,6 +938,7 @@
     results_testid="series-results",
     results_body_id="series-results-body",
     results_body_testid="series-results-body",
+    results_body_attrs=series_results_body_attrs,
     results_html=series_results_html
   ) }}
 

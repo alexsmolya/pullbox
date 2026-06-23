@@ -119,6 +119,7 @@ class RegisterLibraryFileFunc(Protocol):
         | None = None,
         comicinfo_progress_callback: Callable[[str, int, int, str], Awaitable[None] | None]
         | None = None,
+        placement_started_callback: Callable[..., Awaitable[None] | None] | None = None,
     ) -> LibraryFile | LibraryFileRegistrationOutcome: ...
 
 

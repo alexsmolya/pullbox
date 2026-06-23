@@ -34,6 +34,10 @@ SAFE_FILTER_ALLOWLIST = {
     ),
     (
         "components/mission_control_workspace.html",
+        "{{ results_body_attrs | safe }}",
+    ),
+    (
+        "components/mission_control_workspace.html",
         "{{ results_html | safe }}",
     ),
     (

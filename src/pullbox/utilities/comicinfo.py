@@ -462,7 +462,20 @@ def materialize_cbz_with_comicinfo(
         if transfer_method == "move" and source_path.resolve(strict=False) != target_path.resolve(
             strict=False
         ):
-            source_path.unlink(missing_ok=True)
+            try:
+                source_path.unlink(missing_ok=True)
+            except Exception:
+                # The library target is a duplicate until the source is removed.
+                # Keep move semantics atomic from the caller's perspective.
+                try:
+                    target_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.exception(
+                        "comicinfo_materialized_target_cleanup_failed",
+                        source=str(source_path),
+                        target=str(target_path),
+                    )
+                raise
 
         logger.info(
             "comicinfo_materialized_cbz",
