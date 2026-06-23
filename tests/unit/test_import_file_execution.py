@@ -1399,36 +1399,42 @@ class TestImportExecutionAutoflushDiscipline:
             await session.flush()
             return library_file
 
+        adoption_mock = AsyncMock(return_value=True)
         async with session_factory() as session:
             job = await session.get(ImportJob, job_id)
             imp_series = await session.get(ImportedSeries, item_id)
             assert job is not None
             assert imp_series is not None
-            files_imported, files_failed = await process_import_series_files(
-                session,
-                job,
-                imp_series,
-                load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
-                load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
-                load_ingest_policy=AsyncMock(return_value=object()),
-                load_permission_policy=AsyncMock(return_value=object()),
-                raise_if_cancelled=AsyncMock(),
-                prepare_file=_prepare_file,
-                build_comicinfo_payload=AsyncMock(return_value={}),
-                apply_comicinfo=lambda *_args, **_kwargs: None,
-                cleanup_prepared_file=lambda *_args, **_kwargs: None,
-                record_action=AsyncMock(),
-                log_event=AsyncMock(),
-                register_file=_register_file,
-                move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
-                session_factory=session_factory,
-                file_worker_count=2,
-            )
+            with patch(
+                "pullbox.services.import_file_execution.apply_import_series_folder_adoption",
+                adoption_mock,
+            ):
+                files_imported, files_failed = await process_import_series_files(
+                    session,
+                    job,
+                    imp_series,
+                    load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
+                    load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
+                    load_ingest_policy=AsyncMock(return_value=object()),
+                    load_permission_policy=AsyncMock(return_value=object()),
+                    raise_if_cancelled=AsyncMock(),
+                    prepare_file=_prepare_file,
+                    build_comicinfo_payload=AsyncMock(return_value={}),
+                    apply_comicinfo=lambda *_args, **_kwargs: None,
+                    cleanup_prepared_file=lambda *_args, **_kwargs: None,
+                    record_action=AsyncMock(),
+                    log_event=AsyncMock(),
+                    register_file=_register_file,
+                    move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
+                    session_factory=session_factory,
+                    file_worker_count=2,
+                )
             await session.commit()
 
         assert files_imported == 2
         assert files_failed == 0
         assert max_concurrency == 2
+        adoption_mock.assert_awaited_once()
         async with session_factory() as session:
             statuses = (
                 (

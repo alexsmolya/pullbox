@@ -489,6 +489,18 @@ async def process_import_series_files(
     update_embedded_comicinfo_from_match = bool(job.update_embedded_comicinfo_from_match)
     ingest_policy = await load_ingest_policy(session, job)
 
+    if _file_ids_override is None:
+        await apply_import_series_folder_adoption(
+            session,
+            job,
+            item,
+            importable_files,
+            resolved_series_id=resolved_series_id,
+            ingest_policy=ingest_policy,
+            record_action=record_action,
+            log_event=log_event,
+        )
+
     placeholder_progress_live_only = False
     if _setup_placeholder_targets:
         placeholder_progress_live_only = await _ensure_placeholder_issue_targets(
@@ -615,18 +627,6 @@ async def process_import_series_files(
             item.diagnostics = diagnostics
             await session.flush()
         return files_imported, files_failed
-
-    if _file_ids_override is None:
-        await apply_import_series_folder_adoption(
-            session,
-            job,
-            item,
-            importable_files,
-            resolved_series_id=resolved_series_id,
-            ingest_policy=ingest_policy,
-            record_action=record_action,
-            log_event=log_event,
-        )
 
     cv_id_to_issue, number_to_issue = await load_issue_lookup_for_series(
         session,
