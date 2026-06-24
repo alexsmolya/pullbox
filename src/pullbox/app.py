@@ -50,6 +50,7 @@ from pullbox.core.subscribers import (
     on_download_failed,
     on_file_matched,
     on_series_added,
+    recover_recent_search_on_add_misses,
 )
 from pullbox.database import dispose_engine, get_session_factory
 from pullbox.logging import configure_logging
@@ -589,6 +590,22 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler.register_tasks(overrides=overrides)
     await scheduler.load_persisted_stats()
     scheduler.start()
+
+    search_on_add_recovery_task = asyncio.create_task(recover_recent_search_on_add_misses())
+    _startup_background_tasks.add(search_on_add_recovery_task)
+
+    def _cleanup_search_on_add_recovery_task(task: asyncio.Task[object]) -> None:
+        _startup_background_tasks.discard(task)
+        with suppress(asyncio.CancelledError):
+            exc = task.exception()
+            if exc is not None:
+                logger.warning("search_on_add_recovery_startup_failed", exc_info=exc)
+                return
+            recovered = task.result()
+            if isinstance(recovered, int) and recovered:
+                logger.info("search_on_add_recovered_at_startup", count=recovered)
+
+    search_on_add_recovery_task.add_done_callback(_cleanup_search_on_add_recovery_task)
 
     from pullbox.services.restore_recovery_service import (
         has_pending_restore_recovery,

@@ -58,6 +58,24 @@ class TestBugRegressions:
         assert len(validated) == 0
 
     @pytest.mark.regression
+    def test_annual_series_accepts_base_series_release_title(self) -> None:
+        """Annual-only ComicVine series should match releases parsed as base annuals."""
+        results = [make_release("X-Men Annual 001 [2026] [Digital] [Kileko-Empire]")]
+
+        validated = self.validator.validate_results(
+            results,
+            wanted_series="X-Men Annual",
+            wanted_issue=1.0,
+            wanted_year=2026,
+            wanted_issue_type=IssueType.ANNUAL,
+        )
+
+        assert len(validated) == 1
+        assert validated[0].is_match is True
+        assert validated[0].parsed.series_name == "X-Men"
+        assert validated[0].parsed.issue_type == IssueType.ANNUAL
+
+    @pytest.mark.regression
     def test_correct_match_accepted(self) -> None:
         """Batman #5 search SHOULD return 'Batman 005 [2024] [Digital]'."""
         results = [make_release("Batman 005 [2024] [Digital] [Shan-Empire]")]

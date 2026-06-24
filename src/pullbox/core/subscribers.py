@@ -8,14 +8,19 @@ database sessions since they run outside of request scope.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
+from sqlalchemy import select
+from sqlalchemy.orm import aliased
 
 from pullbox.database import get_session_factory
 from pullbox.models.download import DownloadHistory
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile, MatchConfidence
+from pullbox.models.search_log import SearchLog
+from pullbox.models.series import IssueCatalogState, Series
 
 if TYPE_CHECKING:
     from pullbox.core.events import (
@@ -29,6 +34,17 @@ logger = structlog.get_logger(__name__)
 
 # Strong references to background tasks to prevent garbage collection
 _background_tasks: set[asyncio.Task[None]] = set()
+SEARCH_ON_ADD_INITIAL_DELAY_SECONDS = 0.5
+SEARCH_ON_ADD_RETRY_DELAY_SECONDS = 5.0
+SEARCH_ON_ADD_MAX_READINESS_ATTEMPTS = 24
+SEARCH_ON_ADD_RECOVERY_WINDOW_HOURS = 24
+SEARCH_ON_ADD_RECOVERY_LIMIT = 10
+
+
+def _track_background_task(task: asyncio.Task[None]) -> None:
+    """Keep a strong reference until a fire-and-forget task completes."""
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def on_download_completed(event: DownloadCompleted) -> None:
@@ -115,12 +131,10 @@ async def on_series_added(event: SeriesAdded) -> None:
     the calling request can commit and respond immediately.
     """
     cover_task = asyncio.create_task(_download_covers_for_series(event))
-    _background_tasks.add(cover_task)
-    cover_task.add_done_callback(_background_tasks.discard)
+    _track_background_task(cover_task)
 
     search_task = asyncio.create_task(_search_new_series(event))
-    _background_tasks.add(search_task)
-    search_task.add_done_callback(_background_tasks.discard)
+    _track_background_task(search_task)
 
 
 async def _download_covers_for_series(event: SeriesAdded) -> None:
@@ -240,36 +254,122 @@ async def _search_new_series(event: SeriesAdded) -> None:
     Delegates the actual search to ``search_series_issues()`` in the
     search task module.
     """
-    from pullbox.models.series import IssueCatalogState, Series
-
     log = logger.bind(series_id=event.series_id)
     log.info("subscriber_series_added_search_start")
 
-    # Small delay to let the triggering request commit first
-    await asyncio.sleep(0.5)
+    ready = False
+    last_catalog_state: str | None = None
+    for attempt in range(1, SEARCH_ON_ADD_MAX_READINESS_ATTEMPTS + 1):
+        delay = (
+            SEARCH_ON_ADD_INITIAL_DELAY_SECONDS
+            if attempt == 1
+            else SEARCH_ON_ADD_RETRY_DELAY_SECONDS
+        )
+        await asyncio.sleep(delay)
 
-    factory = get_session_factory()
-    async with factory() as session:
-        series = await session.get(Series, event.series_id)
-        if not series:
-            log.warning("subscriber_series_added_not_found")
-            return
+        factory = get_session_factory()
+        async with factory() as session:
+            series = await session.get(Series, event.series_id)
+            if not series:
+                log.info(
+                    "subscriber_series_added_search_waiting",
+                    reason="series is not committed yet",
+                    attempt=attempt,
+                )
+                continue
 
-        if not series.monitored:
+            if not series.monitored:
+                log.info(
+                    "subscriber_series_added_search_skipped",
+                    reason="series is not monitored",
+                )
+                return
+
+            last_catalog_state = series.issue_catalog_state.value
+            if series.issue_catalog_state == IssueCatalogState.COMPLETE:
+                ready = True
+                break
+
             log.info(
-                "subscriber_series_added_search_skipped",
-                reason="series is not monitored",
-            )
-            return
-        if series.issue_catalog_state != IssueCatalogState.COMPLETE:
-            log.info(
-                "subscriber_series_added_search_skipped",
+                "subscriber_series_added_search_waiting",
                 reason="issue catalog is not complete",
-                issue_catalog_state=series.issue_catalog_state.value,
+                issue_catalog_state=last_catalog_state,
+                attempt=attempt,
             )
-            return
+
+    if not ready:
+        log.warning(
+            "subscriber_series_added_search_skipped",
+            reason="issue catalog did not become ready",
+            issue_catalog_state=last_catalog_state,
+            attempts=SEARCH_ON_ADD_MAX_READINESS_ATTEMPTS,
+        )
+        return
 
     # Series is monitored — delegate to reusable helper
     from pullbox.tasks.search_task import search_series_issues
 
     await search_series_issues(event.series_id)
+
+
+async def load_recent_search_on_add_misses(
+    *,
+    limit: int = SEARCH_ON_ADD_RECOVERY_LIMIT,
+    window_hours: int = SEARCH_ON_ADD_RECOVERY_WINDOW_HOURS,
+) -> list[int]:
+    """Find recent add-series rows that should have auto-searched but did not.
+
+    The normal search-on-add trigger is intentionally asynchronous. If the app
+    restarts or a transient subscriber race loses that fire-and-forget task,
+    recent monitored series can be left with wanted issues and no search logs.
+    This query limits recovery to fresh additions to avoid surprising users by
+    sweeping old monitored libraries on startup.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
+    issue_for_log = aliased(Issue)
+    existing_search = (
+        select(SearchLog.id)
+        .join(issue_for_log, SearchLog.issue_id == issue_for_log.id)
+        .where(issue_for_log.series_id == Series.id)
+        .exists()
+    )
+    stmt = (
+        select(Series.id)
+        .join(Issue, Issue.series_id == Series.id)
+        .where(
+            Series.monitored.is_(True),
+            Series.issue_catalog_state == IssueCatalogState.COMPLETE,
+            Series.created_at >= cutoff,
+            Issue.status == IssueStatus.WANTED,
+            ~existing_search,
+        )
+        .group_by(Series.id)
+        .order_by(Series.created_at.asc())
+        .limit(limit)
+    )
+
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(stmt)
+        return [int(series_id) for series_id in result.scalars().all()]
+
+
+async def recover_recent_search_on_add_misses() -> int:
+    """Schedule searches for recent monitored series that missed search-on-add."""
+    series_ids = await load_recent_search_on_add_misses()
+    for series_id in series_ids:
+        task = asyncio.create_task(_run_recovered_search_on_add(series_id))
+        _track_background_task(task)
+    if series_ids:
+        logger.info(
+            "subscriber_search_on_add_recovery_scheduled",
+            series_count=len(series_ids),
+            series_ids=series_ids,
+        )
+    return len(series_ids)
+
+
+async def _run_recovered_search_on_add(series_id: int) -> None:
+    from pullbox.tasks.search_task import search_series_issues
+
+    await search_series_issues(series_id)
