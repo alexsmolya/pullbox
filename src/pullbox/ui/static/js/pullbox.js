@@ -810,6 +810,72 @@ function performHtmxSwap(method, url, options) {
   });
 }
 
+function searchHistoryExpansionSet() {
+  if (!(window._searchHistExpanded instanceof Set)) {
+    window._searchHistExpanded = new Set();
+  }
+  return window._searchHistExpanded;
+}
+
+function searchHistoryRowData(config) {
+  var cfg = config || {};
+  return {
+    detailLoaded: false,
+    detailLoading: false,
+    detailTarget: cfg.detailTarget,
+    detailUrl: cfg.detailUrl,
+    expanded: false,
+    logId: cfg.logId,
+
+    init: function () {
+      this.expanded = searchHistoryExpansionSet().has(this.logId);
+      if (this.expanded) {
+        this.loadDetail();
+      }
+    },
+
+    toggle: function () {
+      var expandedRows = searchHistoryExpansionSet();
+      this.expanded = !this.expanded;
+      if (this.expanded) {
+        expandedRows.add(this.logId);
+        this.loadDetail();
+      } else {
+        expandedRows.delete(this.logId);
+      }
+    },
+
+    loadDetail: function () {
+      var self = this;
+      if (self.detailLoaded || !self.detailUrl || !self.detailTarget) {
+        return;
+      }
+      self.detailLoaded = true;
+      self.detailLoading = true;
+      this.$nextTick(function () {
+        if (
+          !window.htmx ||
+          typeof performHtmxSwap !== "function" ||
+          !document.querySelector(self.detailTarget)
+        ) {
+          self.detailLoaded = false;
+          self.detailLoading = false;
+          return;
+        }
+        performHtmxSwap("GET", self.detailUrl, {
+          target: self.detailTarget,
+          swap: "outerHTML",
+        }).catch(function () {
+          self.detailLoaded = false;
+          self.detailLoading = false;
+        });
+      });
+    },
+  };
+}
+
+window.searchHistoryRowData = searchHistoryRowData;
+
 function loadImportReviewShell(url) {
   var shell = document.getElementById("import-step-review-shell");
   if (!shell || !url) {

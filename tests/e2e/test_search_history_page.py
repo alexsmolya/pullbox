@@ -174,6 +174,37 @@ class TestSearchHistoryPage:
             diagnostics_toggle.click()
             diagnostics_panel.wait_for(state="visible")
 
+    def test_search_history_remembered_detail_reloads_after_navigation(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        search_history = SearchHistoryPage(authed_page, seeded_server)
+        search_history.goto()
+
+        search_history.first_detail_toggle.click()
+        search_history.first_detail_row.wait_for(state="visible")
+        search_history.first_detail_row.locator(
+            "[data-testid^='search-history-detail-content-']"
+        ).first.wait_for(state="visible", timeout=5000)
+
+        authed_page.locator("a[href='/series']").first.click()
+        authed_page.locator("[data-testid='series-page']").first.wait_for(
+            state="visible",
+            timeout=5000,
+        )
+
+        authed_page.locator("a[href='/search-history']").first.click()
+        search_history.page_root.wait_for(state="visible", timeout=5000)
+
+        search_history.first_detail_row.wait_for(state="visible", timeout=5000)
+        search_history.first_detail_row.locator(
+            "[data-testid^='search-history-detail-content-']"
+        ).first.wait_for(state="visible", timeout=5000)
+        detail_text = search_history.first_detail_row.text_content() or ""
+        assert "Expand this search to load diagnostics" not in detail_text
+        assert "Best Match" in detail_text
+
     def test_search_history_row_delete_removes_entry(
         self,
         authed_page,
