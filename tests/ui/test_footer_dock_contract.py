@@ -52,6 +52,16 @@ def test_footer_dock_prevents_wrapping_into_extra_footer_heights() -> None:
     assert ".page-dock-status::-webkit-scrollbar" in css
 
 
+def test_footer_dock_pagination_controls_show_click_cursor() -> None:
+    css = _css()
+    controls = _rule_block(
+        css,
+        ".page-dock-pagination nav > a,\n  .page-dock-pagination nav > button",
+    )
+
+    assert "cursor: pointer;" in controls
+
+
 def test_page_shells_do_not_add_competing_footer_clearance() -> None:
     css = _css()
     page = _rule_block(css, ".admin-workspace-page")

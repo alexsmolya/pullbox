@@ -5589,6 +5589,7 @@
     background: transparent;
     border: 0;
     color: var(--pb-text-secondary);
+    cursor: pointer;
     margin: 0;
   }
   .page-dock-pagination nav > span.bg-pb-interactive {
