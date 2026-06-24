@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from playwright.sync_api import expect
 
 from tests.e2e.conftest import run_htmx_ajax_and_wait, wait_for_htmx
 from tests.e2e.pages.downloads import DownloadsPage
@@ -539,7 +540,7 @@ class TestDownloadsPage:
         downloads = DownloadsPage(authed_page, seeded_server)
         downloads.goto(tab="history")
 
-        downloads.select_history_status("failed")
+        downloads.select_history_status("cancelled")
         wait_for_htmx(authed_page)
 
         assert downloads.page_root.is_visible()
@@ -564,11 +565,11 @@ class TestDownloadsPage:
         downloads = DownloadsPage(authed_page, seeded_server)
         downloads.goto(tab="history")
 
-        downloads.select_history_status("failed")
+        downloads.select_history_status("cancelled")
         wait_for_htmx(authed_page)
 
         assert downloads.history_empty.is_visible()
-        assert "status=failed" in (
+        assert "status=cancelled" in (
             downloads.history_panel.locator(
                 "[data-testid='downloads-history-results']"
             ).get_attribute("hx-get")
@@ -596,6 +597,94 @@ class TestDownloadsPage:
         downloads.goto(tab="history")
 
         assert authed_page.evaluate("() => window.downloadsHistoryRefreshEnabled()") is True
+
+    def test_downloads_history_error_detail_toggle_reopens_cleanly(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        downloads = DownloadsPage(authed_page, seeded_server)
+        downloads.goto(tab="history")
+
+        toggle = downloads.first_history_error_toggle
+        detail = downloads.first_history_error_detail
+        detail_rows = downloads.history_panel.locator(
+            "[data-testid='downloads-history-error-detail-content']"
+        )
+
+        assert toggle.get_attribute("aria-expanded") == "false"
+        expect(detail_rows).to_have_count(0)
+
+        toggle.click()
+        wait_for_htmx(authed_page)
+        detail.wait_for(state="visible", timeout=5000)
+        assert toggle.get_attribute("aria-expanded") == "true"
+
+        toggle.click()
+        wait_for_htmx(authed_page)
+        expect(detail_rows).to_have_count(0)
+        assert toggle.get_attribute("aria-expanded") == "false"
+
+        toggle.click()
+        wait_for_htmx(authed_page)
+        detail.wait_for(state="visible", timeout=5000)
+        assert toggle.get_attribute("aria-expanded") == "true"
+
+    def test_downloads_history_lazy_detail_clicks_stay_in_sync(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        downloads = DownloadsPage(authed_page, seeded_server)
+        downloads.goto(tab="history")
+
+        result = authed_page.evaluate(
+            """
+            () => {
+              const button = document.createElement('button');
+              const rowId = 'downloads-history-error-row-test';
+              const triggerName = 'pullbox-download-history-detail-test';
+              const states = [];
+              let loadEvents = 0;
+
+              window.addEventListener('pb-lazy-table-detail-state', (event) => {
+                if (event.detail.rowId === rowId) {
+                  states.push(event.detail.expanded);
+                }
+              });
+              document.body.addEventListener(triggerName, () => {
+                loadEvents += 1;
+              });
+
+              const first = window.pbToggleLazyTableDetail(button, rowId, triggerName);
+              const loadedRow = document.createElement('tr');
+              loadedRow.id = rowId;
+              document.body.appendChild(loadedRow);
+              const second = window.pbToggleLazyTableDetail(button, rowId, triggerName);
+              const third = window.pbToggleLazyTableDetail(button, rowId, triggerName);
+
+              document.getElementById(rowId)?.remove();
+
+              return {
+                first,
+                second,
+                third,
+                loadEvents,
+                states,
+                ariaExpanded: button.getAttribute('aria-expanded'),
+              };
+            }
+            """
+        )
+
+        assert result == {
+            "first": True,
+            "second": False,
+            "third": True,
+            "loadEvents": 2,
+            "states": [True, False, True],
+            "ariaExpanded": "true",
+        }
 
     def test_downloads_history_refresh_gate_pauses_when_results_are_hovered(
         self,

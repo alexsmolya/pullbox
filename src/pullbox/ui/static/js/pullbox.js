@@ -17,16 +17,69 @@
     return String(value).replace(/([ !"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, "\\$1");
   }
 
-  window.pbToggleLazyTableDetail = function (button, rowId) {
+  function setLazyTableDetailState(button, rowId, expanded) {
+    if (button && button.setAttribute) {
+      button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+
+    window.dispatchEvent(
+      new CustomEvent("pb-lazy-table-detail-state", {
+        detail: { rowId: rowId, expanded: expanded },
+      })
+    );
+  }
+
+  window.pbToggleLazyTableDetail = function (button, rowId, triggerName) {
     var row = document.getElementById(rowId);
     if (row) {
+      button.dataset.lazyDetailDesiredOpen = "false";
       row.remove();
-      button.dataset.skipLazyDetailFetch = "true";
+      delete button.dataset.lazyDetailLoading;
+      if (!triggerName) {
+        button.dataset.skipLazyDetailFetch = "true";
+      }
+      setLazyTableDetailState(button, rowId, false);
+      return false;
+    }
+
+    if (button.dataset.lazyDetailLoading === "true") {
+      button.dataset.lazyDetailDesiredOpen = "false";
+      setLazyTableDetailState(button, rowId, false);
+      if (!triggerName) {
+        button.dataset.skipLazyDetailFetch = "true";
+      }
       return false;
     }
 
     delete button.dataset.skipLazyDetailFetch;
+    if (triggerName) {
+      button.dataset.lazyDetailDesiredOpen = "true";
+      button.dataset.lazyDetailLoading = "true";
+      setLazyTableDetailState(button, rowId, true);
+      document.body.dispatchEvent(new CustomEvent(triggerName, { bubbles: true }));
+    }
     return true;
+  };
+
+  window.pbLazyTableDetailSettled = function (button, rowId) {
+    if (button && button.dataset) {
+      delete button.dataset.lazyDetailLoading;
+    }
+    var row = document.getElementById(rowId);
+    if (button && button.dataset.lazyDetailDesiredOpen === "false") {
+      if (row) {
+        row.remove();
+      }
+      setLazyTableDetailState(button, rowId, false);
+      return;
+    }
+    setLazyTableDetailState(button, rowId, Boolean(row));
+  };
+
+  window.pbLazyTableDetailAfterRequest = function (button, rowId) {
+    window.setTimeout(function () {
+      window.pbLazyTableDetailSettled(button, rowId);
+    }, 0);
   };
 
   window.pbCancelSkippedLazyDetailFetch = function (event) {

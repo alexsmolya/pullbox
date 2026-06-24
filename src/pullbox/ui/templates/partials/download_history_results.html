@@ -67,7 +67,8 @@
           {% set row_tone = "downloads-led-amber" %}
         {% endif %}
         <tbody
-          x-data="{ expanded: false }"
+          x-data="{ expanded: false, detailRowId: 'downloads-history-error-row-{{ dl.id }}' }"
+          @pb-lazy-table-detail-state.window="if ($event.detail.rowId === detailRowId) expanded = $event.detail.expanded"
           x-bind:data-downloads-history-expanded="expanded ? 'true' : 'false'"
         >
           <tr id="history-item-{{ dl.id }}">
@@ -141,15 +142,21 @@
                   </button>
                   {% if dl.error_message %}
                     <button
-                      @click="expanded = window.pbToggleLazyTableDetail($el, 'downloads-history-error-row-{{ dl.id }}')"
+                      @click="expanded = window.pbToggleLazyTableDetail($el, detailRowId, 'pullbox-download-history-detail-{{ dl.id }}')"
                       hx-get="/htmx/downloads/history/{{ dl.id }}/error-detail"
+                      hx-trigger="pullbox-download-history-detail-{{ dl.id }} from:body"
                       hx-target="#history-item-{{ dl.id }}"
                       hx-swap="afterend"
-                      hx-on::before-request="window.pbCancelSkippedLazyDetailFetch(event)"
+                      hx-on::after-request="window.pbLazyTableDetailAfterRequest(this, 'downloads-history-error-row-{{ dl.id }}')"
+                      hx-on::send-error="window.pbLazyTableDetailSettled(this, 'downloads-history-error-row-{{ dl.id }}')"
+                      hx-on::response-error="window.pbLazyTableDetailSettled(this, 'downloads-history-error-row-{{ dl.id }}')"
+                      hx-on::swap-error="window.pbLazyTableDetailSettled(this, 'downloads-history-error-row-{{ dl.id }}')"
                       class="downloads-action-btn"
                       data-tip="Error"
                       data-tip-pos="left"
                       aria-label="Toggle error details"
+                      aria-expanded="false"
+                      x-bind:aria-expanded="expanded ? 'true' : 'false'"
                       type="button"
                     >
                       <svg class="transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">

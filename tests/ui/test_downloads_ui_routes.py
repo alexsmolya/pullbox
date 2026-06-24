@@ -504,6 +504,11 @@ class TestDownloadsRouteContracts:
         assert 'id="downloads-history-sort-input"' in response.text
         assert 'hx-get="/htmx/downloads/history/' in response.text
         assert "/error-detail" in response.text
+        assert 'aria-expanded="false"' in response.text
+        assert 'hx-trigger="pullbox-download-history-detail-' in response.text
+        assert "pbToggleLazyTableDetail($el, detailRowId," in response.text
+        assert "detailRowId: 'downloads-history-error-row-" in response.text
+        assert "pullbox-download-history-detail-" in response.text
         assert 'data-testid="downloads-history-error-detail-content"' not in response.text
         assert 'id="downloads-history-error-row-' not in response.text
         assert "Connection refused" not in response.text
