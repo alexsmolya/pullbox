@@ -121,6 +121,7 @@ class TestSeriesCoverRoutes:
 
         assert isinstance(response, FileResponse)
         assert response.media_type == "image/png"
+        assert response.headers["cache-control"] == "private, max-age=31536000, immutable"
         assert series.cover_path == f"/api/v1/series/{series.id}/cover"
 
     async def test_fetches_remote_series_cover_when_no_local_cover_exists(
@@ -151,6 +152,7 @@ class TestSeriesCoverRoutes:
 
         assert isinstance(response, FileResponse)
         assert response.media_type == "image/webp"
+        assert response.headers["cache-control"] == "private, max-age=31536000, immutable"
 
     async def test_returns_404_when_series_has_no_cover_source(
         self,
@@ -208,6 +210,7 @@ class TestIssueCoverRoutes:
 
         assert isinstance(response, FileResponse)
         assert response.media_type == "image/jpeg"
+        assert response.headers["cache-control"] == "private, max-age=31536000, immutable"
 
     async def test_serves_issue_cover_from_configured_covers_directory(
         self,

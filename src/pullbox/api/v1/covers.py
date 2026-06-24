@@ -26,8 +26,9 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["covers"], include_in_schema=False)
 
-# Cache control: authenticated image URLs should always revalidate before reuse.
-_CACHE_HEADERS = {"Cache-Control": "private, no-cache, max-age=0, must-revalidate"}
+# Cover URLs are authenticated and versioned by callers, so private browser caching
+# keeps grid/list navigation snappy without allowing shared intermediary caching.
+_CACHE_HEADERS = {"Cache-Control": "private, max-age=31536000, immutable"}
 
 
 def _serve_image(path: Path) -> FileResponse:
