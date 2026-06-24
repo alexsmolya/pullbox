@@ -7,23 +7,62 @@
   hx-swap="outerHTML"
 >
   <p class="dashboard-section__label">Recent Outcomes</p>
-  <div class="dashboard-activity-card">
-    {% if dashboard_view.recent_activity %}
+  <div class="dashboard-table-wrap">
+    <table data-testid="dashboard-recent-outcomes-table" class="dashboard-table">
+      <thead>
+        <tr>
+          <th class="c dashboard-table__status-col">SYS</th>
+          <th>Outcome</th>
+          <th>Type</th>
+          <th>When</th>
+          <th class="r">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% if dashboard_view.recent_activity %}
       {% for item in dashboard_view.recent_activity %}
-        <div data-testid="dashboard-activity-{{ item.key }}" class="dashboard-activity-row">
-          <span class="dashboard-activity-row__dot dashboard-activity-row__dot--{{ item.kind }}"></span>
-          <div class="dashboard-activity-row__body">
-            <p class="dashboard-activity-row__summary">{{ item.summary }}</p>
-            <p class="dashboard-activity-row__detail">{{ item.detail }}</p>
-            <div class="dashboard-activity-row__meta">
-              <span class="dashboard-activity-row__time">{{ item.time_label }}</span>
-              <a href="{{ item.href }}" class="dashboard-activity-row__link">View →</a>
-            </div>
-          </div>
-        </div>
+        {% set outcome_led_class = "dashboard-led--off" %}
+        {% set outcome_pill_class = "pill-neutral" %}
+        {% set outcome_type_label = item.kind|capitalize %}
+        {% if item.kind == "acquired" %}
+          {% set outcome_led_class = "dashboard-led--green" %}
+          {% set outcome_pill_class = "pill-success" %}
+          {% set outcome_type_label = "Download" %}
+        {% elif item.kind == "imported" %}
+          {% set outcome_led_class = "dashboard-led--blue" %}
+          {% set outcome_pill_class = "pill-info" %}
+          {% set outcome_type_label = "Import" %}
+        {% elif item.kind == "failed" %}
+          {% set outcome_led_class = "dashboard-led--red" %}
+          {% set outcome_pill_class = "pill-error" %}
+          {% set outcome_type_label = "Failed" %}
+        {% endif %}
+        <tr data-testid="dashboard-activity-{{ item.key }}">
+          <td class="c">
+            <span
+              data-testid="dashboard-recent-outcome-sys-led"
+              class="dashboard-led dashboard-led--sys {{ outcome_led_class }}"
+            ></span>
+          </td>
+          <td>
+            <span class="dashboard-table__name">{{ item.summary }}</span>
+            <div class="dashboard-table__detail">{{ item.detail }}</div>
+          </td>
+          <td>
+            <span class="pill {{ outcome_pill_class }}">{{ outcome_type_label }}</span>
+          </td>
+          <td class="dashboard-table__mono">{{ item.time_label }}</td>
+          <td class="r">
+            <a href="{{ item.href }}" class="dashboard-table__link">View →</a>
+          </td>
+        </tr>
       {% endfor %}
-    {% else %}
-      <p class="dashboard-activity-card__empty">Outcomes will show up here once Pullbox has more work to report.</p>
-    {% endif %}
+      {% else %}
+        <tr>
+          <td colspan="5" class="dashboard-table__detail">Outcomes will show up here once Pullbox has more work to report.</td>
+        </tr>
+      {% endif %}
+      </tbody>
+    </table>
   </div>
 </section>
