@@ -239,6 +239,25 @@ class TestScanFilesMetadata:
         assert df.file_size > 0
 
     @pytest.mark.asyncio
+    async def test_webrip_metadata_does_not_leave_empty_parentheses(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Generic import folders should use clean filename parser output."""
+        folder = tmp_path / "raw imports"
+        file_path = _create_test_cbz(
+            folder / "Batman 145 (2024) (Webrip) (The Last Kryptonian-DCP).cbr"
+        )
+
+        scanner = CollectionScanner(min_file_count=1)
+        result = await scanner.scan_files([str(file_path)])
+
+        assert len(result) == 1
+        assert result[0].raw_series_name == "Batman"
+        assert result[0].raw_year == 2024
+        assert result[0].files[0].parsed_series == "Batman"
+
+    @pytest.mark.asyncio
     async def test_sample_paths_populated(self, tmp_path: Path) -> None:
         """sample_paths contains file paths."""
         folder = tmp_path / "Series (2020)"

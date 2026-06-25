@@ -87,7 +87,7 @@ _BRACKET_TAGS_RE = re.compile(
 _PAREN_TAGS_RE = re.compile(
     r"\("
     r"(?:"
-    r"[Dd]igital(?:[\s-]?[Rr]ip|-?mobile|-?HD)?|c2c|noads|"
+    r"[Dd]igital(?:[\s-]?[Rr]ip|-?mobile|-?HD)?|[Ww]ebrip|c2c|noads|HD|"
     r"Digi-Hybrid|Retail|Comic|HYBRID|"
     r"Scanned\s+Physical\s+Copy|Physical\s+Scan|Scanned\s+Copy|"
     r"(?:AI[\s-]?)?\d{3,4}p|"
@@ -853,6 +853,10 @@ def _clean_series_name(title: str, issue_type: IssueType) -> str | None:
     name = re.sub(r"\b(?:HD|Retail|Repost|Hybrid|eBook|Digital|Webrip|c2c)\b", "", name, flags=re.I)
     name = re.sub(r"\bCOMIC\b(?=\s*$)", "", name)
     name = re.sub(r"\s*-\s*Issue\s*$", "", name, flags=re.I)
+
+    # Late metadata stripping can turn "(Webrip)"-style leftovers into "()".
+    name = re.sub(r"\(\s*\)", "", name)
+    name = re.sub(r"\[\s*\]", "", name)
 
     # Strip trailing orphaned fragments left after format word stripping
     # (e.g. "Alien Bloodlines -BitBook" → "Alien Bloodlines").

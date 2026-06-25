@@ -185,6 +185,30 @@ class TestParseReleaseTitle:
         assert r.issue_type == IssueType.ISSUE
         assert r.scan_group == "Hourman-DCP"
 
+    @pytest.mark.parametrize(
+        ("title", "expected_series"),
+        [
+            (
+                "Batman 145 (2024) (Webrip) (The Last Kryptonian-DCP).cbr",
+                "Batman",
+            ),
+            (
+                "SHAZAM! 009 (2024) (webrip) (The Last Kryptonian-DCP).cbr",
+                "SHAZAM!",
+            ),
+        ],
+    )
+    def test_parenthesized_webrip_metadata_is_fully_stripped(
+        self,
+        title: str,
+        expected_series: str,
+    ) -> None:
+        r = parse_release_title(title)
+        assert r is not None
+        assert r.series_name == expected_series
+        assert r.year == 2024
+        assert r.scan_group == "The Last Kryptonian-DCP"
+
     def test_parenthesized_known_publisher_metadata_is_stripped(self) -> None:
         r = parse_release_title(
             "Coraline (Harper Collins) (2008) (Digital) (Son of Ultron-Empire).cbr"
