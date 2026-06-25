@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pullbox.models.import_job import ImportedFile, ImportedSeries, ImportSeriesStatus
 from pullbox.models.issue import Issue, IssueStatus, IssueType
-from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.models.series import IssueCatalogState, Series, SeriesStatus, SeriesType
 from pullbox.services.import_duplicates import (
     build_duplicate_merge_profile,
     duplicate_merge_is_actionable,
@@ -30,7 +30,7 @@ def test_is_duplicate_series_requires_duplicate_status_and_series_id() -> None:
     )
 
 
-def test_duplicate_merge_is_actionable_uses_diagnostics_before_counters() -> None:
+def test_duplicate_merge_is_actionable_keeps_matched_files_importable() -> None:
     series = ImportedSeries(
         status=ImportSeriesStatus.DUPLICATE,
         series_id=123,
@@ -38,7 +38,19 @@ def test_duplicate_merge_is_actionable_uses_diagnostics_before_counters() -> Non
         diagnostics={"actionable_duplicate_merge": False},
     )
 
-    assert duplicate_merge_is_actionable(series) is False
+    assert duplicate_merge_is_actionable(series) is True
+    assert (
+        duplicate_merge_is_actionable(
+            ImportedSeries(
+                status=ImportSeriesStatus.DUPLICATE,
+                series_id=123,
+                files_matched=0,
+                files_conflict=0,
+                diagnostics={"actionable_duplicate_merge": False},
+            )
+        )
+        is False
+    )
     assert duplicate_merge_is_actionable(
         ImportedSeries(status=ImportSeriesStatus.DUPLICATE, series_id=123, files_conflict=1)
     )
@@ -78,6 +90,28 @@ def test_build_duplicate_merge_profile_keeps_open_targets_actionable() -> None:
     assert profile.actionable is True
     assert profile.fully_owned is False
     assert profile.existing_issue_count == 2
+    assert profile.owned_issue_count == 1
+    assert profile.single_owned_shortcut_issue is None
+
+
+def test_build_duplicate_merge_profile_does_not_mark_partial_catalog_fully_owned() -> None:
+    owned_issue = Issue(issue_type=IssueType.ISSUE)
+    series = Series(
+        status=SeriesStatus.CONTINUING,
+        series_type=SeriesType.STANDARD,
+        issue_count=45,
+        issue_catalog_state=IssueCatalogState.HYDRATING,
+    )
+
+    profile = build_duplicate_merge_profile(
+        series,
+        [(owned_issue, True)],
+        incoming_file_count=1,
+    )
+
+    assert profile.actionable is False
+    assert profile.fully_owned is False
+    assert profile.existing_issue_count == 1
     assert profile.owned_issue_count == 1
     assert profile.single_owned_shortcut_issue is None
 

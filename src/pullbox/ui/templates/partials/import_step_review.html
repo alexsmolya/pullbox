@@ -601,7 +601,7 @@
           {% set _ = row_bucket_tokens.append('conflicts') %}
           {% endif %}
           {% set series_selectable = item.status.value == 'matched' and not file_conflict and item.files_matched > 0 %}
-          {% set duplicate_actionable = series_diagnostics.get('actionable_duplicate_merge', item.files_matched > 0 or item.files_conflict > 0) %}
+          {% set duplicate_actionable = item.files_matched > 0 or item.files_conflict > 0 or series_diagnostics.get('actionable_duplicate_merge', false) %}
           {% set duplicate_selected_files = duplicate_selected_file_counts.get(item.id, 0) if duplicate_selected_file_counts is defined else 0 %}
           {% set duplicate_selectable = item.status.value == 'duplicate' and duplicate_actionable and item.files_matched > 0 %}
           {% set top_candidates = series_diagnostics.get('top_candidates', []) %}

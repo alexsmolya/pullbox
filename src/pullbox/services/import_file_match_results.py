@@ -97,13 +97,17 @@ def apply_file_match_series_summary(
 
     if duplicate_series:
         diagnostics = dict(imp_series.diagnostics or {})
+        has_importable_files = imp_series.files_matched > 0
+        has_conflict_files = imp_series.files_conflict > 0
+        duplicate_profile_actionable = (
+            duplicate_merge_profile.actionable if duplicate_merge_profile is not None else False
+        )
+        actionable_duplicate_merge = bool(
+            duplicate_profile_actionable or has_importable_files or has_conflict_files
+        )
         diagnostics.update(
             {
-                "actionable_duplicate_merge": bool(
-                    duplicate_merge_profile.actionable
-                    if duplicate_merge_profile is not None
-                    else imp_series.files_matched > 0 or imp_series.files_conflict > 0
-                ),
+                "actionable_duplicate_merge": actionable_duplicate_merge,
                 "existing_issue_count": (
                     duplicate_merge_profile.existing_issue_count
                     if duplicate_merge_profile is not None
@@ -115,7 +119,7 @@ def apply_file_match_series_summary(
                     else diagnostics.get("owned_issue_count", 0)
                 ),
                 "fully_owned_series": bool(
-                    duplicate_merge_profile.fully_owned
+                    duplicate_merge_profile.fully_owned and not actionable_duplicate_merge
                     if duplicate_merge_profile is not None
                     else diagnostics.get("fully_owned_series", False)
                 ),
@@ -124,7 +128,7 @@ def apply_file_match_series_summary(
                     if duplicate_merge_profile is not None
                     else diagnostics.get("single_owned_shortcut_applied", False)
                 ),
-                "has_importable_files": imp_series.files_matched > 0,
+                "has_importable_files": has_importable_files,
                 "importable_files": imp_series.files_matched,
                 "duplicate_files": imp_series.files_duplicate,
                 "already_owned_files": imp_series.files_already_owned,

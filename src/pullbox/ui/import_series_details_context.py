@@ -26,10 +26,12 @@ def is_actionable_duplicate_merge(series_item: ImportedSeries | None) -> bool:
     """Return True when a duplicate series still has wanted/missing import targets."""
     if series_item is None or series_item.status != ImportSeriesStatus.DUPLICATE:
         return False
+    if (series_item.files_matched or 0) > 0 or (series_item.files_conflict or 0) > 0:
+        return True
     diagnostics = dict(series_item.diagnostics or {})
     if "actionable_duplicate_merge" in diagnostics:
         return bool(diagnostics["actionable_duplicate_merge"])
-    return bool((series_item.files_matched or 0) > 0 or (series_item.files_conflict or 0) > 0)
+    return False
 
 
 def _format_issue_number(issue_number: float | None) -> str | None:
