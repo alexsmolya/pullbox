@@ -143,6 +143,68 @@ async def test_cancelled_run_updates_scheduler_task_state(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_scheduled_run_defers_while_import_is_protected(monkeypatch) -> None:
+    """Scheduled work should not compete with active or stalled imports."""
+    monkeypatch.setattr(
+        "pullbox.core.scheduler.get_settings",
+        lambda: type("Settings", (), {"db_url": "sqlite+aiosqlite:///:memory:"})(),
+    )
+    monkeypatch.setattr(
+        "pullbox.core.scheduler.has_active_import_scheduler_protection",
+        AsyncMock(return_value=True),
+    )
+    scheduler = PullboxScheduler()
+    scheduler._persist_task_stat = AsyncMock()  # type: ignore[method-assign]
+    called = False
+
+    async def _task() -> None:
+        nonlocal called
+        called = True
+
+    wrapped = scheduler._wrap_task(_task, "test_deferred_import_task")
+    await wrapped()
+
+    assert called is False
+    stats = scheduler._task_stats["test_deferred_import_task"]
+    assert stats.last_status == "deferred"
+    assert stats.last_execution is not None
+    assert stats.last_duration_seconds == 0
+    assert stats.running_since is None
+    scheduler._persist_task_stat.assert_awaited_once()
+    assert scheduler._running_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_manual_run_defers_while_import_is_protected(monkeypatch) -> None:
+    """Queued manual task work should also defer once an import is protected."""
+    monkeypatch.setattr(
+        "pullbox.core.scheduler.get_settings",
+        lambda: type("Settings", (), {"db_url": "sqlite+aiosqlite:///:memory:"})(),
+    )
+    protection_check = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "pullbox.core.scheduler.has_active_import_scheduler_protection",
+        protection_check,
+    )
+    scheduler = PullboxScheduler()
+    scheduler._persist_task_stat = AsyncMock()  # type: ignore[method-assign]
+    called = False
+
+    async def _task() -> None:
+        nonlocal called
+        called = True
+
+    wrapped = scheduler._wrap_task(_task, "test_manual_import_task", trigger_type="manual")
+    await wrapped()
+
+    assert called is False
+    protection_check.assert_awaited_once()
+    stats = scheduler._task_stats["test_manual_import_task"]
+    assert stats.last_status == "deferred"
+    assert stats.last_execution is not None
+
+
+@pytest.mark.asyncio
 async def test_running_task_is_exposed_in_scheduler_rows() -> None:
     """A currently executing task should surface as running in scheduled task rows."""
     _task_registry.clear()

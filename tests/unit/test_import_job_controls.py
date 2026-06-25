@@ -62,6 +62,19 @@ async def test_cancel_job_deletes_discardable_history_row(db_session: AsyncSessi
     assert await db_session.get(ImportJob, job_id) is None
 
 
+async def test_cancel_job_deletes_stalled_scan_without_file_work(
+    db_session: AsyncSession,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session, status=ImportJobStatus.STALLED)
+    job_id = job.id
+
+    result = await service.cancel_job(db_session, job_id)
+
+    assert result == "deleted"
+    assert await db_session.get(ImportJob, job_id) is None
+
+
 async def test_cancel_job_rejects_active_job(db_session: AsyncSession) -> None:
     service = _make_service()
     job = await _create_job_row(db_session, status=ImportJobStatus.IMPORTING)
@@ -218,6 +231,29 @@ async def test_resume_job_uses_progress_snapshot_phase(db_session: AsyncSession)
     assert updated.progress_snapshot["message"] == "Import resume requested."
 
 
+async def test_resume_stalled_job_uses_progress_snapshot_phase(db_session: AsyncSession) -> None:
+    service = _make_service()
+    job = await _create_job_row(
+        db_session,
+        status=ImportJobStatus.STALLED,
+        progress_snapshot={
+            "mode": "scan",
+            "phase": "file_matching",
+            "progress": 87,
+            "message": "Import stalled because the database was busy. Resume when ready.",
+        },
+    )
+    job.error_message = "Import stalled because the database was busy. Resume when ready."
+
+    updated = await service.resume_job(db_session, job.id)
+
+    assert updated.status == ImportJobStatus.FILE_MATCHING
+    assert updated.error_message is None
+    assert updated.progress_snapshot["status"] == ImportJobStatus.FILE_MATCHING.value
+    assert updated.progress_snapshot["phase"] == "file_matching"
+    assert updated.progress_snapshot["message"] == "Import resume requested."
+
+
 async def test_resume_job_rejects_rolled_back_history_row(db_session: AsyncSession) -> None:
     service = _make_service()
     job = await _create_job_row(
@@ -300,6 +336,27 @@ async def test_request_cancel_paused_import_marks_cancelled_snapshot(
     assert updated.progress_snapshot["mode"] == "rollback"
     assert updated.progress_snapshot["phase"] == "queued"
     assert updated.progress_snapshot["progress"] == 0
+    assert updated.progress_snapshot["message"] == "Cancelling import and rolling back changes..."
+
+
+async def test_request_cancel_stalled_import_marks_rollback_snapshot(
+    db_session: AsyncSession,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(
+        db_session,
+        status=ImportJobStatus.STALLED,
+        progress_snapshot={"phase": "importing", "progress": 76, "message": "Stalled"},
+        import_started_at=datetime.now(UTC),
+    )
+
+    updated = await service.request_cancel(db_session, job.id)
+
+    assert updated.status == ImportJobStatus.ROLLING_BACK
+    assert updated.control_request == ImportControlRequest.CANCEL
+    assert updated.progress_snapshot["status"] == ImportJobStatus.ROLLING_BACK.value
+    assert updated.progress_snapshot["mode"] == "rollback"
+    assert updated.progress_snapshot["phase"] == "queued"
     assert updated.progress_snapshot["message"] == "Cancelling import and rolling back changes..."
 
 

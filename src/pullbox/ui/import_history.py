@@ -43,7 +43,7 @@ def _history_resume_step_for_job(job: ImportJob) -> int | None:
         return 3
 
     mode = snapshot_mode_for_job(job)
-    if job.status == ImportJobStatus.PAUSED:
+    if job.status in {ImportJobStatus.PAUSED, ImportJobStatus.STALLED}:
         if mode in {"import", "rollback"} or job.import_started_at is not None:
             return 4
         return 2
@@ -96,9 +96,10 @@ def _get_import_history_order_by(sort: str) -> list[ColumnElement[object]]:
         (ImportJob.status == ImportJobStatus.FILE_MATCHING, 4),
         (ImportJob.status == ImportJobStatus.REVIEW, 5),
         (ImportJob.status == ImportJobStatus.IMPORTING, 6),
-        (ImportJob.status == ImportJobStatus.COMPLETED, 7),
-        (ImportJob.status == ImportJobStatus.FAILED, 8),
-        (ImportJob.status == ImportJobStatus.CANCELLED, 9),
+        (ImportJob.status == ImportJobStatus.STALLED, 7),
+        (ImportJob.status == ImportJobStatus.COMPLETED, 8),
+        (ImportJob.status == ImportJobStatus.FAILED, 9),
+        (ImportJob.status == ImportJobStatus.CANCELLED, 10),
         else_=99,
     )
 
@@ -170,11 +171,13 @@ async def _load_import_history_context(
         ImportJobStatus.MATCHING,
         ImportJobStatus.FILE_MATCHING,
         ImportJobStatus.IMPORTING,
+        ImportJobStatus.STALLED,
         ImportJobStatus.CANCELLING,
         ImportJobStatus.ROLLING_BACK,
     )
     resumable_clause = or_(
         ImportJob.status == ImportJobStatus.PAUSED,
+        ImportJob.status == ImportJobStatus.STALLED,
         ((ImportJob.status == ImportJobStatus.REVIEW) & ImportJob.import_started_at.is_(None)),
     )
     results_ready_statuses = (
@@ -225,6 +228,7 @@ async def _load_import_history_context(
         ImportJobStatus.MATCHING,
         ImportJobStatus.FILE_MATCHING,
         ImportJobStatus.IMPORTING,
+        ImportJobStatus.STALLED,
         ImportJobStatus.CANCELLING,
         ImportJobStatus.ROLLING_BACK,
     }

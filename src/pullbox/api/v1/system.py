@@ -7,7 +7,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -48,9 +48,14 @@ from pullbox.config import get_settings
 from pullbox.core.build_metadata import get_build_metadata
 from pullbox.core.config_resolver import load_system_config_values
 from pullbox.core.shutdown import shutdown_manager
+from pullbox.core.sqlite_lock import is_sqlite_locked_error
 from pullbox.models.config import DEFAULT_SYSTEM_CONFIG, SystemConfig
 from pullbox.services.backup_runtime_service import BackupRuntimeService
 from pullbox.services.backup_service import BackupService
+from pullbox.services.import_activity import (
+    has_active_import_scheduler_protection,
+    is_missing_import_jobs_table_error,
+)
 from pullbox.services.restore_recovery_service import (
     get_restore_recovery_status,
     mark_restore_recovery_pending,
@@ -75,6 +80,9 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/system", tags=["system"], include_in_schema=False)
 _USAGE_STATS_CONSENT_STATES = frozenset({"unknown", "enabled", "disabled"})
+_TASK_RUN_DISABLED_DURING_IMPORT_MESSAGE = (
+    "Manual task runs are disabled until the active import finishes."
+)
 
 
 # ── Schemas ──────────────────────────────────────────────────────────
@@ -652,6 +660,23 @@ async def get_comics_dir(
 # ── Task Routes ────────────────────────────────────────────────────
 
 
+async def _task_manual_run_disabled_reason() -> str | None:
+    """Return why manual task runs are unavailable, if imports are protected."""
+    try:
+        active_import = await has_active_import_scheduler_protection()
+    except Exception as exc:
+        if is_missing_import_jobs_table_error(exc):
+            return None
+        if is_sqlite_locked_error(exc):
+            return _TASK_RUN_DISABLED_DURING_IMPORT_MESSAGE
+        logger.warning(
+            "task_manual_run_import_protection_check_failed",
+            error=str(exc),
+        )
+        return None
+    return _TASK_RUN_DISABLED_DURING_IMPORT_MESSAGE if active_import else None
+
+
 @router.get("/tasks")
 async def list_tasks(
     _user: InteractiveOperatorUser,
@@ -662,8 +687,12 @@ async def list_tasks(
 
     scheduler = get_scheduler()
     await scheduler.load_persisted_stats(session)
+    manual_run_disabled_reason = await _task_manual_run_disabled_reason()
+    scheduled_tasks = scheduler.get_scheduled_tasks()
+    for task in scheduled_tasks:
+        task["manual_run_disabled_reason"] = manual_run_disabled_reason
     return {
-        "scheduled": scheduler.get_scheduled_tasks(),
+        "scheduled": scheduled_tasks,
     }
 
 
@@ -674,6 +703,13 @@ async def run_task(
 ) -> dict[str, str]:
     """Queue immediate execution of a scheduled task."""
     from pullbox.core.scheduler import get_scheduler
+
+    manual_run_disabled_reason = await _task_manual_run_disabled_reason()
+    if manual_run_disabled_reason:
+        raise HTTPException(
+            status_code=409,
+            detail=manual_run_disabled_reason,
+        )
 
     scheduler = get_scheduler()
     status = scheduler.run_task_now(task_id)

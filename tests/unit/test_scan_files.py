@@ -166,6 +166,21 @@ class TestScanFilesFiltering:
         assert result[0].file_count == 1
 
     @pytest.mark.asyncio
+    async def test_appledouble_sidecar_files_skipped(self, tmp_path: Path) -> None:
+        """Explicit file imports should ignore macOS AppleDouble sidecar files."""
+        folder = tmp_path / "Test Series (2020)"
+        real_file = _create_test_cbz(folder / "Issue 001.cbz")
+        apple_double = folder / "._Issue 001.cbz"
+        apple_double.write_bytes(b"\x00" * 4096)
+
+        scanner = CollectionScanner(min_file_count=1)
+        result = await scanner.scan_files([str(real_file), str(apple_double)])
+
+        assert len(result) == 1
+        assert result[0].file_count == 1
+        assert [file.file_name for file in result[0].files] == ["Issue 001.cbz"]
+
+    @pytest.mark.asyncio
     async def test_custom_extensions(self, tmp_path: Path) -> None:
         """Custom extensions filter works."""
         folder = tmp_path / "Series (2020)"

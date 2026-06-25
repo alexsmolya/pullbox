@@ -84,9 +84,10 @@
                     <div class="downloads-action-group is-hover-reveal justify-end">
                       <button
                         @click.stop="runTask(task.task_id)"
-                        :disabled="isTaskRunning(task) || isTaskQueued(task)"
+                        :disabled="isTaskRunDisabled(task)"
                         class="downloads-action-btn"
                         data-tip="Run now"
+                        :data-tip="taskActionTip(task)"
                         data-tip-pos="left"
                         :aria-label="'Run ' + task.name + ' now'"
                         type="button"
@@ -173,12 +174,26 @@ function taskManager(initialTasks) {
     },
 
     runTask(taskId) {
+      const task = this.scheduled.find(item => item.task_id === taskId);
+      if (task && this.isTaskManualDisabled(task)) {
+        if (typeof showToast === 'function') {
+          showToast({ message: task.manual_run_disabled_reason, level: 'info' });
+        }
+        return;
+      }
       this.runningTasks[taskId] = true;
       fetch(`/api/v1/system/tasks/${taskId}/run`, {
         method: 'POST',
         headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
       })
-        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(r => {
+          if (!r.ok) {
+            return r.json().catch(() => ({})).then(data => {
+              throw new Error(data.detail || 'Failed to trigger task.');
+            });
+          }
+          return r.json();
+        })
         .then(data => {
           if (typeof showToast === 'function') {
             const level = data.status === 'queued' ? 'success' : 'info';
@@ -186,8 +201,10 @@ function taskManager(initialTasks) {
           }
           setTimeout(() => this.refreshTasks(false), 150);
         })
-        .catch(() => {
-          if (typeof showToast === 'function') showToast({ message: 'Failed to trigger task.', level: 'error' });
+        .catch(error => {
+          if (typeof showToast === 'function') {
+            showToast({ message: error.message || 'Failed to trigger task.', level: 'error' });
+          }
         })
         .finally(() => {
           setTimeout(() => { delete this.runningTasks[taskId]; }, 250);
@@ -244,6 +261,7 @@ function taskManager(initialTasks) {
       if (this.isTaskRunning(task)) return 'running';
       if (this.isTaskQueued(task)) return 'queued';
       if (!task.last_execution) return 'idle';
+      if (task.last_status === 'deferred') return 'deferred';
       if (task.last_status === 'cancelled') return 'interrupted';
       if (task.last_status === 'failed') return 'failed';
       return 'healthy';
@@ -255,6 +273,14 @@ function taskManager(initialTasks) {
 
     isTaskQueued(task) {
       return task.is_queued === true || Number.isInteger(task.manual_queue_position);
+    },
+
+    isTaskManualDisabled(task) {
+      return typeof task.manual_run_disabled_reason === 'string' && task.manual_run_disabled_reason.length > 0;
+    },
+
+    isTaskRunDisabled(task) {
+      return this.isTaskManualDisabled(task) || this.isTaskRunning(task) || this.isTaskQueued(task);
     },
 
     taskLastRunLabel(task) {
@@ -276,6 +302,7 @@ function taskManager(initialTasks) {
       const state = this.taskState(task);
       if (state === 'running') return 'Running';
       if (state === 'queued') return 'Queued';
+      if (state === 'deferred') return 'Deferred';
       if (state === 'interrupted') return 'Interrupted';
       if (state === 'failed') return 'Failed';
       if (state === 'idle') return 'Never run';
@@ -286,6 +313,7 @@ function taskManager(initialTasks) {
       const state = this.taskState(task);
       if (state === 'running') return 'pill-info';
       if (state === 'queued') return 'pill-neutral';
+      if (state === 'deferred') return 'pill-warning';
       if (state === 'interrupted') return 'pill-warning';
       if (state === 'failed') return 'pill-error';
       if (state === 'idle') return 'pill-neutral';
@@ -293,6 +321,9 @@ function taskManager(initialTasks) {
     },
 
     taskSummary(task) {
+      if (this.isTaskManualDisabled(task)) {
+        return task.manual_run_disabled_reason;
+      }
       if (this.taskState(task) === 'running') {
         return 'A manual run from this page is already in progress. Wait for it to finish, then refresh if you need the newest schedule state.';
       }
@@ -315,6 +346,7 @@ function taskManager(initialTasks) {
     },
 
     taskActionHint(task) {
+      if (this.isTaskManualDisabled(task)) return task.manual_run_disabled_reason;
       if (this.taskState(task) === 'running') return 'Manual execution is already underway.';
       if (this.taskState(task) === 'queued') return 'This manual run is already queued and will start automatically.';
       if (!task.last_execution) return 'Good for the first run or after initial setup.';
@@ -325,6 +357,11 @@ function taskManager(initialTasks) {
         return 'Best used after you address the cause of the last failure.';
       }
       return 'Use this when you need the work completed ahead of schedule.';
+    },
+
+    taskActionTip(task) {
+      if (this.isTaskManualDisabled(task)) return task.manual_run_disabled_reason;
+      return 'Run now';
     },
 
     formatInterval(triggerStr) {
