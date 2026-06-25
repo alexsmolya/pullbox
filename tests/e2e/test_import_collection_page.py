@@ -468,6 +468,213 @@ class TestImportCollectionTab:
         assert state["events"] == ["refresh", "summary"]
         assert "still on your current page" in state["toastMessage"]
 
+    def test_import_collection_cv_override_opens_needs_issue_when_files_remain_unmatched(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        import_page = ImportPage(authed_page, seeded_server)
+        import_page.goto(tab="collection")
+
+        state = authed_page.evaluate(
+            """async () => {
+                const originalFetch = window.fetch;
+                const originalShowToast = window.showToast;
+                try {
+                    const modal = window.importCvSearchModalData({
+                        jobId: 42,
+                        seriesId: 7,
+                        query: "King Dracula",
+                    });
+                    const events = [];
+                    const reviewData = {
+                        currentView: "series",
+                        refreshSeriesReview: function () {
+                            events.push("refresh");
+                            return Promise.resolve();
+                        },
+                        openReviewView: function (view) {
+                            events.push("open:" + String(view || ""));
+                            this.currentView = view;
+                            return Promise.resolve();
+                        },
+                        refreshReviewSummary: function () {
+                            events.push("summary");
+                        },
+                    };
+                    let toast = null;
+
+                    modal.reviewPanelData = function () {
+                        return reviewData;
+                    };
+                    window.fetch = async function () {
+                        return {
+                            ok: true,
+                            json: async function () {
+                                return {
+                                    id: 99,
+                                    status: "no_match",
+                                    cv_id: 160000,
+                                    files_no_match: 1,
+                                    files_conflict: 0,
+                                };
+                            },
+                        };
+                    };
+                    window.showToast = function (detail) {
+                        toast = detail;
+                    };
+
+                    modal.selectResult(160000);
+                    await new Promise((resolve, reject) => {
+                        let attempts = 0;
+                        function check() {
+                            if (events.length > 0 || toast) {
+                                resolve();
+                                return;
+                            }
+                            attempts += 1;
+                            if (attempts > 50) {
+                                reject(new Error("Timed out waiting for override refresh."));
+                                return;
+                            }
+                            window.setTimeout(check, 10);
+                        }
+                        check();
+                    });
+
+                    return {
+                        currentView: reviewData.currentView,
+                        events: events,
+                        toastMessage: toast && toast.message ? toast.message : "",
+                    };
+                } finally {
+                    window.fetch = originalFetch;
+                    window.showToast = originalShowToast;
+                }
+            }"""
+        )
+
+        assert state["currentView"] == "needs_issue"
+        assert state["events"] == ["open:needs_issue", "summary"]
+        assert "Needs Issue Match" in state["toastMessage"]
+
+    def test_import_collection_cv_override_pending_rematch_keeps_refreshing_review(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        import_page = ImportPage(authed_page, seeded_server)
+        import_page.goto(tab="collection")
+
+        state = authed_page.evaluate(
+            """async () => {
+                const originalFetch = window.fetch;
+                const originalShowToast = window.showToast;
+                const originalSetTimeout = window.setTimeout;
+                try {
+                    const modal = window.importCvSearchModalData({
+                        jobId: 42,
+                        seriesId: 7,
+                        query: "Slow Series",
+                    });
+                    const events = [];
+                    const delays = [];
+                    function shellFor(counts, rowBuckets) {
+                        const shell = document.createElement("div");
+                        shell.id = "import-step-review-shell";
+                        shell.setAttribute("data-import-review-status-counts", JSON.stringify(counts || {}));
+                        if (rowBuckets) {
+                            const row = document.createElement("tbody");
+                            row.setAttribute("data-import-review-series-row", "99");
+                            row.setAttribute("data-import-review-row-buckets", rowBuckets);
+                            shell.appendChild(row);
+                        }
+                        return shell;
+                    }
+                    const shellRefreshes = [
+                        shellFor({ matched: 1 }, ""),
+                        shellFor({ needs_issue: 1 }, "needs_issue"),
+                    ];
+                    const reviewData = {
+                        currentView: "series",
+                        refreshSeriesReview: function () {
+                            events.push("refresh");
+                            return Promise.resolve(shellRefreshes.shift() || shellFor({ needs_issue: 1 }, "needs_issue"));
+                        },
+                        openReviewView: function (view) {
+                            events.push("open:" + String(view || ""));
+                            this.currentView = view;
+                            return Promise.resolve(shellFor({ needs_issue: 1 }, "needs_issue"));
+                        },
+                        refreshReviewSummary: function () {
+                            events.push("summary");
+                        },
+                    };
+                    let toast = null;
+
+                    modal.reviewPanelData = function () {
+                        return reviewData;
+                    };
+                    window.fetch = async function () {
+                        return {
+                            ok: true,
+                            json: async function () {
+                                return {
+                                    id: 99,
+                                    status: "matched",
+                                    files_conflict: 0,
+                                    diagnostics: { rematch_pending: true },
+                                };
+                            },
+                        };
+                    };
+                    window.showToast = function (detail) {
+                        toast = detail;
+                    };
+                    window.setTimeout = function (callback, delay) {
+                        delays.push(delay);
+                        if (delay <= 20) {
+                            return originalSetTimeout(callback, delay);
+                        }
+                        return originalSetTimeout(callback, 0);
+                    };
+
+                    modal.selectResult(160000);
+                    await new Promise((resolve, reject) => {
+                        let attempts = 0;
+                        function check() {
+                            if (toast && events.includes("open:needs_issue")) {
+                                resolve();
+                                return;
+                            }
+                            attempts += 1;
+                            if (attempts > 100) {
+                                reject(new Error("Timed out waiting for pending needs-issue refresh."));
+                                return;
+                            }
+                            originalSetTimeout(check, 10);
+                        }
+                        check();
+                    });
+
+                    return {
+                        events: events,
+                        delays: delays,
+                        toastMessage: toast && toast.message ? toast.message : "",
+                    };
+                } finally {
+                    window.fetch = originalFetch;
+                    window.showToast = originalShowToast;
+                    window.setTimeout = originalSetTimeout;
+                }
+            }"""
+        )
+
+        assert state["events"] == ["refresh", "summary", "refresh", "open:needs_issue"]
+        assert state["delays"][0] == 500
+        assert "rematching the files" in state["toastMessage"]
+
     def test_import_collection_series_details_conflict_action_no_longer_switches_views(
         self,
         authed_page,

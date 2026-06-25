@@ -876,6 +876,41 @@ function searchHistoryRowData(config) {
 
 window.searchHistoryRowData = searchHistoryRowData;
 
+function readImportReviewStatusCounts(shell) {
+  if (!shell || typeof shell.getAttribute !== "function") {
+    return {};
+  }
+  var raw = shell.getAttribute("data-import-review-status-counts") || "{}";
+  try {
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function importReviewStatusCount(shell, view) {
+  var counts = readImportReviewStatusCounts(shell);
+  return Number(counts && counts[view]) || 0;
+}
+
+function importReviewShellHasSeriesBucket(shell, seriesId, bucket) {
+  var numericSeriesId = Number(seriesId);
+  if (!shell || !Number.isFinite(numericSeriesId) || !bucket) {
+    return false;
+  }
+  var row = shell.querySelector(
+    '[data-import-review-series-row="' + String(numericSeriesId) + '"]',
+  );
+  if (!row) {
+    return false;
+  }
+  var buckets = String(row.getAttribute("data-import-review-row-buckets") || "")
+    .split(/\s+/)
+    .filter(Boolean);
+  return buckets.indexOf(bucket) >= 0;
+}
+
 function loadImportReviewShell(url) {
   var shell = document.getElementById("import-step-review-shell");
   if (!shell || !url) {
@@ -1866,13 +1901,15 @@ function importCvSearchModalData(config) {
       return "/import/" + this.jobId + "/review-partial" + (query ? "?" + query : "");
     },
 
-    buildOverrideOutcome: function (result, activeReviewView) {
+    buildOverrideOutcome: function (result, activeReviewView, baselineStatusCounts) {
       var activeView = activeReviewView || "series";
       var normalizedStatus = result && result.status ? String(result.status).toLowerCase() : "";
+      var filesNoMatch = Number(result && result.files_no_match) || 0;
+      var resultSeriesId = Number(result && result.id);
       var mergedIntoExistingSeries =
         !!result &&
-        Number.isFinite(Number(result.id)) &&
-        Number(result.id) !== Number(this.seriesId);
+        Number.isFinite(resultSeriesId) &&
+        resultSeriesId !== Number(this.seriesId);
       var filesConflict = Number(result && result.files_conflict) || 0;
       var directlyImportable = normalizedStatus === "matched" && filesConflict === 0;
       var diagnostics =
@@ -1880,12 +1917,29 @@ function importCvSearchModalData(config) {
           ? result.diagnostics
           : {};
       var rematchPending = diagnostics.rematch_pending === true;
+      var hasKnownSeriesTarget =
+        !!result && !!(result.cv_id || result.user_selected_cv_id || result.series_id);
 
       if (rematchPending) {
         return {
           message: "ComicVine match applied. Pullbox is rematching the files in the background.",
           level: "info",
-          refreshDelays: [1500, 5000, 15000],
+          watchDestinationView: "needs_issue",
+          watchSeriesId: Number.isFinite(resultSeriesId) ? resultSeriesId : Number(this.seriesId),
+          baselineStatusCounts: baselineStatusCounts || {},
+          watchDelays: [500, 1500, 3000, 5000, 10000, 15000, 30000, 60000],
+        };
+      }
+
+      if (
+        (normalizedStatus === "no_match" && hasKnownSeriesTarget) ||
+        (normalizedStatus === "duplicate" && filesNoMatch > 0)
+      ) {
+        return {
+          message:
+            "ComicVine match applied. Some files still need issue decisions under Needs Issue Match.",
+          level: "warning",
+          destinationView: "needs_issue",
         };
       }
 
@@ -1948,6 +2002,13 @@ function importCvSearchModalData(config) {
       var reviewData = this.reviewPanelData();
       if (reviewData) {
         if (
+          outcome &&
+          outcome.destinationView &&
+          typeof reviewData.openReviewView === "function"
+        ) {
+          return reviewData.openReviewView(outcome.destinationView);
+        }
+        if (
           activeReviewView &&
           Object.prototype.hasOwnProperty.call(reviewData, "currentView")
         ) {
@@ -1964,6 +2025,74 @@ function importCvSearchModalData(config) {
       });
     },
 
+    overrideDestinationReady: function (outcome, shell) {
+      if (!outcome || !outcome.watchDestinationView || !shell) {
+        return false;
+      }
+
+      var view = outcome.watchDestinationView;
+      if (importReviewShellHasSeriesBucket(shell, outcome.watchSeriesId, view)) {
+        return true;
+      }
+
+      var baselineCounts = outcome.baselineStatusCounts || {};
+      var baseline = Number(baselineCounts[view]) || 0;
+      return importReviewStatusCount(shell, view) > baseline;
+    },
+
+    openWatchedOverrideDestination: function (outcome, shell) {
+      var self = this;
+      if (!self.overrideDestinationReady(outcome, shell)) {
+        return Promise.resolve(false);
+      }
+
+      var reviewData = self.reviewPanelData();
+      if (!reviewData || typeof reviewData.openReviewView !== "function") {
+        return Promise.resolve(false);
+      }
+
+      return Promise.resolve(reviewData.openReviewView(outcome.watchDestinationView)).then(
+        function () {
+          return true;
+        },
+      );
+    },
+
+    watchOverrideReviewState: function (outcome) {
+      var self = this;
+      if (!outcome || !outcome.watchDestinationView) {
+        return;
+      }
+
+      var delays = outcome.watchDelays || [];
+      var attempt = function (index) {
+        if (index >= delays.length) {
+          return;
+        }
+        window.setTimeout(function () {
+          var reviewData = self.reviewPanelData();
+          if (!reviewData || typeof reviewData.refreshSeriesReview !== "function") {
+            return;
+          }
+
+          Promise.resolve(reviewData.refreshSeriesReview())
+            .then(function (shell) {
+              return self.openWatchedOverrideDestination(outcome, shell);
+            })
+            .then(function (opened) {
+              if (!opened) {
+                attempt(index + 1);
+              }
+            })
+            .catch(function () {
+              attempt(index + 1);
+            });
+        }, delays[index]);
+      };
+
+      attempt(0);
+    },
+
     selectResult: function (cvId) {
       var self = this;
       if (!cvId || self.selecting) {
@@ -1976,6 +2105,9 @@ function importCvSearchModalData(config) {
       if (reviewData && reviewData.currentView) {
         activeReviewView = reviewData.currentView;
       }
+      var baselineStatusCounts = readImportReviewStatusCounts(
+        document.getElementById("import-step-review-shell"),
+      );
       fetch("/api/v1/import/" + self.jobId + "/series/" + self.seriesId + "/override", {
         method: "POST",
         headers: {
@@ -2002,10 +2134,14 @@ function importCvSearchModalData(config) {
               return null;
             })
             .then(function (result) {
-              var outcome = self.buildOverrideOutcome(result, activeReviewView);
+              var outcome = self.buildOverrideOutcome(
+                result,
+                activeReviewView,
+                baselineStatusCounts,
+              );
               self.close(true);
               var reviewRefresh = self.refreshReviewForOverride(outcome, activeReviewView);
-              return Promise.resolve(reviewRefresh).then(function () {
+              return Promise.resolve(reviewRefresh).then(function (reviewShell) {
                 var refreshedReviewData = self.reviewPanelData();
                 if (
                   refreshedReviewData &&
@@ -2019,19 +2155,13 @@ function importCvSearchModalData(config) {
                     level: outcome.level || "success",
                   });
                 }
-                if (outcome.refreshDelays && outcome.refreshDelays.length) {
-                  outcome.refreshDelays.forEach(function (delayMs) {
-                    window.setTimeout(function () {
-                      var pendingReviewData = self.reviewPanelData();
-                      if (
-                        pendingReviewData &&
-                        typeof pendingReviewData.refreshSeriesReview === "function"
-                      ) {
-                        pendingReviewData.refreshSeriesReview();
-                      }
-                    }, delayMs);
-                  });
-                }
+                return self.openWatchedOverrideDestination(outcome, reviewShell).then(
+                  function (opened) {
+                    if (!opened) {
+                      self.watchOverrideReviewState(outcome);
+                    }
+                  },
+                );
               });
             });
         })

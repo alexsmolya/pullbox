@@ -234,17 +234,16 @@ async def override_series_cv_id(
         raise ValidationError("cv_id must be a positive integer")
 
     service = await _build_interactive_import_service(session)
-    item = await service.override_cv_id(session, imported_series_id, cv_id, rematch_files=False)
+    item = await service.override_cv_id(session, imported_series_id, cv_id, rematch_files=True)
     await session.commit()
 
     logger.info(
         "import_series_cv_override",
         job_id=job_id,
         imported_series_id=imported_series_id,
-        rematch_series_id=item.id,
+        rematched_series_id=item.id,
         cv_id=cv_id,
     )
-    trigger_import_series_rematch(job_id, item.id)
     return ImportedSeriesRead.model_validate(item)
 
 
