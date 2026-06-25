@@ -76,6 +76,15 @@ _STAGE_LABELS: dict[str, str] = {
     "finalizing": "Finalizing imported file",
 }
 
+_SCAN_REVIEW_PROGRESS_START = 35
+_SCAN_REVIEW_PROGRESS_END = 99
+_ANALYSIS_SERIES_WEIGHT = 0.2
+_SERIES_MATCH_DIRECT_WEIGHT = 0.5
+_SERIES_MATCH_SEARCH_WEIGHT = 2.0
+_SERIES_MATCH_MAX_FILE_BONUS = 1.0
+_FILE_TARGET_BASE_WEIGHT = 1.0
+_FILE_TARGET_MAX_ISSUE_BONUS = 8.0
+_FILE_MATCH_FILE_WEIGHT = 0.5
 _METADATA_COMPONENT_WEIGHT = 2.0
 _BASE_FILE_WEIGHT = 1.0
 _MAX_SIZE_WEIGHT = 24.0
@@ -83,6 +92,50 @@ _CBZ_REWRITE_WEIGHT = 1.5
 _ARCHIVE_CONVERSION_WEIGHT = 5.0
 _PDF_CONVERSION_WEIGHT = 14.0
 _TRANSFER_WEIGHT = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class ScanReviewSeriesMatchProfile:
+    """Minimal series facts needed for Step 2 matching cost estimates."""
+
+    file_count: int = 0
+    direct_match: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ScanReviewFileMatchProfile:
+    """Minimal series facts needed for Step 2 file-matching cost estimates."""
+
+    file_count: int = 0
+    issue_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScanReviewProgressPlan:
+    """Weighted Step 2 plan after discovered files are materialized."""
+
+    analysis_weights: tuple[float, ...]
+    series_match_weights: tuple[float, ...]
+    file_match_weights: tuple[float, ...]
+
+    @property
+    def analysis_weight(self) -> float:
+        return sum(self.analysis_weights)
+
+    @property
+    def series_match_weight(self) -> float:
+        return sum(self.series_match_weights)
+
+    @property
+    def file_match_weight(self) -> float:
+        return sum(self.file_match_weights)
+
+    @property
+    def total_weight(self) -> float:
+        return max(
+            self.analysis_weight + self.series_match_weight + self.file_match_weight,
+            1.0,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +219,127 @@ def elapsed_seconds_since(started_at: datetime | None) -> int | None:
     if started_at is None:
         return None
     return max(int((datetime.now(UTC) - started_at).total_seconds()), 0)
+
+
+def estimate_remaining_work_seconds(
+    started_at: datetime | None,
+    *,
+    completed_units: int | float,
+    total_units: int | float,
+    current_unit_progress_pct: int | float | None = None,
+) -> int | None:
+    """Estimate active-phase remaining time from measured work units."""
+    if started_at is None or total_units <= 0:
+        return None
+
+    elapsed_seconds = elapsed_seconds_since(started_at)
+    if elapsed_seconds is None or elapsed_seconds < 2:
+        return None
+
+    current_unit_fraction = _clamped_pct(current_unit_progress_pct) / 100
+    effective_completed = min(
+        max(float(completed_units) + current_unit_fraction, 0.0),
+        float(total_units),
+    )
+    if effective_completed <= 0 or effective_completed >= float(total_units):
+        return None
+
+    seconds_per_unit = elapsed_seconds / effective_completed
+    remaining_units = float(total_units) - effective_completed
+    remaining = max(round(seconds_per_unit * remaining_units), 0)
+    return remaining or None
+
+
+def scan_review_progress_plan(
+    *,
+    analysis_series_count: int,
+    series_match_profiles: list[ScanReviewSeriesMatchProfile],
+    file_match_profiles: list[ScanReviewFileMatchProfile],
+) -> ScanReviewProgressPlan:
+    """Build the weighted Step 2 plan available after scan materialization."""
+    analysis_weights = tuple(
+        _ANALYSIS_SERIES_WEIGHT for _idx in range(max(analysis_series_count, 0))
+    )
+    series_match_weights = tuple(
+        scan_review_series_match_weight(profile) for profile in series_match_profiles
+    )
+    file_match_weights: list[float] = []
+    for profile in file_match_profiles:
+        file_match_weights.append(scan_review_file_target_weight(profile))
+        file_match_weights.extend(
+            _FILE_MATCH_FILE_WEIGHT for _idx in range(max(profile.file_count, 0))
+        )
+    return ScanReviewProgressPlan(
+        analysis_weights=analysis_weights,
+        series_match_weights=series_match_weights,
+        file_match_weights=tuple(file_match_weights),
+    )
+
+
+def scan_review_series_match_weight(profile: ScanReviewSeriesMatchProfile) -> float:
+    """Estimate relative Step 2 cost for one series-level match."""
+    base = _SERIES_MATCH_DIRECT_WEIGHT if profile.direct_match else _SERIES_MATCH_SEARCH_WEIGHT
+    file_bonus = min(max(profile.file_count, 0) * 0.05, _SERIES_MATCH_MAX_FILE_BONUS)
+    return max(base + file_bonus, 0.1)
+
+
+def scan_review_file_target_weight(profile: ScanReviewFileMatchProfile) -> float:
+    """Estimate relative Step 2 cost for loading one series' issue targets."""
+    issue_count = max(int(profile.issue_count or 0), 0)
+    issue_bonus = min(issue_count / 250, _FILE_TARGET_MAX_ISSUE_BONUS)
+    return max(_FILE_TARGET_BASE_WEIGHT + issue_bonus, 0.1)
+
+
+def scan_review_completed_weight(
+    plan: ScanReviewProgressPlan,
+    *,
+    phase: Literal["analyzing", "matching", "file_matching"],
+    completed_items: int,
+    current_item_progress_pct: int | float | None = None,
+) -> float:
+    """Return weighted Step 2 completion across the post-scan review-prep plan."""
+    if phase == "analyzing":
+        return _weighted_completed(
+            plan.analysis_weights,
+            completed_items,
+            current_item_progress_pct,
+        )
+    if phase == "matching":
+        return plan.analysis_weight + _weighted_completed(
+            plan.series_match_weights,
+            completed_items,
+            current_item_progress_pct,
+        )
+    return (
+        plan.analysis_weight
+        + plan.series_match_weight
+        + _weighted_completed(
+            plan.file_match_weights,
+            completed_items,
+            current_item_progress_pct,
+        )
+    )
+
+
+def scan_review_progress_pct(plan: ScanReviewProgressPlan, *, completed_weight: float) -> int:
+    """Scale weighted Step 2 review-prep work into the canonical 35-99 range."""
+    fraction = min(max(completed_weight / plan.total_weight, 0.0), 1.0)
+    progress = _SCAN_REVIEW_PROGRESS_START + (
+        (_SCAN_REVIEW_PROGRESS_END - _SCAN_REVIEW_PROGRESS_START) * fraction
+    )
+    return max(_SCAN_REVIEW_PROGRESS_START, min(round(progress), _SCAN_REVIEW_PROGRESS_END))
+
+
+def _weighted_completed(
+    weights: tuple[float, ...],
+    completed_items: int,
+    current_item_progress_pct: int | float | None,
+) -> float:
+    safe_completed = max(completed_items, 0)
+    completed = sum(weights[:safe_completed])
+    if safe_completed < len(weights):
+        completed += weights[safe_completed] * (_clamped_pct(current_item_progress_pct) / 100)
+    return completed
 
 
 def import_group_progress_plan(

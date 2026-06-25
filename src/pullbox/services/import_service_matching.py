@@ -50,6 +50,7 @@ from pullbox.services.import_logical_groups import (
     reset_series_group_files as reset_import_series_group_files,
 )
 from pullbox.services.import_mylar3_paths import auto_detect_mylar3_path_map
+from pullbox.services.import_progress_runtime import estimate_remaining_work_seconds
 from pullbox.services.import_series_deduplication import deduplicate_import_series
 from pullbox.services.import_series_matching import run_import_series_matching
 from pullbox.services.import_source_metadata import (
@@ -429,6 +430,7 @@ class ImportServiceMatchingMixin:
             estimate_remaining_seconds=self._estimate_remaining_seconds,
             job_stats=self._job_stats,
             maybe_slow_item_delay=self._maybe_slow_item_delay,
+            estimate_remaining_work_seconds=estimate_remaining_work_seconds,
             progress_callback=progress_callback,
         )
 
