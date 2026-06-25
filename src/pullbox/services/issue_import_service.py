@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,7 @@ from pullbox.core.library_policy import LibraryIngestPolicy, load_library_ingest
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile, MatchConfidence
 from pullbox.models.series import Series
+from pullbox.utilities.comicinfo import materialize_cbz_with_comicinfo
 from pullbox.utilities.executors.file_converter import convert_file
 
 if TYPE_CHECKING:
@@ -160,6 +162,25 @@ async def execute_manual_issue_import(
 
     converter = converter_with_progress if preparation_progress_callback is not None else None
 
+    async def materialize_cbz_with_progress(
+        source: Path,
+        target: Path,
+        comicinfo_payload: dict[str, Any],
+        *,
+        transfer_method: str,
+        progress_callback: Callable[[str, int, int, str], Any] | None = None,
+    ) -> bool:
+        return bool(
+            await asyncio.to_thread(
+                materialize_cbz_with_comicinfo,
+                source,
+                target,
+                comicinfo_payload,
+                transfer_method=transfer_method,
+                progress_callback=progress_callback,
+            )
+        )
+
     library_file = await register_library_file(
         session,
         source_path=prepared.source_path,
@@ -173,6 +194,7 @@ async def execute_manual_issue_import(
         transfer_progress_callback=transfer_progress_callback,
         converter=converter,
         comicinfo_progress_callback=comicinfo_progress_callback,
+        comicinfo_materializer=materialize_cbz_with_progress,
     )
 
     return ManualIssueImportResult(

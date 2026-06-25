@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -77,6 +78,8 @@ def _set_issue_import_state(
 async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> None:
     session_factory = get_session_factory()
     request = ManualFileImportRequest.model_validate(request_payload)
+    loop = asyncio.get_running_loop()
+    loop_thread_id = threading.get_ident()
 
     async with session_factory() as session:
         try:
@@ -97,7 +100,7 @@ async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> N
             }
             progress_imp_file = SimpleNamespace(file_path=str(prepared.source_path))
 
-            def emit_stage_progress(
+            def apply_stage_progress(
                 stage: str,
                 current: int,
                 total: int,
@@ -127,6 +130,17 @@ async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> N
                     file_index=1,
                     total_files=1,
                 )
+
+            def emit_stage_progress(
+                stage: str,
+                current: int,
+                total: int,
+                unit: str,
+            ) -> None:
+                if threading.get_ident() == loop_thread_id:
+                    apply_stage_progress(stage, current, total, unit)
+                    return
+                loop.call_soon_threadsafe(apply_stage_progress, stage, current, total, unit)
 
             _set_issue_import_state(
                 issue_id,
