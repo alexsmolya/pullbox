@@ -484,7 +484,7 @@ async def process_import_series_files(
     item_id = item.id
     job_id = job.id
     move_to_library = bool(job.move_to_library)
-    transfer_method = job.transfer_method
+    transfer_method = job.effective_transfer_method or job.transfer_method
     target_library_root_id = job.target_library_root_id
     update_embedded_comicinfo_from_match = bool(job.update_embedded_comicinfo_from_match)
     ingest_policy = await load_ingest_policy(session, job)

@@ -52,11 +52,15 @@ async def apply_confirm_import_policy(
     if search_on_add:
         job.monitored = True
 
-    if job.convert_to_preferred_format and job.transfer_method in {"hardlink", "symlink"}:
+    effective_transfer_method = job.effective_transfer_method or job.transfer_method
+    if job.convert_to_preferred_format and effective_transfer_method in {"hardlink", "symlink"}:
         raise ValidationError(
             "Normalize Imported Archives to CBZ requires the transfer method to be Move or Copy."
         )
-    if job.update_embedded_comicinfo_from_match and job.transfer_method not in {"move", "copy"}:
+    if job.update_embedded_comicinfo_from_match and effective_transfer_method not in {
+        "move",
+        "copy",
+    }:
         raise ValidationError(
             "Updating embedded ComicInfo.xml from matched issue requires the "
             "transfer method to be Move or Copy."

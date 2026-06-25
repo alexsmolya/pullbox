@@ -104,7 +104,7 @@ async def test_apply_confirm_policy_persists_ingest_defaults(
     assert job.update_embedded_comicinfo_from_match is True
 
 
-async def test_apply_confirm_policy_rejects_convert_with_link_transfer(
+async def test_apply_confirm_policy_allows_convert_with_source_preserving_collection_import(
     db_session: AsyncSession,
 ) -> None:
     db_session.add(
@@ -118,16 +118,21 @@ async def test_apply_confirm_policy_rejects_convert_with_link_transfer(
         )
     )
     await db_session.flush()
+    job = _make_job()
 
-    with pytest.raises(ValidationError, match="Normalize Imported Archives"):
-        await apply_confirm_import_policy(
-            db_session,
-            _make_job(),
-            ConfirmImportRequest(series_ids=[1]),
-        )
+    await apply_confirm_import_policy(
+        db_session,
+        job,
+        ConfirmImportRequest(series_ids=[1]),
+    )
+
+    assert job.transfer_method == "hardlink"
+    assert job.effective_transfer_method == "copy"
+    assert job.source_preserved is True
+    assert job.convert_to_preferred_format is True
 
 
-async def test_apply_confirm_policy_rejects_comicinfo_update_with_link_transfer(
+async def test_apply_confirm_policy_allows_comicinfo_update_with_source_preserving_import(
     db_session: AsyncSession,
 ) -> None:
     db_session.add(SystemConfig(key="post_processing_method", value="symlink", value_type="string"))
@@ -139,13 +144,18 @@ async def test_apply_confirm_policy_rejects_comicinfo_update_with_link_transfer(
         )
     )
     await db_session.flush()
+    job = _make_job()
 
-    with pytest.raises(ValidationError, match=r"ComicInfo\.xml"):
-        await apply_confirm_import_policy(
-            db_session,
-            _make_job(),
-            ConfirmImportRequest(
-                series_ids=[1],
-                update_embedded_comicinfo_from_match=True,
-            ),
-        )
+    await apply_confirm_import_policy(
+        db_session,
+        job,
+        ConfirmImportRequest(
+            series_ids=[1],
+            update_embedded_comicinfo_from_match=True,
+        ),
+    )
+
+    assert job.transfer_method == "symlink"
+    assert job.effective_transfer_method == "copy"
+    assert job.source_preserved is True
+    assert job.update_embedded_comicinfo_from_match is True

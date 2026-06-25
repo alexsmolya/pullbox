@@ -71,7 +71,8 @@ async def prepare_import_file(
             converted=False,
         )
 
-    if job.transfer_method not in {"move", "copy"}:
+    effective_transfer_method = job.effective_transfer_method or job.transfer_method
+    if effective_transfer_method not in {"move", "copy"}:
         raise ValidationError("CBZ normalization requires the transfer method to be Move or Copy.")
 
     temp_dir = Path(tempfile.mkdtemp(prefix="pullbox-import-convert-"))
