@@ -147,6 +147,23 @@ class TestLibraryPage:
         assert library.context_action("delete").is_visible()
         assert library.context_action("convert").count() == 0
 
+    def test_library_file_rows_use_clickable_cursor(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        library = LibraryPage(authed_page, seeded_server)
+        library.goto_path("/tmp/pullbox-e2e-library/01-batman")
+
+        file_row = library.row_text("Batman 001 (2016).cbz")
+        file_cell = file_row.locator("td").first
+        file_label = file_row.locator(".library-browser__name-label").first
+        file_row.hover()
+
+        assert file_row.evaluate("(node) => getComputedStyle(node).cursor") == "pointer"
+        assert file_cell.evaluate("(node) => getComputedStyle(node).cursor") == "pointer"
+        assert file_label.evaluate("(node) => getComputedStyle(node).cursor") == "pointer"
+
     def test_library_context_menu_shows_convert_for_convertible_files(
         self,
         authed_page,
