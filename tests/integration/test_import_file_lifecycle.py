@@ -2,7 +2,7 @@
 
 Scenarios R-A through R-F test the full scan → match → file match →
 review → confirm → import flow with file placement, conflict resolution,
-leave-in-place, renaming, manual import, and Phase 1 regression.
+source-safe copy behavior, renaming, manual import, and Phase 1 regression.
 """
 
 from __future__ import annotations
@@ -312,7 +312,7 @@ class TestFullImportWithFiles:
         db_session: AsyncSession,
         tmp_path: Path,
     ) -> None:
-        """3 series x 5 well-named files each -> all matched, moved to library."""
+        """3 series x 5 well-named files each -> all matched and copied to library."""
         comics_dir = tmp_path / "library"
         await _setup_comics_directory(db_session, comics_dir)
 
@@ -444,15 +444,15 @@ class TestFullImportWithFiles:
         library_files = lf_result.scalars().all()
         assert len(library_files) == 15
 
-        # Verify all files moved to comics directory
+        # Verify all files materialized in comics directory
         for lf in library_files:
             assert str(comics_dir) in lf.file_path
             assert Path(lf.file_path).exists()
 
-        # Verify source files are gone (moved, not copied)
-        for folder in source.iterdir():
-            for f in folder.iterdir():
-                assert not f.exists() or f.suffix != ".cbz"
+        # Collection imports preserve source folders/files so Mylar/Kapowarr/etc. stay intact.
+        source_files = [file for folder in source.iterdir() for file in folder.glob("*.cbz")]
+        assert len(source_files) == 15
+        assert all(file.exists() for file in source_files)
 
         # Verify all matched issues are OWNED
         issue_result = await db_session.execute(
@@ -1109,10 +1109,10 @@ class TestImportLeaveInPlace:
         assert issues[0].status == IssueStatus.OWNED
         assert issues[1].status == IssueStatus.OWNED
 
-    async def test_rc_wizard_import_moves_files_to_library(
+    async def test_rc_wizard_import_copies_files_to_library(
         self, db_session: AsyncSession, tmp_path: Path
     ) -> None:
-        """Wizard import moves files to library when move_to_library=True (default)."""
+        """Wizard import materializes files in library while preserving source files."""
         comics_dir = tmp_path / "library"
         await _setup_comics_directory(db_session, comics_dir)
 
@@ -1163,15 +1163,16 @@ class TestImportLeaveInPlace:
         assert job.status == ImportJobStatus.COMPLETED
         assert job.total_files_imported == 1
 
-        # File moved to comics directory
+        # File materialized in comics directory
         lf_result = await db_session.execute(sa_select(LibraryFile))
         lf = lf_result.scalars().first()
         assert lf is not None
         assert str(comics_dir) in lf.file_path
 
-        # Source file gone
+        # Source file preserved for source-safe collection imports
         source_files = list((source / "Batman (2016)").glob("*.cbz"))
-        assert len(source_files) == 0
+        assert len(source_files) == 1
+        assert source_files[0].exists()
 
 
 # ── Scenario R-D: Import with Rename ─────────────────────────────────

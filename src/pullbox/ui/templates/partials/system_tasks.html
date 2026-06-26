@@ -43,7 +43,12 @@
 
     <div x-show="!loading && scheduled.length > 0" class="section-body">
       <div class="downloads-table-wrap" data-testid="system-tasks-table">
-        <div class="overflow-x-auto">
+        <div
+          class="overflow-x-auto"
+          role="region"
+          aria-label="Scheduled tasks table"
+          tabindex="0"
+        >
           <table class="downloads-table min-w-[860px]">
             <thead>
               <tr>
