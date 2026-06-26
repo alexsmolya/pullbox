@@ -14,9 +14,10 @@ from pullbox.core.exceptions import NotFoundError
 from pullbox.core.file_ops import register_library_file
 from pullbox.core.file_safety import get_allowed_extensions
 from pullbox.core.library_policy import LibraryIngestPolicy, load_library_ingest_policy
-from pullbox.models.issue import Issue, IssueStatus
+from pullbox.models.issue import Issue
 from pullbox.models.library import LibraryFile, MatchConfidence
 from pullbox.models.series import Series
+from pullbox.services.issue_file_service import resolve_configured_utility_trash_dir
 from pullbox.utilities.comicinfo import materialize_cbz_with_comicinfo
 from pullbox.utilities.executors.file_converter import convert_file
 
@@ -73,12 +74,6 @@ async def prepare_manual_issue_import(
     issue = result.unique().scalar_one_or_none()
     if issue is None:
         raise NotFoundError("Issue", issue_id)
-
-    if issue.status == IssueStatus.OWNED and issue.library_file is not None:
-        raise ManualIssueImportError(
-            status_code=409,
-            detail="Issue already has a file imported",
-        )
 
     if move_to_library is False:
         raise ManualIssueImportError(
@@ -181,6 +176,7 @@ async def execute_manual_issue_import(
             )
         )
 
+    existing_library_file = getattr(prepared.issue, "__dict__", {}).get("library_file")
     library_file = await register_library_file(
         session,
         source_path=prepared.source_path,
@@ -195,6 +191,10 @@ async def execute_manual_issue_import(
         converter=converter,
         comicinfo_progress_callback=comicinfo_progress_callback,
         comicinfo_materializer=materialize_cbz_with_progress,
+        replace_existing_library_file=existing_library_file is not None,
+        replacement_trash_dir=await resolve_configured_utility_trash_dir(session)
+        if existing_library_file is not None
+        else None,
     )
 
     return ManualIssueImportResult(

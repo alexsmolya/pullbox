@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -39,9 +40,14 @@ def _policy() -> LibraryIngestPolicy:
     )
 
 
-def _prepared(source_path: Path) -> PreparedManualIssueImport:
+def _prepared(
+    source_path: Path,
+    *,
+    library_file: object | None = None,
+) -> PreparedManualIssueImport:
     issue = SimpleNamespace(
         series=SimpleNamespace(library_root_id=42),
+        library_file=library_file,
     )
     return PreparedManualIssueImport(
         issue=issue,  # type: ignore[arg-type]
@@ -124,19 +130,17 @@ async def test_prepare_manual_issue_import_rejects_missing_issue(
 
 
 @pytest.mark.asyncio
-async def test_prepare_manual_issue_import_rejects_already_owned_issue(
+async def test_prepare_manual_issue_import_allows_already_owned_issue_for_replacement(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ManualIssueImportError) as exc_info:
-        await _prepare(
-            monkeypatch,
-            tmp_path,
-            issue=_issue(status=IssueStatus.OWNED, library_file=object()),
-        )
+    prepared = await _prepare(
+        monkeypatch,
+        tmp_path,
+        issue=_issue(status=IssueStatus.OWNED, library_file=object()),
+    )
 
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "Issue already has a file imported"
+    assert prepared.issue_id == 123
 
 
 @pytest.mark.asyncio
@@ -268,6 +272,7 @@ async def test_execute_manual_issue_import_wires_converter_progress(
         converter = kwargs["converter"]
         assert converter is not None
         assert kwargs["library_root_id"] == 42
+        assert kwargs["replace_existing_library_file"] is True
         assert kwargs["allow_resource_safety_exception"] is True
         assert kwargs["transfer_progress_callback"] is transfer_progress
         assert kwargs["comicinfo_progress_callback"] is comicinfo_progress
@@ -291,10 +296,15 @@ async def test_execute_manual_issue_import_wires_converter_progress(
 
     monkeypatch.setattr(issue_import_service, "convert_file", fake_convert_file)
     monkeypatch.setattr(issue_import_service, "register_library_file", fake_register_library_file)
+    monkeypatch.setattr(
+        issue_import_service,
+        "resolve_configured_utility_trash_dir",
+        AsyncMock(return_value=None),
+    )
 
     result = await execute_manual_issue_import(
         object(),  # type: ignore[arg-type]
-        _prepared(source),
+        _prepared(source, library_file=object()),
         allow_resource_safety_exception=True,
         preparation_progress_callback=preparation_progress,
         transfer_progress_callback=transfer_progress,

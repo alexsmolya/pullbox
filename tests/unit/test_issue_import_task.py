@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -29,6 +30,35 @@ class _FakeSession:
 class _FakeSessionFactory:
     def __call__(self) -> _FakeSession:
         return _FakeSession()
+
+
+@pytest.mark.asyncio
+async def test_cancel_issue_import_run_marks_active_task_cancelled() -> None:
+    """Cancelling an in-flight manual import should stop the task and publish state."""
+
+    issue_import_task._issue_import_states.clear()
+    issue_import_task._issue_import_tasks.clear()
+
+    task = asyncio.create_task(asyncio.sleep(60))
+    issue_import_task._issue_import_tasks[42] = task
+    issue_import_task._issue_import_states[42] = issue_import_task.ManualFileImportProgressResponse(
+        issue_id=42,
+        state="running",
+        message="Importing selected file...",
+    )
+
+    try:
+        state = await issue_import_task.cancel_issue_import_run(42)
+
+        assert state.state == "cancelled"
+        assert state.message == "Import cancelled."
+        assert task.cancelled() or task.done()
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        issue_import_task._issue_import_tasks.clear()
+        issue_import_task._issue_import_states.clear()
 
 
 @pytest.mark.asyncio

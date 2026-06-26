@@ -14263,7 +14263,10 @@ function issueDetailPage(config) {
     coverModalUrl: "",
     searching: false,
     togglingStatus: false,
+    deletingIssueFile: false,
     importing: false,
+    cancellingImport: false,
+    importReplacementConfirmed: false,
     importModalOpen: false,
     importPollTimer: null,
     importState: "idle",
@@ -14357,6 +14360,7 @@ function issueDetailPage(config) {
       this.form.file_name = selection.name;
       this.form.file_size = selection.size || 0;
       this.form.file_ext = selection.ext || "";
+      this.importReplacementConfirmed = false;
       this.submitImport();
     },
 
@@ -14379,6 +14383,7 @@ function issueDetailPage(config) {
         completed: "Complete",
         failed: "Needs attention",
         safety_blocked: "Safety review",
+        cancelled: "Cancelled",
       };
       return labels[this.importState] || "Importing";
     },
@@ -14435,6 +14440,9 @@ function issueDetailPage(config) {
       }
       if (this.importState === "completed") {
         return "The file finished importing and the page will refresh.";
+      }
+      if (this.importState === "cancelled") {
+        return "The import was cancelled before Pullbox finished placing this file.";
       }
       return "Applying your current import settings to the selected file.";
     },
@@ -14543,6 +14551,45 @@ function issueDetailPage(config) {
           (data && data.error_message) || "Import failed.",
           "error"
         );
+        return;
+      }
+
+      if ((data && data.state) === "cancelled") {
+        this.importModalOpen = false;
+        this.dispatchToast("Import cancelled", "warning");
+      }
+    },
+
+    cancelIssueImport: async function () {
+      if (this.cancellingImport || this.importState === "completed") return;
+
+      this.cancellingImport = true;
+      this.stopImportPolling();
+
+      try {
+        var response = await fetch(cfg.importCancelUrl, {
+          method: "POST",
+          headers: { "X-CSRF-Token": this.csrfToken() },
+        });
+        if (!response.ok) {
+          var data = await response.json().catch(function () {
+            return {};
+          });
+          throw new Error(data.detail || "Failed to cancel import.");
+        }
+
+        var progress = await response.json();
+        this.applyImportProgress(progress);
+        this.importing = false;
+        this.importModalOpen = false;
+        this.dispatchToast("Import cancelled", "warning");
+      } catch (error) {
+        if (this.importState === "running") {
+          this.beginImportPolling();
+        }
+        this.dispatchToast(error.message || "Failed to cancel import.", "error");
+      } finally {
+        this.cancellingImport = false;
       }
     },
 
@@ -14554,6 +14601,20 @@ function issueDetailPage(config) {
 
     submitImport: async function () {
       if (!this.form.file_path || this.importing) return;
+
+      if (cfg.hasLibraryFile && !this.importReplacementConfirmed) {
+        var replaceConfirmed = await pbConfirm({
+          title: "Replace Issue File",
+          message:
+            "Pullbox will replace the current file for this issue using your import settings. This action cannot be rolled back.",
+          confirmText: "Replace File",
+          destructive: true,
+        });
+        if (!replaceConfirmed) {
+          return;
+        }
+        this.importReplacementConfirmed = true;
+      }
 
       this.importing = true;
       this.importModalOpen = true;
@@ -14613,6 +14674,43 @@ function issueDetailPage(config) {
       if (!this.form.file_path || this.importing) return;
       this.importAllowSafetyException = true;
       this.submitImport();
+    },
+
+    deleteIssueFile: async function () {
+      if (this.deletingIssueFile || !cfg.deleteFileUrl) return;
+
+      var confirmed = await pbConfirm({
+        title: "Delete Issue File",
+        message:
+          "This removes the linked file from your library and makes the issue importable again. This action cannot be rolled back.",
+        confirmText: "Delete File",
+        destructive: true,
+      });
+      if (!confirmed) {
+        return;
+      }
+
+      this.deletingIssueFile = true;
+      try {
+        var response = await fetch(cfg.deleteFileUrl, {
+          method: "DELETE",
+          headers: { "X-CSRF-Token": this.csrfToken() },
+        });
+        if (!response.ok) {
+          var data = await response.json().catch(function () {
+            return {};
+          });
+          throw new Error(data.detail || "Failed to delete issue file.");
+        }
+        this.dispatchToast("Issue file deleted", "success");
+        window.location.reload();
+      } catch (error) {
+        this.deletingIssueFile = false;
+        this.dispatchToast(
+          error.message || "Failed to delete issue file.",
+          "error"
+        );
+      }
     },
   });
 }

@@ -462,7 +462,12 @@ async def _run_post_processing(
         trace.seed_safe_torrent_import = (
             download.download_client.is_torrent and trace.torrent_import_strategy == "seed_safe"
         )
-        if ingest_policy.skip_existing_files and issue.library_file is not None:
+        replacing_existing_file = bool(getattr(download, "replace_existing_file", False))
+        if (
+            ingest_policy.skip_existing_files
+            and issue.library_file is not None
+            and not replacing_existing_file
+        ):
             log.info(
                 "post_processing_skipped_existing",
                 issue_id=issue.id,
@@ -501,12 +506,14 @@ async def _run_post_processing(
         dest_path = destination_plan.dest_path
         dest_dir = destination_plan.dest_dir
 
-        existing_destination = await find_existing_destination_file(
-            comic_file=comic_file,
-            dest_path=dest_path,
-            dest_dir=dest_dir,
-            log=log,
-        )
+        existing_destination = None
+        if not replacing_existing_file:
+            existing_destination = await find_existing_destination_file(
+                comic_file=comic_file,
+                dest_path=dest_path,
+                dest_dir=dest_dir,
+                log=log,
+            )
         if existing_destination is not None:
             await register_existing_destination_file(
                 session=session,
@@ -537,6 +544,8 @@ async def _run_post_processing(
 
         # 5. Transfer the file using the shared ingest engine
         method = ingest_policy.post_processing_method
+        from pullbox.services.issue_file_service import resolve_configured_utility_trash_dir
+
         dest_path = await transfer_and_register_library_file(
             session=session,
             comic_file=comic_file,
@@ -550,6 +559,9 @@ async def _run_post_processing(
             register_library_file=register_library_file,
             set_transfer_progress=_set_post_processing_transfer_progress,
             infer_effective_transfer_method=_infer_effective_post_processing_transfer_method,
+            replacement_trash_dir=await resolve_configured_utility_trash_dir(session)
+            if replacing_existing_file
+            else None,
         )
 
         # 5b. Clean up empty source directory for usenet downloads (SABnzbd/NZBGet).

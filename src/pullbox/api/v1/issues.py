@@ -19,6 +19,7 @@ from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import LibraryFile, MatchConfidence
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.schemas.issue import (
+    IssueFileDeleteResponse,
     IssueResponse,
     IssueUpdate,
     ManualFileImportProgressResponse,
@@ -33,6 +34,10 @@ from pullbox.schemas.search import (
     MatchDetails,
     RejectedResultItem,
     SearchResultItem,
+)
+from pullbox.services.issue_file_service import (
+    delete_issue_library_file,
+    resolve_configured_utility_trash_dir,
 )
 from pullbox.services.issue_import_service import (
     ManualIssueImportError,
@@ -56,6 +61,7 @@ from pullbox.services.search_service import (
 )
 from pullbox.services.search_types import SearchEvalKwargs
 from pullbox.tasks.issue_import_task import (
+    cancel_issue_import_run,
     get_issue_import_progress_state,
     start_issue_import_run,
 )
@@ -547,9 +553,13 @@ async def grab_release(
     """
     from pullbox.composition.services import build_domain_download_service
 
-    issue = await session.get(Issue, issue_id)
+    issue_result = await session.execute(
+        select(Issue).options(joinedload(Issue.library_file)).where(Issue.id == issue_id)
+    )
+    issue = issue_result.unique().scalar_one_or_none()
     if not issue:
         raise NotFoundError("Issue", issue_id)
+    replace_existing_file = issue.library_file is not None
 
     built = await build_domain_download_service(session)
     if built is None:
@@ -567,6 +577,7 @@ async def grab_release(
         indexer_name=body.indexer_name,
         is_torrent=body.is_torrent,
         file_size=body.file_size,
+        replace_existing_file=replace_existing_file,
     )
     if download.state == DownloadState.FAILED:
         detail = download.error_message or "Download client rejected the release."
@@ -779,6 +790,7 @@ async def import_file_for_issue(
             file_path=body.file_path,
             move_to_library=body.move_to_library,
         )
+        existing_library_file = getattr(prepared.issue, "__dict__", {}).get("library_file")
         library_file = await register_library_file(
             session,
             source_path=prepared.source_path,
@@ -789,6 +801,10 @@ async def import_file_for_issue(
             loaded_issue=prepared.issue,
             ingest_policy=prepared.ingest_policy,
             allow_resource_safety_exception=body.allow_resource_safety_exception,
+            replace_existing_library_file=existing_library_file is not None,
+            replacement_trash_dir=await resolve_configured_utility_trash_dir(session)
+            if existing_library_file is not None
+            else None,
         )
     except ManualIssueImportError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
@@ -816,6 +832,33 @@ async def import_file_for_issue(
     )
 
 
+@router.delete(
+    "/{issue_id}/file",
+    response_model=IssueFileDeleteResponse,
+)
+async def delete_file_for_issue(
+    issue_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> IssueFileDeleteResponse:
+    """Delete or trash the library file linked to an issue."""
+    result = await delete_issue_library_file(session, issue_id)
+    logger.info(
+        "issue_file_deleted",
+        issue_id=result.issue_id,
+        status=result.status.value,
+        file_deleted=result.file_deleted,
+        trashed=result.trashed,
+    )
+    return IssueFileDeleteResponse(
+        issue_id=result.issue_id,
+        status=result.status,
+        file_deleted=result.file_deleted,
+        trashed=result.trashed,
+        trash_path=str(result.trash_path) if result.trash_path is not None else None,
+    )
+
+
 @router.post(
     "/{issue_id}/import-file/start",
     status_code=202,
@@ -828,6 +871,18 @@ async def start_import_file_for_issue(
 ) -> ManualFileImportProgressResponse:
     """Start a background manual import for the issue-detail UI."""
     return await start_issue_import_run(issue_id, body)
+
+
+@router.post(
+    "/{issue_id}/import-file/cancel",
+    response_model=ManualFileImportProgressResponse,
+)
+async def cancel_import_file_for_issue(
+    issue_id: int,
+    _user: AuthenticatedUser,
+) -> ManualFileImportProgressResponse:
+    """Cancel a background manual import for the issue-detail UI."""
+    return await cancel_issue_import_run(issue_id)
 
 
 @router.get(

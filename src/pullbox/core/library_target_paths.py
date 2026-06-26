@@ -39,6 +39,8 @@ async def resolve_library_target_path(
     root: LibraryRoot,
     ingest_policy: LibraryIngestPolicy,
     rename: bool,
+    *,
+    replace_existing_path: Path | None = None,
 ) -> ResolvedLibraryTarget:
     """Resolve the final library path before materializing the artifact."""
     target_path = await predict_library_target_path(
@@ -59,7 +61,10 @@ async def resolve_library_target_path(
     series_folder_created = not series_folder.exists()
     await asyncio.to_thread(series_folder.mkdir, parents=True, exist_ok=True)
 
-    if target_path.exists() and target_path != source_path:
+    target_is_replaceable = replace_existing_path is not None and target_path.resolve(
+        strict=False
+    ) == replace_existing_path.resolve(strict=False)
+    if target_path.exists() and target_path != source_path and not target_is_replaceable:
         stem = target_path.stem
         suffix = target_path.suffix
         counter = 1
