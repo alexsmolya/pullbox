@@ -436,7 +436,7 @@ class TestSystemPage:
                             {
                                 "task_id": "refresh_metadata",
                                 "name": "Refresh Metadata",
-                                "interval": "cron[hour='3', minute='0']",
+                                "interval": "cron[hour='3', minute='15']",
                                 "next_run_time": "2026-04-21T12:00:00+00:00",
                                 "last_execution": "2026-04-21T05:21:16+00:00",
                                 "last_duration_seconds": 0.21,

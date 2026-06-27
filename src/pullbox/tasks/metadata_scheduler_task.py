@@ -23,6 +23,7 @@ async def scheduled_sync_new_issues() -> None:
     trigger="cron",
     display_name="Refresh Metadata",
     hour=3,
+    minute=15,
 )
 async def scheduled_refresh_metadata() -> None:
     """Run the stale-series metadata refresh on its nightly cadence."""

@@ -5,7 +5,7 @@ Two scheduled tasks:
   ComicVine-backed series, creates new Issue records, and refreshes stale
   series metadata changes (status, description, publisher).  When new issues
   are set to WANTED by monitoring criteria, a one-shot search is scheduled.
-- ``refresh_metadata`` (cron, default 03:00) — re-fetches series metadata
+- ``refresh_metadata`` (cron, default 03:15) — re-fetches series metadata
   when it exceeds the configured staleness threshold.
 """
 
