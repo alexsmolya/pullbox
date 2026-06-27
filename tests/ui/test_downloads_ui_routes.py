@@ -495,6 +495,7 @@ class TestDownloadsRouteContracts:
         assert "tooltip-wrap" in response.text
         assert "data-tooltip-auto" in response.text
         assert "data-tooltip-measure" in response.text
+        assert 'hx-boost="false" class="downloads-issue-link"' in response.text
         assert 'data-testid="downloads-history-sort-title"' in response.text
         assert 'data-testid="downloads-history-sort-issue"' in response.text
         assert 'data-testid="downloads-history-sort-status"' in response.text
