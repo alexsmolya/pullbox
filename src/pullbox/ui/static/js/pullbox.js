@@ -12986,6 +12986,7 @@ function interventionPage() {
   return {
     selectedIds: [],
     toolbarMode: "browse",
+    bulkActionBusy: null,
     selectAllMatchingBusy: false,
     totalMatchingCount: Number(cfg.totalMatchingCount || 0),
     selectionFilterSignature: "",
@@ -13276,12 +13277,12 @@ function interventionPage() {
 
       var approveButton = document.querySelector("[data-testid='intervention-bulk-approve']");
       if (approveButton) {
-        approveButton.disabled = this.selectedIds.length === 0;
+        approveButton.disabled = Boolean(this.bulkActionBusy) || this.selectedIds.length === 0;
       }
 
       var rejectButton = document.querySelector("[data-testid='intervention-bulk-reject']");
       if (rejectButton) {
-        rejectButton.disabled = this.selectedIds.length === 0;
+        rejectButton.disabled = Boolean(this.bulkActionBusy) || this.selectedIds.length === 0;
       }
     },
 
