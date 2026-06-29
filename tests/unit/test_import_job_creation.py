@@ -60,6 +60,9 @@ async def test_create_job_uses_global_search_on_add_and_logs_event(
     assert job.progress_snapshot["phase"] == "inventory"
     assert job.ingest_policy_snapshot["post_processing_method"] == "move"
     assert "comic_file_template" in job.ingest_policy_snapshot
+    assert job.transfer_method == "move"
+    assert job.effective_transfer_method == "copy"
+    assert job.source_preserved is True
     assert events == [
         (
             "import_job_created",

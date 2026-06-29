@@ -298,6 +298,11 @@ class TestDashboardRouteContracts:
         assert 'data-testid="dashboard-download-exception-sys-led"' in response.text
         assert 'data-testid="dashboard-downloads-panel"' not in response.text
         assert 'data-testid="dashboard-recent-activity"' in response.text
+        assert 'data-testid="dashboard-recent-outcomes-table"' in response.text
+        assert response.text.count('class="dashboard-table-wrap"') >= 3
+        assert response.text.count('class="dashboard-table"') >= 3
+        assert "dashboard-activity-card" not in response.text
+        assert "dashboard-activity-row" not in response.text
         assert "Recent Outcomes" in response.text
         assert "Automated search found" not in response.text
         assert "hit a download failure" not in response.text
@@ -434,6 +439,11 @@ class TestDashboardRouteContracts:
 
         assert recent_response.status_code == 200
         assert 'data-testid="dashboard-recent-activity"' in recent_response.text
+        assert 'data-testid="dashboard-recent-outcomes-table"' in recent_response.text
+        assert 'class="dashboard-table-wrap"' in recent_response.text
+        assert 'class="dashboard-table"' in recent_response.text
+        assert "dashboard-activity-card" not in recent_response.text
+        assert "dashboard-activity-row" not in recent_response.text
         assert "Recent Outcomes" in recent_response.text
         assert "Automated search found" not in recent_response.text
         assert 'data-testid="dashboard-page"' not in recent_response.text

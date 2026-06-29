@@ -67,11 +67,21 @@ class ManualFileImportResponse(BaseModel):
     match_confidence: str
 
 
+class IssueFileDeleteResponse(BaseModel):
+    """Response after deleting or trashing the library file linked to an issue."""
+
+    issue_id: int
+    status: IssueStatus
+    file_deleted: bool
+    trashed: bool
+    trash_path: str | None = None
+
+
 class ManualFileImportProgressResponse(BaseModel):
     """Live progress snapshot for background manual issue import."""
 
     issue_id: int
-    state: Literal["idle", "running", "completed", "failed", "safety_blocked"] = "idle"
+    state: Literal["idle", "running", "completed", "failed", "safety_blocked", "cancelled"] = "idle"
     message: str = ""
     current_file_name: str | None = None
     current_file_stage: str | None = None

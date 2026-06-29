@@ -121,7 +121,10 @@ async def cancel_job(
         ImportJobStatus.ROLLED_BACK,
     }
 
-    if job.status == ImportJobStatus.PAUSED and job.import_started_at is None:
+    if (
+        job.status in {ImportJobStatus.PAUSED, ImportJobStatus.STALLED}
+        and job.import_started_at is None
+    ):
         await session.delete(job)
         await session.flush()
         return "deleted"
@@ -206,12 +209,12 @@ async def resume_job(
     *,
     log_event: ImportEventLogger,
 ) -> ImportJob:
-    """Resume a paused import from its last safe checkpoint."""
+    """Resume a paused or stalled import from its last safe checkpoint."""
     job = await session.get(ImportJob, job_id)
     if job is None:
         raise NotFoundError("ImportJob", job_id)
 
-    if job.status != ImportJobStatus.PAUSED:
+    if job.status not in {ImportJobStatus.PAUSED, ImportJobStatus.STALLED}:
         raise ValidationError(f"Cannot resume job in {job.status} state")
 
     phase = str((job.progress_snapshot or {}).get("phase") or "")
@@ -266,13 +269,19 @@ async def request_cancel(
     if job is None:
         raise NotFoundError("ImportJob", job_id)
 
-    if job.status == ImportJobStatus.PAUSED and job.import_started_at is None:
+    if (
+        job.status in {ImportJobStatus.PAUSED, ImportJobStatus.STALLED}
+        and job.import_started_at is None
+    ):
         await session.delete(job)
         await session.flush()
         return job
 
     def _apply_cancel(target: ImportJob) -> None:
-        if target.status == ImportJobStatus.PAUSED and target.import_started_at is not None:
+        if (
+            target.status in {ImportJobStatus.PAUSED, ImportJobStatus.STALLED}
+            and target.import_started_at is not None
+        ):
             target.status = ImportJobStatus.ROLLING_BACK
             target.control_request = ImportControlRequest.CANCEL
         elif target.status in {

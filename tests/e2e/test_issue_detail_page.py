@@ -329,6 +329,104 @@ class TestIssueDetailPage:
         assert authed_page.locator("[data-testid='issue-import-progress-bar']").first.is_visible()
         assert authed_page.locator("[data-testid='issue-import-progress-value']").first.is_visible()
 
+    def test_manual_import_cancel_posts_cancel_and_closes_modal(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(2)
+
+        authed_page.route(
+            "**/api/v1/filesystem/browse?**",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "path": "/tmp/imports",
+                        "parent": "/tmp",
+                        "directories": [],
+                        "files": [
+                            {
+                                "name": "Batman 002.cbz",
+                                "path": "/tmp/imports/Batman 002.cbz",
+                                "size": 52428800,
+                            }
+                        ],
+                        "quick_links": [],
+                    }
+                ),
+            ),
+        )
+        authed_page.route(
+            "**/api/v1/issues/2/import-file/start",
+            lambda route: route.fulfill(
+                status=202,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "issue_id": 2,
+                        "state": "running",
+                        "message": "Preparing import...",
+                        "current_file_name": "Batman 002.cbz",
+                        "current_file_stage": "preparing",
+                        "current_file_progress_current": 0,
+                        "current_file_progress_total": 1,
+                        "current_file_progress_pct": 0,
+                        "current_file_progress_unit": "steps",
+                        "file_index": 1,
+                        "total_files": 1,
+                    }
+                ),
+            ),
+        )
+        authed_page.route(
+            "**/api/v1/issues/2/import-file/progress",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "issue_id": 2,
+                        "state": "running",
+                        "message": "Importing selected file...",
+                        "current_file_name": "Batman 002.cbz",
+                        "current_file_stage": "transferring",
+                        "current_file_progress_current": 26214400,
+                        "current_file_progress_total": 52428800,
+                        "current_file_progress_pct": 50,
+                        "current_file_progress_unit": "bytes",
+                        "file_index": 1,
+                        "total_files": 1,
+                    }
+                ),
+            ),
+        )
+        authed_page.route(
+            "**/api/v1/issues/2/import-file/cancel",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "issue_id": 2,
+                        "state": "cancelled",
+                        "message": "Import cancelled.",
+                    }
+                ),
+            ),
+        )
+
+        issue.open_import_file_browser()
+        authed_page.locator("[data-testid='file-browser-file-entry']").first.click()
+        issue.import_modal.wait_for(state="visible", timeout=5000)
+
+        with authed_page.expect_request("**/api/v1/issues/2/import-file/cancel"):
+            authed_page.locator("[data-testid='issue-import-cancel']").click()
+
+        issue.import_modal.wait_for(state="hidden", timeout=5000)
+
     def test_manual_search_block_posts_to_blocklist(
         self,
         authed_page,

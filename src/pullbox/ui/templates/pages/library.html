@@ -236,6 +236,7 @@
                 {% for row in library_view.browser_rows %}
                   <tr
                     data-testid="library-browser-row-{{ loop.index }}"
+                    class="library-browser__table-row{% if not row.is_folder %} library-browser__table-row--file cursor-pointer{% endif %}"
                     data-entry-name="{{ row.name }}"
                     data-entry-path="{{ row.path }}"
                     data-entry-kind="{{ row.kind }}"
@@ -260,7 +261,7 @@
                         {% if row.is_folder %}
                           <a href="{{ row.href }}" class="library-browser__name-label library-browser__name-label--folder">{{ row.name }}</a>
                         {% else %}
-                          <span class="library-browser__name-label">{{ row.name }}</span>
+                          <span class="library-browser__name-label cursor-pointer">{{ row.name }}</span>
                         {% endif %}
                       </div>
                     </td>

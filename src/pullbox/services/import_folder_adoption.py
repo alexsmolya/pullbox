@@ -185,7 +185,8 @@ async def apply_import_series_folder_adoption(
 def _folder_adoption_enabled(job: ImportJob, ingest_policy: LibraryIngestPolicy) -> bool:
     if not job.move_to_library:
         return False
-    if str(job.transfer_method or "").lower() != "move":
+    transfer_method = job.effective_transfer_method or job.transfer_method
+    if str(transfer_method or "").lower() != "move":
         return False
     return bool(getattr(ingest_policy, "rename_on_import", False))
 

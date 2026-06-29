@@ -7,14 +7,22 @@ from datetime import UTC, datetime, timedelta
 from pullbox.services.import_progress_runtime import (
     ImportProgressFileProfile,
     ImportProgressSettings,
+    ScanReviewFileMatchProfile,
+    ScanReviewSeriesMatchProfile,
     current_item_payload,
     default_phase_message,
     elapsed_seconds_since,
+    estimate_remaining_work_seconds,
     import_group_file_progress_pct,
     import_group_metadata_progress_pct,
     import_group_progress_plan,
     phase_label,
     phase_range,
+    scan_review_completed_weight,
+    scan_review_file_target_weight,
+    scan_review_progress_pct,
+    scan_review_progress_plan,
+    scan_review_series_match_weight,
     stage_label,
     weighted_import_progress_pct,
 )
@@ -60,6 +68,105 @@ def test_elapsed_seconds_since_uses_wall_clock_runtime() -> None:
     assert elapsed is not None
     assert 40 <= elapsed <= 45
     assert elapsed_seconds_since(None) is None
+
+
+def test_estimate_remaining_work_seconds_uses_total_units() -> None:
+    started_at = datetime.now(UTC) - timedelta(seconds=20)
+
+    remaining = estimate_remaining_work_seconds(
+        started_at,
+        completed_units=5,
+        total_units=20,
+    )
+
+    assert remaining is not None
+    assert 55 <= remaining <= 65
+
+
+def test_estimate_remaining_work_seconds_counts_current_unit_progress() -> None:
+    started_at = datetime.now(UTC) - timedelta(seconds=20)
+
+    remaining = estimate_remaining_work_seconds(
+        started_at,
+        completed_units=0,
+        total_units=10,
+        current_unit_progress_pct=50,
+    )
+
+    assert remaining is not None
+    assert 370 <= remaining <= 390
+
+
+def test_estimate_remaining_work_seconds_omits_unstable_values() -> None:
+    started_at = datetime.now(UTC) - timedelta(seconds=20)
+
+    assert estimate_remaining_work_seconds(None, completed_units=5, total_units=20) is None
+    assert (
+        estimate_remaining_work_seconds(
+            datetime.now(UTC),
+            completed_units=5,
+            total_units=20,
+        )
+        is None
+    )
+    assert estimate_remaining_work_seconds(started_at, completed_units=0, total_units=20) is None
+    assert estimate_remaining_work_seconds(started_at, completed_units=20, total_units=20) is None
+    assert estimate_remaining_work_seconds(started_at, completed_units=5, total_units=0) is None
+
+
+def test_scan_review_plan_weights_large_issue_catalogs() -> None:
+    small = ScanReviewFileMatchProfile(file_count=1, issue_count=12)
+    giant = ScanReviewFileMatchProfile(file_count=1, issue_count=2_800)
+
+    assert scan_review_file_target_weight(giant) > scan_review_file_target_weight(small) * 4
+
+
+def test_scan_review_plan_weights_direct_series_matches_lower() -> None:
+    direct = ScanReviewSeriesMatchProfile(file_count=1, direct_match=True)
+    searched = ScanReviewSeriesMatchProfile(file_count=1, direct_match=False)
+
+    assert scan_review_series_match_weight(direct) < scan_review_series_match_weight(searched)
+
+
+def test_scan_review_progress_scales_post_scan_work() -> None:
+    plan = scan_review_progress_plan(
+        analysis_series_count=2,
+        series_match_profiles=[
+            ScanReviewSeriesMatchProfile(file_count=1, direct_match=False),
+            ScanReviewSeriesMatchProfile(file_count=2, direct_match=True),
+        ],
+        file_match_profiles=[
+            ScanReviewFileMatchProfile(file_count=1, issue_count=12),
+            ScanReviewFileMatchProfile(file_count=2, issue_count=2_800),
+        ],
+    )
+
+    after_analysis = scan_review_completed_weight(
+        plan,
+        phase="analyzing",
+        completed_items=2,
+    )
+    after_first_series_match = scan_review_completed_weight(
+        plan,
+        phase="matching",
+        completed_items=1,
+    )
+    first_file_match_started = scan_review_completed_weight(
+        plan,
+        phase="file_matching",
+        completed_items=0,
+        current_item_progress_pct=0,
+    )
+
+    assert scan_review_progress_pct(plan, completed_weight=0) == 35
+    assert (
+        35
+        < scan_review_progress_pct(plan, completed_weight=after_analysis)
+        < scan_review_progress_pct(plan, completed_weight=after_first_series_match)
+        < scan_review_progress_pct(plan, completed_weight=first_file_match_started)
+        < 99
+    )
+    assert scan_review_progress_pct(plan, completed_weight=plan.total_weight) == 99
 
 
 def test_weighted_import_progress_prioritizes_large_conversion_work() -> None:

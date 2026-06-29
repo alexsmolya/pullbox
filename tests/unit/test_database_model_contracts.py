@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from sqlalchemy import DateTime, Integer
 from sqlalchemy import Enum as SQLAlchemyEnum
 
 from pullbox.models import Base
 from pullbox.models.base import UTCDateTime
+from pullbox.models.import_job import ImportJobStatus
+
+MIGRATION_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 
 IDENTITY_EXCEPTIONS = {
     "IssueCreator",  # association table with composite primary key
@@ -92,6 +98,32 @@ def test_runtime_enum_columns_use_python_enum_classes() -> None:
                 offenders.append(f"{model.__name__}.{column.name}")
 
     assert offenders == []
+
+
+def test_import_job_status_enum_values_are_covered_by_migrations() -> None:
+    """PostgreSQL native enum migrations must include every ImportJobStatus member."""
+    migration_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in MIGRATION_DIR.glob("*.py")
+    )
+    created_statuses = set()
+    for enum_definition in re.findall(
+        r"sa\.Enum\((.*?)name=\"importjobstatus\"",
+        migration_text,
+        flags=re.DOTALL,
+    ):
+        created_statuses.update(re.findall(r'"([A-Z_]+)"', enum_definition))
+
+    added_statuses = set(
+        re.findall(
+            r"ALTER TYPE importjobstatus ADD VALUE IF NOT EXISTS '([^']+)'",
+            migration_text,
+        )
+    )
+
+    migration_statuses = created_statuses | added_statuses
+    missing_statuses = {member.name for member in ImportJobStatus} - migration_statuses
+
+    assert missing_statuses == set()
 
 
 def test_foreign_keys_define_delete_behavior() -> None:

@@ -13,6 +13,7 @@
     data-testid="intervention-page"
     data-select-toolbar-page="true"
     :data-toolbar-mode="toolbarMode"
+    :data-intervention-bulk-busy="bulkActionBusy ? 'true' : 'false'"
     class="series-page-shell"
     x-data="interventionPage({ csrfToken: '{{ csrf_token }}' })"
   >

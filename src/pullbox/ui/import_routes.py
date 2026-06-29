@@ -121,11 +121,12 @@ def _can_resume_collection_job(job: ImportJob, requested_step: int | None) -> bo
         return job.status in {
             ImportJobStatus.IMPORTING,
             ImportJobStatus.PAUSED,
+            ImportJobStatus.STALLED,
             ImportJobStatus.CANCELLING,
             ImportJobStatus.ROLLING_BACK,
             ImportJobStatus.COMPLETED,
             ImportJobStatus.FAILED,
-        }
+        } and (job.status != ImportJobStatus.STALLED or job.import_started_at is not None)
     if step == 3:
         return job.status == ImportJobStatus.REVIEW and job.import_started_at is None
     if step == 2:
@@ -139,6 +140,7 @@ def _can_resume_collection_job(job: ImportJob, requested_step: int | None) -> bo
                 ImportJobStatus.ANALYZING,
                 ImportJobStatus.MATCHING,
                 ImportJobStatus.FILE_MATCHING,
+                ImportJobStatus.STALLED,
                 ImportJobStatus.REVIEW,
             }
             and job.import_started_at is None

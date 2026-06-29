@@ -90,6 +90,25 @@ class TestUtilitiesRouteContracts:
         assert 'href="/utilities/permissions"' in response.text
         assert 'data-testid="utilities-overview-card-permissions"' in response.text
 
+    async def test_utilities_bulk_tools_use_bulk_action_badges(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        overview_response = await authenticated_client.get("/utilities")
+        mass_convert_response = await authenticated_client.get("/utilities/mass-convert")
+        mass_rename_response = await authenticated_client.get("/utilities/mass-rename")
+
+        assert overview_response.status_code == 200
+        assert mass_convert_response.status_code == 200
+        assert mass_rename_response.status_code == 200
+        assert (
+            overview_response.text.count('<span class="utility-launch-tag">Bulk Action</span>') == 2
+        )
+        assert "Batch convert to CBZ with ComicInfo embedding" in mass_convert_response.text
+        assert "Apply naming rules with auto-preview" in mass_rename_response.text
+        assert mass_convert_response.text.count("Bulk Action") == 1
+        assert mass_rename_response.text.count("Bulk Action") == 1
+
     async def test_utilities_hx_tab_switch_returns_content_bundle(
         self,
         authenticated_client,

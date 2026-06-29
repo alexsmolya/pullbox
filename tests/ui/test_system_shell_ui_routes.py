@@ -231,6 +231,9 @@ class TestSystemRouteContracts:
 
         assert 'data-testid="system-tasks-table"' in tasks.text
         assert 'class="downloads-table-wrap"' in tasks.text
+        assert 'role="region"' in tasks.text
+        assert 'aria-label="Scheduled tasks table"' in tasks.text
+        assert 'tabindex="0"' in tasks.text
         assert 'class="downloads-table min-w-[860px]"' in tasks.text
         assert 'class="downloads-action-group is-hover-reveal justify-end"' in tasks.text
         assert 'data-tip="Run now"' in tasks.text

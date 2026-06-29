@@ -901,7 +901,7 @@ class TestImportExecutionAutoflushDiscipline:
         assert all(call["update_embedded_comicinfo_from_match"] is True for call in seen_kwargs)
 
     @pytest.mark.asyncio
-    async def test_series_file_processing_adopts_source_folder_under_library_root(
+    async def test_source_preserving_series_file_processing_does_not_adopt_source_folder(
         self,
         db_session: AsyncSession,
         tmp_path: Path,
@@ -943,6 +943,8 @@ class TestImportExecutionAutoflushDiscipline:
             target_library_root_id=root.id,
             move_to_library=True,
             transfer_method="move",
+            effective_transfer_method="copy",
+            source_preserved=True,
         )
         db_session.add_all([issue, job])
         await db_session.flush()
@@ -993,10 +995,11 @@ class TestImportExecutionAutoflushDiscipline:
             confidence: MatchConfidence,
             **_kwargs: object,
         ) -> LibraryFile:
-            assert source == target_folder / "Batman 001.cbz"
+            assert source == source_path
+            assert _kwargs["transfer_method"] == "copy"
             library_file = LibraryFile(
-                file_path=str(source),
-                file_name=source.name,
+                file_path=str(target_folder / "Batman 001.cbz"),
+                file_name="Batman 001.cbz",
                 file_size=source.stat().st_size,
                 file_format=FileFormat.CBZ,
                 file_modified_at=datetime.now(tz=UTC),
@@ -1031,10 +1034,12 @@ class TestImportExecutionAutoflushDiscipline:
 
         assert files_imported == 1
         assert files_failed == 0
-        assert not source_folder.exists()
-        assert (target_folder / "series.json").exists()
-        assert imp_file.file_path == str(target_folder / "Batman 001.cbz")
-        assert record_action.await_args_list[0].kwargs["action_type"] == "series_folder_renamed"
+        assert source_folder.exists()
+        assert (source_folder / "series.json").exists()
+        assert imp_file.file_path == str(source_path)
+        assert [call.kwargs["action_type"] for call in record_action.await_args_list] == [
+            "library_file_registered"
+        ]
 
     @pytest.mark.asyncio
     async def test_import_logs_conversion_comicinfo_and_final_destination_name(

@@ -11,6 +11,8 @@ from pullbox.utilities.comicinfo import embed_comicinfo_in_cbz, materialize_cbz_
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 
 def _write_cbz(path: Path, comicinfo_xml: str) -> None:
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -222,6 +224,49 @@ def test_materialize_cbz_with_comicinfo_writes_target_in_one_pass(tmp_path: Path
     assert root.findtext("Series") == "New Series"
     assert root.findtext("Number") == "1"
     assert root.find("Pages") is not None
+
+
+def test_materialize_cbz_with_comicinfo_reports_transfer_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.cbz"
+    target = tmp_path / "library" / "target.cbz"
+    progress_events: list[tuple[str, int, int, str]] = []
+    monkeypatch.setattr("pullbox.utilities.comicinfo._COMICINFO_MATERIALIZE_CHUNK_SIZE", 4)
+    with zipfile.ZipFile(source, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("page001.jpg", b"first-page")
+        archive.writestr("page002.jpg", b"second-page")
+        archive.writestr("<ComicInfo.xml>", b"not the real metadata member")
+        archive.writestr("ComicInfo.xml", "<ComicInfo><Series>Old</Series></ComicInfo>")
+
+    changed = materialize_cbz_with_comicinfo(
+        source,
+        target,
+        {"Series": "New Series", "Number": "1"},
+        transfer_method="copy",
+        progress_callback=lambda stage, current, total, unit: progress_events.append(
+            (stage, current, total, unit)
+        ),
+    )
+
+    assert changed is True
+    assert source.exists()
+    assert target.exists()
+    transfer_events = [event for event in progress_events if event[0] == "transferring"]
+    assert transfer_events[0] == ("transferring", 0, 49, "bytes")
+    assert transfer_events[-1] == ("transferring", 49, 49, "bytes")
+    assert any(0 < current < total for _stage, current, total, _unit in transfer_events)
+    assert progress_events[-1] == ("rewriting", 1, 1, "entries")
+    with zipfile.ZipFile(target, "r") as archive:
+        names = archive.namelist()
+        xml_content = archive.read("ComicInfo.xml").decode("utf-8")
+    root = ET.fromstring(xml_content)
+    assert names.count("ComicInfo.xml") == 1
+    assert "page001.jpg" in names
+    assert "page002.jpg" in names
+    assert "<ComicInfo.xml>" in names
+    assert root.findtext("Series") == "New Series"
 
 
 def test_materialize_cbz_with_comicinfo_move_deletes_source_after_success(

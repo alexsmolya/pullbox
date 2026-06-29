@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -39,9 +40,14 @@ def _policy() -> LibraryIngestPolicy:
     )
 
 
-def _prepared(source_path: Path) -> PreparedManualIssueImport:
+def _prepared(
+    source_path: Path,
+    *,
+    library_file: object | None = None,
+) -> PreparedManualIssueImport:
     issue = SimpleNamespace(
         series=SimpleNamespace(library_root_id=42),
+        library_file=library_file,
     )
     return PreparedManualIssueImport(
         issue=issue,  # type: ignore[arg-type]
@@ -124,19 +130,17 @@ async def test_prepare_manual_issue_import_rejects_missing_issue(
 
 
 @pytest.mark.asyncio
-async def test_prepare_manual_issue_import_rejects_already_owned_issue(
+async def test_prepare_manual_issue_import_allows_already_owned_issue_for_replacement(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ManualIssueImportError) as exc_info:
-        await _prepare(
-            monkeypatch,
-            tmp_path,
-            issue=_issue(status=IssueStatus.OWNED, library_file=object()),
-        )
+    prepared = await _prepare(
+        monkeypatch,
+        tmp_path,
+        issue=_issue(status=IssueStatus.OWNED, library_file=object()),
+    )
 
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "Issue already has a file imported"
+    assert prepared.issue_id == 123
 
 
 @pytest.mark.asyncio
@@ -268,9 +272,11 @@ async def test_execute_manual_issue_import_wires_converter_progress(
         converter = kwargs["converter"]
         assert converter is not None
         assert kwargs["library_root_id"] == 42
+        assert kwargs["replace_existing_library_file"] is True
         assert kwargs["allow_resource_safety_exception"] is True
         assert kwargs["transfer_progress_callback"] is transfer_progress
         assert kwargs["comicinfo_progress_callback"] is comicinfo_progress
+        assert kwargs["comicinfo_materializer"] is not None
         await converter(
             kwargs["source_path"],
             "cbz",
@@ -290,10 +296,15 @@ async def test_execute_manual_issue_import_wires_converter_progress(
 
     monkeypatch.setattr(issue_import_service, "convert_file", fake_convert_file)
     monkeypatch.setattr(issue_import_service, "register_library_file", fake_register_library_file)
+    monkeypatch.setattr(
+        issue_import_service,
+        "resolve_configured_utility_trash_dir",
+        AsyncMock(return_value=None),
+    )
 
     result = await execute_manual_issue_import(
         object(),  # type: ignore[arg-type]
-        _prepared(source),
+        _prepared(source, library_file=object()),
         allow_resource_safety_exception=True,
         preparation_progress_callback=preparation_progress,
         transfer_progress_callback=transfer_progress,
@@ -311,6 +322,88 @@ async def test_execute_manual_issue_import_wires_converter_progress(
             "target_path": destination,
             "progress_callback": preparation_progress,
             "allow_resource_safety_exception": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_manual_issue_import_wires_threaded_comicinfo_materializer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.cbz"
+    target = tmp_path / "target.cbz"
+    source.write_bytes(b"cbz")
+    materialize_calls: list[dict[str, Any]] = []
+    progress_calls: list[tuple[str, int, int, str]] = []
+
+    def fake_materialize_cbz_with_comicinfo(
+        source_path: Path,
+        target_path: Path,
+        payload: dict[str, Any],
+        *,
+        transfer_method: str,
+        progress_callback: Any = None,
+    ) -> bool:
+        materialize_calls.append(
+            {
+                "source_path": source_path,
+                "target_path": target_path,
+                "payload": payload,
+                "transfer_method": transfer_method,
+                "progress_callback": progress_callback,
+            }
+        )
+        assert progress_callback is comicinfo_progress
+        progress_callback("transferring", 5, 10, "bytes")
+        progress_callback("rewriting", 1, 1, "entries")
+        return True
+
+    async def fake_register_library_file(
+        _session: object,
+        **kwargs: Any,
+    ) -> object:
+        materializer = kwargs["comicinfo_materializer"]
+        assert materializer is not None
+        changed = await materializer(
+            kwargs["source_path"],
+            target,
+            {"Series": "Aliens Epic Collection"},
+            transfer_method="move",
+            progress_callback=kwargs["comicinfo_progress_callback"],
+        )
+        assert changed is True
+        return SimpleNamespace(id=100)
+
+    def comicinfo_progress(stage: str, current: int, total: int, unit: str) -> None:
+        progress_calls.append((stage, current, total, unit))
+
+    monkeypatch.setattr(
+        issue_import_service,
+        "materialize_cbz_with_comicinfo",
+        fake_materialize_cbz_with_comicinfo,
+    )
+    monkeypatch.setattr(issue_import_service, "register_library_file", fake_register_library_file)
+
+    result = await execute_manual_issue_import(
+        object(),  # type: ignore[arg-type]
+        _prepared(source),
+        comicinfo_progress_callback=comicinfo_progress,
+    )
+
+    assert result.issue_id == 123
+    assert result.library_file.id == 100
+    assert progress_calls == [
+        ("transferring", 5, 10, "bytes"),
+        ("rewriting", 1, 1, "entries"),
+    ]
+    assert materialize_calls == [
+        {
+            "source_path": source,
+            "target_path": target,
+            "payload": {"Series": "Aliens Epic Collection"},
+            "transfer_method": "move",
+            "progress_callback": comicinfo_progress,
         }
     ]
 

@@ -23,6 +23,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.0] - 2026-06-29
+
+The first stable release. Pullbox 1.0 is a complete, self-hosted comic library
+manager: pull list automation, weekly release discovery, a matching engine built
+for how comics actually get named, and the operational depth to run unattended
+on your server.
+
+### Library & Collection
+
+- Series management with eleven distinct series types, including annuals, trade
+  paperbacks, omnibuses, hardcovers, one-shots, and more, so collections
+  organize the way comics actually work.
+- Pull list monitoring: mark a series monitored and new issues are searched,
+  grabbed, and filed automatically.
+- Review-first collection import: scan a folder, match against ComicVine,
+  resolve conflicts and duplicates explicitly, then import with full rollback.
+- Mylar3 importer: reads a Mylar3 database strictly read-only, preserves its
+  ComicVine matches as high-confidence imports, and preserves external source
+  folders during import.
+- File-level tracking with naming templates per series type, configurable
+  transfer methods, and ComicInfo.xml metadata writing.
+
+### Acquisition
+
+- Five download clients with full lifecycle management: SABnzbd, NZBGet,
+  qBittorrent, Transmission, and Deluge.
+- Indexer support: Prowlarr integration plus direct Newznab and Torznab
+  connections, with health checks and per-indexer priority.
+- Matching engine: a three-stage parse, match, validate pipeline developed
+  against a corpus of more than 20,000 real-world release names, with an
+  intervention queue for ambiguous matches instead of silent wrong grabs.
+- Universal blocklist across all client types, with configurable expiry,
+  wildcard release-group patterns, and per-series clearing.
+- Two-pass search with configurable thresholds, size guardrails, scoring
+  weights, and ignored-phrase filters.
+
+### Weekly Release Discovery
+
+- What's New: this week's releases, filterable by publisher.
+- Coming Soon: upcoming weeks, with graceful offline fallback to cached data.
+
+### Metadata
+
+- ComicVine integration with your own free API key, encrypted at rest, with
+  aggressive caching and internal rate limiting to stay well inside ComicVine's
+  limits.
+
+### Utilities
+
+- Seven built-in tools, job-queue backed with live progress: File Converter,
+  Mass Convert, Mass Rename, Integrity Check, Library Permissions, DB Check &
+  Cleanup, and Export Library.
+
+### Operations
+
+- Health dashboard covering database, filesystem, ComicVine, clients, indexers,
+  scheduler, and system resources, with actionable guidance on failures.
+- One-click diagnostics packages with secrets redacted.
+- Scheduled database backups with retention and restore.
+- Audit log of security-relevant events.
+- Full REST API behind the same auth as the UI, with an interactive reference
+  served from the instance at `/docs`.
+
+### Security & Runtime
+
+- Ships on Python 3.14 using Docker Hardened Images, running as a fixed non-root
+  user with a minimal attack surface.
+- Encrypted credentials at rest, CSRF protection, tiered rate limiting, bcrypt
+  password hashing, signed sessions, and API keys stored as hashes.
+- Native HTTPS with your own certificates, or reverse-proxy friendly with
+  trusted-proxy support.
+- Multi-architecture images for `amd64` and `arm64` on GHCR and Docker Hub.
+- Anonymous usage telemetry that is opt-in, off by default, and documented
+  field-by-field on the public transparency page.
+
+### Interface
+
+- Light and dark themes with system-preference detection.
+- Responsive layout from phone to desktop.
+- Targets WCAG 2.2 AA with automated contrast, keyboard, focus, and axe
+  regression checks.
+
 ## [1.0.0-rc1] - 2026-06-23
 
 Release candidate for the v1.0 production burn-in, focused on Mylar3 migration

@@ -11,13 +11,19 @@ from pullbox.schemas.import_job import ImportProgressEvent
 from pullbox.services.import_file_match_targets import (
     load_file_match_target_index as _load_file_match_target_index,
 )
-from pullbox.services.import_progress_runtime import current_item_payload
+from pullbox.services.import_progress_runtime import (
+    ScanReviewProgressPlan,
+    current_item_payload,
+    scan_review_completed_weight,
+    scan_review_progress_pct,
+)
 
 _FILE_MATCH_PROGRESS_HEARTBEAT_SECONDS = 5.0
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from datetime import datetime
+    from typing import Protocol
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +39,17 @@ if TYPE_CHECKING:
     EmitLiveProgressFunc = Callable[..., Awaitable[None]]
     PhaseProgressFunc = Callable[[int, int, int, int], int]
     EstimateRemainingFunc = Callable[[datetime | None, int], int | None]
+
+    class EstimateRemainingWorkFunc(Protocol):
+        def __call__(
+            self,
+            started_at: datetime | None,
+            *,
+            completed_units: int | float,
+            total_units: int | float,
+            current_unit_progress_pct: int | float | None = None,
+        ) -> int | None: ...
+
     JobStatsFunc = Callable[[ImportJob], dict[str, int]]
     EmitFileMatchingProgressFunc = Callable[..., Awaitable[None]]
     RaiseIfCancelledFunc = Callable[[AsyncSession, int], Awaitable[None]]
@@ -56,6 +73,8 @@ def build_file_matching_progress_emitter(
     job_stats: JobStatsFunc,
     total_file_phase_units: int,
     revision_state: dict[str, int],
+    estimate_remaining_work_seconds: EstimateRemainingWorkFunc | None = None,
+    scan_review_plan: ScanReviewProgressPlan | None = None,
     phase_start: int = 80,
     phase_end: int = 99,
 ) -> Callable[..., Awaitable[None]]:
@@ -73,11 +92,46 @@ def build_file_matching_progress_emitter(
         if progress_callback is None:
             return
 
-        progress = phase_progress(
-            phase_start,
-            phase_end,
-            completed_units,
-            max(total_file_phase_units, 1),
+        completed_weight = (
+            scan_review_completed_weight(
+                scan_review_plan,
+                phase="file_matching",
+                completed_items=completed_units,
+                current_item_progress_pct=current_item_progress_pct,
+            )
+            if scan_review_plan is not None
+            else None
+        )
+        progress = (
+            scan_review_progress_pct(scan_review_plan, completed_weight=completed_weight)
+            if scan_review_plan is not None and completed_weight is not None
+            else phase_progress(
+                phase_start,
+                phase_end,
+                completed_units,
+                max(total_file_phase_units, 1),
+            )
+        )
+        estimated_seconds_remaining = (
+            estimate_remaining_work_seconds(
+                job.scan_completed_at or job.match_completed_at or job.scan_started_at,
+                completed_units=(
+                    completed_weight if completed_weight is not None else completed_units
+                ),
+                total_units=(
+                    scan_review_plan.total_weight
+                    if scan_review_plan is not None
+                    else max(total_file_phase_units, 1)
+                ),
+                current_unit_progress_pct=(
+                    None if scan_review_plan is not None else current_item_progress_pct
+                ),
+            )
+            if estimate_remaining_work_seconds is not None
+            else estimate_remaining_seconds(
+                job.scan_started_at,
+                progress,
+            )
         )
         event = ImportProgressEvent(
             job_id=job.id,
@@ -87,10 +141,7 @@ def build_file_matching_progress_emitter(
             message=message,
             current_series=item.raw_series_name,
             current_series_status=item.status,
-            estimated_seconds_remaining=estimate_remaining_seconds(
-                job.scan_started_at,
-                progress,
-            ),
+            estimated_seconds_remaining=estimated_seconds_remaining,
             **current_item_payload(
                 kind="series",
                 stage=current_item_stage,

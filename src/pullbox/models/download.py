@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     ForeignKey,
     Index,
     Integer,
@@ -95,6 +96,14 @@ class DownloadHistory(Base, IdentityMixin, TimestampMixin):
     retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     max_retries: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
     next_retry_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    # Replacement intent for explicit user-driven "find alternative" downloads.
+    replace_existing_file: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
+    )
 
     # Timing
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

@@ -123,12 +123,14 @@ async def recompute_file_counters(
 
         if is_duplicate_series(series_item):
             diagnostics = dict(series_item.diagnostics or {})
+            actionable_duplicate_merge = bool(
+                series_item.files_matched > 0
+                or series_item.files_conflict > 0
+                or diagnostics.get("actionable_duplicate_merge", False)
+            )
             diagnostics.update(
                 {
-                    "actionable_duplicate_merge": diagnostics.get(
-                        "actionable_duplicate_merge",
-                        series_item.files_matched > 0 or series_item.files_conflict > 0,
-                    ),
+                    "actionable_duplicate_merge": actionable_duplicate_merge,
                     "has_importable_files": series_item.files_matched > 0,
                     "importable_files": series_item.files_matched,
                     "duplicate_files": series_item.files_duplicate,

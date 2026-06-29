@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from pullbox.models import Base
 from pullbox.models.download import DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
+from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.models.user import APIKey, User
@@ -165,6 +166,59 @@ async def _create_issue(
         return issue.id
 
 
+async def _create_owned_issue(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    library_path: str = "/tmp/test-comics/Batman/Batman 001.cbz",
+) -> int:
+    """Seed an owned issue with a library file, return the issue id."""
+    async with factory() as session:
+        root = LibraryRoot(name="Comics", path="/tmp/test-comics", enabled=True)
+        session.add(root)
+        await session.flush()
+
+        series = Series(
+            comicvine_id=99901,
+            title="Batman",
+            sort_title="batman",
+            year_start=2016,
+            status=SeriesStatus.CONTINUING,
+            series_type=SeriesType.STANDARD,
+            monitored=True,
+            issue_count=1,
+            library_root_id=root.id,
+        )
+        session.add(series)
+        await session.flush()
+
+        issue = Issue(
+            series_id=series.id,
+            comicvine_id=50002,
+            issue_number=1.0,
+            title="Issue #1",
+            status=IssueStatus.OWNED,
+        )
+        session.add(issue)
+        await session.flush()
+
+        from datetime import UTC, datetime
+
+        session.add(
+            LibraryFile(
+                file_path=library_path,
+                file_name="Batman 001.cbz",
+                file_size=123,
+                file_format=FileFormat.CBZ,
+                file_modified_at=datetime.now(UTC),
+                match_confidence=MatchConfidence.HIGH,
+                issue_id=issue.id,
+                library_root_id=root.id,
+            )
+        )
+        await session.commit()
+        return issue.id
+
+
 def _mock_nzb_client() -> AsyncMock:
     """Create a mock NZB client (SABnzbd)."""
     client = AsyncMock()
@@ -254,6 +308,41 @@ async def test_grab_creates_download_history(
     assert data["download_id"] > 0
     assert data["title"] == GRAB_BODY_NZB["title"]
     assert data["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_grab_owned_issue_marks_download_as_replacement(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Find alternative grabs for owned issues persist replacement intent."""
+    issue_id = await _create_owned_issue(_db_factory)
+
+    nzb_client = _mock_nzb_client()
+    registry = _mock_registry(nzb=nzb_client)
+
+    with patch(
+        "pullbox.composition.providers.build_registry",
+        new_callable=AsyncMock,
+        return_value=(registry, {}),
+    ):
+        resp = await client.post(f"/api/v1/issues/{issue_id}/grab", json=GRAB_BODY_NZB)
+
+    assert resp.status_code == 201
+
+    async with _db_factory() as session:
+        downloads = (
+            (
+                await session.execute(
+                    select(DownloadHistory).where(DownloadHistory.issue_id == issue_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert len(downloads) == 1
+    assert downloads[0].replace_existing_file is True
 
 
 @pytest.mark.asyncio

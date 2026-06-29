@@ -863,6 +863,24 @@ class TestEdgeCases:
         assert results[0].raw_series_name == "Batman"
 
     @pytest.mark.asyncio
+    async def test_appledouble_sidecar_files_skipped(self, tmp_path: Path) -> None:
+        """macOS AppleDouble resource-fork files should not enter import review."""
+        _make_series_dir(
+            tmp_path,
+            "Batman (2016)",
+            files=["Batman 001.cbz", "._Batman 001.cbz"],
+        )
+
+        scanner = CollectionScanner()
+        inventory = await scanner.inventory(tmp_path)
+        results = await _scan_all(scanner, tmp_path)
+
+        assert inventory.file_count == 1
+        assert len(results) == 1
+        assert results[0].raw_series_name == "Batman"
+        assert [file.file_name for file in results[0].files] == ["Batman 001.cbz"]
+
+    @pytest.mark.asyncio
     async def test_recycle_directory_skipped(self, tmp_path: Path) -> None:
         """#recycle (Synology recycle folder) is in IGNORE_DIRS."""
         _make_series_dir(tmp_path, "Batman (2016)", files=["Batman 001.cbz"])

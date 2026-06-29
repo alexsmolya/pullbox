@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from pullbox.core.exceptions import JobCancelledError, JobPausedError
@@ -52,6 +55,15 @@ async def _create_job(
     session.add(job)
     await session.flush()
     return job
+
+
+def _sqlite_database_locked_error() -> SQLAlchemyOperationalError:
+    """Build the SQLAlchemy wrapper shape raised by SQLite busy writes."""
+    return SQLAlchemyOperationalError(
+        "UPDATE import_jobs SET progress_snapshot=? WHERE import_jobs.id = ?",
+        {},
+        sqlite3.OperationalError("database is locked"),
+    )
 
 
 # ── Test: Progress Queues ────────────────────────────────────────────────
@@ -543,6 +555,85 @@ class TestRunImportExecuteTask:
         await db_session.refresh(job)
         assert job.status == ImportJobStatus.FAILED
         assert job.error_message is not None
+
+    @pytest.mark.asyncio
+    async def test_runner_marks_database_lock_as_stalled(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """Transient SQLite lock failures leave imports resumable instead of failed."""
+        job = await _create_job(db_session, status=ImportJobStatus.IMPORTING)
+        job.import_started_at = datetime.now(UTC)
+        job.progress_snapshot = {
+            "status": ImportJobStatus.IMPORTING.value,
+            "mode": "import",
+            "phase": "importing",
+            "progress": 41,
+            "message": "Processing review group 7/24...",
+            "current_series_name": "King Dracula",
+        }
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        runner = ImportRunner(factory)
+        mock_service = AsyncMock()
+        mock_service.run_import.side_effect = _sqlite_database_locked_error()
+
+        with (
+            patch("pullbox.tasks.import_task._build_import_service", return_value=mock_service),
+            patch("pullbox.tasks.import_task.publish", new_callable=AsyncMock),
+        ):
+            await runner._run_job(job.id)
+
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.STALLED
+        assert (
+            job.error_message == "Import stalled because the database was busy. Resume when ready."
+        )
+        assert job.progress_snapshot["status"] == ImportJobStatus.STALLED.value
+        assert job.progress_snapshot["phase"] == "importing"
+        assert job.progress_snapshot["progress"] == 41
+        assert job.progress_snapshot["control_state"]["can_resume"] is True
+        assert job.progress_snapshot["control_state"]["can_cancel"] is True
+
+    @pytest.mark.asyncio
+    async def test_runner_resumes_stalled_scan_from_snapshot_phase(
+        self, async_engine: object, db_session: AsyncSession
+    ) -> None:
+        """A stalled scan resumes from the stalled phase instead of restarting."""
+        job = await _create_job(db_session, status=ImportJobStatus.STALLED)
+        job.error_message = "Import stalled because the database was busy. Resume when ready."
+        job.progress_snapshot = {
+            "status": ImportJobStatus.STALLED.value,
+            "mode": "scan",
+            "phase": "file_matching",
+            "progress": 87,
+            "message": "Import stalled because the database was busy. Resume when ready.",
+        }
+        await db_session.commit()
+
+        factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        runner = ImportRunner(factory)
+        mock_service = AsyncMock()
+
+        async def complete_resume(session, job_id, progress_callback=None):
+            import_job = await session.get(ImportJob, job_id)
+            assert import_job is not None
+            import_job.status = ImportJobStatus.REVIEW
+            import_job.error_message = None
+            await session.flush()
+
+        mock_service.resume_scan_phase.side_effect = complete_resume
+
+        with (
+            patch("pullbox.tasks.import_task._build_import_service", return_value=mock_service),
+            patch("pullbox.tasks.import_task.publish", new_callable=AsyncMock),
+        ):
+            await runner._run_job(job.id)
+
+        mock_service.resume_scan_phase.assert_awaited_once()
+        mock_service.start_scan.assert_not_called()
+        await db_session.refresh(job)
+        assert job.status == ImportJobStatus.REVIEW
 
     @pytest.mark.asyncio
     async def test_execute_task_terminal_failure_revision_beats_live_only_progress(

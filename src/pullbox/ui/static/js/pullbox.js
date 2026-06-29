@@ -17,16 +17,69 @@
     return String(value).replace(/([ !"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, "\\$1");
   }
 
-  window.pbToggleLazyTableDetail = function (button, rowId) {
+  function setLazyTableDetailState(button, rowId, expanded) {
+    if (button && button.setAttribute) {
+      button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+
+    window.dispatchEvent(
+      new CustomEvent("pb-lazy-table-detail-state", {
+        detail: { rowId: rowId, expanded: expanded },
+      })
+    );
+  }
+
+  window.pbToggleLazyTableDetail = function (button, rowId, triggerName) {
     var row = document.getElementById(rowId);
     if (row) {
+      button.dataset.lazyDetailDesiredOpen = "false";
       row.remove();
-      button.dataset.skipLazyDetailFetch = "true";
+      delete button.dataset.lazyDetailLoading;
+      if (!triggerName) {
+        button.dataset.skipLazyDetailFetch = "true";
+      }
+      setLazyTableDetailState(button, rowId, false);
+      return false;
+    }
+
+    if (button.dataset.lazyDetailLoading === "true") {
+      button.dataset.lazyDetailDesiredOpen = "false";
+      setLazyTableDetailState(button, rowId, false);
+      if (!triggerName) {
+        button.dataset.skipLazyDetailFetch = "true";
+      }
       return false;
     }
 
     delete button.dataset.skipLazyDetailFetch;
+    if (triggerName) {
+      button.dataset.lazyDetailDesiredOpen = "true";
+      button.dataset.lazyDetailLoading = "true";
+      setLazyTableDetailState(button, rowId, true);
+      document.body.dispatchEvent(new CustomEvent(triggerName, { bubbles: true }));
+    }
     return true;
+  };
+
+  window.pbLazyTableDetailSettled = function (button, rowId) {
+    if (button && button.dataset) {
+      delete button.dataset.lazyDetailLoading;
+    }
+    var row = document.getElementById(rowId);
+    if (button && button.dataset.lazyDetailDesiredOpen === "false") {
+      if (row) {
+        row.remove();
+      }
+      setLazyTableDetailState(button, rowId, false);
+      return;
+    }
+    setLazyTableDetailState(button, rowId, Boolean(row));
+  };
+
+  window.pbLazyTableDetailAfterRequest = function (button, rowId) {
+    window.setTimeout(function () {
+      window.pbLazyTableDetailSettled(button, rowId);
+    }, 0);
   };
 
   window.pbCancelSkippedLazyDetailFetch = function (event) {
@@ -755,6 +808,107 @@ function performHtmxSwap(method, url, options) {
       reject(err);
     }
   });
+}
+
+function searchHistoryExpansionSet() {
+  if (!(window._searchHistExpanded instanceof Set)) {
+    window._searchHistExpanded = new Set();
+  }
+  return window._searchHistExpanded;
+}
+
+function searchHistoryRowData(config) {
+  var cfg = config || {};
+  return {
+    detailLoaded: false,
+    detailLoading: false,
+    detailTarget: cfg.detailTarget,
+    detailUrl: cfg.detailUrl,
+    expanded: false,
+    logId: cfg.logId,
+
+    init: function () {
+      this.expanded = searchHistoryExpansionSet().has(this.logId);
+      if (this.expanded) {
+        this.loadDetail();
+      }
+    },
+
+    toggle: function () {
+      var expandedRows = searchHistoryExpansionSet();
+      this.expanded = !this.expanded;
+      if (this.expanded) {
+        expandedRows.add(this.logId);
+        this.loadDetail();
+      } else {
+        expandedRows.delete(this.logId);
+      }
+    },
+
+    loadDetail: function () {
+      var self = this;
+      if (self.detailLoaded || !self.detailUrl || !self.detailTarget) {
+        return;
+      }
+      self.detailLoaded = true;
+      self.detailLoading = true;
+      this.$nextTick(function () {
+        if (
+          !window.htmx ||
+          typeof performHtmxSwap !== "function" ||
+          !document.querySelector(self.detailTarget)
+        ) {
+          self.detailLoaded = false;
+          self.detailLoading = false;
+          return;
+        }
+        performHtmxSwap("GET", self.detailUrl, {
+          target: self.detailTarget,
+          swap: "outerHTML",
+        }).catch(function () {
+          self.detailLoaded = false;
+          self.detailLoading = false;
+        });
+      });
+    },
+  };
+}
+
+window.searchHistoryRowData = searchHistoryRowData;
+
+function readImportReviewStatusCounts(shell) {
+  if (!shell || typeof shell.getAttribute !== "function") {
+    return {};
+  }
+  var raw = shell.getAttribute("data-import-review-status-counts") || "{}";
+  try {
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function importReviewStatusCount(shell, view) {
+  var counts = readImportReviewStatusCounts(shell);
+  return Number(counts && counts[view]) || 0;
+}
+
+function importReviewShellHasSeriesBucket(shell, seriesId, bucket) {
+  var numericSeriesId = Number(seriesId);
+  if (!shell || !Number.isFinite(numericSeriesId) || !bucket) {
+    return false;
+  }
+  var row = shell.querySelector(
+    '[data-import-review-series-row="' + String(numericSeriesId) + '"]',
+  );
+  if (!row) {
+    return false;
+  }
+  var buckets = String(row.getAttribute("data-import-review-row-buckets") || "")
+    .split(/\s+/)
+    .filter(Boolean);
+  return buckets.indexOf(bucket) >= 0;
 }
 
 function loadImportReviewShell(url) {
@@ -1747,13 +1901,15 @@ function importCvSearchModalData(config) {
       return "/import/" + this.jobId + "/review-partial" + (query ? "?" + query : "");
     },
 
-    buildOverrideOutcome: function (result, activeReviewView) {
+    buildOverrideOutcome: function (result, activeReviewView, baselineStatusCounts) {
       var activeView = activeReviewView || "series";
       var normalizedStatus = result && result.status ? String(result.status).toLowerCase() : "";
+      var filesNoMatch = Number(result && result.files_no_match) || 0;
+      var resultSeriesId = Number(result && result.id);
       var mergedIntoExistingSeries =
         !!result &&
-        Number.isFinite(Number(result.id)) &&
-        Number(result.id) !== Number(this.seriesId);
+        Number.isFinite(resultSeriesId) &&
+        resultSeriesId !== Number(this.seriesId);
       var filesConflict = Number(result && result.files_conflict) || 0;
       var directlyImportable = normalizedStatus === "matched" && filesConflict === 0;
       var diagnostics =
@@ -1761,12 +1917,29 @@ function importCvSearchModalData(config) {
           ? result.diagnostics
           : {};
       var rematchPending = diagnostics.rematch_pending === true;
+      var hasKnownSeriesTarget =
+        !!result && !!(result.cv_id || result.user_selected_cv_id || result.series_id);
 
       if (rematchPending) {
         return {
           message: "ComicVine match applied. Pullbox is rematching the files in the background.",
           level: "info",
-          refreshDelays: [1500, 5000, 15000],
+          watchDestinationView: "needs_issue",
+          watchSeriesId: Number.isFinite(resultSeriesId) ? resultSeriesId : Number(this.seriesId),
+          baselineStatusCounts: baselineStatusCounts || {},
+          watchDelays: [500, 1500, 3000, 5000, 10000, 15000, 30000, 60000],
+        };
+      }
+
+      if (
+        (normalizedStatus === "no_match" && hasKnownSeriesTarget) ||
+        (normalizedStatus === "duplicate" && filesNoMatch > 0)
+      ) {
+        return {
+          message:
+            "ComicVine match applied. Some files still need issue decisions under Needs Issue Match.",
+          level: "warning",
+          destinationView: "needs_issue",
         };
       }
 
@@ -1829,6 +2002,13 @@ function importCvSearchModalData(config) {
       var reviewData = this.reviewPanelData();
       if (reviewData) {
         if (
+          outcome &&
+          outcome.destinationView &&
+          typeof reviewData.openReviewView === "function"
+        ) {
+          return reviewData.openReviewView(outcome.destinationView);
+        }
+        if (
           activeReviewView &&
           Object.prototype.hasOwnProperty.call(reviewData, "currentView")
         ) {
@@ -1845,6 +2025,74 @@ function importCvSearchModalData(config) {
       });
     },
 
+    overrideDestinationReady: function (outcome, shell) {
+      if (!outcome || !outcome.watchDestinationView || !shell) {
+        return false;
+      }
+
+      var view = outcome.watchDestinationView;
+      if (importReviewShellHasSeriesBucket(shell, outcome.watchSeriesId, view)) {
+        return true;
+      }
+
+      var baselineCounts = outcome.baselineStatusCounts || {};
+      var baseline = Number(baselineCounts[view]) || 0;
+      return importReviewStatusCount(shell, view) > baseline;
+    },
+
+    openWatchedOverrideDestination: function (outcome, shell) {
+      var self = this;
+      if (!self.overrideDestinationReady(outcome, shell)) {
+        return Promise.resolve(false);
+      }
+
+      var reviewData = self.reviewPanelData();
+      if (!reviewData || typeof reviewData.openReviewView !== "function") {
+        return Promise.resolve(false);
+      }
+
+      return Promise.resolve(reviewData.openReviewView(outcome.watchDestinationView)).then(
+        function () {
+          return true;
+        },
+      );
+    },
+
+    watchOverrideReviewState: function (outcome) {
+      var self = this;
+      if (!outcome || !outcome.watchDestinationView) {
+        return;
+      }
+
+      var delays = outcome.watchDelays || [];
+      var attempt = function (index) {
+        if (index >= delays.length) {
+          return;
+        }
+        window.setTimeout(function () {
+          var reviewData = self.reviewPanelData();
+          if (!reviewData || typeof reviewData.refreshSeriesReview !== "function") {
+            return;
+          }
+
+          Promise.resolve(reviewData.refreshSeriesReview())
+            .then(function (shell) {
+              return self.openWatchedOverrideDestination(outcome, shell);
+            })
+            .then(function (opened) {
+              if (!opened) {
+                attempt(index + 1);
+              }
+            })
+            .catch(function () {
+              attempt(index + 1);
+            });
+        }, delays[index]);
+      };
+
+      attempt(0);
+    },
+
     selectResult: function (cvId) {
       var self = this;
       if (!cvId || self.selecting) {
@@ -1857,6 +2105,9 @@ function importCvSearchModalData(config) {
       if (reviewData && reviewData.currentView) {
         activeReviewView = reviewData.currentView;
       }
+      var baselineStatusCounts = readImportReviewStatusCounts(
+        document.getElementById("import-step-review-shell"),
+      );
       fetch("/api/v1/import/" + self.jobId + "/series/" + self.seriesId + "/override", {
         method: "POST",
         headers: {
@@ -1883,10 +2134,14 @@ function importCvSearchModalData(config) {
               return null;
             })
             .then(function (result) {
-              var outcome = self.buildOverrideOutcome(result, activeReviewView);
+              var outcome = self.buildOverrideOutcome(
+                result,
+                activeReviewView,
+                baselineStatusCounts,
+              );
               self.close(true);
               var reviewRefresh = self.refreshReviewForOverride(outcome, activeReviewView);
-              return Promise.resolve(reviewRefresh).then(function () {
+              return Promise.resolve(reviewRefresh).then(function (reviewShell) {
                 var refreshedReviewData = self.reviewPanelData();
                 if (
                   refreshedReviewData &&
@@ -1900,19 +2155,13 @@ function importCvSearchModalData(config) {
                     level: outcome.level || "success",
                   });
                 }
-                if (outcome.refreshDelays && outcome.refreshDelays.length) {
-                  outcome.refreshDelays.forEach(function (delayMs) {
-                    window.setTimeout(function () {
-                      var pendingReviewData = self.reviewPanelData();
-                      if (
-                        pendingReviewData &&
-                        typeof pendingReviewData.refreshSeriesReview === "function"
-                      ) {
-                        pendingReviewData.refreshSeriesReview();
-                      }
-                    }, delayMs);
-                  });
-                }
+                return self.openWatchedOverrideDestination(outcome, reviewShell).then(
+                  function (opened) {
+                    if (!opened) {
+                      self.watchOverrideReviewState(outcome);
+                    }
+                  },
+                );
               });
             });
         })
@@ -12737,6 +12986,7 @@ function interventionPage() {
   return {
     selectedIds: [],
     toolbarMode: "browse",
+    bulkActionBusy: null,
     selectAllMatchingBusy: false,
     totalMatchingCount: Number(cfg.totalMatchingCount || 0),
     selectionFilterSignature: "",
@@ -13027,12 +13277,12 @@ function interventionPage() {
 
       var approveButton = document.querySelector("[data-testid='intervention-bulk-approve']");
       if (approveButton) {
-        approveButton.disabled = this.selectedIds.length === 0;
+        approveButton.disabled = Boolean(this.bulkActionBusy) || this.selectedIds.length === 0;
       }
 
       var rejectButton = document.querySelector("[data-testid='intervention-bulk-reject']");
       if (rejectButton) {
-        rejectButton.disabled = this.selectedIds.length === 0;
+        rejectButton.disabled = Boolean(this.bulkActionBusy) || this.selectedIds.length === 0;
       }
     },
 
@@ -14014,7 +14264,10 @@ function issueDetailPage(config) {
     coverModalUrl: "",
     searching: false,
     togglingStatus: false,
+    deletingIssueFile: false,
     importing: false,
+    cancellingImport: false,
+    importReplacementConfirmed: false,
     importModalOpen: false,
     importPollTimer: null,
     importState: "idle",
@@ -14108,6 +14361,7 @@ function issueDetailPage(config) {
       this.form.file_name = selection.name;
       this.form.file_size = selection.size || 0;
       this.form.file_ext = selection.ext || "";
+      this.importReplacementConfirmed = false;
       this.submitImport();
     },
 
@@ -14130,6 +14384,7 @@ function issueDetailPage(config) {
         completed: "Complete",
         failed: "Needs attention",
         safety_blocked: "Safety review",
+        cancelled: "Cancelled",
       };
       return labels[this.importState] || "Importing";
     },
@@ -14186,6 +14441,9 @@ function issueDetailPage(config) {
       }
       if (this.importState === "completed") {
         return "The file finished importing and the page will refresh.";
+      }
+      if (this.importState === "cancelled") {
+        return "The import was cancelled before Pullbox finished placing this file.";
       }
       return "Applying your current import settings to the selected file.";
     },
@@ -14294,6 +14552,47 @@ function issueDetailPage(config) {
           (data && data.error_message) || "Import failed.",
           "error"
         );
+        return;
+      }
+
+      if ((data && data.state) === "cancelled") {
+        this.importModalOpen = false;
+        this.dispatchToast("Import cancelled", "warning");
+      }
+    },
+
+    cancelIssueImport: async function () {
+      if (this.cancellingImport || this.importState === "completed") return;
+
+      this.cancellingImport = true;
+      this.stopImportPolling();
+
+      try {
+        var response = await fetch(cfg.importCancelUrl, {
+          method: "POST",
+          headers: { "X-CSRF-Token": this.csrfToken() },
+        });
+        if (!response.ok) {
+          var data = await response.json().catch(function () {
+            return {};
+          });
+          throw new Error(data.detail || "Failed to cancel import.");
+        }
+
+        var progress = await response.json();
+        this.applyImportProgress(progress);
+        if (this.importState === "running") {
+          this.beginImportPolling();
+          return;
+        }
+        this.handleTerminalImportProgress(progress);
+      } catch (error) {
+        if (this.importState === "running") {
+          this.beginImportPolling();
+        }
+        this.dispatchToast(error.message || "Failed to cancel import.", "error");
+      } finally {
+        this.cancellingImport = false;
       }
     },
 
@@ -14305,6 +14604,20 @@ function issueDetailPage(config) {
 
     submitImport: async function () {
       if (!this.form.file_path || this.importing) return;
+
+      if (cfg.hasLibraryFile && !this.importReplacementConfirmed) {
+        var replaceConfirmed = await pbConfirm({
+          title: "Replace Issue File",
+          message:
+            "Pullbox will replace the current file for this issue using your import settings. This action cannot be rolled back.",
+          confirmText: "Replace File",
+          destructive: true,
+        });
+        if (!replaceConfirmed) {
+          return;
+        }
+        this.importReplacementConfirmed = true;
+      }
 
       this.importing = true;
       this.importModalOpen = true;
@@ -14364,6 +14677,43 @@ function issueDetailPage(config) {
       if (!this.form.file_path || this.importing) return;
       this.importAllowSafetyException = true;
       this.submitImport();
+    },
+
+    deleteIssueFile: async function () {
+      if (this.deletingIssueFile || !cfg.deleteFileUrl) return;
+
+      var confirmed = await pbConfirm({
+        title: "Delete Issue File",
+        message:
+          "This removes the linked file from your library and makes the issue importable again. This action cannot be rolled back.",
+        confirmText: "Delete File",
+        destructive: true,
+      });
+      if (!confirmed) {
+        return;
+      }
+
+      this.deletingIssueFile = true;
+      try {
+        var response = await fetch(cfg.deleteFileUrl, {
+          method: "DELETE",
+          headers: { "X-CSRF-Token": this.csrfToken() },
+        });
+        if (!response.ok) {
+          var data = await response.json().catch(function () {
+            return {};
+          });
+          throw new Error(data.detail || "Failed to delete issue file.");
+        }
+        this.dispatchToast("Issue file deleted", "success");
+        window.location.reload();
+      } catch (error) {
+        this.deletingIssueFile = false;
+        this.dispatchToast(
+          error.message || "Failed to delete issue file.",
+          "error"
+        );
+      }
     },
   });
 }

@@ -33,13 +33,16 @@ from pullbox.models.import_job import (
 )
 from pullbox.models.issue import IssueType
 from pullbox.schemas.import_job import ImportProgressEvent
-from pullbox.services.import_progress_runtime import current_item_payload
-from pullbox.services.import_series_match_state import clear_auto_cv_match_fields
-from pullbox.services.import_workflow_state import (
-    SCAN_PROGRESS_MATCH_END,
-    SCAN_PROGRESS_MATCH_START,
-    emit_live_progress,
+from pullbox.services.import_progress_runtime import (
+    ScanReviewFileMatchProfile,
+    ScanReviewSeriesMatchProfile,
+    current_item_payload,
+    scan_review_completed_weight,
+    scan_review_progress_pct,
+    scan_review_progress_plan,
 )
+from pullbox.services.import_series_match_state import clear_auto_cv_match_fields
+from pullbox.services.import_workflow_state import emit_live_progress
 
 logger = structlog.get_logger(__name__)
 
@@ -77,6 +80,7 @@ class _VolumeSubtitleRebucketMatch:
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
     from datetime import datetime
+    from typing import Protocol
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,6 +110,17 @@ if TYPE_CHECKING:
     ]
     PhaseProgressFunc = Callable[[int, int, int, int], int]
     EstimateRemainingFunc = Callable[[datetime | None, int], int | None]
+
+    class EstimateRemainingWorkFunc(Protocol):
+        def __call__(
+            self,
+            started_at: datetime | None,
+            *,
+            completed_units: int | float,
+            total_units: int | float,
+            current_unit_progress_pct: int | float | None = None,
+        ) -> int | None: ...
+
     JobStatsFunc = Callable[[ImportJob], dict[str, int]]
     SlowItemDelayFunc = Callable[[], Awaitable[None]]
 
@@ -192,6 +207,7 @@ async def run_import_series_matching(
     estimate_remaining_seconds: EstimateRemainingFunc,
     job_stats: JobStatsFunc,
     maybe_slow_item_delay: SlowItemDelayFunc,
+    estimate_remaining_work_seconds: EstimateRemainingWorkFunc | None = None,
     progress_callback: Callable[[ImportProgressEvent], Awaitable[None]] | None = None,
 ) -> None:
     """Run ComicVine matching for all pending imported series in a job."""
@@ -251,6 +267,24 @@ async def run_import_series_matching(
     deferred_metadata_loads = 0
     total_items = len(items)
     runtime_revision_state: dict[str, int] = {"value": int(job.progress_revision or 0)}
+    progress_plan = scan_review_progress_plan(
+        analysis_series_count=max(job.series_found or total_items, total_items),
+        series_match_profiles=[
+            ScanReviewSeriesMatchProfile(
+                file_count=int(item.files_total or item.file_count or 0),
+                direct_match=bool(item.cv_id),
+            )
+            for item in items
+        ],
+        file_match_profiles=[
+            ScanReviewFileMatchProfile(
+                file_count=int(item.files_total or item.file_count or 0),
+                issue_count=item.cv_issue_count,
+            )
+            for item in items
+            if item.has_files
+        ],
+    )
 
     async def emit_matching_progress(
         item: ImportedSeries,
@@ -264,11 +298,27 @@ async def run_import_series_matching(
         if progress_callback is None:
             return
 
-        progress = phase_progress(
-            SCAN_PROGRESS_MATCH_START,
-            SCAN_PROGRESS_MATCH_END,
-            idx,
-            max(total_items, 1),
+        completed_weight = scan_review_completed_weight(
+            progress_plan,
+            phase="matching",
+            completed_items=idx,
+            current_item_progress_pct=current_item_progress_pct,
+        )
+        progress = scan_review_progress_pct(
+            progress_plan,
+            completed_weight=completed_weight,
+        )
+        estimated_seconds_remaining = (
+            estimate_remaining_work_seconds(
+                job.scan_completed_at or job.match_started_at or job.scan_started_at,
+                completed_units=completed_weight,
+                total_units=progress_plan.total_weight,
+            )
+            if estimate_remaining_work_seconds is not None
+            else estimate_remaining_seconds(
+                job.scan_started_at,
+                progress,
+            )
         )
         event = ImportProgressEvent(
             job_id=job.id,
@@ -278,10 +328,7 @@ async def run_import_series_matching(
             message=message,
             current_series=item.raw_series_name,
             current_series_status=item.status,
-            estimated_seconds_remaining=estimate_remaining_seconds(
-                job.scan_started_at,
-                progress,
-            ),
+            estimated_seconds_remaining=estimated_seconds_remaining,
             **current_item_payload(
                 kind="series",
                 stage=current_item_stage,
@@ -603,11 +650,26 @@ async def run_import_series_matching(
 
         if progress_callback and should_checkpoint:
             total_items = len(items)
-            progress = phase_progress(
-                SCAN_PROGRESS_MATCH_START,
-                SCAN_PROGRESS_MATCH_END,
-                idx + 1,
-                max(total_items, 1),
+            completed_weight = scan_review_completed_weight(
+                progress_plan,
+                phase="matching",
+                completed_items=idx + 1,
+            )
+            progress = scan_review_progress_pct(
+                progress_plan,
+                completed_weight=completed_weight,
+            )
+            estimated_seconds_remaining = (
+                estimate_remaining_work_seconds(
+                    job.scan_completed_at or job.match_started_at or job.scan_started_at,
+                    completed_units=completed_weight,
+                    total_units=progress_plan.total_weight,
+                )
+                if estimate_remaining_work_seconds is not None
+                else estimate_remaining_seconds(
+                    job.scan_started_at,
+                    progress,
+                )
             )
             job.series_matched = matched_count
             job.series_no_match = no_match_count
@@ -622,10 +684,7 @@ async def run_import_series_matching(
                     message=f"Matching {idx + 1}/{total_items}...",
                     current_series=item.raw_series_name,
                     current_series_status=item.status,
-                    estimated_seconds_remaining=estimate_remaining_seconds(
-                        job.scan_started_at,
-                        progress,
-                    ),
+                    estimated_seconds_remaining=estimated_seconds_remaining,
                     **current_item_payload(
                         kind="series",
                         stage="matching",

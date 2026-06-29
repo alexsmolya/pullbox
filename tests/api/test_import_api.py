@@ -953,7 +953,10 @@ class TestOverrideCvId:
             )
             series_id = result.scalars().first()
 
-        # Mock the service's override method to avoid real CV calls
+        # Mock the service's override method to avoid real CV calls.
+        # Interactive overrides must return the final rematched row so the Step 3
+        # review tabs/counts can refresh immediately without waiting for a
+        # background task.
         mock_item = MagicMock()
         mock_item.id = series_id
         mock_item.status = ImportSeriesStatus.MATCHED
@@ -1009,9 +1012,9 @@ class TestOverrideCvId:
             ANY,
             series_id,
             12345,
-            rematch_files=False,
+            rematch_files=True,
         )
-        mock_trigger.assert_called_once_with(job_id, series_id)
+        mock_trigger.assert_not_called()
 
 
 # ── Tests: POST /import/{id}/series/{sid}/reconcile ───────────────────
@@ -2780,9 +2783,9 @@ class TestHandlersDirect:
                 session,
                 series_id,
                 99999,
-                rematch_files=False,
+                rematch_files=True,
             )
-            mock_trigger.assert_called_once_with(job_id, series_id)
+            mock_trigger.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_override_invalid_cv_id_direct(

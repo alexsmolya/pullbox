@@ -302,10 +302,12 @@ async def test_task_routes_cover_statuses(
 
     scheduler = Scheduler()
     monkeypatch.setattr("pullbox.core.scheduler.get_scheduler", lambda: scheduler)
+    import_guard = AsyncMock(return_value=False)
+    monkeypatch.setattr(system_api, "has_active_import_scheduler_protection", import_guard)
 
     listed = await system_api.list_tasks(object(), db_session)
     assert scheduler.loaded is True
-    assert listed["scheduled"] == [{"id": "metadata"}]
+    assert listed["scheduled"] == [{"id": "metadata", "manual_run_disabled_reason": None}]
 
     for status, expected in [
         ("already_running", "already running"),
@@ -320,6 +322,12 @@ async def test_task_routes_cover_statuses(
     scheduler.status = None
     with pytest.raises(NotFoundError):
         await system_api.run_task("missing", object())
+
+    import_guard.return_value = True
+    with pytest.raises(HTTPException) as exc_info:
+        await system_api.run_task("metadata", object())
+    assert exc_info.value.status_code == 409
+    assert "disabled until the active import finishes" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

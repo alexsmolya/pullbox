@@ -42,7 +42,7 @@ class TestDashboardPage:
         assert sys_led_styles["backgroundColor"] != "rgba(0, 0, 0, 0)"
         assert sys_led_styles["boxShadow"] != "none"
         assert dashboard.download_exceptions_panel.is_visible()
-        assert dashboard.download_exception_all_clear.is_visible()
+        assert dashboard.first_download_exception_sys_led.is_visible()
         assert dashboard.recent_activity.is_visible()
         assert dashboard.footer_dock.is_visible()
         assert authed_page.get_by_text("Updated just now").count() == 0

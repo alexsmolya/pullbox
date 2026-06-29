@@ -72,6 +72,11 @@ from pullbox.core.scheduler_task_views import (
     build_job_summaries,
     build_scheduled_task_views,
 )
+from pullbox.core.sqlite_lock import is_sqlite_locked_error
+from pullbox.services.import_activity import (
+    has_active_import_scheduler_protection,
+    is_missing_import_jobs_table_error,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -136,6 +141,7 @@ class PullboxScheduler:
         self._manual_current_task_id: str | None = None
         self._persist_lock = asyncio.Lock()
         self._task_stats_persistence_disabled = False
+        self._import_protection_check_disabled = False
         self._scheduler.add_listener(self._on_job_missed, EVENT_JOB_MISSED)
         self._scheduler.add_listener(self._on_job_max_instances, EVENT_JOB_MAX_INSTANCES)
 
@@ -344,6 +350,13 @@ class PullboxScheduler:
         async def wrapper() -> None:
             log = logger.bind(task_id=task_id)
             reserved_exclusive = False
+            if trigger_type in {"scheduled", "manual"} and await scheduler._defer_task_for_import(
+                task_id,
+                log,
+                trigger_type=trigger_type,
+            ):
+                return
+
             async with scheduler._execution_admission_lock:
                 active_exclusive = scheduler._exclusive_active_task_id
                 if active_exclusive is not None and active_exclusive != task_id:
@@ -475,6 +488,41 @@ class PullboxScheduler:
                             scheduler._exclusive_active_task_id = None
 
         return wrapper
+
+    async def _defer_task_for_import(self, task_id: str, log: Any, *, trigger_type: str) -> bool:
+        """Skip scheduler-managed background work while an import owns the runtime."""
+        if self._import_protection_check_disabled:
+            return False
+
+        try:
+            should_defer = await has_active_import_scheduler_protection()
+        except Exception as exc:
+            if is_missing_import_jobs_table_error(exc):
+                self._import_protection_check_disabled = True
+                log.debug("task_import_protection_check_disabled_missing_table")
+                return False
+            if not is_sqlite_locked_error(exc):
+                log.warning("task_import_protection_check_failed", exc_info=True)
+                return False
+            should_defer = True
+
+        if not should_defer:
+            return False
+
+        stats = self._task_stats.setdefault(task_id, TaskStats())
+        ended = datetime.now(UTC).isoformat()
+        stats.last_execution = ended
+        stats.last_duration_seconds = 0.0
+        stats.last_status = "deferred"
+        stats.running_since = None
+        await self._persist_task_stat(
+            task_id,
+            stats,
+            trigger_type=trigger_type,
+            reason="deferred",
+        )
+        log.info("task_deferred_active_import", trigger_type=trigger_type)
+        return True
 
     def _ensure_manual_worker(self) -> None:
         """Start the manual queue worker if it is not already draining requests."""

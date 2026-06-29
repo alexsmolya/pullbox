@@ -58,6 +58,7 @@ ACTIVE_IMPORT_JOB_STATUSES = frozenset(
         ImportJobStatus.FILE_MATCHING,
         ImportJobStatus.REVIEW,
         ImportJobStatus.IMPORTING,
+        ImportJobStatus.STALLED,
         ImportJobStatus.CANCELLING,
         ImportJobStatus.ROLLING_BACK,
     }
@@ -82,6 +83,7 @@ RUNNING_IMPORT_JOB_STATUSES = frozenset(
         ImportJobStatus.MATCHING,
         ImportJobStatus.FILE_MATCHING,
         ImportJobStatus.IMPORTING,
+        ImportJobStatus.STALLED,
         ImportJobStatus.ROLLING_BACK,
     }
 )
@@ -90,6 +92,7 @@ _PROTECTED_RUNTIME_STATUSES = frozenset(
     {
         ImportJobStatus.REVIEW,
         ImportJobStatus.PAUSED,
+        ImportJobStatus.STALLED,
         ImportJobStatus.CANCELLING,
         ImportJobStatus.ROLLING_BACK,
         ImportJobStatus.COMPLETED,
@@ -130,6 +133,11 @@ def paused_message_for_mode(mode: str) -> str:
     if mode == "rollback":
         return "Rollback is paused."
     return "Scan is paused."
+
+
+def stalled_message() -> str:
+    """Return the user-facing recoverable import-stall message."""
+    return "Import stalled because the database was busy. Resume when ready."
 
 
 def snapshot_requested_action_for_job(job: ImportJob) -> ImportControlRequest:
@@ -208,6 +216,64 @@ def sync_paused_job_state(job: ImportJob) -> None:
     )
 
 
+def sync_stalled_job_state(job: ImportJob) -> None:
+    """Persist a recoverable stalled snapshot without losing current progress detail."""
+    snapshot = dict(job.progress_snapshot or {})
+    mode = snapshot_mode_for_job(job)
+    default_phase = (
+        "importing" if mode == "import" else ("rollback" if mode == "rollback" else "inventory")
+    )
+    current_series_name = snapshot.get("current_series_name") or snapshot.get("current_series")
+
+    job.status = ImportJobStatus.STALLED
+    job.control_request = ImportControlRequest.NONE
+    job.error_message = stalled_message()
+    sync_progress_snapshot_state(
+        job,
+        status=ImportJobStatus.STALLED,
+        mode=mode,
+        phase=str(snapshot.get("phase") or default_phase),
+        progress=int(snapshot.get("progress") or 0),
+        message=stalled_message(),
+        current_series_id=snapshot.get("current_series_id"),
+        current_series_name=str(current_series_name) if current_series_name else None,
+        current_file_id=snapshot.get("current_file_id"),
+        current_file_name=(
+            str(snapshot.get("current_file_name")) if snapshot.get("current_file_name") else None
+        ),
+        current_file_stage=(
+            str(snapshot.get("current_file_stage")) if snapshot.get("current_file_stage") else None
+        ),
+        current_file_progress_current=snapshot.get("current_file_progress_current"),
+        current_file_progress_total=snapshot.get("current_file_progress_total"),
+        current_file_progress_pct=snapshot.get("current_file_progress_pct"),
+        current_file_progress_unit=(
+            str(snapshot.get("current_file_progress_unit"))
+            if snapshot.get("current_file_progress_unit")
+            else None
+        ),
+        current_item_kind=(
+            str(snapshot.get("current_item_kind")) if snapshot.get("current_item_kind") else None
+        ),
+        current_item_stage=(
+            str(snapshot.get("current_item_stage")) if snapshot.get("current_item_stage") else None
+        ),
+        current_item_stage_label=(
+            str(snapshot.get("current_item_stage_label"))
+            if snapshot.get("current_item_stage_label")
+            else None
+        ),
+        current_item_progress_pct=snapshot.get("current_item_progress_pct"),
+        current_item_detail=(
+            str(snapshot.get("current_item_detail"))
+            if snapshot.get("current_item_detail")
+            else None
+        ),
+        estimated_seconds_remaining=snapshot.get("estimated_seconds_remaining"),
+        elapsed_seconds=snapshot.get("elapsed_seconds"),
+    )
+
+
 def import_control_state_for_job(job: ImportJob) -> dict[str, object]:
     """Return durable UI control affordances for the current job state."""
     requested_action = snapshot_requested_action_for_job(job)
@@ -223,7 +289,7 @@ def import_control_state_for_job(job: ImportJob) -> dict[str, object]:
         }
         and not action_pending
     )
-    can_resume = job.status == ImportJobStatus.PAUSED or (
+    can_resume = job.status in {ImportJobStatus.PAUSED, ImportJobStatus.STALLED} or (
         job.status == ImportJobStatus.REVIEW and job.import_started_at is None
     )
     can_cancel = (
@@ -238,6 +304,7 @@ def import_control_state_for_job(job: ImportJob) -> dict[str, object]:
     can_discard = job.status in {
         ImportJobStatus.PENDING,
         ImportJobStatus.PAUSED,
+        ImportJobStatus.STALLED,
         ImportJobStatus.REVIEW,
         ImportJobStatus.FAILED,
         ImportJobStatus.CANCELLED,
@@ -247,6 +314,7 @@ def import_control_state_for_job(job: ImportJob) -> dict[str, object]:
         ImportJobStatus.PENDING,
         ImportJobStatus.REVIEW,
         ImportJobStatus.PAUSED,
+        ImportJobStatus.STALLED,
         ImportJobStatus.FAILED,
         ImportJobStatus.CANCELLED,
         ImportJobStatus.ROLLED_BACK,

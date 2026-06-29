@@ -443,6 +443,12 @@ class TestHandlersDirect:
             r'<a\s+href="/issues/\d+"\s+hx-boost="false"\s+class="downloads-issue-link">',
             body,
         )
+        assert ":data-intervention-bulk-busy=\"bulkActionBusy ? 'true' : 'false'\"" in body
+        assert "hx-on::before-request=\"bulkActionBusy = 'approve'\"" in body
+        assert "hx-on::before-request=\"bulkActionBusy = 'reject'\"" in body
+        assert "Approving..." in body
+        assert "Rejecting..." in body
+        assert ':disabled="bulkActionBusy || selectedIds.length === 0"' in body
         assert not re.search(
             r'data-testid="intervention-select-mode-toggle"[^>]*\sdisabled(?:\s|>|=)', body
         )

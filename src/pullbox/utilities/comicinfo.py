@@ -89,6 +89,7 @@ _PULLBOX_AUTHORITATIVE_FIELDS = frozenset(
     }
 )
 ComicInfoProgressCallback = Callable[[str, int, int, str], None]
+_COMICINFO_MATERIALIZE_CHUNK_SIZE = 1024 * 1024
 _RETAILER_SCRUBBED_FIELDS = frozenset({"Web", "Notes"})
 
 
@@ -438,23 +439,45 @@ def materialize_cbz_with_comicinfo(
                 archive_path=source_path,
             )
             entries = [item for item in src.infolist() if item.filename.lower() != "comicinfo.xml"]
-            total_entries = len(entries) + 1
+            total_transfer_bytes = max(sum(item.file_size for item in entries), 1)
+            transferred_bytes = 0
             with zipfile.ZipFile(temp_output_path, "w", zipfile.ZIP_DEFLATED) as dst:
-                for index, item in enumerate(entries, start=1):
-                    dst.writestr(item, src.read(item.filename))
-                    _emit_comicinfo_progress(
-                        progress_callback,
-                        "rewriting",
-                        index,
-                        total_entries,
-                        "entries",
+                _emit_comicinfo_progress(
+                    progress_callback,
+                    "transferring",
+                    0,
+                    total_transfer_bytes,
+                    "bytes",
+                )
+                for item in entries:
+                    transferred_bytes = _copy_zip_member_with_progress(
+                        src,
+                        dst,
+                        item,
+                        transferred_bytes=transferred_bytes,
+                        total_transfer_bytes=total_transfer_bytes,
+                        progress_callback=progress_callback,
                     )
+                _emit_comicinfo_progress(
+                    progress_callback,
+                    "transferring",
+                    total_transfer_bytes,
+                    total_transfer_bytes,
+                    "bytes",
+                )
+                _emit_comicinfo_progress(
+                    progress_callback,
+                    "rewriting",
+                    0,
+                    1,
+                    "entries",
+                )
                 dst.writestr("ComicInfo.xml", xml_content.encode("utf-8"))
                 _emit_comicinfo_progress(
                     progress_callback,
                     "rewriting",
-                    total_entries,
-                    total_entries,
+                    1,
+                    1,
                     "entries",
                 )
 
@@ -499,6 +522,32 @@ def materialize_cbz_with_comicinfo(
         if tmp_fd >= 0:
             with contextlib.suppress(OSError):
                 os.close(tmp_fd)
+
+
+def _copy_zip_member_with_progress(
+    src: zipfile.ZipFile,
+    dst: zipfile.ZipFile,
+    item: zipfile.ZipInfo,
+    *,
+    transferred_bytes: int,
+    total_transfer_bytes: int,
+    progress_callback: ComicInfoProgressCallback | None,
+) -> int:
+    with src.open(item, "r") as src_member, dst.open(item, "w") as dst_member:
+        while True:
+            chunk = src_member.read(_COMICINFO_MATERIALIZE_CHUNK_SIZE)
+            if not chunk:
+                break
+            dst_member.write(chunk)
+            transferred_bytes += len(chunk)
+            _emit_comicinfo_progress(
+                progress_callback,
+                "transferring",
+                min(transferred_bytes, total_transfer_bytes),
+                total_transfer_bytes,
+                "bytes",
+            )
+    return transferred_bytes
 
 
 def _emit_comicinfo_progress(

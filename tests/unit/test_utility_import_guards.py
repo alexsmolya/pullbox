@@ -48,6 +48,25 @@ async def test_mutating_utility_job_is_blocked_during_import(db_session) -> None
 
 
 @pytest.mark.asyncio
+async def test_mutating_utility_job_is_blocked_during_stalled_import(db_session) -> None:
+    db_session.add(
+        ImportJob(
+            source_path="/imports/test",
+            source_type=ImportSourceType.FILESYSTEM,
+            status=ImportJobStatus.STALLED,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(ValidationError, match="currently writing files"):
+        await ensure_utility_job_allowed_during_import(
+            db_session,
+            job_type=JobType.MASS_RENAME,
+            config={},
+        )
+
+
+@pytest.mark.asyncio
 async def test_non_mutating_utility_job_is_allowed_during_import(db_session) -> None:
     db_session.add(
         ImportJob(

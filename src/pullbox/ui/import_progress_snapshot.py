@@ -11,6 +11,7 @@ from pullbox.services.import_workflow_state import (
     paused_message_for_mode,
     snapshot_mode_for_job,
     snapshot_requested_action_for_job,
+    stalled_message,
 )
 
 _PROGRESS_FALLBACK_BY_STATUS = {
@@ -19,6 +20,7 @@ _PROGRESS_FALLBACK_BY_STATUS = {
     ImportJobStatus.MATCHING: 45,
     ImportJobStatus.FILE_MATCHING: 80,
     ImportJobStatus.IMPORTING: 5,
+    ImportJobStatus.STALLED: 0,
     ImportJobStatus.ROLLING_BACK: 5,
     ImportJobStatus.REVIEW: 100,
     ImportJobStatus.COMPLETED: 100,
@@ -37,6 +39,7 @@ _MESSAGE_FALLBACK_BY_STATUS = {
     ImportJobStatus.ANALYZING: "Analyzing for duplicates...",
     ImportJobStatus.MATCHING: "Matching against ComicVine...",
     ImportJobStatus.FILE_MATCHING: "Matching files to issues...",
+    ImportJobStatus.STALLED: stalled_message(),
 }
 
 
@@ -88,6 +91,8 @@ def _fallback_message(job: Any, effective_mode: str, snapshot: dict[str, object]
         return job.error_message or "Import failed."
     if job.status == ImportJobStatus.PAUSED:
         return paused_message_for_mode(effective_mode)
+    if job.status == ImportJobStatus.STALLED:
+        return job.error_message or stalled_message()
     return _MESSAGE_FALLBACK_BY_STATUS.get(job.status, "Preparing scan inventory...")
 
 

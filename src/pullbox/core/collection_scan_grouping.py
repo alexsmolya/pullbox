@@ -141,6 +141,8 @@ def _is_obvious_non_comic_document(path: Path) -> bool:
 
 def _is_scan_candidate_file(path: Path, extensions: frozenset[str]) -> bool:
     """Return true when a path is a supported import candidate."""
+    if path.name.startswith("._"):
+        return False
     return path.suffix.lower() in extensions and not _is_obvious_non_comic_document(path)
 
 

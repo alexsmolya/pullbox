@@ -42,7 +42,15 @@ from pullbox.services.import_file_matching_progress import (
 from pullbox.services.import_file_split_series import (
     split_explicit_issue_series_mismatches as _split_explicit_issue_series_mismatches,
 )
-from pullbox.services.import_progress_runtime import current_item_payload
+from pullbox.services.import_progress_runtime import (
+    ScanReviewFileMatchProfile,
+    ScanReviewSeriesMatchProfile,
+    current_item_payload,
+    estimate_remaining_work_seconds,
+    scan_review_completed_weight,
+    scan_review_progress_pct,
+    scan_review_progress_plan,
+)
 from pullbox.services.import_source_metadata import load_archive_entry_issue_hint_for_import_file
 from pullbox.services.import_workflow_state import (
     SCAN_PROGRESS_FILE_MATCH_END,
@@ -177,6 +185,24 @@ async def run_import_file_matching(
         max(int(series_item.files_total or series_item.file_count or 0), 0)
         for series_item in matched_series_list
     )
+    series_match_profile_count = max(
+        int(job.series_matched or 0) + int(job.series_no_match or 0),
+        len(matched_series_list),
+    )
+    progress_plan = scan_review_progress_plan(
+        analysis_series_count=max(int(job.series_found or 0), series_match_profile_count),
+        series_match_profiles=[
+            ScanReviewSeriesMatchProfile(direct_match=False)
+            for _idx in range(series_match_profile_count)
+        ],
+        file_match_profiles=[
+            ScanReviewFileMatchProfile(
+                file_count=max(int(series_item.files_total or series_item.file_count or 0), 0),
+                issue_count=series_item.cv_issue_count,
+            )
+            for series_item in matched_series_list
+        ],
+    )
     completed_file_phase_units = 0
     total_series = max(len(matched_series_list), 1)
     runtime_revision_state: dict[str, int] = {"value": int(job.progress_revision or 0)}
@@ -189,9 +215,11 @@ async def run_import_file_matching(
         emit_live_progress=emit_live_progress,
         phase_progress=phase_progress,
         estimate_remaining_seconds=estimate_remaining_seconds,
+        estimate_remaining_work_seconds=estimate_remaining_work_seconds,
         job_stats=job_stats,
         total_file_phase_units=total_file_phase_units,
         revision_state=runtime_revision_state,
+        scan_review_plan=progress_plan,
         phase_start=SCAN_PROGRESS_FILE_MATCH_START,
         phase_end=SCAN_PROGRESS_FILE_MATCH_END,
     )
@@ -469,11 +497,14 @@ async def run_import_file_matching(
             last_checkpoint_at = time.monotonic()
 
         if progress_callback and should_checkpoint:
-            progress = phase_progress(
-                SCAN_PROGRESS_FILE_MATCH_START,
-                SCAN_PROGRESS_FILE_MATCH_END,
-                completed_file_phase_units,
-                max(total_file_phase_units, 1),
+            completed_weight = scan_review_completed_weight(
+                progress_plan,
+                phase="file_matching",
+                completed_items=completed_file_phase_units,
+            )
+            progress = scan_review_progress_pct(
+                progress_plan,
+                completed_weight=completed_weight,
             )
             await emit_progress(
                 session,
@@ -485,9 +516,10 @@ async def run_import_file_matching(
                     progress=progress,
                     message=f"Matched files in {imp_series.raw_series_name}",
                     current_series=imp_series.raw_series_name,
-                    estimated_seconds_remaining=estimate_remaining_seconds(
-                        job.scan_started_at,
-                        progress,
+                    estimated_seconds_remaining=estimate_remaining_work_seconds(
+                        job.scan_completed_at or job.match_completed_at or job.scan_started_at,
+                        completed_units=completed_weight,
+                        total_units=progress_plan.total_weight,
                     ),
                     **current_item_payload(
                         kind="series",
