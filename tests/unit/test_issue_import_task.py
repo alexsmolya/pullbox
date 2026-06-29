@@ -34,12 +34,23 @@ class _FakeSessionFactory:
 
 @pytest.mark.asyncio
 async def test_cancel_issue_import_run_marks_active_task_cancelled() -> None:
-    """Cancelling an in-flight manual import should stop the task and publish state."""
+    """Cancelling an in-flight manual import should request cooperative cancellation."""
 
     issue_import_task._issue_import_states.clear()
     issue_import_task._issue_import_tasks.clear()
+    issue_import_task._issue_import_cancel_requests.clear()
 
-    task = asyncio.create_task(asyncio.sleep(60))
+    async def cooperative_import() -> None:
+        while 42 not in issue_import_task._issue_import_cancel_requests:
+            await asyncio.sleep(0)
+        issue_import_task._issue_import_cancel_requests.discard(42)
+        issue_import_task._set_issue_import_state(
+            42,
+            state="cancelled",
+            message="Import cancelled.",
+        )
+
+    task = asyncio.create_task(cooperative_import())
     issue_import_task._issue_import_tasks[42] = task
     issue_import_task._issue_import_states[42] = issue_import_task.ManualFileImportProgressResponse(
         issue_id=42,
@@ -52,13 +63,56 @@ async def test_cancel_issue_import_run_marks_active_task_cancelled() -> None:
 
         assert state.state == "cancelled"
         assert state.message == "Import cancelled."
-        assert task.cancelled() or task.done()
+        assert task.done()
+        assert not task.cancelled()
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
         issue_import_task._issue_import_tasks.clear()
         issue_import_task._issue_import_states.clear()
+        issue_import_task._issue_import_cancel_requests.clear()
+
+
+@pytest.mark.asyncio
+async def test_cancel_issue_import_run_reports_completed_if_safe_point_passed() -> None:
+    """A cancel request must not publish cancelled while file work keeps running."""
+
+    issue_import_task._issue_import_states.clear()
+    issue_import_task._issue_import_tasks.clear()
+    issue_import_task._issue_import_cancel_requests.clear()
+
+    async def non_interruptible_import() -> None:
+        await asyncio.sleep(0.01)
+        issue_import_task._issue_import_cancel_requests.discard(43)
+        issue_import_task._set_issue_import_state(
+            43,
+            state="completed",
+            message="Import completed before cancellation could safely stop.",
+        )
+
+    task = asyncio.create_task(non_interruptible_import())
+    issue_import_task._issue_import_tasks[43] = task
+    issue_import_task._issue_import_states[43] = issue_import_task.ManualFileImportProgressResponse(
+        issue_id=43,
+        state="running",
+        message="Importing selected file...",
+    )
+
+    try:
+        state = await issue_import_task.cancel_issue_import_run(43)
+
+        assert state.state == "completed"
+        assert state.message == "Import completed before cancellation could safely stop."
+        assert task.done()
+        assert not task.cancelled()
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        issue_import_task._issue_import_tasks.clear()
+        issue_import_task._issue_import_states.clear()
+        issue_import_task._issue_import_cancel_requests.clear()
 
 
 @pytest.mark.asyncio

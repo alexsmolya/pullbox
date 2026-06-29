@@ -1241,6 +1241,111 @@ class TestReplacementRegistration:
         assert lf.match_confidence == MatchConfidence.MANUAL
 
     @pytest.mark.asyncio
+    async def test_replacement_staged_original_is_removed_only_after_commit(
+        self,
+        session: AsyncSession,
+        issue: Issue,
+        source_file: Path,
+        comics_dir_config: Path,
+    ) -> None:
+        from pullbox.core.file_ops import register_library_file
+
+        result = await session.execute(select(LibraryRoot).limit(1))
+        root = result.scalars().first()
+        assert root is not None
+
+        final_path = comics_dir_config / "Batman (2024)" / "Batman (2024) #017.cbz"
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        final_path.write_bytes(b"old")
+        existing = LibraryFile(
+            file_path=str(final_path),
+            file_name=final_path.name,
+            file_size=final_path.stat().st_size,
+            file_format=FileFormat.CBZ,
+            file_modified_at=datetime.fromtimestamp(final_path.stat().st_mtime, tz=UTC),
+            match_confidence=MatchConfidence.HIGH,
+            issue_id=issue.id,
+            library_root_id=root.id,
+        )
+        session.add(existing)
+        await session.commit()
+        replacement_bytes = source_file.read_bytes()
+
+        await register_library_file(
+            session,
+            source_file,
+            issue,
+            MatchConfidence.MANUAL,
+            move_to_library=True,
+            library_root_id=root.id,
+            loaded_issue=issue,
+            replace_existing_library_file=True,
+            replacement_trash_dir=None,
+        )
+
+        staged_paths = list(final_path.parent.glob(f".{final_path.name}.pullbox-replace*"))
+        assert len(staged_paths) == 1
+        assert staged_paths[0].read_bytes() == b"old"
+        assert final_path.read_bytes() == replacement_bytes
+
+        await session.commit()
+
+        assert not staged_paths[0].exists()
+        assert final_path.read_bytes() == replacement_bytes
+
+    @pytest.mark.asyncio
+    async def test_replacement_rollback_restores_staged_original_after_registration(
+        self,
+        session: AsyncSession,
+        issue: Issue,
+        source_file: Path,
+        comics_dir_config: Path,
+    ) -> None:
+        from pullbox.core.file_ops import register_library_file
+
+        result = await session.execute(select(LibraryRoot).limit(1))
+        root = result.scalars().first()
+        assert root is not None
+
+        final_path = comics_dir_config / "Batman (2024)" / "Batman (2024) #017.cbz"
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        final_path.write_bytes(b"old")
+        existing = LibraryFile(
+            file_path=str(final_path),
+            file_name=final_path.name,
+            file_size=final_path.stat().st_size,
+            file_format=FileFormat.CBZ,
+            file_modified_at=datetime.fromtimestamp(final_path.stat().st_mtime, tz=UTC),
+            match_confidence=MatchConfidence.HIGH,
+            issue_id=issue.id,
+            library_root_id=root.id,
+        )
+        session.add(existing)
+        await session.commit()
+        replacement_bytes = source_file.read_bytes()
+
+        await register_library_file(
+            session,
+            source_file,
+            issue,
+            MatchConfidence.MANUAL,
+            move_to_library=True,
+            library_root_id=root.id,
+            loaded_issue=issue,
+            replace_existing_library_file=True,
+            replacement_trash_dir=None,
+        )
+
+        staged_paths = list(final_path.parent.glob(f".{final_path.name}.pullbox-replace*"))
+        assert len(staged_paths) == 1
+        assert final_path.read_bytes() == replacement_bytes
+
+        await session.rollback()
+
+        assert final_path.read_bytes() == b"old"
+        assert not staged_paths[0].exists()
+
+    @pytest.mark.asyncio
     async def test_replacement_cancellation_restores_staged_original(
         self,
         session: AsyncSession,
