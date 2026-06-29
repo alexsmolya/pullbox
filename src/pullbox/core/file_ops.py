@@ -13,10 +13,11 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from pullbox.core.exceptions import ConfigurationError
@@ -74,13 +75,13 @@ from pullbox.utilities.settings import move_file_to_utility_trash, restore_file_
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     from pullbox.core.library_permission_engine import PermissionChangeResult
     from pullbox.core.library_permissions import LibraryPermissionPolicy
     from pullbox.models.download import DownloadClientType
 
 logger = structlog.get_logger(__name__)
+
+_DEFERRED_REPLACEMENT_STASHES_KEY = "pullbox_deferred_replacement_stashes"
 
 
 def _safe_move(src: Path, dst: Path) -> None:
@@ -106,6 +107,28 @@ class _ReplacementStash:
     original_path: Path
     staged_path: Path | None
     staged_in_trash: bool = False
+
+
+def _pending_replacement_stashes(session: AsyncSession) -> list[_ReplacementStash]:
+    """Return the transaction-local replacement stashes awaiting durability."""
+    stashes = session.sync_session.info.setdefault(_DEFERRED_REPLACEMENT_STASHES_KEY, [])
+    return cast("list[_ReplacementStash]", stashes)
+
+
+@event.listens_for(AsyncSession.sync_session_class, "after_commit")
+def _cleanup_deferred_replacement_stashes(session: Any) -> None:
+    """Discard staged originals only after the database commit succeeds."""
+    stashes = session.info.pop(_DEFERRED_REPLACEMENT_STASHES_KEY, [])
+    for stash in stashes:
+        _discard_replacement_stash_sync(stash)
+
+
+@event.listens_for(AsyncSession.sync_session_class, "after_rollback")
+def _restore_deferred_replacement_stashes(session: Any) -> None:
+    """Restore staged originals when a caller rolls back after registration."""
+    stashes = session.info.pop(_DEFERRED_REPLACEMENT_STASHES_KEY, [])
+    for stash in reversed(stashes):
+        _restore_replacement_stash_sync(stash)
 
 
 async def _load_issue_with_series_and_publisher(
@@ -597,13 +620,14 @@ async def register_library_file_with_metadata(
                     confidence=confidence,
                     naming_snapshot=naming_snapshot,
                 )
-                await _finalize_replacement_stash(
+                await _finalize_replacement_stash_db_state(
                     session,
                     replacement_stash,
                     registered_file=existing,
                 )
-                replacement_finalized = True
                 await session.flush()
+                _defer_replacement_stash_cleanup(session, replacement_stash)
+                replacement_finalized = True
                 logger.info(
                     "library_file_already_exists",
                     file_path=str(final_path),
@@ -657,14 +681,15 @@ async def register_library_file_with_metadata(
         issue.status = IssueStatus.OWNED
         effective_issue.status = IssueStatus.OWNED
 
-        await _finalize_replacement_stash(
+        await _finalize_replacement_stash_db_state(
             session,
             replacement_stash,
             registered_file=lf,
         )
-        replacement_finalized = True
 
         await session.flush()
+        _defer_replacement_stash_cleanup(session, replacement_stash)
+        replacement_finalized = True
 
         logger.info(
             "library_file_registered",
@@ -790,40 +815,55 @@ def _replacement_staging_path(original_path: Path) -> Path:
 
 async def _restore_replacement_stash(stash: _ReplacementStash) -> None:
     """Restore a staged old file after a failed replacement attempt."""
+    await asyncio.to_thread(_restore_replacement_stash_sync, stash)
+
+
+def _restore_replacement_stash_sync(stash: _ReplacementStash) -> None:
+    """Synchronously restore a staged old file for transaction event hooks."""
     if stash.staged_path is None:
         return
 
-    if await asyncio.to_thread(stash.original_path.exists):
+    if stash.original_path.exists():
         with suppress(OSError):
-            await asyncio.to_thread(stash.original_path.unlink)
+            stash.original_path.unlink()
 
     if stash.staged_in_trash:
-        await asyncio.to_thread(
-            restore_file_from_utility_trash,
-            stash.staged_path,
-            stash.original_path,
-        )
+        restore_file_from_utility_trash(stash.staged_path, stash.original_path)
     else:
         stash.original_path.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(stash.staged_path.rename, stash.original_path)
+        stash.staged_path.rename(stash.original_path)
 
 
-async def _finalize_replacement_stash(
+async def _finalize_replacement_stash_db_state(
     session: AsyncSession,
     stash: _ReplacementStash | None,
     *,
     registered_file: LibraryFile,
 ) -> None:
-    """Discard staged originals and remove superseded DB rows after success."""
+    """Stage superseded DB row removal before the caller flushes."""
     if stash is None:
         return
 
     if stash.library_file.id != registered_file.id:
         await session.delete(stash.library_file)
 
-    if stash.staged_path is not None and not stash.staged_in_trash:
-        with suppress(FileNotFoundError):
-            await asyncio.to_thread(stash.staged_path.unlink)
+
+def _defer_replacement_stash_cleanup(
+    session: AsyncSession,
+    stash: _ReplacementStash | None,
+) -> None:
+    """Defer staged original cleanup until the active transaction is durable."""
+    if stash is None:
+        return
+    _pending_replacement_stashes(session).append(stash)
+
+
+def _discard_replacement_stash_sync(stash: _ReplacementStash) -> None:
+    """Discard a staged original after the replacement transaction commits."""
+    if stash.staged_path is None or stash.staged_in_trash:
+        return
+    with suppress(FileNotFoundError):
+        stash.staged_path.unlink()
 
 
 async def _update_existing_library_file_from_path(

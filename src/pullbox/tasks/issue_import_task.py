@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -24,6 +25,7 @@ logger = structlog.get_logger(__name__)
 
 _issue_import_states: dict[int, ManualFileImportProgressResponse] = {}
 _issue_import_tasks: dict[int, asyncio.Task[Any]] = {}
+_issue_import_cancel_requests: set[int] = set()
 _issue_import_start_lock = asyncio.Lock()
 _background_tasks: set[asyncio.Task[Any]] = set()
 
@@ -45,6 +47,7 @@ async def start_issue_import_run(
         if existing is not None and existing.state == "running":
             return existing
 
+        _issue_import_cancel_requests.discard(issue_id)
         initial = ManualFileImportProgressResponse(
             issue_id=issue_id,
             state="running",
@@ -72,12 +75,27 @@ async def start_issue_import_run(
 
 async def cancel_issue_import_run(issue_id: int) -> ManualFileImportProgressResponse:
     """Cancel a running manual-import task and publish a terminal snapshot."""
+    task: asyncio.Task[Any] | None = None
     async with _issue_import_start_lock:
         task = _issue_import_tasks.get(issue_id)
         if task is not None and not task.done():
-            task.cancel()
-            await asyncio.sleep(0)
+            _issue_import_cancel_requests.add(issue_id)
+            _set_issue_import_state(
+                issue_id,
+                state="running",
+                message="Cancelling after the current safe file step...",
+                error_message=None,
+            )
 
+    if task is not None and not task.done():
+        with suppress(asyncio.CancelledError, Exception):
+            await task
+
+    current = _issue_import_states.get(issue_id)
+    if current is not None and current.state != "running":
+        return current
+
+    async with _issue_import_start_lock:
         return _set_issue_import_state(
             issue_id,
             state="cancelled",
@@ -184,6 +202,21 @@ async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> N
                 file_index=1,
                 total_files=1,
             )
+            if issue_id in _issue_import_cancel_requests:
+                _issue_import_cancel_requests.discard(issue_id)
+                await session.rollback()
+                _set_issue_import_state(
+                    issue_id,
+                    state="cancelled",
+                    message="Import cancelled.",
+                    error_message=None,
+                    current_file_stage=None,
+                    current_file_progress_current=None,
+                    current_file_progress_total=None,
+                    current_file_progress_pct=None,
+                    current_file_progress_unit=None,
+                )
+                return
 
             result = await execute_manual_issue_import(
                 session,
@@ -203,11 +236,17 @@ async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> N
                     unit=unit,
                 ),
             )
+            cancel_requested_after_file_work = issue_id in _issue_import_cancel_requests
+            _issue_import_cancel_requests.discard(issue_id)
             await session.commit()
             _set_issue_import_state(
                 issue_id,
                 state="completed",
-                message="Import complete.",
+                message=(
+                    "Import completed before cancellation could safely stop."
+                    if cancel_requested_after_file_work
+                    else "Import complete."
+                ),
                 current_file_name=result.library_file.file_name,
                 current_file_stage="finalizing",
                 current_file_progress_current=1,
@@ -233,6 +272,7 @@ async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> N
                 error_message=None,
             )
         except asyncio.CancelledError:
+            _issue_import_cancel_requests.discard(issue_id)
             await session.rollback()
             logger.info("issue_import_run_cancelled", issue_id=issue_id)
             _set_issue_import_state(
@@ -248,6 +288,7 @@ async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> N
             )
             raise
         except (ManualIssueImportError, FileNotFoundError) as exc:
+            _issue_import_cancel_requests.discard(issue_id)
             await session.rollback()
             _set_issue_import_state(
                 issue_id,
@@ -261,6 +302,7 @@ async def _run_issue_import(issue_id: int, request_payload: dict[str, Any]) -> N
                 current_file_progress_unit=None,
             )
         except Exception as exc:
+            _issue_import_cancel_requests.discard(issue_id)
             logger.exception("issue_import_run_failed", issue_id=issue_id)
             await session.rollback()
             resource_block = classify_resource_safety_exception(exc)

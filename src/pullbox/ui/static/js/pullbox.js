@@ -14581,9 +14581,11 @@ function issueDetailPage(config) {
 
         var progress = await response.json();
         this.applyImportProgress(progress);
-        this.importing = false;
-        this.importModalOpen = false;
-        this.dispatchToast("Import cancelled", "warning");
+        if (this.importState === "running") {
+          this.beginImportPolling();
+          return;
+        }
+        this.handleTerminalImportProgress(progress);
       } catch (error) {
         if (this.importState === "running") {
           this.beginImportPolling();
