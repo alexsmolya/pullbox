@@ -1979,10 +1979,10 @@ class TestConfirmImport:
             )
 
     @pytest.mark.asyncio
-    async def test_confirm_rejects_embedded_comicinfo_update_with_hardlink_transfer(
+    async def test_confirm_allows_embedded_comicinfo_update_with_source_preserving_transfer(
         self, db_session: AsyncSession, service: ImportService
     ) -> None:
-        """Global metadata updates still reject hardlink/symlink transfer methods."""
+        """Collection imports keep source-safe effective copy for metadata rewrites."""
         job = await _create_job_row(db_session, status=ImportJobStatus.REVIEW)
         item = await _create_imported_series(db_session, job)
         db_session.add(
@@ -1997,15 +1997,19 @@ class TestConfirmImport:
         )
         await db_session.flush()
 
-        with pytest.raises(ValidationError, match="Move or Copy"):
-            await service.confirm_import(
-                db_session,
-                job.id,
-                ConfirmImportRequest(
-                    series_ids=[item.id],
-                    update_embedded_comicinfo_from_match=True,
-                ),
-            )
+        await service.confirm_import(
+            db_session,
+            job.id,
+            ConfirmImportRequest(
+                series_ids=[item.id],
+                update_embedded_comicinfo_from_match=True,
+            ),
+        )
+
+        assert job.transfer_method == "hardlink"
+        assert job.effective_transfer_method == "copy"
+        assert job.source_preserved is True
+        assert job.update_embedded_comicinfo_from_match is True
 
     @pytest.mark.asyncio
     async def test_confirm_duplicate_file_only_selection_allowed(
@@ -2197,10 +2201,10 @@ class TestConfirmImport:
         assert job.total_files_no_match == 1
 
     @pytest.mark.asyncio
-    async def test_confirm_rejects_convert_with_hardlink_transfer(
+    async def test_confirm_allows_convert_with_source_preserving_transfer(
         self, db_session: AsyncSession, service: ImportService
     ) -> None:
-        """Conversion on import is incompatible with hardlink/symlink transfer modes."""
+        """Collection imports keep source-safe effective copy for archive conversion."""
         job = await _create_job_row(db_session, status=ImportJobStatus.REVIEW)
         item = await _create_imported_series(db_session, job)
         db_session.add(
@@ -2215,12 +2219,16 @@ class TestConfirmImport:
         )
         await db_session.flush()
 
-        with pytest.raises(ValidationError, match="Move or Copy"):
-            await service.confirm_import(
-                db_session,
-                job.id,
-                ConfirmImportRequest(series_ids=[item.id]),
-            )
+        await service.confirm_import(
+            db_session,
+            job.id,
+            ConfirmImportRequest(series_ids=[item.id]),
+        )
+
+        assert job.transfer_method == "hardlink"
+        assert job.effective_transfer_method == "copy"
+        assert job.source_preserved is True
+        assert job.convert_to_preferred_format is True
 
 
 class TestMetadataRepair:

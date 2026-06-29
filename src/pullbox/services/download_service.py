@@ -46,6 +46,8 @@ class DownloadService:
         release: ReleaseResult,
         issue_id: int,
         indexer_id: int | None = None,
+        *,
+        replace_existing_file: bool = False,
     ) -> DownloadHistory:
         """Send a release to the appropriate download client.
 
@@ -71,6 +73,7 @@ class DownloadService:
             download_client=client_type,
             state=DownloadState.QUEUED,
             file_size=release.size_bytes,
+            replace_existing_file=replace_existing_file,
         )
         session.add(download)
         await session.flush()
@@ -125,6 +128,8 @@ class DownloadService:
         indexer_name: str,
         is_torrent: bool,
         file_size: int | None = None,
+        *,
+        replace_existing_file: bool = False,
     ) -> DownloadHistory:
         """Grab a specific release selected by the user.
 
@@ -145,7 +150,12 @@ class DownloadService:
             category=None,
             published_at=None,
         )
-        return await self.send_to_client(session, release, issue_id)
+        return await self.send_to_client(
+            session,
+            release,
+            issue_id,
+            replace_existing_file=replace_existing_file,
+        )
 
     async def check_active_downloads(
         self,

@@ -69,7 +69,10 @@ class ImportServiceJobLifecycleMixin:
         if job is None:
             raise NotFoundError("ImportJob", job_id)
 
-        if job.status == ImportJobStatus.PAUSED and job.import_started_at is not None:
+        if (
+            job.status in {ImportJobStatus.PAUSED, ImportJobStatus.STALLED}
+            and job.import_started_at is not None
+        ):
             await request_import_cancel(
                 session,
                 job_id,

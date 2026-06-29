@@ -21,6 +21,7 @@ from pullbox.models.health import HealthCheckResult, HealthStatus
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.services.update_check import UpdateCheckResult
+from pullbox.tasks.backup_task import run_backups
 from pullbox.tasks.blocklist_task import expire_blocklist_entries
 from pullbox.tasks.cover_backfill_task import scheduled_backfill_series_covers
 from pullbox.tasks.download_scheduler_task import (
@@ -421,10 +422,19 @@ class TestMetadataSchedulerWrappers:
         """Long daily jobs should not reset their next run on every restart."""
         registered = {task.task_id: task for task in get_registered_tasks()}
 
+        assert run_backups.__name__ == "run_backups"
         assert registered["sync_new_issues"].trigger == "cron"
         assert registered["sync_new_issues"].trigger_kwargs == {"hour": 1, "minute": 0}
         assert registered["backfill_series_covers"].trigger == "cron"
         assert registered["backfill_series_covers"].trigger_kwargs == {"hour": 2, "minute": 0}
+        assert registered["run_backups"].trigger == "cron"
+        assert registered["run_backups"].trigger_kwargs == {"hour": 3}
+        assert registered["refresh_metadata"].trigger == "cron"
+        assert registered["refresh_metadata"].trigger_kwargs == {"hour": 3, "minute": 15}
+        assert (
+            registered["refresh_metadata"].trigger_kwargs
+            != registered["run_backups"].trigger_kwargs
+        )
 
     def test_app_startup_does_not_override_sync_new_issues_to_interval(self) -> None:
         """The fixed cron schedule should not be replaced by interval-style kwargs."""

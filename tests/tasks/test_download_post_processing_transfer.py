@@ -70,12 +70,16 @@ async def test_transfer_and_register_tracks_progress_and_final_state(
         library_root_id: int | None,
         transfer_progress_callback: object,
         download_client: object,
+        replace_existing_library_file: bool,
+        replacement_trash_dir: Path | None,
     ) -> object:
         _ = session, issue, download_client
         assert source_path == source
         assert confidence.value == "high"
         assert move_to_library is True
         assert library_root_id == 12
+        assert replace_existing_library_file is False
+        assert replacement_trash_dir is None
         assert callable(transfer_progress_callback)
         transfer_progress_callback(5, 10)
         transfer_progress_callback(10, 10)

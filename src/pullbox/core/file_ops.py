@@ -67,7 +67,9 @@ from pullbox.core.library_transfer import transfer_into_library as _transfer_int
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.series import Series
+from pullbox.services.series_delete_targets import trash_relative_path
 from pullbox.utilities.executors.file_converter import convert_file
+from pullbox.utilities.settings import move_file_to_utility_trash, restore_file_from_utility_trash
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -96,6 +98,16 @@ class LibraryFileRegistrationOutcome:
     permission_results: tuple[PermissionChangeResult, ...] = ()
 
 
+@dataclass(slots=True)
+class _ReplacementStash:
+    """Temporarily moved file state while a replacement import is materialized."""
+
+    library_file: LibraryFile
+    original_path: Path
+    staged_path: Path | None
+    staged_in_trash: bool = False
+
+
 async def _load_issue_with_series_and_publisher(
     session: AsyncSession,
     issue: Issue,
@@ -103,7 +115,10 @@ async def _load_issue_with_series_and_publisher(
     """Reload an Issue with eager relationships even if it is already identity-mapped."""
     statement = (
         select(Issue)
-        .options(joinedload(Issue.series).joinedload(Series.publisher))
+        .options(
+            joinedload(Issue.series).joinedload(Series.publisher),
+            joinedload(Issue.library_file).joinedload(LibraryFile.library_root),
+        )
         .where(Issue.id == issue.id)
         .execution_options(populate_existing=True)
     )
@@ -189,6 +204,8 @@ async def register_library_file(
     comicinfo_materializer: Callable[..., Any] | None = None,
     placement_started_callback: Callable[..., Any] | None = None,
     allow_resource_safety_exception: bool = False,
+    replace_existing_library_file: bool = False,
+    replacement_trash_dir: Path | None = None,
 ) -> LibraryFile:
     """Register a file in the library, optionally moving/renaming it."""
     outcome = await register_library_file_with_metadata(
@@ -215,6 +232,8 @@ async def register_library_file(
         comicinfo_materializer=comicinfo_materializer,
         placement_started_callback=placement_started_callback,
         allow_resource_safety_exception=allow_resource_safety_exception,
+        replace_existing_library_file=replace_existing_library_file,
+        replacement_trash_dir=replacement_trash_dir,
     )
     return outcome.library_file
 
@@ -244,6 +263,8 @@ async def register_library_file_with_metadata(
     comicinfo_materializer: Callable[..., Any] | None = None,
     placement_started_callback: Callable[..., Any] | None = None,
     allow_resource_safety_exception: bool = False,
+    replace_existing_library_file: bool = False,
+    replacement_trash_dir: Path | None = None,
 ) -> LibraryFileRegistrationOutcome:
     """Register a file in the library, optionally moving/renaming it.
 
@@ -272,6 +293,8 @@ async def register_library_file_with_metadata(
     transfer_artifact = artifact_transfer or _materialize_library_artifact
     materialize_with_comicinfo = comicinfo_materializer
     comicinfo_already_embedded = False
+    replacement_stash: _ReplacementStash | None = None
+    replacement_finalized = False
 
     async def notify_placement_started(
         *,
@@ -321,9 +344,10 @@ async def register_library_file_with_metadata(
                 )
 
             # 4. Load series with publisher (need for naming and root resolution)
-            effective_issue = loaded_issue or await _load_issue_with_series_and_publisher(
-                session,
-                issue,
+            effective_issue = (
+                await _load_issue_with_series_and_publisher(session, issue)
+                if loaded_issue is None or replace_existing_library_file
+                else loaded_issue
             )
             series = effective_issue.series
 
@@ -333,6 +357,11 @@ async def register_library_file_with_metadata(
                 source_path,
                 library_root_id,
                 series=series,
+            )
+            replace_existing_path = (
+                Path(effective_issue.library_file.file_path)
+                if replace_existing_library_file and effective_issue.library_file is not None
+                else None
             )
 
             if not source_path.exists():
@@ -398,8 +427,15 @@ async def register_library_file_with_metadata(
                         root,
                         effective_ingest_policy,
                         rename,
+                        replace_existing_path=replace_existing_path,
                     )
                     target_path = target.path
+                    replacement_stash = await _stage_replacement_file(
+                        effective_issue,
+                        prepared_source,
+                        replace_existing_library_file=replace_existing_library_file,
+                        replacement_trash_dir=replacement_trash_dir,
+                    )
                     same_filesystem = await asyncio.to_thread(
                         paths_on_same_filesystem,
                         prepared_source,
@@ -436,6 +472,13 @@ async def register_library_file_with_metadata(
                         root,
                         effective_ingest_policy,
                         rename,
+                        replace_existing_path=replace_existing_path,
+                    )
+                    replacement_stash = await _stage_replacement_file(
+                        effective_issue,
+                        prepared_source,
+                        replace_existing_library_file=replace_existing_library_file,
+                        replacement_trash_dir=replacement_trash_dir,
                     )
                     if _can_materialize_cbz_with_comicinfo(
                         prepared_source,
@@ -545,10 +588,21 @@ async def register_library_file_with_metadata(
             )
             if existing is not None:
                 # Update match info on existing record
-                existing.issue_id = issue.id
-                existing.match_confidence = confidence
-                existing.naming_snapshot = naming_snapshot
-                issue.status = IssueStatus.OWNED
+                await _update_existing_library_file_from_path(
+                    existing,
+                    final_path,
+                    issue=effective_issue,
+                    series=series,
+                    root=root,
+                    confidence=confidence,
+                    naming_snapshot=naming_snapshot,
+                )
+                await _finalize_replacement_stash(
+                    session,
+                    replacement_stash,
+                    registered_file=existing,
+                )
+                replacement_finalized = True
                 await session.flush()
                 logger.info(
                     "library_file_already_exists",
@@ -601,6 +655,14 @@ async def register_library_file_with_metadata(
 
         # 10. Set Issue status to OWNED
         issue.status = IssueStatus.OWNED
+        effective_issue.status = IssueStatus.OWNED
+
+        await _finalize_replacement_stash(
+            session,
+            replacement_stash,
+            registered_file=lf,
+        )
+        replacement_finalized = True
 
         await session.flush()
 
@@ -624,6 +686,14 @@ async def register_library_file_with_metadata(
             series_folder_path=final_path.parent,
             permission_results=permission_results,
         )
+    except asyncio.CancelledError:
+        if replacement_stash is not None and not replacement_finalized:
+            await _restore_replacement_stash(replacement_stash)
+        raise
+    except Exception:
+        if replacement_stash is not None and not replacement_finalized:
+            await _restore_replacement_stash(replacement_stash)
+        raise
     finally:
         await asyncio.to_thread(_cleanup_prepared_paths, cleanup_paths)
 
@@ -652,6 +722,137 @@ async def _materialize_library_artifact(
         transfer_method=transfer_method,
     )
     return target_path
+
+
+async def _stage_replacement_file(
+    issue: Issue,
+    artifact_source: Path,
+    *,
+    replace_existing_library_file: bool,
+    replacement_trash_dir: Path | None,
+) -> _ReplacementStash | None:
+    """Move an existing issue file aside before materializing a replacement."""
+    if not replace_existing_library_file or issue.library_file is None:
+        return None
+
+    library_file = issue.library_file
+    original_path = Path(library_file.file_path)
+    if not await asyncio.to_thread(original_path.exists):
+        return _ReplacementStash(
+            library_file=library_file,
+            original_path=original_path,
+            staged_path=None,
+        )
+
+    if original_path.resolve(strict=False) == artifact_source.resolve(strict=False):
+        return _ReplacementStash(
+            library_file=library_file,
+            original_path=original_path,
+            staged_path=None,
+        )
+
+    if replacement_trash_dir is not None:
+        staged_path = await asyncio.to_thread(
+            move_file_to_utility_trash,
+            original_path,
+            replacement_trash_dir,
+            relative_path=trash_relative_path(original_path, library_file.library_root),
+        )
+        return _ReplacementStash(
+            library_file=library_file,
+            original_path=original_path,
+            staged_path=staged_path,
+            staged_in_trash=True,
+        )
+
+    staged_path = _replacement_staging_path(original_path)
+    await asyncio.to_thread(original_path.rename, staged_path)
+    return _ReplacementStash(
+        library_file=library_file,
+        original_path=original_path,
+        staged_path=staged_path,
+    )
+
+
+def _replacement_staging_path(original_path: Path) -> Path:
+    """Return a hidden, non-conflicting sibling path for a replaced file."""
+    candidate = original_path.with_name(f".{original_path.name}.pullbox-replace")
+    if not candidate.exists():
+        return candidate
+
+    counter = 1
+    while True:
+        numbered = original_path.with_name(f".{original_path.name}.pullbox-replace-{counter}")
+        if not numbered.exists():
+            return numbered
+        counter += 1
+
+
+async def _restore_replacement_stash(stash: _ReplacementStash) -> None:
+    """Restore a staged old file after a failed replacement attempt."""
+    if stash.staged_path is None:
+        return
+
+    if await asyncio.to_thread(stash.original_path.exists):
+        with suppress(OSError):
+            await asyncio.to_thread(stash.original_path.unlink)
+
+    if stash.staged_in_trash:
+        await asyncio.to_thread(
+            restore_file_from_utility_trash,
+            stash.staged_path,
+            stash.original_path,
+        )
+    else:
+        stash.original_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(stash.staged_path.rename, stash.original_path)
+
+
+async def _finalize_replacement_stash(
+    session: AsyncSession,
+    stash: _ReplacementStash | None,
+    *,
+    registered_file: LibraryFile,
+) -> None:
+    """Discard staged originals and remove superseded DB rows after success."""
+    if stash is None:
+        return
+
+    if stash.library_file.id != registered_file.id:
+        await session.delete(stash.library_file)
+
+    if stash.staged_path is not None and not stash.staged_in_trash:
+        with suppress(FileNotFoundError):
+            await asyncio.to_thread(stash.staged_path.unlink)
+
+
+async def _update_existing_library_file_from_path(
+    library_file: LibraryFile,
+    final_path: Path,
+    *,
+    issue: Issue,
+    series: object,
+    root: LibraryRoot,
+    confidence: MatchConfidence,
+    naming_snapshot: dict[str, Any],
+) -> None:
+    """Refresh an existing LibraryFile row from the current artifact on disk."""
+    stat = await asyncio.to_thread(final_path.stat)
+    extension = final_path.suffix.lstrip(".").lower()
+
+    library_file.file_path = str(final_path)
+    library_file.file_name = final_path.name
+    library_file.file_size = stat.st_size
+    library_file.file_format = _FORMAT_MAP.get(extension, FileFormat.CBZ)
+    library_file.file_modified_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    library_file.match_confidence = confidence
+    library_file.parsed_series = series.title if isinstance(series, Series) else None
+    library_file.parsed_issue_number = issue.issue_number
+    library_file.parsed_year = series.year_start if isinstance(series, Series) else None
+    library_file.issue_id = issue.id
+    library_file.library_root_id = root.id
+    library_file.naming_snapshot = naming_snapshot
+    issue.status = IssueStatus.OWNED
 
 
 def _can_materialize_cbz_with_comicinfo(

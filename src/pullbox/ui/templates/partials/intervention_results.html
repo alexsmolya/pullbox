@@ -125,14 +125,14 @@
         count_testid="intervention-selection-count",
         count_expr="`${selectedIds.length} selected`",
         select_visible_click="selectAllVisible()",
-        select_visible_disabled_expr="visibleIds().length === 0 || allVisibleSelected()",
+        select_visible_disabled_expr="bulkActionBusy || visibleIds().length === 0 || allVisibleSelected()",
         deselect_all_click="deselectAll()",
-        deselect_all_disabled_expr="selectedIds.length === 0",
+        deselect_all_disabled_expr="bulkActionBusy || selectedIds.length === 0",
         done_click="doneSelectMode()",
         done_testid="intervention-select-mode-done",
         show_select_all_expr="hasMoreMatchingThanVisible()",
         select_all_click="selectAllMatching()",
-        select_all_disabled_expr="selectAllMatchingBusy || allMatchingSelected()",
+        select_all_disabled_expr="bulkActionBusy || selectAllMatchingBusy || allMatchingSelected()",
         select_all_busy_expr="selectAllMatchingBusy",
         select_all_testid="intervention-select-all-results"
       ) %}
@@ -143,12 +143,14 @@
           hx-swap="outerHTML"
           hx-sync="#intervention-queue-results:replace"
           hx-include="#intervention-filter-form"
-          hx-on::after-request="if ($event.detail.successful) { doneSelectMode() }"
+          hx-on::before-request="bulkActionBusy = 'approve'"
+          hx-on::after-request="bulkActionBusy = null; if ($event.detail.successful) { doneSelectMode() }"
           data-testid="intervention-bulk-approve"
           class="select-btn select-btn-success whitespace-nowrap"
-          :disabled="selectedIds.length === 0"
+          :disabled="bulkActionBusy || selectedIds.length === 0"
         >
-          Approve selected
+          <span x-show="bulkActionBusy !== 'approve'">Approve selected</span>
+          <span x-show="bulkActionBusy === 'approve'">Approving...</span>
         </button>
 
         <button
@@ -158,12 +160,14 @@
           hx-swap="outerHTML"
           hx-sync="#intervention-queue-results:replace"
           hx-include="#intervention-filter-form"
-          hx-on::after-request="if ($event.detail.successful) { doneSelectMode() }"
+          hx-on::before-request="bulkActionBusy = 'reject'"
+          hx-on::after-request="bulkActionBusy = null; if ($event.detail.successful) { doneSelectMode() }"
           data-testid="intervention-bulk-reject"
           class="select-btn select-btn-danger whitespace-nowrap"
-          :disabled="selectedIds.length === 0"
+          :disabled="bulkActionBusy || selectedIds.length === 0"
         >
-          Reject selected
+          <span x-show="bulkActionBusy !== 'reject'">Reject selected</span>
+          <span x-show="bulkActionBusy === 'reject'">Rejecting...</span>
         </button>
       {% endcall %}
 {% endset %}

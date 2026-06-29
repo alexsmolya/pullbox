@@ -1432,7 +1432,7 @@ class TestSeriesRouteContracts:
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
-        assert response.headers["cache-control"] == "private, no-cache, max-age=0, must-revalidate"
+        assert response.headers["cache-control"] == "private, max-age=31536000, immutable"
 
     async def test_series_selection_ids_returns_all_matching_series(
         self,

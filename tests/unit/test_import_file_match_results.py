@@ -234,3 +234,35 @@ def test_file_match_summary_duplicate_series_falls_back_to_current_counts() -> N
     assert series.diagnostics["fully_owned_series"] is False
     assert series.diagnostics["has_importable_files"] is False
     assert series.diagnostics["conflict_files"] == 1
+
+
+def test_file_match_summary_duplicate_matched_files_override_stale_non_actionable_profile() -> None:
+    series = ImportedSeries(
+        raw_series_name="Poison Ivy",
+        status=ImportSeriesStatus.DUPLICATE,
+        diagnostics={
+            "kind": "duplicate_series",
+            "actionable_duplicate_merge": False,
+            "fully_owned_series": True,
+        },
+    )
+    files = [ImportedFile(status=ImportedFileStatus.MATCHED)]
+    profile = DuplicateMergeProfile(
+        actionable=False,
+        fully_owned=False,
+        existing_issue_count=2,
+        owned_issue_count=2,
+    )
+
+    apply_file_match_series_summary(
+        series,
+        files,
+        duplicate_series=True,
+        duplicate_merge_profile=profile,
+        cv_match_threshold=0.88,
+    )
+
+    assert series.diagnostics["actionable_duplicate_merge"] is True
+    assert series.diagnostics["fully_owned_series"] is False
+    assert series.diagnostics["has_importable_files"] is True
+    assert series.diagnostics["importable_files"] == 1

@@ -516,6 +516,17 @@ async def _seed_series_library_data() -> None:
                             file_size=52_428_800,
                             completed_at=datetime.now(tz=UTC),
                         ),
+                        DownloadHistory(
+                            issue_id=wanted_issue.id,
+                            title="Batman 003 (2016) [Failed].cbz",
+                            download_url="https://example.com/downloads/batman-003-failed",
+                            download_client=DownloadClientType.SABNZBD,
+                            external_id="e2e-failed-download-history",
+                            state=DownloadState.FAILED,
+                            file_size=73_400_320,
+                            error_message="Connection refused while sending to client.",
+                            completed_at=datetime.now(tz=UTC),
+                        ),
                         PendingMatch(
                             issue_id=wanted_issue.id,
                             release_title="Batman 002 (2016) [Digital] (Alt Source).cbz",

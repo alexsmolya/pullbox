@@ -202,6 +202,7 @@
   x-on:import:conflicts-saved.window="handleConflictsSaved($event.detail)"
   x-on:import:conflicts-reset.window="handleConflictsReset($event.detail)"
   data-testid="import-collection-review"
+  data-import-review-status-counts='{{ status_counts|tojson|forceescape }}'
   class="space-y-6"
 >
   <input type="hidden" name="review_status_filter" value="{{ active_review_view if active_review_view != 'series' else '' }}">
@@ -584,13 +585,33 @@
           {% set series_conflict = item.status.value == 'no_match' and series_diagnostics.get('kind') == 'series_conflict' %}
           {% set known_series_target = item.cv_id or item.user_selected_cv_id or item.series_id %}
           {% set file_conflict = item.status.value == 'matched' and item.files_conflict > 0 %}
+          {% set file_issue_mismatch = item.status.value == 'no_match' and known_series_target %}
+          {% set duplicate_issue_mismatch = item.status.value == 'duplicate' and known_series_target and item.files_no_match > 0 %}
+          {% set row_bucket_tokens = [] %}
+          {% if file_issue_mismatch or duplicate_issue_mismatch %}
+          {% set _ = row_bucket_tokens.append('needs_issue') %}
+          {% endif %}
+          {% if item.status.value == 'no_match' and not known_series_target and not series_conflict %}
+          {% set _ = row_bucket_tokens.append('needs_series') %}
+          {% endif %}
+          {% if row_safety_blocked_count > 0 %}
+          {% set _ = row_bucket_tokens.append('safety_blocked') %}
+          {% endif %}
+          {% if file_conflict or series_conflict %}
+          {% set _ = row_bucket_tokens.append('conflicts') %}
+          {% endif %}
           {% set series_selectable = item.status.value == 'matched' and not file_conflict and item.files_matched > 0 %}
-          {% set duplicate_actionable = series_diagnostics.get('actionable_duplicate_merge', item.files_matched > 0 or item.files_conflict > 0) %}
+          {% set duplicate_actionable = item.files_matched > 0 or item.files_conflict > 0 or series_diagnostics.get('actionable_duplicate_merge', false) %}
           {% set duplicate_selected_files = duplicate_selected_file_counts.get(item.id, 0) if duplicate_selected_file_counts is defined else 0 %}
           {% set duplicate_selectable = item.status.value == 'duplicate' and duplicate_actionable and item.files_matched > 0 %}
           {% set top_candidates = series_diagnostics.get('top_candidates', []) %}
           {% set can_expand_details = (row_safety_blocked_count > 0) or (item.status.value == 'matched') or (item.status.value in ('no_match', 'duplicate') and series_diagnostics) %}
-          <tbody{% if can_expand_details %} x-data="importReviewRowExpansionData({ jobId: {{ job.id }}, rowId: {{ item.id }} })"{% endif %}>
+          <tbody
+            data-import-review-series-row="{{ item.id }}"
+            data-import-review-row-status="{{ item.status.value }}"
+            data-import-review-row-buckets="{{ row_bucket_tokens|join(' ') }}"
+            {% if can_expand_details %}x-data="importReviewRowExpansionData({ jobId: {{ job.id }}, rowId: {{ item.id }} })"{% endif %}
+          >
             <tr>
               {% if show_selection_column %}
               <td>
@@ -667,8 +688,6 @@
                 {% endif %}
               </td>
               <td class="text-pb-text-dim">&rarr;</td>
-                {% set file_issue_mismatch = item.status.value == 'no_match' and known_series_target %}
-                {% set duplicate_issue_mismatch = item.status.value == 'duplicate' and known_series_target and item.files_no_match > 0 %}
                 {% set no_match_search_query = (item.cv_title or item.raw_series_name) if file_issue_mismatch else item.raw_series_name %}
                 {% set no_match_search_tip = "Change ComicVine match" if file_issue_mismatch else "Search ComicVine" %}
                 {% set no_match_search_aria = "Change ComicVine match" if file_issue_mismatch else "Search ComicVine" %}

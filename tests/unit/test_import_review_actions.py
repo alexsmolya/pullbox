@@ -456,6 +456,36 @@ async def test_update_file_selection_toggles_duplicate_matched_file(
     assert updated.include_in_import is False
 
 
+async def test_update_file_selection_allows_duplicate_with_stale_non_actionable_diagnostics(
+    db_session: AsyncSession,
+) -> None:
+    job = await _create_job_row(db_session)
+    library_series = await _create_library_series(db_session)
+    imported = await _create_imported_series(
+        db_session,
+        job,
+        status=ImportSeriesStatus.DUPLICATE,
+        series_id=library_series.id,
+        diagnostics={
+            "actionable_duplicate_merge": False,
+            "fully_owned_series": True,
+        },
+    )
+    imported.files_matched = 1
+    imp_file = _make_file(job, imported, name="issue-020.cbz", include_in_import=False)
+    db_session.add(imp_file)
+    await db_session.flush()
+
+    updated = await update_file_selection(
+        db_session,
+        job.id,
+        imp_file.id,
+        include_in_import=True,
+    )
+
+    assert updated.include_in_import is True
+
+
 async def test_bulk_update_file_selection_limits_to_actionable_duplicate_series(
     db_session: AsyncSession,
 ) -> None:

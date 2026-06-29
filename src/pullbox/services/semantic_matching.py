@@ -177,9 +177,9 @@ class SemanticMatchEngine:
             fuzzy_low_threshold=self._config.fuzzy_low_threshold,
         )
         stripped_wanted = extract_base_series_title(wanted_series)
-        if (
-            stripped_wanted != wanted_series
-            and issue_type_family(metadata.issue_type) == TypeFamily.COLLECTION
+        if stripped_wanted != wanted_series and (
+            issue_type_family(metadata.issue_type) == TypeFamily.COLLECTION
+            or wanted_issue_type == IssueType.ANNUAL
         ):
             stripped_match = _matcher.match(
                 series_name,

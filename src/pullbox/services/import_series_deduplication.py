@@ -27,9 +27,13 @@ from pullbox.services.import_matching import (
     is_same_series,
     series_type_from_import_diagnostics,
 )
-from pullbox.services.import_workflow_state import (
-    SCAN_PROGRESS_ANALYZE_END,
-    SCAN_PROGRESS_ANALYZE_START,
+from pullbox.services.import_progress_runtime import (
+    ScanReviewFileMatchProfile,
+    ScanReviewSeriesMatchProfile,
+    estimate_remaining_work_seconds,
+    scan_review_completed_weight,
+    scan_review_progress_pct,
+    scan_review_progress_plan,
 )
 
 if TYPE_CHECKING:
@@ -107,6 +111,24 @@ async def deduplicate_import_series(
 
     duplicate_count = 0
     total_items = len(items)
+    progress_plan = scan_review_progress_plan(
+        analysis_series_count=total_items,
+        series_match_profiles=[
+            ScanReviewSeriesMatchProfile(
+                file_count=int(item.files_total or item.file_count or 0),
+                direct_match=bool(item.cv_id),
+            )
+            for item in items
+        ],
+        file_match_profiles=[
+            ScanReviewFileMatchProfile(
+                file_count=int(item.files_total or item.file_count or 0),
+                issue_count=item.cv_issue_count,
+            )
+            for item in items
+            if item.has_files
+        ],
+    )
     for idx, item in enumerate(items):
         await raise_if_cancelled(session, job.id)
         duplicate_found = await _mark_cv_id_duplicate(
@@ -136,11 +158,14 @@ async def deduplicate_import_series(
             last_checkpoint_at = time.monotonic()
 
         if progress_callback and should_checkpoint:
-            progress = phase_progress(
-                SCAN_PROGRESS_ANALYZE_START,
-                SCAN_PROGRESS_ANALYZE_END,
-                idx + 1,
-                max(total_items, 1),
+            completed_weight = scan_review_completed_weight(
+                progress_plan,
+                phase="analyzing",
+                completed_items=idx + 1,
+            )
+            progress = scan_review_progress_pct(
+                progress_plan,
+                completed_weight=completed_weight,
             )
             job.series_duplicate = duplicate_count
             await emit_progress(
@@ -154,9 +179,10 @@ async def deduplicate_import_series(
                     message=f"Analyzing {idx + 1}/{total_items}...",
                     current_series=item.raw_series_name,
                     current_series_status=item.status,
-                    estimated_seconds_remaining=estimate_remaining_seconds(
-                        job.scan_started_at,
-                        progress,
+                    estimated_seconds_remaining=estimate_remaining_work_seconds(
+                        job.scan_completed_at or job.scan_started_at,
+                        completed_units=completed_weight,
+                        total_units=progress_plan.total_weight,
                     ),
                     **job_stats(job),
                 ),

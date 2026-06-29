@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -33,6 +33,7 @@ def _job() -> ImportJob:
         source_type=ImportSourceType.FILESYSTEM,
         status=ImportJobStatus.FILE_MATCHING,
         scan_started_at=datetime(2026, 6, 9, 12, 0, tzinfo=UTC),
+        match_completed_at=datetime(2026, 6, 9, 12, 30, tzinfo=UTC),
         progress_revision=10,
     )
 
@@ -114,6 +115,74 @@ async def test_file_matching_progress_emitter_persists_durable_event() -> None:
     assert event.current_item_progress_pct == 40
     assert event.series_found == 3
     assert event.total_files_found == 4
+
+
+@pytest.mark.asyncio
+async def test_file_matching_progress_eta_uses_total_work_units() -> None:
+    persisted_events: list[ImportProgressEvent] = []
+    work_eta_calls: list[dict[str, Any]] = []
+    job = _job()
+    job.match_completed_at = datetime.now(UTC) - timedelta(seconds=20)
+
+    async def emit_progress(
+        _session: object,
+        _job: ImportJob,
+        event: ImportProgressEvent,
+        _callback: object,
+    ) -> None:
+        persisted_events.append(event)
+
+    async def emit_live_progress(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("expected durable progress")
+
+    def estimate_remaining_work_seconds(
+        started_at: datetime | None,
+        *,
+        completed_units: int | float,
+        total_units: int | float,
+        current_unit_progress_pct: int | float | None = None,
+    ) -> int:
+        work_eta_calls.append(
+            {
+                "started_at": started_at,
+                "completed_units": completed_units,
+                "total_units": total_units,
+                "current_unit_progress_pct": current_unit_progress_pct,
+            }
+        )
+        return 777
+
+    emitter = build_file_matching_progress_emitter(
+        session=object(),
+        job=job,
+        progress_callback=object(),
+        emit_progress=emit_progress,
+        emit_live_progress=emit_live_progress,
+        phase_progress=lambda _start, _end, _completed, _total: 91,
+        estimate_remaining_seconds=lambda *_args: 12,
+        estimate_remaining_work_seconds=estimate_remaining_work_seconds,
+        job_stats=lambda _job: {},
+        total_file_phase_units=10,
+        revision_state={"value": 10},
+    )
+
+    await emitter(
+        _series(),
+        3,
+        message="Matched file 2/4 for Batman",
+        current_item_progress_pct=50,
+    )
+
+    assert len(persisted_events) == 1
+    assert persisted_events[0].estimated_seconds_remaining == 777
+    assert work_eta_calls == [
+        {
+            "started_at": job.match_completed_at,
+            "completed_units": 3,
+            "total_units": 10,
+            "current_unit_progress_pct": 50,
+        }
+    ]
 
 
 @pytest.mark.asyncio

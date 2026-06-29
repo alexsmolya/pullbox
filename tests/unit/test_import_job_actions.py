@@ -8,10 +8,14 @@ from unittest.mock import AsyncMock
 
 from pullbox.core.exceptions import NotFoundError
 from pullbox.models.import_job import (
+    ImportedFile,
+    ImportedFileStatus,
+    ImportedSeries,
     ImportJob,
     ImportJobAction,
     ImportJobActionStatus,
     ImportJobStatus,
+    ImportSeriesStatus,
     ImportSourceType,
 )
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
@@ -398,6 +402,77 @@ async def test_rollback_action_restores_partial_move_when_source_was_removed(
     assert original_path.read_text(encoding="utf-8") == "moved target"
     assert not destination_path.exists()
     assert not series_folder.exists()
+    assert action.status == ImportJobActionStatus.ROLLED_BACK
+    assert action.rolled_back_at is not None
+
+
+async def test_rollback_action_restores_adopted_import_file_paths(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    service = _make_service()
+    job = await _create_job_row(db_session)
+    old_folder = tmp_path / "library" / "Mylar Folder"
+    new_folder = tmp_path / "library" / "Canonical Series (2024)"
+    new_folder.mkdir(parents=True)
+    (new_folder / "cover.jpg").write_text("sidecar", encoding="utf-8")
+    renamed_file = new_folder / "Mylar Series 001.cbz"
+    renamed_file.write_text("comic", encoding="utf-8")
+    series = Series(
+        title="Canonical Series",
+        sort_title="Canonical Series",
+        year_start=2024,
+        path=str(new_folder),
+    )
+    db_session.add(series)
+    await db_session.flush()
+    imported_series = ImportedSeries(
+        import_job_id=job.id,
+        status=ImportSeriesStatus.CONFIRMED,
+        raw_series_name="Mylar Series",
+        file_count=1,
+        files_total=1,
+        source_folder=str(old_folder),
+        series_id=series.id,
+    )
+    db_session.add(imported_series)
+    await db_session.flush()
+    imported_file = ImportedFile(
+        import_job_id=job.id,
+        import_series_id=imported_series.id,
+        file_path=str(renamed_file),
+        file_name=renamed_file.name,
+        file_size=renamed_file.stat().st_size,
+        file_format="cbz",
+        status=ImportedFileStatus.MATCHED,
+        include_in_import=True,
+    )
+    action = ImportJobAction(
+        import_job_id=job.id,
+        sequence_no=1,
+        phase="import",
+        action_type="series_folder_renamed",
+        status=ImportJobActionStatus.COMPLETED,
+        payload={
+            "series_id": series.id,
+            "import_series_id": imported_series.id,
+            "old_folder_path": str(old_folder),
+            "new_folder_path": str(new_folder),
+            "old_series_path": str(old_folder),
+            "old_library_root_id": None,
+        },
+    )
+    db_session.add_all([imported_file, action])
+    await db_session.flush()
+
+    await service._rollback_action(db_session, _rollback_plan(action))
+
+    restored_file_path = old_folder / "Mylar Series 001.cbz"
+    assert old_folder.exists()
+    assert not new_folder.exists()
+    assert restored_file_path.exists()
+    assert imported_file.file_path == str(restored_file_path)
+    assert series.path == str(old_folder)
     assert action.status == ImportJobActionStatus.ROLLED_BACK
     assert action.rolled_back_at is not None
 

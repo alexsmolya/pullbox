@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
@@ -14,7 +15,8 @@ from pullbox.core.events import DownloadCompleted, DownloadFailed, FileMatched, 
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
-from pullbox.models.series import Series, SeriesStatus
+from pullbox.models.search_log import SearchLog, SearchType
+from pullbox.models.series import IssueCatalogState, Series, SeriesStatus
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -217,6 +219,105 @@ async def test_series_added_schedules_cover_and_search_tasks(
 
     assert created_coroutines == ["fake_download", "fake_search"]
     assert not subscribers._background_tasks
+
+
+@pytest.mark.asyncio
+async def test_series_added_search_retries_until_catalog_is_complete(
+    async_engine: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    async with factory() as session:
+        series = Series(
+            title="Delayed Search",
+            sort_title="delayed search",
+            monitored=True,
+            issue_catalog_state=IssueCatalogState.HYDRATING,
+        )
+        session.add(series)
+        await session.flush()
+        issue = Issue(
+            series_id=series.id,
+            issue_number=1.0,
+            status=IssueStatus.WANTED,
+        )
+        session.add(issue)
+        await session.commit()
+        series_id = series.id
+
+    sleep_calls = 0
+
+    async def fake_sleep(_delay: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls == 2:
+            async with factory() as session:
+                series = await session.get(Series, series_id)
+                assert series is not None
+                series.issue_catalog_state = IssueCatalogState.COMPLETE
+                await session.commit()
+
+    search_mock = AsyncMock(return_value={"wanted": 1, "sent": 0, "queued": 0})
+    monkeypatch.setattr(subscribers, "get_session_factory", lambda: factory)
+    monkeypatch.setattr(subscribers.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(subscribers, "SEARCH_ON_ADD_MAX_READINESS_ATTEMPTS", 3)
+    monkeypatch.setattr("pullbox.tasks.search_task.search_series_issues", search_mock)
+
+    await subscribers._search_new_series(SeriesAdded(series_id=series_id, comicvine_id=123))
+
+    assert sleep_calls == 2
+    search_mock.assert_awaited_once_with(series_id)
+
+
+@pytest.mark.asyncio
+async def test_load_recent_search_on_add_misses_finds_unsearched_recent_series(
+    async_engine: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    async with factory() as session:
+        missed = Series(
+            title="Missed Search",
+            sort_title="missed search",
+            monitored=True,
+            issue_catalog_state=IssueCatalogState.COMPLETE,
+        )
+        already_searched = Series(
+            title="Already Searched",
+            sort_title="already searched",
+            monitored=True,
+            issue_catalog_state=IssueCatalogState.COMPLETE,
+        )
+        session.add_all([missed, already_searched])
+        await session.flush()
+        missed_issue = Issue(
+            series_id=missed.id,
+            issue_number=1.0,
+            status=IssueStatus.WANTED,
+        )
+        searched_issue = Issue(
+            series_id=already_searched.id,
+            issue_number=1.0,
+            status=IssueStatus.WANTED,
+        )
+        session.add_all([missed_issue, searched_issue])
+        await session.flush()
+        session.add(
+            SearchLog(
+                issue_id=searched_issue.id,
+                series_title=already_searched.title,
+                issue_number=1.0,
+                search_type=SearchType.BULK,
+            )
+        )
+        await session.commit()
+        missed_id = missed.id
+
+    monkeypatch.setattr(subscribers, "get_session_factory", lambda: factory)
+
+    recovered = await subscribers.load_recent_search_on_add_misses()
+
+    assert recovered == [missed_id]
 
 
 @pytest.mark.asyncio

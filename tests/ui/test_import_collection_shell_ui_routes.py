@@ -758,6 +758,8 @@ class TestImportShellRouteContracts:
         assert 'data-testid="import-collection-source-mylar3"' in response.text
         assert "sourceType === 'filesystem' ? '/imports' : '/imports/mylar.db'" in response.text
         assert 'data-testid="import-collection-source-browse"' in response.text
+        assert "Collection imports preserve source files." in response.text
+        assert "Files and folders in the selected source stay untouched" in response.text
         assert 'data-testid="file-browser-modal"' in response.text
         assert 'data-testid="import-collection-modal-host"' in response.text
 

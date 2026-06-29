@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -28,6 +30,35 @@ class _FakeSession:
 class _FakeSessionFactory:
     def __call__(self) -> _FakeSession:
         return _FakeSession()
+
+
+@pytest.mark.asyncio
+async def test_cancel_issue_import_run_marks_active_task_cancelled() -> None:
+    """Cancelling an in-flight manual import should stop the task and publish state."""
+
+    issue_import_task._issue_import_states.clear()
+    issue_import_task._issue_import_tasks.clear()
+
+    task = asyncio.create_task(asyncio.sleep(60))
+    issue_import_task._issue_import_tasks[42] = task
+    issue_import_task._issue_import_states[42] = issue_import_task.ManualFileImportProgressResponse(
+        issue_id=42,
+        state="running",
+        message="Importing selected file...",
+    )
+
+    try:
+        state = await issue_import_task.cancel_issue_import_run(42)
+
+        assert state.state == "cancelled"
+        assert state.message == "Import cancelled."
+        assert task.cancelled() or task.done()
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        issue_import_task._issue_import_tasks.clear()
+        issue_import_task._issue_import_states.clear()
 
 
 @pytest.mark.asyncio
@@ -107,3 +138,86 @@ async def test_run_issue_import_accepts_positional_progress_callbacks(monkeypatc
     assert state.state == "completed"
     assert state.file_name == "Henchgirl 001.cbz"
     assert state.match_confidence == "manual"
+
+
+@pytest.mark.asyncio
+async def test_run_issue_import_accepts_worker_thread_progress_callbacks(monkeypatch) -> None:
+    """Off-thread ComicInfo materialization should still update live progress."""
+
+    issue_import_task._issue_import_states.clear()
+
+    prepared = SimpleNamespace(
+        source_path=Path("/tmp/imports/Aliens Epic Collection.cbz"),
+        issue=SimpleNamespace(series=SimpleNamespace(library_root_id=1)),
+        issue_id=11,
+        ingest_policy=SimpleNamespace(
+            normalize_imported_archives_to_cbz=False,
+            update_embedded_comicinfo_from_match=True,
+        ),
+    )
+
+    async def fake_execute_manual_issue_import(
+        session,
+        prepared_arg,
+        *,
+        allow_resource_safety_exception=False,
+        preparation_progress_callback=None,
+        transfer_progress_callback=None,
+        comicinfo_progress_callback=None,
+    ):
+        assert prepared_arg is prepared
+        assert comicinfo_progress_callback is not None
+
+        def emit_from_worker_thread() -> None:
+            comicinfo_progress_callback("transferring", 512, 1024, "bytes")
+
+        await asyncio.to_thread(emit_from_worker_thread)
+        await asyncio.sleep(0)
+        state = issue_import_task.get_issue_import_progress_state(11)
+        assert state is not None
+        assert state.current_file_stage == "transferring"
+        assert state.current_file_progress_current == 512
+        assert state.current_file_progress_total == 1024
+        assert state.current_file_progress_unit == "bytes"
+
+        return SimpleNamespace(
+            issue_id=11,
+            library_file=SimpleNamespace(
+                id=111,
+                file_name="Aliens Epic Collection.cbz",
+                file_path="/comics/Aliens Epic Collection.cbz",
+                file_size=654321,
+                file_format=SimpleNamespace(value="cbz"),
+                match_confidence=SimpleNamespace(value="manual"),
+            ),
+        )
+
+    monkeypatch.setattr(
+        issue_import_task,
+        "get_session_factory",
+        lambda: _FakeSessionFactory(),
+    )
+    monkeypatch.setattr(
+        issue_import_task,
+        "prepare_manual_issue_import",
+        AsyncMock(return_value=prepared),
+    )
+    monkeypatch.setattr(
+        issue_import_task,
+        "execute_manual_issue_import",
+        fake_execute_manual_issue_import,
+    )
+
+    await issue_import_task._run_issue_import(
+        11,
+        {
+            "file_path": "/tmp/imports/Aliens Epic Collection.cbz",
+            "move_to_library": True,
+            "allow_resource_safety_exception": False,
+        },
+    )
+
+    state = issue_import_task.get_issue_import_progress_state(11)
+    assert state is not None
+    assert state.state == "completed"
+    assert state.file_name == "Aliens Epic Collection.cbz"

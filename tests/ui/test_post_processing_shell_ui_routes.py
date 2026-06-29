@@ -557,3 +557,4 @@ class TestPostProcessingRouteContracts:
         assert "tooltip-wrap" in response.text
         assert "data-tooltip-auto" in response.text
         assert "data-tooltip-measure" in response.text
+        assert 'hx-boost="false" class="downloads-issue-link"' in response.text

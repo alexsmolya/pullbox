@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pullbox.core.name_matcher import NameMatcher
 from pullbox.models.import_job import ImportedFile, ImportedSeries, ImportSeriesStatus
 from pullbox.models.issue import Issue, IssueStatus, is_non_standard_issue_type
-from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.models.series import IssueCatalogState, Series, SeriesStatus, SeriesType
 
 
 @dataclass(slots=True)
@@ -83,10 +83,13 @@ def duplicate_merge_is_actionable(item: ImportedSeries | None) -> bool:
     """Return True when a duplicate series still has wanted/missing import targets."""
     if item is None or not is_duplicate_series(item):
         return False
+    has_importable_files = bool((item.files_matched or 0) > 0 or (item.files_conflict or 0) > 0)
+    if has_importable_files:
+        return True
     diagnostics = dict(item.diagnostics or {})
     if "actionable_duplicate_merge" in diagnostics:
         return bool(diagnostics["actionable_duplicate_merge"])
-    return bool((item.files_matched or 0) > 0 or (item.files_conflict or 0) > 0)
+    return False
 
 
 def build_duplicate_merge_profile(
@@ -99,7 +102,11 @@ def build_duplicate_merge_profile(
     existing_issue_count = len(issue_entries)
     owned_issue_count = sum(1 for _issue, has_library_file in issue_entries if has_library_file)
     actionable = any(not has_library_file for _issue, has_library_file in issue_entries)
-    fully_owned = existing_issue_count > 0 and owned_issue_count == existing_issue_count
+    fully_owned = (
+        existing_issue_count > 0
+        and owned_issue_count == existing_issue_count
+        and _catalog_can_prove_full_ownership(existing_series, existing_issue_count)
+    )
 
     single_owned_shortcut_issue: Issue | None = None
     if (
@@ -122,6 +129,29 @@ def build_duplicate_merge_profile(
         owned_issue_count=owned_issue_count,
         single_owned_shortcut_issue=single_owned_shortcut_issue,
     )
+
+
+def _catalog_can_prove_full_ownership(
+    existing_series: Series | None,
+    existing_issue_count: int,
+) -> bool:
+    """Return whether local issue rows are complete enough to call a series fully owned."""
+    if existing_series is None:
+        return True
+
+    expected_issue_count = int(existing_series.issue_count or 0)
+    raw_state = existing_series.issue_catalog_state
+    if raw_state is None:
+        catalog_state = IssueCatalogState.COMPLETE
+    else:
+        catalog_state = (
+            raw_state
+            if isinstance(raw_state, IssueCatalogState)
+            else IssueCatalogState(str(raw_state).lower())
+        )
+    if catalog_state != IssueCatalogState.COMPLETE and expected_issue_count > 0:
+        return False
+    return expected_issue_count <= 0 or existing_issue_count >= expected_issue_count
 
 
 def logical_series_group_key(

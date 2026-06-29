@@ -3,11 +3,9 @@
   x-cloak
   x-show="showImportModal()"
   data-testid="issue-import-modal"
-  @keydown.escape.window="closeImportModal()"
 >
   <div
     class="modal-backdrop"
-    @click="closeImportModal()"
     x-transition:enter="transition ease-out duration-200"
     x-transition:enter-start="opacity-0"
     x-transition:enter-end="opacity-100"
@@ -18,7 +16,6 @@
     x-transition:enter="transition ease-out duration-200"
     x-transition:enter-start="opacity-0 translate-y-2 scale-95"
     x-transition:enter-end="opacity-100 translate-y-0 scale-100"
-    @click.outside="closeImportModal()"
   >
     <div class="modal-header">
       <div class="space-y-1">
@@ -30,18 +27,6 @@
           Keep this dialog open while Pullbox prepares, transfers, and finalizes the selected file.
         </p>
       </div>
-      <button
-        @click="closeImportModal()"
-        class="icon-btn icon-btn-sm"
-        x-bind:disabled="importState === 'running'"
-        x-bind:aria-disabled="importState === 'running' ? 'true' : 'false'"
-        aria-label="Close import dialog"
-        type="button"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
     </div>
 
     <div class="modal-body">
@@ -119,12 +104,14 @@
           </button>
           <button
             type="button"
-            class="btn btn-secondary"
-            @click="closeImportModal()"
-            x-bind:disabled="importState === 'running'"
-            x-bind:aria-disabled="importState === 'running' ? 'true' : 'false'"
+            class="btn-danger btn-sm"
+            data-testid="issue-import-cancel"
+            @click="cancelIssueImport()"
+            x-bind:disabled="cancellingImport || importState === 'completed'"
+            x-bind:aria-disabled="(cancellingImport || importState === 'completed') ? 'true' : 'false'"
           >
-            Close
+            <span x-show="!cancellingImport">Cancel import</span>
+            <span x-show="cancellingImport">Cancelling…</span>
           </button>
         </div>
       </div>

@@ -158,7 +158,9 @@ class TestIssueDetailRouteContracts:
         assert "Manage <span>issue</span>" in response.text
         assert "Manage <span>this issue</span>" not in response.text
         assert 'data-testid="issue-action-download"' in response.text
+        assert 'data-testid="issue-action-import"' in response.text
         assert 'data-testid="issue-action-manual-search"' in response.text
+        assert 'data-testid="issue-action-delete-file"' in response.text
         assert 'data-testid="issue-search-modal"' in response.text
         assert 'data-testid="issue-search-close"' in response.text
         assert 'data-testid="issue-search-modal-footer-close"' in response.text
@@ -207,6 +209,16 @@ class TestIssueDetailRouteContracts:
         assert 'data-testid="issue-import-modal-title"' in response.text
         assert 'data-testid="issue-import-progress-bar"' in response.text
         assert 'data-testid="issue-import-progress-value"' in response.text
+        assert 'data-testid="issue-import-cancel"' in response.text
+        assert "cancelIssueImport()" in response.text
+        import_modal_fragment = response.text[
+            response.text.index('data-testid="issue-import-modal"') : response.text.index(
+                'data-testid="file-browser-modal"'
+            )
+        ]
+        assert "Close import dialog" not in import_modal_fragment
+        assert "@keydown.escape.window" not in import_modal_fragment
+        assert '@click.outside="closeImportModal()"' not in import_modal_fragment
         assert 'data-testid="file-browser-modal"' in response.text
         assert 'data-testid="file-browser-title"' in response.text
         assert 'data-testid="issue-action-search"' in response.text

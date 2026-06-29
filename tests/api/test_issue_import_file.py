@@ -391,23 +391,39 @@ async def test_import_file_honors_configured_allowed_extensions(
 
 
 @pytest.mark.asyncio
-async def test_import_file_already_owned(
+async def test_import_file_replaces_already_owned_issue(
     client: AsyncClient,
     _db_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
-    """409 when issue already has a LibraryFile."""
+    """Owned issues can be replaced by explicit manual import."""
     _root_id, _series_id, issue_id = await _create_owned_issue(_db_factory)
 
     comic_file = tmp_path / "Superman 001.cbz"
     comic_file.write_bytes(b"PK" + b"\x00" * 500)
 
-    resp = await client.post(
-        f"/api/v1/issues/{issue_id}/import-file",
-        json={"file_path": str(comic_file)},
-    )
-    assert resp.status_code == 409
-    assert "already" in resp.json()["detail"].lower()
+    mock_lf = AsyncMock()
+    mock_lf.id = 84
+    mock_lf.file_path = "/tmp/test-comics/Superman (2018)/Superman 001.cbz"
+    mock_lf.file_name = "Superman 001.cbz"
+    mock_lf.file_size = 502
+    mock_lf.file_format = "cbz"
+    mock_lf.match_confidence = MatchConfidence.MANUAL
+
+    with patch(
+        "pullbox.api.v1.issues.register_library_file",
+        new_callable=AsyncMock,
+        return_value=mock_lf,
+    ) as mock_register:
+        resp = await client.post(
+            f"/api/v1/issues/{issue_id}/import-file",
+            json={"file_path": str(comic_file)},
+        )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["library_file_id"] == 84
+    mock_register.assert_called_once()
+    assert mock_register.call_args.kwargs["replace_existing_library_file"] is True
 
 
 @pytest.mark.asyncio
@@ -957,6 +973,30 @@ async def test_start_manual_issue_import_returns_initial_progress(
     assert data["state"] == "running"
     assert data["current_file_name"] == "Batman 002.cbz"
     assert data["current_file_stage"] == "preparing"
+
+
+@pytest.mark.asyncio
+async def test_cancel_manual_issue_import_returns_cancelled_progress(
+    client: AsyncClient,
+) -> None:
+    """UI cancel endpoint returns the cancelled background run snapshot."""
+    with patch(
+        "pullbox.api.v1.issues.cancel_issue_import_run",
+        new_callable=AsyncMock,
+    ) as mock_cancel:
+        mock_cancel.return_value = ManualFileImportProgressResponse(
+            issue_id=2,
+            state="cancelled",
+            message="Import cancelled.",
+        )
+
+        resp = await client.post("/api/v1/issues/2/import-file/cancel")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["state"] == "cancelled"
+    assert data["message"] == "Import cancelled."
+    mock_cancel.assert_awaited_once_with(2)
 
 
 @pytest.mark.asyncio

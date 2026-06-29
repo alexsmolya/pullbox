@@ -1381,6 +1381,108 @@ class TestPostProcessingIntegrityCheck:
         assert summaries[0]["transferred_bytes"] == existing_path.stat().st_size
 
     @pytest.mark.asyncio
+    async def test_run_post_processing_replacement_bypasses_skip_existing(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import pullbox.core.file_ops as file_ops
+        import pullbox.core.library_policy as library_policy
+        import pullbox.tasks.download_task as download_task
+
+        release_path = _create_valid_cbz(tmp_path / "downloads" / "sab-job" / "issue-009.cbz")
+        library_root_path = tmp_path / "comics"
+        library_root_path.mkdir(parents=True, exist_ok=True)
+        existing_path = library_root_path / "Absolute Superman (2025) #009.cbz"
+        existing_path.write_bytes(b"existing")
+        replacement_path = library_root_path / "Absolute Superman (2025) #009 replacement.cbz"
+
+        async def fake_register_library_file(_session: object, *args: object, **kwargs: object):
+            assert kwargs["replace_existing_library_file"] is True
+            replacement_path.write_bytes(b"replacement")
+            return SimpleNamespace(
+                file_path=str(replacement_path),
+                file_size=replacement_path.stat().st_size,
+            )
+
+        monkeypatch.setattr(download_task, "logger", _FakeLogger())
+        monkeypatch.setattr(file_ops, "register_library_file", fake_register_library_file)
+        monkeypatch.setattr(
+            library_policy,
+            "load_library_ingest_policy",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    skip_existing_files=True,
+                    post_processing_method="move",
+                )
+            ),
+        )
+
+        async with db_factory() as session:
+            root = LibraryRoot(name="Comics", path=str(library_root_path), enabled=True)
+            session.add(root)
+            await session.flush()
+
+            series = Series(
+                title="Absolute Superman",
+                sort_title="absolute superman",
+                year_start=2025,
+                library_root_id=root.id,
+            )
+            session.add(series)
+            await session.flush()
+
+            issue = Issue(series_id=series.id, issue_number=9.0, status=IssueStatus.DOWNLOADING)
+            session.add(issue)
+            await session.flush()
+
+            session.add(
+                LibraryFile(
+                    file_path=str(existing_path),
+                    file_name=existing_path.name,
+                    file_size=existing_path.stat().st_size,
+                    file_format=FileFormat.CBZ,
+                    file_hash=None,
+                    file_modified_at=datetime.now(UTC),
+                    match_confidence=MatchConfidence.HIGH,
+                    parsed_series="Absolute Superman",
+                    parsed_issue_number=9.0,
+                    parsed_year=2025,
+                    parsed_publisher=None,
+                    has_comicinfo=False,
+                    issue_id=issue.id,
+                    library_root_id=root.id,
+                )
+            )
+            await session.flush()
+
+            download = DownloadHistory(
+                title="Absolute Superman 009.cbz",
+                state=DownloadState.COMPLETED,
+                download_client=DownloadClientType.SABNZBD,
+                download_url="https://example.com/absolute-superman-009.nzb",
+                downloaded_path="/data/download/comics/Absolute Superman 009.cbz",
+                issue_id=issue.id,
+                replace_existing_file=True,
+                completed_at=datetime(2026, 5, 1, 6, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 5, 1, 6, 0, tzinfo=UTC),
+            )
+            session.add(download)
+            await session.flush()
+
+            monkeypatch.setattr(
+                download_task,
+                "_resolve_local_path",
+                AsyncMock(return_value=str(release_path)),
+            )
+
+            await download_task._run_post_processing(session, download)
+
+            assert download.imported_at is None
+            assert download.final_path == str(replacement_path)
+
+    @pytest.mark.asyncio
     async def test_recover_orphaned_downloads_restores_owned_for_imported_issue_with_library_file(
         self,
         db_factory: async_sessionmaker[AsyncSession],

@@ -1,4 +1,4 @@
-{% set active_statuses = ['pending', 'scanning', 'pausing', 'paused', 'analyzing', 'matching', 'file_matching', 'review', 'importing', 'cancelling', 'rolling_back'] %}
+{% set active_statuses = ['pending', 'scanning', 'pausing', 'paused', 'analyzing', 'matching', 'file_matching', 'review', 'importing', 'stalled', 'cancelling', 'rolling_back'] %}
 {% set refresh_qs = "tab=history&sort=" ~ sort ~ "&page=" ~ page %}
 {% if search_query %}{% set refresh_qs = refresh_qs ~ "&search=" ~ (search_query|urlencode) %}{% endif %}
 {%- macro sort_header(field, label, extra_classes="", width="") -%}

@@ -6,9 +6,11 @@ error handling, and Issue status updates.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,7 +23,7 @@ from pullbox.models import Base
 from pullbox.models.config import SystemConfig
 from pullbox.models.download import DownloadClientType
 from pullbox.models.issue import Issue, IssueStatus, IssueType
-from pullbox.models.library import FileFormat, LibraryRoot, MatchConfidence
+from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.publisher import Publisher
 from pullbox.models.series import Series
 
@@ -1181,6 +1183,116 @@ class TestDuplicateDetection:
         )
 
         assert lf1.id == lf2.id
+
+
+class TestReplacementRegistration:
+    """Explicit replacement refreshes the existing library file row."""
+
+    @pytest.mark.asyncio
+    async def test_replacement_same_path_updates_existing_metadata(
+        self,
+        session: AsyncSession,
+        issue: Issue,
+        source_file: Path,
+        comics_dir_config: Path,
+    ) -> None:
+        from pullbox.core.file_ops import register_library_file
+
+        result = await session.execute(select(LibraryRoot).limit(1))
+        root = result.scalars().first()
+        assert root is not None
+
+        final_path = comics_dir_config / "Batman (2024)" / "Batman (2024) #017.cbz"
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        final_path.write_bytes(b"old")
+        old_size = final_path.stat().st_size
+
+        existing = LibraryFile(
+            file_path=str(final_path),
+            file_name=final_path.name,
+            file_size=old_size,
+            file_format=FileFormat.CBZ,
+            file_modified_at=datetime.fromtimestamp(final_path.stat().st_mtime, tz=UTC),
+            match_confidence=MatchConfidence.HIGH,
+            issue_id=issue.id,
+            library_root_id=root.id,
+        )
+        session.add(existing)
+        await session.flush()
+
+        replacement_size = source_file.stat().st_size
+        lf = await register_library_file(
+            session,
+            source_file,
+            issue,
+            MatchConfidence.MANUAL,
+            move_to_library=True,
+            library_root_id=root.id,
+            loaded_issue=issue,
+            replace_existing_library_file=True,
+            replacement_trash_dir=None,
+        )
+
+        assert lf.id == existing.id
+        assert final_path.exists()
+        assert final_path.stat().st_size == replacement_size
+        assert lf.file_size == replacement_size
+        assert lf.file_size != old_size
+        assert lf.match_confidence == MatchConfidence.MANUAL
+
+    @pytest.mark.asyncio
+    async def test_replacement_cancellation_restores_staged_original(
+        self,
+        session: AsyncSession,
+        issue: Issue,
+        source_file: Path,
+        comics_dir_config: Path,
+    ) -> None:
+        from pullbox.core.file_ops import register_library_file
+
+        result = await session.execute(select(LibraryRoot).limit(1))
+        root = result.scalars().first()
+        assert root is not None
+
+        final_path = comics_dir_config / "Batman (2024)" / "Batman (2024) #017.cbz"
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        final_path.write_bytes(b"old")
+        original_size = final_path.stat().st_size
+
+        existing = LibraryFile(
+            file_path=str(final_path),
+            file_name=final_path.name,
+            file_size=original_size,
+            file_format=FileFormat.CBZ,
+            file_modified_at=datetime.fromtimestamp(final_path.stat().st_mtime, tz=UTC),
+            match_confidence=MatchConfidence.HIGH,
+            issue_id=issue.id,
+            library_root_id=root.id,
+        )
+        session.add(existing)
+        await session.flush()
+
+        async def cancelling_transfer(*_args: object, **_kwargs: object) -> None:
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await register_library_file(
+                session,
+                source_file,
+                issue,
+                MatchConfidence.MANUAL,
+                move_to_library=True,
+                library_root_id=root.id,
+                loaded_issue=issue,
+                replace_existing_library_file=True,
+                replacement_trash_dir=None,
+                artifact_transfer=cancelling_transfer,
+            )
+
+        assert final_path.exists()
+        assert final_path.read_bytes() == b"old"
+        assert final_path.stat().st_size == original_size
+        assert not list(final_path.parent.glob(f".{final_path.name}.pullbox-replace*"))
 
 
 class TestLibraryRootResolution:

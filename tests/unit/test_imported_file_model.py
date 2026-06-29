@@ -67,6 +67,7 @@ class TestFileMatchingJobStatus:
             "file_matching",
             "review",
             "importing",
+            "stalled",
             "cancelling",
             "rolling_back",
             "rolled_back",

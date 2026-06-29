@@ -10,6 +10,11 @@ import structlog
 from sqlalchemy import select as sa_select
 
 from pullbox.core.exceptions import JobCancelledError, JobPausedError
+from pullbox.core.sqlite_lock import (
+    SQLITE_LOCK_RETRY_ATTEMPTS,
+    is_sqlite_locked_error,
+    sqlite_lock_retry_delay,
+)
 from pullbox.database import get_session_factory
 from pullbox.models.import_job import (
     ImportControlRequest,
@@ -25,10 +30,13 @@ from pullbox.services.import_workflow_state import (
     paused_message_for_mode,
     snapshot_mode_for_job,
     sync_paused_job_state,
+    sync_stalled_job_state,
 )
 from pullbox.utilities.sse import publish
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = structlog.get_logger(__name__)
@@ -466,6 +474,81 @@ class ImportRunner:
         job.progress_snapshot = snapshot
         await session.commit()
 
+    async def _mutate_job_with_retries(
+        self,
+        job_id: int,
+        *,
+        mutate: Callable[[ImportJob], None],
+        log_event: str,
+    ) -> None:
+        """Persist a runner recovery mutation through a fresh session."""
+        for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+            try:
+                async with self._session_factory() as recovery_session:
+                    job = await recovery_session.get(ImportJob, job_id)
+                    if job is None:
+                        return
+                    mutate(job)
+                    await recovery_session.commit()
+                return
+            except Exception as exc:
+                if not is_sqlite_locked_error(exc) or attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                    logger.exception(log_event, job_id=job_id)
+                    return
+                await asyncio.sleep(sqlite_lock_retry_delay(attempt))
+
+    async def _mark_stalled(self, job_id: int) -> None:
+        def _mutate(job: ImportJob) -> None:
+            if job.status in _TERMINAL_STATES:
+                return
+            sync_stalled_job_state(job)
+            snapshot = dict(job.progress_snapshot or {})
+            snapshot["stalled_reason"] = "database_locked"
+            snapshot["stalled_at"] = datetime.now(UTC).isoformat()
+            job.progress_snapshot = snapshot
+
+        await self._mutate_job_with_retries(
+            job_id,
+            mutate=_mutate,
+            log_event="import_runner_stalled_persist_failed",
+        )
+
+    async def _mark_failed(self, job_id: int) -> None:
+        def _mutate(job: ImportJob) -> None:
+            if job.status in _TERMINAL_STATES:
+                return
+            job.status = ImportJobStatus.FAILED
+            if not job.error_message:
+                job.error_message = "Import worker failed. Check logs for details."
+
+        await self._mutate_job_with_retries(
+            job_id,
+            mutate=_mutate,
+            log_event="import_runner_failed_persist_failed",
+        )
+
+    async def _publish_final_state(self, job_id: int) -> ImportJobStatus | None:
+        """Publish the current final worker state from a clean session."""
+        for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+            try:
+                async with self._session_factory() as final_session:
+                    job = await final_session.get(ImportJob, job_id)
+                    if job is not None and job.status in {
+                        ImportJobStatus.PAUSED,
+                        ImportJobStatus.STALLED,
+                    }:
+                        return await _publish_current_snapshot_event_for_job(
+                            final_session,
+                            job_id,
+                        )
+                    return await _emit_terminal_event_for_job(final_session, job_id)
+            except Exception as exc:
+                if not is_sqlite_locked_error(exc) or attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                    logger.exception("import_runner_final_event_failed", job_id=job_id)
+                    return None
+                await asyncio.sleep(sqlite_lock_retry_delay(attempt))
+        return None
+
     async def _run_job(self, job_id: int) -> None:
         async with self._session_factory() as session:
             service = await _build_import_service(session)
@@ -477,6 +560,10 @@ class ImportRunner:
                 job = await session.get(ImportJob, job_id)
                 if job is None:
                     return
+
+                if job.status == ImportJobStatus.STALLED:
+                    _resume_stalled_job(job)
+                    await session.commit()
 
                 if job.status in _SCAN_STATES:
                     await service.resume_scan_phase(
@@ -521,24 +608,15 @@ class ImportRunner:
                         progress_callback=progress_callback,
                     )
                     await session.commit()
-            except Exception:
+            except Exception as exc:
                 logger.exception("import_runner_job_failed", job_id=job_id)
                 await session.rollback()
-                job = await session.get(ImportJob, job_id)
-                if job is not None and job.status not in _TERMINAL_STATES:
-                    job.status = ImportJobStatus.FAILED
-                    if not job.error_message:
-                        job.error_message = "Import worker failed. Check logs for details."
-                    await session.commit()
-            finally:
-                job = await session.get(ImportJob, job_id)
-                if job is not None and job.status == ImportJobStatus.PAUSED:
-                    terminal_status = await _publish_current_snapshot_event_for_job(
-                        session,
-                        job_id,
-                    )
+                if is_sqlite_locked_error(exc):
+                    await self._mark_stalled(job_id)
                 else:
-                    terminal_status = await _emit_terminal_event_for_job(session, job_id)
+                    await self._mark_failed(job_id)
+            finally:
+                terminal_status = await self._publish_final_state(job_id)
                 if terminal_status in {
                     ImportJobStatus.CANCELLED,
                     ImportJobStatus.COMPLETED,
@@ -883,3 +961,40 @@ def _resume_startup_recovered_job(job: ImportJob) -> None:
     sync_progress_snapshot["message"] = "Import recovered after restart; resuming automatically."
     sync_progress_snapshot["requested_action"] = ImportControlRequest.NONE.value
     job.progress_snapshot = sync_progress_snapshot
+
+
+def _resume_stalled_job(job: ImportJob) -> None:
+    """Restore the runnable status for a job stalled by transient DB contention."""
+    snapshot = dict(job.progress_snapshot or {})
+    phase = str(snapshot.get("phase") or "")
+    mode = snapshot_mode_for_job(job)
+    if mode == "scan" and job.import_started_at is not None:
+        if phase == "importing":
+            mode = "import"
+        elif phase == "rollback":
+            mode = "rollback"
+
+    if mode == "import":
+        job.status = ImportJobStatus.IMPORTING
+    elif mode == "rollback":
+        job.status = ImportJobStatus.ROLLING_BACK
+    elif phase == "file_matching":
+        job.status = ImportJobStatus.FILE_MATCHING
+    elif phase == "matching":
+        job.status = ImportJobStatus.MATCHING
+    elif phase == "analyzing":
+        job.status = ImportJobStatus.ANALYZING
+    else:
+        job.status = ImportJobStatus.SCANNING
+
+    job.control_request = ImportControlRequest.NONE
+    job.error_message = None
+    resume_snapshot = dict(snapshot)
+    resume_snapshot.pop("stalled_reason", None)
+    resume_snapshot.pop("stalled_at", None)
+    resume_snapshot["status"] = job.status.value
+    resume_snapshot["mode"] = mode
+    resume_snapshot["phase"] = phase or "scanning"
+    resume_snapshot["message"] = "Import resumed after database contention."
+    resume_snapshot["requested_action"] = ImportControlRequest.NONE.value
+    job.progress_snapshot = resume_snapshot

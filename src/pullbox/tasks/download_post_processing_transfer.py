@@ -29,6 +29,7 @@ async def transfer_and_register_library_file(
     register_library_file: RegisterLibraryFile,
     set_transfer_progress: SetTransferProgress,
     infer_effective_transfer_method: InferEffectiveTransferMethod,
+    replacement_trash_dir: Path | None = None,
 ) -> Path:
     """Transfer the completed download into the library and update trace state."""
     method = ingest_policy.post_processing_method
@@ -61,6 +62,8 @@ async def transfer_and_register_library_file(
         library_root_id=series.library_root_id,
         transfer_progress_callback=_on_transfer_progress,
         download_client=download.download_client,
+        replace_existing_library_file=bool(getattr(download, "replace_existing_file", False)),
+        replacement_trash_dir=replacement_trash_dir,
     )
     dest_path = Path(library_file.file_path)
     trace.final_path = str(dest_path)

@@ -51,6 +51,7 @@ class ImportJobStatus(enum.StrEnum):
     FILE_MATCHING = "file_matching"
     REVIEW = "review"
     IMPORTING = "importing"
+    STALLED = "stalled"
     CANCELLING = "cancelling"
     ROLLING_BACK = "rolling_back"
     ROLLED_BACK = "rolled_back"

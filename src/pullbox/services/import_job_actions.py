@@ -13,6 +13,7 @@ from sqlalchemy import select as sa_select
 
 from pullbox.core.exceptions import NotFoundError
 from pullbox.models.import_job import (
+    ImportedFile,
     ImportJob,
     ImportJobAction,
     ImportJobActionStatus,
@@ -198,6 +199,7 @@ async def rollback_action(
 
     elif action_type == "series_folder_renamed":
         series_id = int(payload.get("series_id") or 0)
+        import_series_id = int(payload.get("import_series_id") or 0)
         old_folder_path = Path(str(payload.get("old_folder_path") or ""))
         new_folder_path = Path(str(payload.get("new_folder_path") or ""))
         old_series_path = str(payload.get("old_series_path") or "")
@@ -206,6 +208,13 @@ async def rollback_action(
         if new_folder_path.exists() and not old_folder_path.exists():
             old_folder_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(new_folder_path), str(old_folder_path))
+        if import_series_id:
+            await _restore_imported_file_paths_after_folder_rollback(
+                session,
+                import_series_id=import_series_id,
+                old_folder_path=old_folder_path,
+                new_folder_path=new_folder_path,
+            )
 
         if series_id:
             series = await session.get(Series, series_id)
@@ -221,3 +230,26 @@ async def rollback_action(
     action.status = ImportJobActionStatus.ROLLED_BACK
     action.rolled_back_at = datetime.now(UTC)
     await session.flush()
+
+
+async def _restore_imported_file_paths_after_folder_rollback(
+    session: AsyncSession,
+    *,
+    import_series_id: int,
+    old_folder_path: Path,
+    new_folder_path: Path,
+) -> None:
+    """Point import-review file paths back at the restored source folder."""
+    resolved_old_folder = old_folder_path.expanduser().resolve(strict=False)
+    resolved_new_folder = new_folder_path.expanduser().resolve(strict=False)
+    result = await session.execute(
+        sa_select(ImportedFile).where(ImportedFile.import_series_id == import_series_id)
+    )
+    for imported_file in result.scalars().all():
+        current_path = Path(imported_file.file_path)
+        resolved_current_path = current_path.expanduser().resolve(strict=False)
+        try:
+            relative_path = resolved_current_path.relative_to(resolved_new_folder)
+        except ValueError:
+            continue
+        imported_file.file_path = str(resolved_old_folder / relative_path)

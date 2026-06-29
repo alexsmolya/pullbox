@@ -59,8 +59,11 @@
         {% set run_state = details.get("run_state") or "completed" %}
         {% set search_time_ms = details.get("search_time_ms") %}
         <tbody
-          x-data="{ expanded: (window._searchHistExpanded || new Set()).has({{ log.id }}),
-                    toggle() { this.expanded = !this.expanded; window._searchHistExpanded = window._searchHistExpanded || new Set(); this.expanded ? window._searchHistExpanded.add({{ log.id }}) : window._searchHistExpanded.delete({{ log.id }}) } }"
+          x-data="searchHistoryRowData({
+                    logId: {{ log.id }},
+                    detailUrl: '/htmx/search-history/logs/{{ log.id }}/detail',
+                    detailTarget: '#search-history-detail-content-{{ log.id }}'
+                  })"
         >
           <tr id="search-history-row-{{ log.id }}">
             <td>
@@ -121,10 +124,7 @@
                 <button
                   type="button"
                   @click="toggle()"
-                  hx-get="/htmx/search-history/logs/{{ log.id }}/detail"
-                  hx-target="#search-history-detail-content-{{ log.id }}"
-                  hx-swap="outerHTML"
-                  hx-trigger="click once"
+                  :aria-expanded="expanded.toString()"
                   data-testid="search-history-detail-toggle-{{ log.id }}"
                   class="downloads-action-btn"
                   data-tip="Details"
@@ -164,8 +164,18 @@
                 id="search-history-detail-content-{{ log.id }}"
                 data-testid="search-history-detail-placeholder"
                 class="rounded-xl border border-dashed border-pb-border bg-pb-card/40 px-4 py-3 text-xs text-pb-text-dim"
+                aria-live="polite"
               >
-                Expand this search to load diagnostics and log export data.
+                <span x-show="!detailLoading">
+                  Expand this search to load diagnostics and log export data.
+                </span>
+                <span x-show="detailLoading" class="inline-flex items-center gap-2">
+                  <svg class="h-3.5 w-3.5 animate-spin text-pb-interactive" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                  </svg>
+                  Loading diagnostics…
+                </span>
               </div>
             </td>
           </tr>

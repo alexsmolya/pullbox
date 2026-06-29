@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 _IMPORT_FILE_MUTATION_STATUSES = frozenset(
     {
         ImportJobStatus.IMPORTING,
+        ImportJobStatus.STALLED,
         ImportJobStatus.ROLLING_BACK,
     }
 )

@@ -901,7 +901,7 @@ class TestImportExecutionAutoflushDiscipline:
         assert all(call["update_embedded_comicinfo_from_match"] is True for call in seen_kwargs)
 
     @pytest.mark.asyncio
-    async def test_series_file_processing_adopts_source_folder_under_library_root(
+    async def test_source_preserving_series_file_processing_does_not_adopt_source_folder(
         self,
         db_session: AsyncSession,
         tmp_path: Path,
@@ -943,6 +943,8 @@ class TestImportExecutionAutoflushDiscipline:
             target_library_root_id=root.id,
             move_to_library=True,
             transfer_method="move",
+            effective_transfer_method="copy",
+            source_preserved=True,
         )
         db_session.add_all([issue, job])
         await db_session.flush()
@@ -993,10 +995,11 @@ class TestImportExecutionAutoflushDiscipline:
             confidence: MatchConfidence,
             **_kwargs: object,
         ) -> LibraryFile:
-            assert source == target_folder / "Batman 001.cbz"
+            assert source == source_path
+            assert _kwargs["transfer_method"] == "copy"
             library_file = LibraryFile(
-                file_path=str(source),
-                file_name=source.name,
+                file_path=str(target_folder / "Batman 001.cbz"),
+                file_name="Batman 001.cbz",
                 file_size=source.stat().st_size,
                 file_format=FileFormat.CBZ,
                 file_modified_at=datetime.now(tz=UTC),
@@ -1031,10 +1034,12 @@ class TestImportExecutionAutoflushDiscipline:
 
         assert files_imported == 1
         assert files_failed == 0
-        assert not source_folder.exists()
-        assert (target_folder / "series.json").exists()
-        assert imp_file.file_path == str(target_folder / "Batman 001.cbz")
-        assert record_action.await_args_list[0].kwargs["action_type"] == "series_folder_renamed"
+        assert source_folder.exists()
+        assert (source_folder / "series.json").exists()
+        assert imp_file.file_path == str(source_path)
+        assert [call.kwargs["action_type"] for call in record_action.await_args_list] == [
+            "library_file_registered"
+        ]
 
     @pytest.mark.asyncio
     async def test_import_logs_conversion_comicinfo_and_final_destination_name(
@@ -1399,36 +1404,42 @@ class TestImportExecutionAutoflushDiscipline:
             await session.flush()
             return library_file
 
+        adoption_mock = AsyncMock(return_value=True)
         async with session_factory() as session:
             job = await session.get(ImportJob, job_id)
             imp_series = await session.get(ImportedSeries, item_id)
             assert job is not None
             assert imp_series is not None
-            files_imported, files_failed = await process_import_series_files(
-                session,
-                job,
-                imp_series,
-                load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
-                load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
-                load_ingest_policy=AsyncMock(return_value=object()),
-                load_permission_policy=AsyncMock(return_value=object()),
-                raise_if_cancelled=AsyncMock(),
-                prepare_file=_prepare_file,
-                build_comicinfo_payload=AsyncMock(return_value={}),
-                apply_comicinfo=lambda *_args, **_kwargs: None,
-                cleanup_prepared_file=lambda *_args, **_kwargs: None,
-                record_action=AsyncMock(),
-                log_event=AsyncMock(),
-                register_file=_register_file,
-                move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
-                session_factory=session_factory,
-                file_worker_count=2,
-            )
+            with patch(
+                "pullbox.services.import_file_execution.apply_import_series_folder_adoption",
+                adoption_mock,
+            ):
+                files_imported, files_failed = await process_import_series_files(
+                    session,
+                    job,
+                    imp_series,
+                    load_media_settings=AsyncMock(return_value={"skip_existing_files": "false"}),
+                    load_trash_dir=AsyncMock(return_value=tmp_path / ".trash"),
+                    load_ingest_policy=AsyncMock(return_value=object()),
+                    load_permission_policy=AsyncMock(return_value=object()),
+                    raise_if_cancelled=AsyncMock(),
+                    prepare_file=_prepare_file,
+                    build_comicinfo_payload=AsyncMock(return_value={}),
+                    apply_comicinfo=lambda *_args, **_kwargs: None,
+                    cleanup_prepared_file=lambda *_args, **_kwargs: None,
+                    record_action=AsyncMock(),
+                    log_event=AsyncMock(),
+                    register_file=_register_file,
+                    move_to_trash=lambda *args, **kwargs: tmp_path / ".trash" / "source.cbz",
+                    session_factory=session_factory,
+                    file_worker_count=2,
+                )
             await session.commit()
 
         assert files_imported == 2
         assert files_failed == 0
         assert max_concurrency == 2
+        adoption_mock.assert_awaited_once()
         async with session_factory() as session:
             statuses = (
                 (

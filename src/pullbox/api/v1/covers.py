@@ -26,12 +26,19 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["covers"], include_in_schema=False)
 
-# Cache control: authenticated image URLs should always revalidate before reuse.
-_CACHE_HEADERS = {"Cache-Control": "private, no-cache, max-age=0, must-revalidate"}
+# Series cover URLs are authenticated and versioned by callers, so private
+# browser caching keeps grid/list navigation snappy without shared caching.
+_VERSIONED_CACHE_HEADERS = {"Cache-Control": "private, max-age=31536000, immutable"}
+_REVALIDATING_CACHE_HEADERS = {"Cache-Control": "private, no-cache, max-age=0, must-revalidate"}
 
 
-def _serve_image(path: Path) -> FileResponse:
+def _serve_image(
+    path: Path,
+    *,
+    cache_headers: dict[str, str] | None = None,
+) -> FileResponse:
     """Return a FileResponse for an image with caching headers."""
+    response_headers = cache_headers or _VERSIONED_CACHE_HEADERS
     path = path.expanduser().resolve(strict=True)
     # Infer media type from extension
     suffix = path.suffix.lower()
@@ -45,8 +52,13 @@ def _serve_image(path: Path) -> FileResponse:
     return FileResponse(
         path=path,
         media_type=media_type,
-        headers=_CACHE_HEADERS,
+        headers=response_headers,
     )
+
+
+def _serve_issue_image(path: Path) -> FileResponse:
+    """Return an issue image without immutable caching for unversioned callers."""
+    return _serve_image(path, cache_headers=_REVALIDATING_CACHE_HEADERS)
 
 
 def _find_cover_file(directory: Path, stem: str) -> Path | None:
@@ -134,7 +146,7 @@ async def get_issue_cover(
         series_path = Path(issue.series.path)
         cover = _find_cover_file(series_path, f"issue_{issue_num_str}")
         if cover:
-            return _serve_image(cover)
+            return _serve_issue_image(cover)
 
     # 2. Try .covers/ directory (by issue number)
     from pullbox.services.cover_resolver import resolve_covers_dir
@@ -144,7 +156,7 @@ async def get_issue_cover(
         covers_dir = covers_base / str(issue.series_id)
         cover = _find_cover_file(covers_dir, f"issue_{issue_num_str}")
         if cover:
-            return _serve_image(cover)
+            return _serve_issue_image(cover)
 
     # 3. Try legacy location (by DB ID)
     settings = get_settings()
@@ -152,23 +164,23 @@ async def get_issue_cover(
         legacy_dir = settings.covers_dir / str(issue.series_id)
         cover = _find_cover_file(legacy_dir, f"issue_{issue_id}")
         if cover:
-            return _serve_image(cover)
+            return _serve_issue_image(cover)
 
     # 4. Fall back to series cover
     if issue.series:
         if issue.series.path:
             cover = _find_cover_file(Path(issue.series.path), "cover")
             if cover:
-                return _serve_image(cover)
+                return _serve_issue_image(cover)
         covers_dir = covers_base / str(issue.series_id)
         cover = _find_cover_file(covers_dir, "series")
         if cover:
-            return _serve_image(cover)
+            return _serve_issue_image(cover)
         if settings.covers_dir != covers_base:
             legacy_dir = settings.covers_dir / str(issue.series_id)
             cover = _find_cover_file(legacy_dir, "series")
             if cover:
-                return _serve_image(cover)
+                return _serve_issue_image(cover)
 
     # 5. No cover found
     return Response(status_code=404)

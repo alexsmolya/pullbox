@@ -169,7 +169,10 @@ class TestSearchHistoryShellRouteContracts:
         assert "query_diagnostics" not in response.text
         assert "rejected_diagnostics_count" not in response.text
         assert 'data-testid="search-history-detail-placeholder"' in response.text
-        assert f'hx-get="/htmx/search-history/logs/{log_id}/detail"' in response.text
+        assert 'x-data="searchHistoryRowData({' in response.text
+        assert f"detailUrl: '/htmx/search-history/logs/{log_id}/detail'" in response.text
+        assert f"detailTarget: '#search-history-detail-content-{log_id}'" in response.text
+        assert "Loading diagnostics" in response.text
         assert response.text.count("search-log-data-") == 0
 
         detail_response = await authenticated_client.get(

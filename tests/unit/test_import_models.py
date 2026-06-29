@@ -29,6 +29,7 @@ class TestEnums:
             "file_matching",
             "review",
             "importing",
+            "stalled",
             "pausing",
             "paused",
             "cancelling",

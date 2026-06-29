@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -729,6 +729,152 @@ async def test_series_matching_current_item_progress_is_series_local(async_engin
     assert alpha_start.current_item_progress_pct == 0
     assert alpha_done.current_item_progress_pct == 100
     assert beta_start.current_item_progress_pct == 0
+
+
+async def test_series_matching_eta_uses_total_series_work(async_engine) -> None:
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+
+    async with factory() as seed_session:
+        job = ImportJob(
+            source_path="/tmp/imports",
+            source_type=ImportSourceType.FILESYSTEM,
+            status=ImportJobStatus.MATCHING,
+            scan_started_at=datetime.now(UTC) - timedelta(minutes=2),
+            match_started_at=datetime.now(UTC) - timedelta(seconds=20),
+        )
+        seed_session.add(job)
+        await seed_session.flush()
+        seed_session.add_all(
+            [
+                ImportedSeries(
+                    import_job_id=job.id,
+                    raw_series_name="Alpha",
+                    raw_year=2020,
+                    status=ImportSeriesStatus.PENDING,
+                    file_count=1,
+                ),
+                ImportedSeries(
+                    import_job_id=job.id,
+                    raw_series_name="Beta",
+                    raw_year=2021,
+                    status=ImportSeriesStatus.PENDING,
+                    file_count=1,
+                ),
+            ]
+        )
+        await seed_session.commit()
+        job_id = job.id
+        expected_started_at = job.match_started_at
+
+    progress_events: list[ImportProgressEvent] = []
+    eta_calls: list[dict[str, Any]] = []
+
+    async def source_metadata_for_series(
+        _session: AsyncSession,
+        item: ImportedSeries,
+    ) -> SourceMetadata:
+        return SourceMetadata(original_title=item.raw_series_name)
+
+    async def evaluate_match(**kwargs: Any) -> ComicVineMatchEvaluation:
+        return ComicVineMatchEvaluation(
+            match={
+                "cv_id": 1000,
+                "cv_title": str(kwargs["raw_name"]),
+                "cv_year": kwargs.get("raw_year"),
+                "cv_publisher": "Test Publisher",
+                "cv_issue_count": 1,
+                "cv_url": f"https://example.com/{str(kwargs['raw_name']).lower()}",
+                "cv_match_score": 1.0,
+                "cv_match_method": "exact_title_year",
+            },
+            diagnostics={},
+        )
+
+    async def raise_if_cancelled(_session: AsyncSession, _job_id: int) -> None:
+        return None
+
+    async def reclassify_duplicates(_session: AsyncSession, _job: ImportJob) -> int | None:
+        return None
+
+    async def recompute_series_counters(_session: AsyncSession, _job: ImportJob) -> None:
+        return None
+
+    async def log_event(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def emit_progress(
+        _session: AsyncSession,
+        _job: ImportJob,
+        event: ImportProgressEvent,
+        progress_callback,
+    ) -> None:
+        await progress_callback(event)
+
+    async def progress_callback(event: ImportProgressEvent) -> None:
+        progress_events.append(event)
+
+    async def maybe_slow_item_delay() -> None:
+        return None
+
+    def estimate_remaining_work_seconds(
+        started_at: datetime | None,
+        *,
+        completed_units: int | float,
+        total_units: int | float,
+        current_unit_progress_pct: int | float | None = None,
+    ) -> int:
+        eta_calls.append(
+            {
+                "started_at": started_at,
+                "completed_units": completed_units,
+                "total_units": total_units,
+                "current_unit_progress_pct": current_unit_progress_pct,
+            }
+        )
+        return 888
+
+    async with factory() as session:
+        job = await session.get(ImportJob, job_id)
+        assert job is not None
+        await run_import_series_matching(
+            session,
+            job,
+            metadata_provider=None,
+            source_metadata_for_series=source_metadata_for_series,
+            evaluate_match=evaluate_match,
+            raise_if_cancelled=raise_if_cancelled,
+            reclassify_duplicates=reclassify_duplicates,
+            recompute_series_counters=recompute_series_counters,
+            log_event=log_event,
+            emit_progress=emit_progress,
+            phase_progress=phase_progress,
+            estimate_remaining_seconds=lambda *_args: 12,
+            estimate_remaining_work_seconds=estimate_remaining_work_seconds,
+            job_stats=lambda _job: {},
+            maybe_slow_item_delay=maybe_slow_item_delay,
+            progress_callback=progress_callback,
+        )
+
+    alpha_start = next(
+        event
+        for event in progress_events
+        if event.message == "Matching Alpha against ComicVine (series 1/2)..."
+    )
+    alpha_done = next(event for event in progress_events if event.message == "Matching 1/2...")
+
+    assert alpha_start.estimated_seconds_remaining == 888
+    assert alpha_done.estimated_seconds_remaining == 888
+    assert eta_calls[0]["started_at"] == expected_started_at
+    assert eta_calls[0]["completed_units"] > 0
+    assert eta_calls[0]["total_units"] > 2
+    assert eta_calls[0]["current_unit_progress_pct"] is None
+    assert any(
+        call["started_at"] == expected_started_at
+        and call["completed_units"] > eta_calls[0]["completed_units"]
+        and call["total_units"] == eta_calls[0]["total_units"]
+        and call["current_unit_progress_pct"] is None
+        for call in eta_calls
+    )
 
 
 async def test_series_matching_detail_log_lock_does_not_rollback_match(async_engine) -> None:
