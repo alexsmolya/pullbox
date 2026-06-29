@@ -210,7 +210,7 @@ class TestIssueCoverRoutes:
 
         assert isinstance(response, FileResponse)
         assert response.media_type == "image/jpeg"
-        assert response.headers["cache-control"] == "private, max-age=31536000, immutable"
+        assert response.headers["cache-control"] == "private, no-cache, max-age=0, must-revalidate"
 
     async def test_serves_issue_cover_from_configured_covers_directory(
         self,

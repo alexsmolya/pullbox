@@ -686,6 +686,10 @@ async def register_library_file_with_metadata(
             series_folder_path=final_path.parent,
             permission_results=permission_results,
         )
+    except asyncio.CancelledError:
+        if replacement_stash is not None and not replacement_finalized:
+            await _restore_replacement_stash(replacement_stash)
+        raise
     except Exception:
         if replacement_stash is not None and not replacement_finalized:
             await _restore_replacement_stash(replacement_stash)
