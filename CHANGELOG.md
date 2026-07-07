@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.1] - 2026-07-07
+
+Patch maintenance release focused on dependency freshness and release-pipeline
+hygiene after the 1.0 launch.
+
+### CI / Build
+
+- Updated pinned GitHub Actions used by CI, Docker validation, CodeQL branch
+  probing, release image publication, and security scanning workflows.
+- Updated Tailwind CSS and the Tailwind CLI to 4.3.2 and regenerated the
+  compiled stylesheet.
+- Added a narrow local and CI `pip-audit` ignore for the current Safety
+  toolchain's transitive `nltk` advisory while no fixed upstream version is
+  available.
+
 ## [1.0.0] - 2026-06-29
 
 The first stable release. Pullbox 1.0 is a complete, self-hosted comic library
