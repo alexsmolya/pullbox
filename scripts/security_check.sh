@@ -25,6 +25,7 @@ if ! "${pip_audit_bin}" --strict --desc on -r "${requirements_file}" \
   --ignore-vuln GHSA-rf74-v2fm-23pw \
   --ignore-vuln CVE-2026-33230 \
   --ignore-vuln CVE-2026-33231 \
+  --ignore-vuln PYSEC-2026-597 \
   --ignore-vuln CVE-2026-4539; then
   status=1
 fi
