@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.4] - 2026-07-13
+
+Maintenance release focused on reliable multi-platform publication across
+Docker runtimes with classic image stores.
+
+### CI / Build
+
+- Evicted the digest-selected image between AMD64 and ARM64 runtime checks so
+  sequential verification cannot fail with Docker's `cannot overwrite digest`
+  error after manifests are published.
+
 ## [1.0.3] - 2026-07-13
 
 Maintenance release focused on faster multi-architecture image publication and
