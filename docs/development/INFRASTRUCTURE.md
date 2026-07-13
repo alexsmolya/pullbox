@@ -25,6 +25,10 @@ requirements.
 - Pull request pushes run a cheap GitHub Actions preflight by default. Full PR
   CI/security/workflow-hygiene checks run after maintainers apply `ci:full`.
 - CI tests Python 3.12, 3.13, and 3.14.
+- Self-hosted Python matrix jobs use five pytest workers per Python version.
+- Self-hosted functional E2E jobs use three isolated pytest workers per browser.
+- Normal PR E2E runs disable video encoding; manual CI dispatches can enable
+  retained failure video and tracing with the `e2e_diagnostics` input.
 - Python 3.14 is the production container runtime.
 - The production Docker image uses Docker Hardened Images.
 - The runtime image is non-root and intentionally minimal.
@@ -94,6 +98,8 @@ tests/e2e/
 - Tests outside `tests/unit/` are treated as slower coverage.
 - E2E tests run a live app and seed through API-style setup rather than relying
   on broad seed scripts.
+- Each parallel E2E worker creates its own temporary database, data directories,
+  uvicorn server, browser session, and local port.
 - Search and parser tests should use real fixture data when release-title edge
   cases matter.
 - Coverage percentage is useful, but contract coverage matters more.
@@ -222,8 +228,11 @@ tracked in the active CI/CD path.
   - `github-hosted` moves trusted checks to `ubuntu-latest`
 - Fork and Dependabot pull requests always run ordinary checks on
   `ubuntu-latest`, regardless of `PULLBOX_CHECKS_RUNNER`.
-- Trusted ordinary jobs use the explicit self-hosted `ci` runner label when
-  `PULLBOX_CHECKS_RUNNER` is not `github-hosted`.
+- Trusted compute-intensive test and E2E jobs use the explicit self-hosted `ci`
+  runner label when `PULLBOX_CHECKS_RUNNER` is not `github-hosted`.
+- Trusted accessibility, dependency-audit, static-analysis, secret-scan, and
+  workflow-hygiene jobs use the explicit self-hosted `checks` runner label so
+  they cannot occupy a matrix-test runner slot.
 - Trusted Docker validation and Docker release jobs use the explicit
   self-hosted `docker` runner label by design. They are not governed by
   `PULLBOX_CHECKS_RUNNER`.

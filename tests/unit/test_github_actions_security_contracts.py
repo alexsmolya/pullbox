@@ -18,6 +18,7 @@ WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DEPENDABOT_CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
 CODEQL_CONFIG = REPO_ROOT / ".github" / "codeql" / "codeql-config.yml"
 GRYPE_CONFIG = REPO_ROOT / ".grype.yaml"
+ACTIONLINT_CONFIG = REPO_ROOT / ".github" / "actionlint.yaml"
 RELEASE_SYNC_SCRIPT = REPO_ROOT / ".github" / "scripts" / "validate-release-sync-pr.py"
 
 ACTION_REF_RE = re.compile(
@@ -457,6 +458,112 @@ def test_trusted_jobs_use_explicit_self_hosted_runner_labels() -> None:
             if runs_on == "self-hosted":
                 failures.append(f"{workflow.name}:{job_name}")
     assert failures == []
+
+
+def test_actionlint_allowlist_declares_every_custom_runner_label() -> None:
+    config = _load_yaml(ACTIONLINT_CONFIG)
+    labels = config.get("self-hosted-runner", {}).get("labels")
+    assert set(labels) == {"checks", "ci", "docker"}
+
+
+def test_self_hosted_jobs_separate_heavy_ci_from_lightweight_checks() -> None:
+    """Keep matrix tests off runners used by accessibility and security checks."""
+    expected_labels = {
+        "ci.yml": {
+            "ci": ["quality-gate", "typecheck", "test", "alembic-check", "e2e"],
+            "checks": ["accessibility"],
+        },
+        "security.yml": {
+            "checks": ["gitleaks", "dependency-audit", "safety-check", "bandit"],
+        },
+        "workflow-hygiene.yml": {"checks": ["actionlint"]},
+    }
+
+    for workflow_name, labels in expected_labels.items():
+        jobs = _load_yaml(WORKFLOW_DIR / workflow_name).get("jobs")
+        assert isinstance(jobs, dict)
+        for label, job_names in labels.items():
+            selector = f'["self-hosted","Linux","X64","{label}"]'
+            for job_name in job_names:
+                job = jobs.get(job_name)
+                assert isinstance(job, dict)
+                runs_on = job.get("runs-on")
+                assert isinstance(runs_on, str)
+                assert "ubuntu-latest" in runs_on
+                assert selector in runs_on
+
+
+def test_ci_python_matrix_uses_five_parallel_workers() -> None:
+    workflow = _load_yaml(WORKFLOW_DIR / "ci.yml")
+    env = workflow.get("env")
+    assert isinstance(env, dict)
+    assert env.get("PYTEST_WORKERS") == "5"
+
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    test_job = jobs.get("test")
+    assert isinstance(test_job, dict)
+    test_step = next(
+        step for step in test_job.get("steps", []) if step.get("name") == "Run tests with coverage"
+    )
+    assert "--dist=worksteal" in test_step.get("run", "")
+
+
+def test_e2e_matrix_shards_each_browser_across_three_workers() -> None:
+    workflow = _load_yaml(WORKFLOW_DIR / "ci.yml")
+    env = workflow.get("env")
+    assert isinstance(env, dict)
+    assert env.get("E2E_WORKERS") == "3"
+
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    e2e_job = jobs.get("e2e")
+    assert isinstance(e2e_job, dict)
+    e2e_step = next(
+        step for step in e2e_job.get("steps", []) if step.get("name") == "Run E2E tests"
+    )
+    command = e2e_step.get("run", "")
+    assert '-n "${E2E_WORKERS}"' in command
+    assert "--dist=worksteal" in command
+
+
+def test_ci_video_and_trace_capture_are_manual_diagnostics_only() -> None:
+    workflow = _load_yaml(WORKFLOW_DIR / "ci.yml")
+    triggers = workflow.get(True, workflow.get("on"))
+    assert isinstance(triggers, dict)
+    dispatch = triggers.get("workflow_dispatch")
+    assert isinstance(dispatch, dict)
+    diagnostic_input = dispatch.get("inputs", {}).get("e2e_diagnostics")
+    assert diagnostic_input == {
+        "description": "Retain E2E failure video and traces",
+        "required": False,
+        "type": "boolean",
+        "default": False,
+    }
+
+    env = workflow.get("env")
+    assert isinstance(env, dict)
+    assert env.get("E2E_VIDEO_MODE") == (
+        "${{ github.event_name == 'workflow_dispatch' && inputs.e2e_diagnostics "
+        "&& 'retain-on-failure' || 'off' }}"
+    )
+    assert env.get("PULLBOX_E2E_TRACE") == (
+        "${{ github.event_name == 'workflow_dispatch' && inputs.e2e_diagnostics "
+        "&& 'true' || 'false' }}"
+    )
+
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    for job_name, step_name in [
+        ("accessibility", "Run accessibility browser tests"),
+        ("e2e", "Run E2E tests"),
+    ]:
+        job = jobs.get(job_name)
+        assert isinstance(job, dict)
+        step = next(step for step in job.get("steps", []) if step.get("name") == step_name)
+        command = step.get("run", "")
+        assert '--video "${E2E_VIDEO_MODE}"' in command
+        assert "--video retain-on-failure" not in command
 
 
 def test_browser_smoke_and_accessibility_artifacts_survive_failures_and_cancels() -> None:

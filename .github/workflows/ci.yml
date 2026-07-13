@@ -22,6 +22,12 @@ on:
       - labeled
       - unlabeled
   workflow_dispatch:
+    inputs:
+      e2e_diagnostics:
+        description: Retain E2E failure video and traces
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,8 +37,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  E2E_WORKERS: "3"
+  E2E_VIDEO_MODE: "${{ github.event_name == 'workflow_dispatch' && inputs.e2e_diagnostics && 'retain-on-failure' || 'off' }}"
+  PULLBOX_E2E_TRACE: "${{ github.event_name == 'workflow_dispatch' && inputs.e2e_diagnostics && 'true' || 'false' }}"
   PYTHON_DEFAULT: "3.14"
-  PYTEST_WORKERS: "4"
+  PYTEST_WORKERS: "5"
 
 jobs:
   release_sync_check:
@@ -193,6 +202,7 @@ jobs:
           pytest tests/ \
             --ignore=tests/e2e \
             -n "${PYTEST_WORKERS}" \
+            --dist=worksteal \
             --cov=pullbox \
             --cov-report=xml \
             --cov-report=term-missing \
@@ -272,7 +282,7 @@ jobs:
   # ──────────────────────────────────────────────
   accessibility:
     name: Accessibility Checks
-    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","checks"]') }}
     needs: [release_sync_check, full_ci_check, quality-gate, typecheck, alembic-check]
     if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
     timeout-minutes: 30
@@ -314,7 +324,7 @@ jobs:
             -v \
             -m accessibility \
             --browser chromium \
-            --video retain-on-failure \
+            --video "${E2E_VIDEO_MODE}" \
             --screenshot only-on-failure \
             --full-page-screenshot \
             --output=test-results/e2e \
@@ -393,9 +403,11 @@ jobs:
           pytest tests/e2e/ \
             -v \
             -m "not accessibility" \
+            -n "${E2E_WORKERS}" \
+            --dist=worksteal \
             --browser ${{ matrix.browser }} \
             ${{ matrix.pytest_extra_args }} \
-            --video retain-on-failure \
+            --video "${E2E_VIDEO_MODE}" \
             --screenshot only-on-failure \
             --full-page-screenshot \
             --output=test-results/e2e \
