@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.3] - 2026-07-13
+
+Maintenance release focused on faster multi-architecture image publication and
+dependency security while preserving the existing release gates.
+
+### Fixed
+
+- Raised the Pillow dependency floor to 12.3.0 to include upstream fixes for
+  crafted font/image memory exhaustion and Windows viewer command injection.
+
+### CI / Build
+
+- Parallelized AMD64 and ARM64 release builds across two Docker runners while
+  preserving Grype, smoke-test, dual-registry, attestation, and signing gates.
+
 ## [1.0.2] - 2026-07-12
 
 Maintenance release focused on container runtime reliability, migration
