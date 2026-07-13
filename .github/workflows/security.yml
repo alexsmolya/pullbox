@@ -95,7 +95,7 @@ jobs:
     name: Gitleaks
     needs: [release_sync_check, full_ci_check]
     if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
-    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","checks"]') }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -184,7 +184,7 @@ jobs:
     name: pip-audit
     needs: [release_sync_check, full_ci_check]
     if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
-    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","checks"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -223,7 +223,7 @@ jobs:
     name: Safety Check
     needs: [release_sync_check, full_ci_check]
     if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
-    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","checks"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -260,7 +260,7 @@ jobs:
     name: Bandit
     needs: [release_sync_check, full_ci_check]
     if: needs.release_sync_check.outputs.is_sync != 'true' && needs.full_ci_check.outputs.run_full == 'true'
-    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","ci"]') }}
+    runs-on: ${{ fromJSON(((github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) || vars.PULLBOX_CHECKS_RUNNER == 'github-hosted') && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","checks"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -316,14 +316,14 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           languages: python
           queries: +security-extended
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           category: "/language:python"
 

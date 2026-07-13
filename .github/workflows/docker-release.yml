@@ -247,6 +247,11 @@ jobs:
       - name: Runner preflight
         run: .github/scripts/preflight-runner.sh docker
 
+      - name: Verify container security runtime
+        run: |
+          docker run --rm -i --entrypoint python pullbox:ci-scan - \
+            < scripts/verify_container_security_runtime.py
+
       - name: Run Grype scan
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         id: scan
@@ -260,7 +265,7 @@ jobs:
       - name: Upload SARIF to GitHub Security
         if: always()
         continue-on-error: true  # SARIF upload requires GitHub Advanced Security (paid for private repos)
-        uses: github/codeql-action/upload-sarif@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}
           category: container-scan
@@ -569,6 +574,17 @@ jobs:
               print("Missing SBOM/provenance attestation manifests.", file=sys.stderr)
               sys.exit(1)
           PY
+
+      - name: Verify published platform security runtimes
+        env:
+          DIGEST: ${{ steps.push-image.outputs.digest }}
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            echo "Verifying container security runtime for ${platform}"
+            docker run --rm --pull always --platform "${platform}" -i \
+              --entrypoint python "${GHCR_IMAGE}@${DIGEST}" - \
+              < scripts/verify_container_security_runtime.py
+          done
 
       - name: Summary
         run: |
