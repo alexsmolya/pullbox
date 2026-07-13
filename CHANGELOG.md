@@ -23,6 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.2] - 2026-07-12
+
+Maintenance release focused on container runtime reliability, migration
+correctness, and faster self-hosted CI without weakening release gates.
+
+### Fixed
+
+- Added the missing PostgreSQL enum migration for paused import jobs so
+  PostgreSQL deployments upgrade cleanly.
+- Made shell-free production images resilient to Python path changes between
+  Docker Hardened Image builder and runtime releases.
+
+### CI / Build
+
+- Hardened release image validation with an Expat runtime floor, exact reviewed
+  Grype exceptions, and pre-signing checks for both AMD64 and ARM64 images.
+- Routed lightweight checks to a dedicated runner, increased Python test
+  parallelism, sharded browser tests, and disabled routine E2E video encoding
+  while retaining opt-in diagnostics.
+- Updated the pinned CodeQL actions to 4.37.0.
+
 ## [1.0.1] - 2026-07-07
 
 Patch maintenance release focused on dependency freshness and release-pipeline
