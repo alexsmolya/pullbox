@@ -209,16 +209,35 @@ async def series_list(
     )
 
     sort_map = {
-        "title": Series.sort_title,
+        "title": func.lower(Series.sort_title),
         "year": Series.year_start,
         "date_added": Series.created_at,
-        "publisher": Publisher.name,
-        "status": Series.status,
+        "publisher": func.lower(Publisher.name),
+        "status": func.lower(Series.status),
         "issues": func.coalesce(issue_counts.c.owned_count, 0),
-        "series_type": Series.series_type,
+        "series_type": func.lower(Series.series_type),
     }
-    sort_col = sort_map.get(sort_field, Series.sort_title)
+    sort_col = sort_map.get(sort_field, func.lower(Series.sort_title))
     order_clause = sort_col.desc() if sort_desc else sort_col.asc()
+    if sort_field in {"year", "publisher"}:
+        order_clause = order_clause.nullslast()
+
+    order_clauses = [order_clause]
+    if sort_field == "title":
+        order_clauses.extend(
+            [
+                Series.year_start.desc().nullslast(),
+                func.lower(Series.series_type).asc(),
+            ]
+        )
+    else:
+        order_clauses.extend(
+            [
+                func.lower(Series.sort_title).asc(),
+                Series.year_start.desc().nullslast(),
+            ]
+        )
+    order_clauses.append(Series.id.asc())
 
     query = (
         select(
@@ -231,7 +250,7 @@ async def series_list(
         .outerjoin(Series.publisher)
         .outerjoin(issue_counts, issue_counts.c.series_id == Series.id)
         .options(contains_eager(Series.publisher))
-        .order_by(order_clause)
+        .order_by(*order_clauses)
     )
     offset = (page - 1) * per_page
     query = query.limit(per_page).offset(offset)
