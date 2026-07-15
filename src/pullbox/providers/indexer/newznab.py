@@ -152,11 +152,7 @@ class NewznabIndexer:
         if query.categories:
             params["cat"] = ",".join(query.categories)
 
-        try:
-            xml_text = await self._request(params)
-        except NewznabError:
-            log.exception("newznab_search_failed")
-            return []
+        xml_text = await self._request(params)
 
         results = self._parse_search_results(xml_text)
         log.debug("newznab_search_results", count=len(results))

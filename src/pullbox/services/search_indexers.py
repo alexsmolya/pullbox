@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -30,8 +31,17 @@ INDEXER_BACKOFF_SECONDS = [900, 3600, 21600, 86400]  # 15min, 1hr, 6hr, 24hr
 
 SearchSingleIndexerFunc = Callable[
     ["Indexer", SearchQuery, "IndexerConfig | None", int],
-    Awaitable[list[ReleaseResult]],
+    Awaitable["IndexerSearchAttempt"],
 ]
+
+
+@dataclass(frozen=True)
+class IndexerSearchAttempt:
+    """Results and health status for one isolated indexer request."""
+
+    results: list[ReleaseResult]
+    status: str = "completed"
+    error: str | None = None
 
 
 def calculate_backoff(
@@ -114,11 +124,11 @@ async def search_indexers(
         indexer: Indexer,
         indexer_query: SearchQuery,
         cfg: IndexerConfig | None,
-    ) -> tuple[Indexer, SearchQuery, list[ReleaseResult], int]:
+    ) -> tuple[Indexer, SearchQuery, IndexerSearchAttempt, int]:
         started_at = time.monotonic()
-        results = await search_single(indexer, indexer_query, cfg, failure_threshold)
+        attempt = await search_single(indexer, indexer_query, cfg, failure_threshold)
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        return indexer, indexer_query, results, elapsed_ms
+        return indexer, indexer_query, attempt, elapsed_ms
 
     raw_results = await asyncio.gather(
         *[
@@ -128,7 +138,8 @@ async def search_indexers(
     )
 
     all_results: list[ReleaseResult] = []
-    for indexer, indexer_query, results, elapsed_ms in raw_results:
+    for indexer, indexer_query, attempt, elapsed_ms in raw_results:
+        results = attempt.results
         if results:
             active_logger.debug(
                 "search_indexer_raw_results",
@@ -144,18 +155,19 @@ async def search_indexers(
         filtered_results = [result for result in results if _is_comic_category(result.category)]
         filtered = before - len(filtered_results)
         if timing_collector is not None:
-            timing_collector.append(
-                {
-                    "query": indexer_query.series_title,
-                    "indexer": indexer.name,
-                    "status": "completed",
-                    "elapsed_ms": elapsed_ms,
-                    "raw_count": before,
-                    "result_count": len(filtered_results),
-                    "filtered_count": filtered,
-                    "categories": indexer_query.categories,
-                }
-            )
+            timing: dict[str, object] = {
+                "query": indexer_query.series_title,
+                "indexer": indexer.name,
+                "status": attempt.status,
+                "elapsed_ms": elapsed_ms,
+                "raw_count": before,
+                "result_count": len(filtered_results),
+                "filtered_count": filtered,
+                "categories": indexer_query.categories,
+            }
+            if attempt.error is not None:
+                timing["error"] = attempt.error
+            timing_collector.append(timing)
         if filtered:
             active_logger.debug(
                 "search_category_filtered",
@@ -174,7 +186,7 @@ async def search_single_indexer(
     query: SearchQuery,
     cfg: IndexerConfig | None = None,
     failure_threshold: int = DEFAULT_INDEXER_FAILURE_THRESHOLD,
-) -> list[ReleaseResult]:
+) -> IndexerSearchAttempt:
     """Search a single indexer, handling errors and health tracking."""
     log = logger.bind(indexer=indexer.name, query=query.series_title)
     log.debug(
@@ -195,10 +207,10 @@ async def search_single_indexer(
             cfg.disabled_until = None
             cfg.last_success_at = datetime.now(UTC)
 
-        return results
-    except Exception:
+        return IndexerSearchAttempt(results=results)
+    except Exception as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        log.exception("search_indexer_error", elapsed_ms=elapsed_ms)
+        log.warning("search_indexer_error", elapsed_ms=elapsed_ms, error=str(exc))
 
         if cfg is not None:
             cfg.failure_count += 1
@@ -215,4 +227,4 @@ async def search_single_indexer(
                     backoff_seconds=backoff,
                 )
 
-        return []
+        return IndexerSearchAttempt(results=[], status="failed", error=str(exc))
