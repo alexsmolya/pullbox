@@ -934,7 +934,6 @@ function indexersSettings() {
 
     init() {
       this.persistIndexerStatusCache();
-      {% if indexers %}this._silentTestAll();{% endif %}
     },
 
     // ── Modal lifecycle ──────────────────────────────────────────
@@ -1107,16 +1106,8 @@ function indexersSettings() {
         headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
       })
         .then(r => r.json())
-        .then(indexers => this.runIndexerChecksSequentially(indexers))
+        .then(indexers => this.runIndexerChecksSequentially(indexers.filter(idx => idx.enabled)))
         .finally(() => { this.testingAll = false; });
-    },
-
-    _silentTestAll() {
-      fetch('/api/v1/indexers', {
-        headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
-      })
-        .then(r => r.json())
-        .then(indexers => this.runIndexerChecksSequentially(indexers));
     },
 
     // ── Prowlarr ─────────────────────────────────────────────────

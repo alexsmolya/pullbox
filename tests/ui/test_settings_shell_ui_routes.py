@@ -200,6 +200,19 @@ class TestSettingsRouteContracts:
         assert "Promise.all(" not in block
         assert "for (const idx of indexers)" in block
         assert "await this.testIndexerConnection(idx.id)" in block
+        assert (
+            ".then(indexers => this.runIndexerChecksSequentially("
+            "indexers.filter(idx => idx.enabled)))"
+        ) in block
+
+    async def test_settings_indexers_do_not_run_connection_tests_on_page_load(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert "_silentTestAll" not in response.text
 
     async def test_settings_media_naming_preview_escapes_template_values_and_results(
         self,
