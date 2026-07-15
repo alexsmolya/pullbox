@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from types import MethodType, SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -644,6 +645,72 @@ async def test_search_indexers_keeps_unconfigured_registries_cache_isolated(
     assert first == [release]
     assert second == [release]
     assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_query_variants_count_as_one_indexer_failure() -> None:
+    indexer = AsyncMock()
+    indexer.name = "NZBgeek"
+    indexer.search = AsyncMock(side_effect=TimeoutError("Prowlarr restarted"))
+    registry = ProviderRegistry()
+    registry.register_indexer(1, indexer)
+    config = IndexerConfig(
+        name="NZBgeek",
+        indexer_type=IndexerType.NEWZNAB,
+        url="https://prowlarr.test/15",
+        api_key="encrypted",
+        failure_count=0,
+    )
+    config.disabled_until = None
+    service = SearchService(registry)
+    queries = [
+        SearchQuery(series_title=query)
+        for query in (
+            "Infernal Hulk 1",
+            "Infernal Hulk 01",
+            "Infernal Hulk #01",
+            "Infernal Hulk 001",
+            "Infernal Hulk #001",
+        )
+    ]
+
+    results = await service._run_query_batch(queries, indexer_configs={1: config})
+
+    assert results == []
+    assert indexer.search.await_count == 5
+    assert config.failure_count == 1
+    assert config.disabled_until is None
+
+
+@pytest.mark.asyncio
+async def test_manual_search_bypasses_backoff_and_automated_empty_cache() -> None:
+    release = _make_release("Infernal Hulk 001 [2026] [Digital].cbz")
+    indexer = AsyncMock()
+    indexer.name = "NZBgeek"
+    indexer.search = AsyncMock(return_value=[release])
+    registry = ProviderRegistry()
+    registry.register_indexer(1, indexer)
+    config = IndexerConfig(
+        name="NZBgeek",
+        indexer_type=IndexerType.NEWZNAB,
+        url="https://prowlarr.test/15",
+        api_key="encrypted",
+        failure_count=3,
+    )
+    config.disabled_until = datetime.now(UTC) + timedelta(hours=2)
+    indexer_configs = {1: config}
+    query = SearchQuery(series_title="Infernal Hulk", issue_number=1, year=2026)
+
+    automated = SearchService(registry)
+    assert await automated.search(query, indexer_configs=indexer_configs) == []
+
+    manual = SearchService(registry, ignore_indexer_backoff=True)
+    results = await manual.search(query, indexer_configs=indexer_configs)
+
+    assert results == [release]
+    indexer.search.assert_awaited_once()
+    assert config.failure_count == 0
+    assert config.disabled_until is None
 
 
 @pytest.mark.asyncio

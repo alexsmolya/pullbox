@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 DEFAULT_INDEXER_FAILURE_THRESHOLD = 3
-INDEXER_BACKOFF_SECONDS = [900, 3600, 21600, 86400]  # 15min, 1hr, 6hr, 24hr
+INDEXER_BACKOFF_SECONDS = [900, 3600, 7200]  # 15min, 1hr, 2hr maximum
 
 SearchSingleIndexerFunc = Callable[
     ["Indexer", SearchQuery, "IndexerConfig | None", int],
@@ -62,6 +62,7 @@ async def search_indexers(
     search_single_indexer_func: SearchSingleIndexerFunc | None = None,
     log: structlog.stdlib.BoundLogger | None = None,
     timing_collector: list[dict[str, object]] | None = None,
+    ignore_backoff: bool = False,
 ) -> list[ReleaseResult]:
     """Search all registered indexers concurrently and aggregate results."""
     active_logger = log or logger
@@ -84,7 +85,7 @@ async def search_indexers(
     for config_id, indexer in indexer_items:
         cfg = indexer_configs.get(config_id) if indexer_configs else None
 
-        if cfg and cfg.disabled_until and cfg.disabled_until > now:
+        if not ignore_backoff and cfg and cfg.disabled_until and cfg.disabled_until > now:
             active_logger.debug(
                 "search_indexer_skipped",
                 indexer=indexer.name,
@@ -186,6 +187,7 @@ async def search_single_indexer(
     query: SearchQuery,
     cfg: IndexerConfig | None = None,
     failure_threshold: int = DEFAULT_INDEXER_FAILURE_THRESHOLD,
+    failure_cohort: set[int] | None = None,
 ) -> IndexerSearchAttempt:
     """Search a single indexer, handling errors and health tracking."""
     log = logger.bind(indexer=indexer.name, query=query.series_title)
@@ -206,6 +208,9 @@ async def search_single_indexer(
             cfg.failure_count = 0
             cfg.disabled_until = None
             cfg.last_success_at = datetime.now(UTC)
+            cfg.last_error = None
+            if failure_cohort is not None:
+                failure_cohort.discard(_config_health_key(cfg))
 
         return IndexerSearchAttempt(results=results)
     except Exception as exc:
@@ -213,11 +218,16 @@ async def search_single_indexer(
         log.warning("search_indexer_error", elapsed_ms=elapsed_ms, error=str(exc))
 
         if cfg is not None:
-            cfg.failure_count += 1
+            health_key = _config_health_key(cfg)
+            record_failure = failure_cohort is None or health_key not in failure_cohort
+            if record_failure:
+                cfg.failure_count += 1
+                if failure_cohort is not None:
+                    failure_cohort.add(health_key)
             cfg.last_failure_at = datetime.now(UTC)
             cfg.last_error = f"Search failed for query: {query.series_title}"
 
-            if cfg.failure_count >= failure_threshold:
+            if record_failure and cfg.failure_count >= failure_threshold:
                 backoff = calculate_backoff(cfg.failure_count, failure_threshold)
                 cfg.disabled_until = datetime.now(UTC) + timedelta(seconds=backoff)
                 log.warning(
@@ -228,3 +238,10 @@ async def search_single_indexer(
                 )
 
         return IndexerSearchAttempt(results=[], status="failed", error=str(exc))
+
+
+def _config_health_key(config: IndexerConfig) -> int:
+    """Return a stable key for deduplicating failures within one search run."""
+
+    config_id = getattr(config, "id", None)
+    return int(config_id) if config_id is not None else id(config)

@@ -284,9 +284,13 @@ class SearchService:
         self,
         registry: ProviderRegistry,
         failure_threshold: int = DEFAULT_INDEXER_FAILURE_THRESHOLD,
+        *,
+        ignore_indexer_backoff: bool = False,
     ) -> None:
         self._registry = registry
         self._failure_threshold = failure_threshold
+        self._ignore_indexer_backoff = ignore_indexer_backoff
+        self._indexer_failure_cohort: set[int] = set()
         self._query_cache: dict[tuple[object, ...], tuple[float, list[ReleaseResult]]] = {}
         self._query_inflight: dict[tuple[object, ...], asyncio.Task[list[ReleaseResult]]] = {}
 
@@ -732,6 +736,18 @@ class SearchService:
         timing_collector: list[dict[str, object]] | None = None,
     ) -> list[ReleaseResult]:
         """Compatibility facade for indexer fan-out and category filtering."""
+        if self._ignore_indexer_backoff:
+            return await _search_indexers.search_indexers(
+                self._registry,
+                query,
+                indexer_configs=indexer_configs,
+                failure_threshold=self._failure_threshold,
+                search_single_indexer_func=self._search_single_indexer,
+                log=logger,
+                timing_collector=timing_collector,
+                ignore_backoff=True,
+            )
+
         cache_key = _query_cache_key(
             query,
             registry_id=id(self._registry),
@@ -809,8 +825,8 @@ class SearchService:
         _remember_query_cache_result(query_cache, cache_key, results)
         return list(results)
 
-    @staticmethod
     async def _search_single_indexer(
+        self,
         indexer: Indexer,
         query: SearchQuery,
         cfg: IndexerConfig | None = None,
@@ -822,6 +838,7 @@ class SearchService:
             query,
             cfg,
             failure_threshold,
+            failure_cohort=self._indexer_failure_cohort,
         )
 
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -34,6 +35,7 @@ from pullbox.models.user import APIKey, User
 from pullbox.providers.base import ReleaseResult
 from pullbox.services.auth_service import AuthService
 from pullbox.services.release_validator import ReleaseValidator
+from pullbox.services.search_service import IssueSearchTarget
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -569,3 +571,47 @@ async def test_nonexistent_issue_returns_404(client: AsyncClient) -> None:
     """Missing issue returns 404."""
     resp = await client.get("/api/v1/issues/99999/search-results")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_issue_interactive_search_ignores_indexer_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pullbox.api.v1 import issues as issues_api
+
+    target = IssueSearchTarget(
+        issue_id=1,
+        series_id=2,
+        series_title="Infernal Hulk",
+        issue_number=1,
+        issue_type=IssueType.ISSUE,
+        series_year=2026,
+    )
+    runtime = SimpleNamespace(
+        registry=object(),
+        failure_threshold=3,
+        indexer_configs={},
+        eval_kwargs={},
+        validator_kwargs={},
+        source_priority=None,
+        type_thresholds={},
+        two_pass_enabled=False,
+    )
+    constructor_args: dict[str, object] = {}
+
+    class FakeSearchService:
+        def __init__(self, **kwargs: object) -> None:
+            constructor_args.update(kwargs)
+
+        async def search_issue_target(self, *args: object, **kwargs: object) -> object:
+            return SimpleNamespace(matched=[object()], rejected=[], search_details={})
+
+    session = AsyncMock()
+    monkeypatch.setattr(issues_api, "load_issue_search_target", AsyncMock(return_value=target))
+    monkeypatch.setattr(issues_api, "build_search_runtime", AsyncMock(return_value=runtime))
+    monkeypatch.setattr(issues_api, "SearchService", FakeSearchService)
+    monkeypatch.setattr(issues_api, "build_interactive_results", lambda *args, **kwargs: ([], []))
+
+    await issues_api._run_issue_search(session, target.issue_id, include_download_clients=False)
+
+    assert constructor_args["ignore_indexer_backoff"] is True
