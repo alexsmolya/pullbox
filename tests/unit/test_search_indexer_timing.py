@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.providers.base import ProviderRegistry, ReleaseResult, SearchQuery
 from pullbox.services.search_indexers import search_indexers
 
@@ -26,6 +27,11 @@ class _FakeIndexer:
 
     async def test_connection(self) -> ProviderHealthResult:
         raise NotImplementedError
+
+
+class _FailingIndexer(_FakeIndexer):
+    async def search(self, query: SearchQuery) -> list[ReleaseResult]:
+        raise TimeoutError(f"{self.name} timed out")
 
 
 def _release(title: str, *, category: str | None = "7030") -> ReleaseResult:
@@ -79,3 +85,43 @@ async def test_search_indexers_records_per_indexer_timing_diagnostics() -> None:
         }
     ]
     assert isinstance(timings[0]["elapsed_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_search_indexers_records_failure_without_losing_healthy_results() -> None:
+    registry = ProviderRegistry()
+    registry.register_indexer(1, _FailingIndexer("UnavailableIndexer", []))
+    registry.register_indexer(
+        2,
+        _FakeIndexer("HealthyIndexer", [_release("Absolute Flash 001 (2025).cbz")]),
+    )
+    failed_config = IndexerConfig(
+        name="UnavailableIndexer",
+        indexer_type=IndexerType.PROWLARR,
+        url="https://unavailable.example.test",
+        api_key="encrypted",
+        failure_count=0,
+    )
+    healthy_config = IndexerConfig(
+        name="HealthyIndexer",
+        indexer_type=IndexerType.PROWLARR,
+        url="https://healthy.example.test",
+        api_key="encrypted",
+        failure_count=2,
+    )
+    timings: list[dict[str, object]] = []
+
+    results = await search_indexers(
+        registry,
+        SearchQuery(series_title="Absolute Flash #001", issue_number=None),
+        indexer_configs={1: failed_config, 2: healthy_config},
+        timing_collector=timings,
+    )
+
+    assert [result.title for result in results] == ["Absolute Flash 001 (2025).cbz"]
+    assert [timing["status"] for timing in timings] == ["failed", "completed"]
+    assert timings[0]["error"] == "UnavailableIndexer timed out"
+    assert failed_config.failure_count == 1
+    assert failed_config.last_failure_at is not None
+    assert healthy_config.failure_count == 0
+    assert healthy_config.last_success_at is not None

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
@@ -50,6 +52,16 @@ def _request(
 
 def _user() -> SimpleNamespace:
     return SimpleNamespace(username="admin")
+
+
+@pytest.mark.parametrize("column", [Series.status, Series.series_type])
+def test_series_enum_sort_expression_casts_before_lowering(column) -> None:  # type: ignore[no-untyped-def]
+    statement = select(Series.id).order_by(series_routes._lower_enum_sort(column))
+
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "lower(CAST(" in compiled
+    assert f"lower(series.{column.key})" not in compiled
 
 
 async def _config_values(

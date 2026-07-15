@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from tests.e2e.conftest import wait_for_htmx
+from tests.e2e.conftest import _run_async_blocking, wait_for_htmx
 from tests.e2e.pages.series_list import SeriesListPage
 
 pytestmark = pytest.mark.e2e
@@ -31,6 +31,49 @@ def _wait_for_animation_frames(page, count: int = 3) -> None:  # type: ignore[no
             step(count);
         })""",
         count,
+    )
+
+
+async def _set_series_catalog_state(title: str, state: str) -> None:
+    from sqlalchemy import select
+
+    from pullbox.database import get_session_factory
+    from pullbox.models.series import IssueCatalogState, Series
+
+    factory = get_session_factory()
+    async with factory() as session:
+        series = (await session.execute(select(Series).where(Series.title == title))).scalar_one()
+        series.issue_catalog_state = IssueCatalogState(state)
+        await session.commit()
+
+
+def _trigger_series_catalog_refresh(page) -> None:  # type: ignore[no-untyped-def]
+    page.evaluate(
+        """() => new Promise((resolve, reject) => {
+            const target = document.querySelector("#series-results-body");
+            if (!target || !window.htmx) {
+                reject(new Error("Series results or HTMX was unavailable"));
+                return;
+            }
+
+            target.__pbSelectionRefreshSentinel = true;
+            const timeout = window.setTimeout(() => {
+                reject(new Error("Series catalog refresh did not settle"));
+            }, 5000);
+
+            window.htmx.ajax("GET", target.getAttribute("hx-get"), {
+                source: target,
+                target,
+                select: "#series-results-body",
+                swap: target.getAttribute("hx-swap"),
+            }).then(() => {
+                window.clearTimeout(timeout);
+                resolve();
+            }).catch((error) => {
+                window.clearTimeout(timeout);
+                reject(error);
+            });
+        })"""
     )
 
 
@@ -927,6 +970,48 @@ class TestSeriesPage:
         assert tokens_after == shell_tokens
         assert series.footer.is_visible()
         assert series.results_body.is_visible()
+
+    def test_pagination_replaces_results_body_without_nesting_duplicate_ids(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series = SeriesListPage(authed_page, seeded_server)
+        series.goto("per_page=2")
+
+        assert authed_page.locator("#series-results-body").count() == 1
+
+        series.click_next_page()
+
+        assert series.query_param("page") == "2"
+        assert authed_page.locator("#series-results-body").count() == 1
+
+    @pytest.mark.parametrize("view", ["list", "grid"])
+    def test_catalog_refresh_preserves_series_selection(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+        view: str,
+    ) -> None:
+        _run_async_blocking(_set_series_catalog_state("Batman", "hydrating"))
+        try:
+            series = SeriesListPage(authed_page, seeded_server)
+            series.goto("q=Batman&per_page=25", preferred_view=view)
+            assert series.results_body.get_attribute("hx-swap") == "morph:outerHTML"
+
+            series.toggle_row_selection("Batman")
+            assert series.selected_count_text() == "1 selected"
+            assert series.row_is_selected("Batman")
+
+            _trigger_series_catalog_refresh(authed_page)
+
+            assert series.selected_count_text() == "1 selected"
+            assert series.row_is_selected("Batman")
+            assert authed_page.evaluate(
+                "() => document.querySelector('#series-results-body').__pbSelectionRefreshSentinel === true"
+            )
+        finally:
+            _run_async_blocking(_set_series_catalog_state("Batman", "complete"))
 
     def test_pagination_returns_viewport_to_results_top_in_grid_view(
         self,

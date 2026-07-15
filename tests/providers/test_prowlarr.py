@@ -187,13 +187,12 @@ class TestSearch:
             timeout=45.0,
         )
 
-    async def test_search_returns_empty_list_when_prowlarr_errors(self) -> None:
+    async def test_search_propagates_prowlarr_error(self) -> None:
         indexer = _make_indexer()
         indexer._api_request = AsyncMock(side_effect=ProwlarrError("down"))  # type: ignore[method-assign]
 
-        results = await indexer.search(SearchQuery(series_title="Batman"))
-
-        assert results == []
+        with pytest.raises(ProwlarrError, match="down"):
+            await indexer.search(SearchQuery(series_title="Batman"))
 
 
 @pytest.mark.asyncio

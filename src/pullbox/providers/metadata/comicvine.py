@@ -229,8 +229,9 @@ def _extract_story_arcs(arc_credits: list[dict[str, Any]] | None) -> list[dict[s
 class ComicVineError(Exception):
     """Raised when the ComicVine API returns a non-OK status."""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(self, status_code: int, message: str, *, retryable: bool = False) -> None:
         self.status_code = status_code
+        self.retryable = retryable
         super().__init__(message)
 
 
@@ -303,16 +304,25 @@ class ComicVineProvider:
             response.raise_for_status()
         except httpx.TimeoutException:
             log.error("comicvine_timeout")
-            raise ComicVineError(0, f"Request timed out: {endpoint}") from None
+            raise ComicVineError(
+                0,
+                f"Request timed out: {endpoint}",
+                retryable=True,
+            ) from None
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
+            http_status = exc.response.status_code
+            if http_status == 404:
                 log.warning("comicvine_not_found")
                 raise ComicVineError(_STATUS_NOT_FOUND, f"Resource not found: {endpoint}") from None
-            log.error("comicvine_http_error", status=exc.response.status_code)
-            raise ComicVineError(0, f"HTTP {exc.response.status_code}: {endpoint}") from None
+            log.error("comicvine_http_error", status=http_status)
+            raise ComicVineError(
+                http_status,
+                f"HTTP {http_status}: {endpoint}",
+                retryable=http_status in {408, 420, 429} or http_status >= 500,
+            ) from None
         except httpx.HTTPError as exc:
             log.error("comicvine_request_failed", error=str(exc))
-            raise ComicVineError(0, f"Request failed: {exc}") from None
+            raise ComicVineError(0, f"Request failed: {exc}", retryable=True) from None
 
         data: dict[str, Any] = response.json()
         status_code = data.get("status_code", 0)
@@ -325,7 +335,7 @@ class ComicVineProvider:
             raise ComicVineError(status_code, f"Resource not found: {endpoint}")
         if status_code == _STATUS_RATE_LIMITED:
             log.warning("comicvine_rate_limited")
-            raise ComicVineError(status_code, "Rate limit exceeded")
+            raise ComicVineError(status_code, "Rate limit exceeded", retryable=True)
         if status_code != _STATUS_OK:
             error_msg = data.get("error", "Unknown error")
             log.error("comicvine_api_error", status_code=status_code, error=error_msg)

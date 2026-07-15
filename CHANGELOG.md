@@ -23,6 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.5] - 2026-07-15
+
+Patch release focused on production reliability under sustained background work
+and large-library metadata synchronization.
+
+### Fixed
+
+- Hardened indexer, download-client, scheduled-search, metadata, and ComicInfo
+  background workflows against remote failures, provider throttling, and SQLite
+  lock contention.
+- Preserved failed and rejected indexer outcomes so retry, intervention, and
+  blocklist handling remain visible instead of silently losing results.
+- Deferred ComicInfo enrichment safely when providers throttle requests, while
+  allowing imports to complete and enrichment to resume later.
+- Made series sorting deterministic across all pages and compatible with native
+  PostgreSQL enum columns.
+- Reconciled issue wanted/skipped states during bulk monitor changes across all
+  selected results.
+- Preserved the active page and selected series during metadata hydration, and
+  stopped expanded search-history details from flashing during live polling.
+- Prevented automatic health checks from probing disabled indexers.
+- Corrected scheduled-task table styling and pointer feedback for enabled import
+  rule saves.
+
 ## [1.0.4] - 2026-07-13
 
 Maintenance release focused on reliable multi-platform publication across

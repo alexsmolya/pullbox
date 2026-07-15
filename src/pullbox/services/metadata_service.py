@@ -36,6 +36,16 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+
+def _provider_error_from_comicvine(exc: ComicVineError) -> ProviderError:
+    """Preserve provider failure classification across the service boundary."""
+    return ProviderError(
+        "comicvine",
+        str(exc),
+        details={"status_code": exc.status_code, "retryable": exc.retryable},
+    )
+
+
 # Mapping from IssueType → SeriesType for propagating detected issue types
 # to the parent series when all issues share a single non-standard type.
 _ISSUE_TO_SERIES_TYPE: dict[IssueType, SeriesType] = {
@@ -194,7 +204,7 @@ class MetadataService:
         try:
             return await self._provider.get_series(str(comicvine_id))
         except ComicVineError as exc:
-            raise ProviderError("comicvine", str(exc)) from exc
+            raise _provider_error_from_comicvine(exc) from exc
 
     async def get_issue_summaries_for_series(
         self,
@@ -207,7 +217,7 @@ class MetadataService:
         try:
             return await self._provider.get_issues_for_series(str(comicvine_id))
         except ComicVineError as exc:
-            raise ProviderError("comicvine", str(exc)) from exc
+            raise _provider_error_from_comicvine(exc) from exc
 
     async def get_recent_issue_summaries_for_series(
         self,
@@ -225,7 +235,7 @@ class MetadataService:
                 limit=limit,
             )
         except ComicVineError as exc:
-            raise ProviderError("comicvine", str(exc)) from exc
+            raise _provider_error_from_comicvine(exc) from exc
 
     async def classify_and_link_series(
         self,
@@ -335,7 +345,7 @@ class MetadataService:
         try:
             meta = await self._provider.get_issue(str(comicvine_id))
         except ComicVineError as exc:
-            raise ProviderError("comicvine", str(exc)) from exc
+            raise _provider_error_from_comicvine(exc) from exc
 
         existing = (
             await session.execute(select(Issue).where(Issue.comicvine_id == comicvine_id))

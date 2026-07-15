@@ -132,6 +132,44 @@ def _extract_pagination_urls(markup: str) -> list[str]:
     return [html.unescape(url) for url in re.findall(pattern, markup)]
 
 
+def _extract_series_titles(markup: str) -> list[str]:
+    pattern = r'data-testid="series-item-link"[^>]*>\s*([^<]+)</a>'
+    return [html.unescape(title.strip()) for title in re.findall(pattern, markup)]
+
+
+@pytest.fixture
+async def seeded_series_sort_ties(sec_db, seeded_series_ui_data) -> None:  # type: ignore[no-untyped-def]
+    """Seed equal-key rows in reverse title order to expose unstable sorting."""
+    from pullbox.models.library import LibraryRoot
+    from pullbox.models.publisher import Publisher
+    from pullbox.models.series import Series, SeriesStatus, SeriesType
+
+    async with sec_db() as session:
+        publisher = (
+            await session.execute(select(Publisher).where(Publisher.name == "DC Comics"))
+        ).scalar_one()
+        root = (
+            await session.execute(select(LibraryRoot).where(LibraryRoot.name == "UI Test Library"))
+        ).scalar_one()
+        tied_at = datetime(2035, 1, 1, tzinfo=UTC)
+        for title in ("Zulu Sort Tie", "Alpha Sort Tie"):
+            session.add(
+                Series(
+                    title=title,
+                    sort_title=title.lower(),
+                    year_start=2035,
+                    created_at=tied_at,
+                    status=SeriesStatus.ENDED,
+                    monitored=False,
+                    issue_count=0,
+                    publisher_id=publisher.id,
+                    library_root_id=root.id,
+                    series_type=SeriesType.ANNUAL,
+                )
+            )
+        await session.commit()
+
+
 class SelectRecorder:
     """Capture SELECT statements emitted by the test app engine."""
 
@@ -408,7 +446,19 @@ class TestSeriesRouteContracts:
         assert 'data-testid="series-catalog-state-badge"' in response.text
         assert 'data-catalog-refresh-active="true"' in response.text
         assert 'hx-trigger="every 10s"' in response.text
+        assert 'hx-swap="morph:outerHTML"' in response.text
+        assert 'hx-push-url="false"' in response.text
+        assert 'hx-sync="#series-results-body:replace"' in response.text
         assert "Metadata syncing" in response.text
+
+        fragment_response = await authenticated_client.get(
+            "/series?q=Batman",
+            headers={"HX-Request": "true"},
+        )
+
+        assert fragment_response.status_code == 200
+        assert 'data-catalog-refresh-active="true"' in fragment_response.text
+        assert 'hx-swap="morph:outerHTML"' in fragment_response.text
 
     async def test_series_grid_surfaces_catalog_sync_state(
         self,
@@ -1465,6 +1515,47 @@ class TestSeriesRouteContracts:
         assert all(query.get("monitored") == ["true"] for query in parsed)
         assert all(query.get("sort") == ["-title"] for query in parsed)
         assert all(query.get("per_page") == ["1"] for query in parsed)
+
+    @pytest.mark.parametrize(
+        "sort",
+        [
+            "date_added",
+            "-date_added",
+            "year",
+            "-year",
+            "publisher",
+            "-publisher",
+            "issues",
+            "-issues",
+            "series_type",
+            "-series_type",
+            "status",
+        ],
+    )
+    async def test_grouped_sorts_use_title_tiebreakers(
+        self,
+        authenticated_client,
+        seeded_series_sort_ties,
+        sort: str,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(f"/series?sort={sort}&per_page=100")
+
+        assert response.status_code == 200
+        titles = _extract_series_titles(response.text)
+        assert titles.index("Alpha Sort Tie") < titles.index("Zulu Sort Tie")
+
+    async def test_year_sort_is_deterministic_across_page_boundaries(
+        self,
+        authenticated_client,
+        seeded_series_sort_ties,
+    ) -> None:  # type: ignore[no-untyped-def]
+        first_page = await authenticated_client.get("/series?sort=-year&per_page=1&page=1")
+        second_page = await authenticated_client.get("/series?sort=-year&per_page=1&page=2")
+
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        assert _extract_series_titles(first_page.text) == ["Alpha Sort Tie"]
+        assert _extract_series_titles(second_page.text) == ["Zulu Sort Tie"]
 
     async def test_empty_state_renders_inside_mounted_results_contract(
         self,

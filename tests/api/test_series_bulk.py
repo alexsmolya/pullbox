@@ -209,7 +209,7 @@ async def _seed_series(
                     comicvine_id=60000 + i * 10 + 1,
                     issue_number=1.0,
                     title="Issue #1",
-                    status=IssueStatus.WANTED,
+                    status=IssueStatus.WANTED if monitored else IssueStatus.SKIPPED,
                 )
             )
             session.add(
@@ -251,7 +251,33 @@ class TestBulkMonitorUpdate:
 
         assert result == {"updated": 3, "skipped": 0}
         assert [stmt.lstrip().split(maxsplit=1)[0].upper() for stmt in recorder.statements] == [
-            "UPDATE"
+            "UPDATE",
+            "UPDATE",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_bulk_update_chunks_large_all_results_selection(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Large all-results selections stay below SQLite bind-variable limits."""
+        series_ids = list(range(1, 502))
+
+        async with _db_factory() as session:
+            engine = cast("AsyncEngine", session.bind)
+            with StatementRecorder(engine) as recorder:
+                result = await bulk_update_series(
+                    SeriesBulkUpdate(series_ids=series_ids, monitored=True),
+                    cast("AuthenticatedUser", object()),
+                    session,
+                )
+
+        assert result == {"updated": 0, "skipped": 501}
+        assert [stmt.lstrip().split(maxsplit=1)[0].upper() for stmt in recorder.statements] == [
+            "UPDATE",
+            "UPDATE",
+            "UPDATE",
+            "UPDATE",
         ]
 
     @pytest.mark.asyncio
@@ -276,6 +302,19 @@ class TestBulkMonitorUpdate:
                 s = await session.get(Series, sid)
                 assert s is not None
                 assert s.monitored is True
+                issues = list(
+                    (
+                        await session.execute(
+                            select(Issue).where(Issue.series_id == sid).order_by(Issue.issue_number)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert [issue.status for issue in issues] == [
+                    IssueStatus.WANTED,
+                    IssueStatus.OWNED,
+                ]
 
     @pytest.mark.asyncio
     async def test_set_monitored_false(
@@ -298,6 +337,140 @@ class TestBulkMonitorUpdate:
                 s = await session.get(Series, sid)
                 assert s is not None
                 assert s.monitored is False
+                issues = list(
+                    (
+                        await session.execute(
+                            select(Issue).where(Issue.series_id == sid).order_by(Issue.issue_number)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert [issue.status for issue in issues] == [
+                    IssueStatus.SKIPPED,
+                    IssueStatus.OWNED,
+                ]
+
+    @pytest.mark.asyncio
+    async def test_bulk_monitor_preserves_manual_skips(
+        self,
+        client: AsyncClient,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        ids = await _seed_series(_db_factory, count=1, monitored=False)
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            issue.manual_skip = True
+            await session.commit()
+
+        resp = await client.patch(
+            "/api/v1/series/bulk",
+            json={"series_ids": ids, "monitored": True},
+        )
+
+        assert resp.status_code == 200
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            assert issue.status == IssueStatus.SKIPPED
+            assert issue.manual_skip is True
+
+    @pytest.mark.asyncio
+    async def test_bulk_monitor_repairs_skipped_issue_when_series_is_already_monitored(
+        self,
+        client: AsyncClient,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        ids = await _seed_series(_db_factory, count=1, monitored=True)
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            issue.status = IssueStatus.SKIPPED
+            await session.commit()
+
+        resp = await client.patch(
+            "/api/v1/series/bulk",
+            json={"series_ids": ids, "monitored": True},
+        )
+
+        assert resp.status_code == 200
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            assert issue.status == IssueStatus.WANTED
+
+    @pytest.mark.asyncio
+    async def test_bulk_unmonitor_repairs_wanted_issue_when_series_is_already_unmonitored(
+        self,
+        client: AsyncClient,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        ids = await _seed_series(_db_factory, count=1, monitored=False)
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            issue.status = IssueStatus.WANTED
+            await session.commit()
+
+        resp = await client.patch(
+            "/api/v1/series/bulk",
+            json={"series_ids": ids, "monitored": False},
+        )
+
+        assert resp.status_code == 200
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            assert issue.status == IssueStatus.SKIPPED
+
+    @pytest.mark.asyncio
+    async def test_bulk_unmonitor_skips_downloading_issues(
+        self,
+        client: AsyncClient,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        ids = await _seed_series(_db_factory, count=1, monitored=True)
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            issue.status = IssueStatus.DOWNLOADING
+            await session.commit()
+
+        resp = await client.patch(
+            "/api/v1/series/bulk",
+            json={"series_ids": ids, "monitored": False},
+        )
+
+        assert resp.status_code == 200
+        async with _db_factory() as session:
+            issue = (
+                await session.execute(
+                    select(Issue).where(Issue.series_id == ids[0], Issue.issue_number == 1.0)
+                )
+            ).scalar_one()
+            assert issue.status == IssueStatus.SKIPPED
 
     @pytest.mark.asyncio
     async def test_nonexistent_series_skipped(
@@ -326,15 +499,30 @@ class TestBulkMonitorUpdate:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_over_max_returns_422(
+    async def test_all_results_sized_update_is_accepted(
         self,
         client: AsyncClient,
     ) -> None:
-        """More than 100 IDs returns 422."""
+        """Selecting more than one page of series remains a valid bulk update."""
         resp = await client.patch(
             "/api/v1/series/bulk",
             json={"series_ids": list(range(1, 102)), "monitored": True},
         )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"updated": 0, "skipped": 101}
+
+    @pytest.mark.asyncio
+    async def test_over_safety_max_returns_422(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        """Unreasonably large bulk payloads retain a defensive upper bound."""
+        resp = await client.patch(
+            "/api/v1/series/bulk",
+            json={"series_ids": list(range(1, 10_002)), "monitored": True},
+        )
+
         assert resp.status_code == 422
 
 

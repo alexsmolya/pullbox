@@ -8,7 +8,9 @@
     hx-trigger="every 10s"
     hx-target="#series-results-body"
     hx-select="#series-results-body"
-    hx-swap="outerHTML"
+    hx-sync="#series-results-body:replace"
+    hx-swap="morph:outerHTML"
+    hx-push-url="false"
     {% endif %}
     class="series-results-body-shell"
   >

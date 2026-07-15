@@ -1,14 +1,21 @@
 """Indexer API routes — CRUD, test connection, Prowlarr sync, and priority management."""
 
+import asyncio
 from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from pullbox.api.deps import DbSession, InteractiveOperatorUser
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
 from pullbox.core.exceptions import NotFoundError
+from pullbox.core.sqlite_lock import (
+    SQLITE_LOCK_RETRY_ATTEMPTS,
+    is_sqlite_locked_error,
+    sqlite_lock_retry_delay,
+)
 from pullbox.models.indexer import IndexerConfig
 from pullbox.schemas.indexer import (
     IndexerCreate,
@@ -50,6 +57,45 @@ def _redact_indexer(indexer: IndexerConfig) -> dict[str, object]:
         "created_at": indexer.created_at,
         "updated_at": indexer.updated_at,
     }
+
+
+async def _persist_indexer_test_status_with_retry(
+    session: DbSession,
+    indexer_id: int,
+    *,
+    healthy: bool,
+    message: str,
+    checked_at: datetime,
+) -> None:
+    """Persist indexer test status, retrying transient SQLite write locks."""
+    for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+        indexer = await session.get(IndexerConfig, indexer_id)
+        if not indexer:
+            raise NotFoundError("Indexer", indexer_id)
+
+        if healthy:
+            indexer.last_success_at = checked_at
+            indexer.last_error = None
+        else:
+            indexer.last_failure_at = checked_at
+            indexer.last_error = message
+
+        try:
+            await session.flush()
+            return
+        except OperationalError as exc:
+            await session.rollback()
+            if not is_sqlite_locked_error(exc) or attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                raise
+            delay_seconds = sqlite_lock_retry_delay(attempt)
+            logger.warning(
+                "indexer_test_status_persist_retrying_after_sqlite_lock",
+                indexer_id=indexer_id,
+                attempt=attempt,
+                max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
+                delay_seconds=delay_seconds,
+            )
+            await asyncio.sleep(delay_seconds)
 
 
 # ── List ─────────────────────────────────────────────────────────────
@@ -433,14 +479,13 @@ async def test_indexer(
 
     result = await provider.test_connection()
 
-    checked_at = datetime.now(UTC)
-    if result.healthy:
-        indexer.last_success_at = checked_at
-        indexer.last_error = None
-    else:
-        indexer.last_failure_at = checked_at
-        indexer.last_error = result.message
-    await session.flush()
+    await _persist_indexer_test_status_with_retry(
+        session,
+        indexer_id,
+        healthy=result.healthy,
+        message=result.message,
+        checked_at=datetime.now(UTC),
+    )
 
     logger.info(
         "indexer_test_connection",

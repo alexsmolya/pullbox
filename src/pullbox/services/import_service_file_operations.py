@@ -92,6 +92,7 @@ if TYPE_CHECKING:
             issue: Issue,
             *,
             defer_provider_fetch: bool = False,
+            propagate_retryable_provider_errors: bool = False,
             timing: dict[str, Any] | None = None,
         ) -> Issue: ...
 
@@ -102,6 +103,7 @@ if TYPE_CHECKING:
             *,
             source_path: Path | None = None,
             defer_issue_enrichment: bool = False,
+            propagate_retryable_provider_errors: bool = False,
             timing: dict[str, Any] | None = None,
         ) -> dict[str, Any]: ...
 
@@ -272,15 +274,10 @@ class ImportServiceFileOperationsMixin:
         *,
         source_path: Path | None = None,
         defer_issue_enrichment: bool = False,
+        propagate_retryable_provider_errors: bool = False,
         timing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build authoritative ComicInfo.xml fields for a chosen issue."""
-        enriched_issue = await self._enrich_issue_for_comicinfo(
-            session,
-            issue,
-            defer_provider_fetch=defer_issue_enrichment,
-            timing=timing,
-        )
         page_count = None
         if source_path is not None:
             page_count_started_at = time.monotonic()
@@ -299,6 +296,13 @@ class ImportServiceFileOperationsMixin:
                         else None,
                     }
                 )
+        enriched_issue = await self._enrich_issue_for_comicinfo(
+            session,
+            issue,
+            defer_provider_fetch=defer_issue_enrichment,
+            propagate_retryable_provider_errors=propagate_retryable_provider_errors,
+            timing=timing,
+        )
         return await build_comicinfo_payload_for_issue(
             session,
             enriched_issue,
@@ -351,6 +355,7 @@ class ImportServiceFileOperationsMixin:
         issue: Issue,
         *,
         defer_provider_fetch: bool = False,
+        propagate_retryable_provider_errors: bool = False,
         timing: dict[str, Any] | None = None,
     ) -> Issue:
         """Fetch full issue metadata once when ComicInfo needs authoritative fields."""
@@ -359,6 +364,7 @@ class ImportServiceFileOperationsMixin:
             issue,
             metadata_service=self._metadata_service,
             defer_provider_fetch=defer_provider_fetch,
+            propagate_retryable_provider_errors=propagate_retryable_provider_errors,
             timing=timing,
             log_warning=logger.warning,
         )

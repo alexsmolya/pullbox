@@ -158,11 +158,7 @@ class ProwlarrIndexer:
         if self._indexer_ids:
             params["indexerIds"] = self._indexer_ids
 
-        try:
-            data = await self._api_request("/search", params, timeout=_SEARCH_TIMEOUT)
-        except ProwlarrError:
-            log.exception("prowlarr_search_failed")
-            return []
+        data = await self._api_request("/search", params, timeout=_SEARCH_TIMEOUT)
 
         results = self._parse_api_results(data)
         log.debug("prowlarr_search_results", count=len(results))

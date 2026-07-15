@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from pullbox.api.v1 import indexers as indexers_api
 from pullbox.core.encryption import decrypt_secret, encrypt_secret, is_encrypted
@@ -44,6 +46,10 @@ def _health(message: str = "reachable", *, healthy: bool = True) -> ProviderHeal
         message=message,
         response_time_ms=14.25,
     )
+
+
+async def _instant_sleep(_seconds: float) -> None:
+    return None
 
 
 async def _seed_indexer(
@@ -410,3 +416,45 @@ class TestIndexerConnectionRoutes:
         assert result["healthy"] is False
         assert indexer.last_failure_at is not None
         assert indexer.last_error == "indexer refused connection"
+
+    async def test_indexer_test_route_retries_transient_sqlite_lock(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class _FakeProvider:
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+
+            async def test_connection(self) -> ProviderHealthResult:
+                return _health("indexer reachable after retry")
+
+        monkeypatch.setattr("pullbox.providers.indexer.newznab.NewznabIndexer", _FakeProvider)
+
+        async with sec_db() as session:
+            indexer = await _seed_indexer(session)
+            await session.commit()
+            original_flush = session.flush
+            flush_attempts = 0
+
+            async def _flaky_flush(*args: object, **kwargs: object) -> None:
+                nonlocal flush_attempts
+                flush_attempts += 1
+                if flush_attempts == 1:
+                    raise OperationalError(
+                        "UPDATE indexer_configs",
+                        {},
+                        sqlite3.OperationalError("database is locked"),
+                    )
+                await original_flush(*args, **kwargs)
+
+            monkeypatch.setattr(session, "flush", _flaky_flush)
+            monkeypatch.setattr(indexers_api.asyncio, "sleep", _instant_sleep)
+
+            result = await indexers_api.test_indexer(indexer.id, object(), session)  # type: ignore[arg-type]
+            await session.refresh(indexer)
+
+        assert flush_attempts == 2
+        assert result["healthy"] is True
+        assert indexer.last_success_at is not None
+        assert indexer.last_error is None
