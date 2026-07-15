@@ -1082,23 +1082,32 @@ function indexersSettings() {
       }
     },
 
+    async testIndexerConnection(indexerId) {
+      try {
+        const response = await fetch(`/api/v1/indexers/${indexerId}/test`, {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+        });
+        const data = await response.json();
+        this.setIndexerResult(indexerId, data.healthy);
+      } catch {
+        this.setIndexerResult(indexerId, false);
+      }
+    },
+
+    async runIndexerChecksSequentially(indexers) {
+      for (const idx of indexers) {
+        await this.testIndexerConnection(idx.id);
+      }
+    },
+
     testAll() {
       this.testingAll = true;
       fetch('/api/v1/indexers', {
         headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
       })
         .then(r => r.json())
-        .then(indexers => Promise.all(
-          indexers.map(idx =>
-            fetch(`/api/v1/indexers/${idx.id}/test`, {
-              method: 'POST',
-              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
-            })
-              .then(r => r.json())
-              .then(data => { this.setIndexerResult(idx.id, data.healthy); })
-              .catch(() => { this.setIndexerResult(idx.id, false); })
-          )
-        ))
+        .then(indexers => this.runIndexerChecksSequentially(indexers))
         .finally(() => { this.testingAll = false; });
     },
 
@@ -1107,17 +1116,7 @@ function indexersSettings() {
         headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
       })
         .then(r => r.json())
-        .then(indexers => Promise.all(
-          indexers.map(idx =>
-            fetch(`/api/v1/indexers/${idx.id}/test`, {
-              method: 'POST',
-              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
-            })
-              .then(r => r.json())
-              .then(data => { this.setIndexerResult(idx.id, data.healthy); })
-              .catch(() => { this.setIndexerResult(idx.id, false); })
-          )
-        ));
+        .then(indexers => this.runIndexerChecksSequentially(indexers));
     },
 
     // ── Prowlarr ─────────────────────────────────────────────────
