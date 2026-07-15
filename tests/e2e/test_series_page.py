@@ -928,6 +928,21 @@ class TestSeriesPage:
         assert series.footer.is_visible()
         assert series.results_body.is_visible()
 
+    def test_pagination_replaces_results_body_without_nesting_duplicate_ids(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series = SeriesListPage(authed_page, seeded_server)
+        series.goto("per_page=2")
+
+        assert authed_page.locator("#series-results-body").count() == 1
+
+        series.click_next_page()
+
+        assert series.query_param("page") == "2"
+        assert authed_page.locator("#series-results-body").count() == 1
+
     def test_pagination_returns_viewport_to_results_top_in_grid_view(
         self,
         authed_page,
