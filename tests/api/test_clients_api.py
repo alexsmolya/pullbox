@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import sqlite3
 import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from pullbox.api.v1 import clients as clients_api
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
@@ -25,6 +28,10 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytest_plugins = ["conftest_security"]
+
+
+async def _instant_sleep(_seconds: float) -> None:
+    return None
 
 
 def _client_payload(
@@ -769,6 +776,59 @@ class TestClientRouteFunctions:
         assert client.last_success_at is not None
         assert client.last_error is None
         assert client.last_test_message == f"{client_type.value} healthy"
+
+    async def test_saved_client_test_route_retries_transient_sqlite_lock(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def _healthy_test(_self) -> ProviderHealthResult:
+            return _health_result("qBittorrent reachable after retry")
+
+        monkeypatch.setattr(
+            "pullbox.providers.download.qbittorrent.QBittorrentClient.test_connection",
+            _healthy_test,
+        )
+
+        async with sec_db() as session:
+            client = DownloadClientConfig(
+                name="qBittorrent saved",
+                client_type=DownloadClientType.QBITTORRENT,
+                url="http://localhost:8080",
+                enabled=True,
+                priority=50,
+                username="admin",
+                password=encrypt_secret("qbit-password"),
+            )
+            session.add(client)
+            await session.commit()
+            client_id = client.id
+            original_flush = session.flush
+            flush_attempts = 0
+
+            async def _flaky_flush(*args: object, **kwargs: object) -> None:
+                nonlocal flush_attempts
+                flush_attempts += 1
+                if flush_attempts == 1:
+                    raise OperationalError(
+                        "UPDATE download_client_configs",
+                        {},
+                        sqlite3.OperationalError("database is locked"),
+                    )
+                await original_flush(*args, **kwargs)
+
+            monkeypatch.setattr(session, "flush", _flaky_flush)
+            monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+            result = await clients_api.test_client(client_id, object(), session)  # type: ignore[arg-type]
+            refreshed = await session.get(DownloadClientConfig, client_id)
+
+        assert flush_attempts == 2
+        assert result["healthy"] is True
+        assert refreshed is not None
+        assert refreshed.last_success_at is not None
+        assert refreshed.last_error is None
+        assert refreshed.last_test_message == "qBittorrent reachable after retry"
 
     async def test_saved_client_test_route_persists_failure_and_handles_errors(
         self,

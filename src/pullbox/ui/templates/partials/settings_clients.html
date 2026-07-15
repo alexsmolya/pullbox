@@ -1243,23 +1243,32 @@ function clientsSettings() {
         });
     },
 
+    async testClientConnection(clientId) {
+      try {
+        const response = await fetch(`/api/v1/clients/${clientId}/test`, {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
+        });
+        const data = await response.json();
+        this.setClientResult(clientId, { healthy: data.healthy, message: data.message || '' });
+      } catch {
+        this.setClientResult(clientId, { healthy: false, message: 'Test failed' });
+      }
+    },
+
+    async runClientChecksSequentially(clients) {
+      for (const client of clients) {
+        await this.testClientConnection(client.id);
+      }
+    },
+
     testAll() {
       this.testingAll = true;
       fetch('/api/v1/clients', {
         headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
       })
         .then(r => r.json())
-        .then(clients => Promise.all(
-          clients.map(c =>
-            fetch(`/api/v1/clients/${c.id}/test`, {
-              method: 'POST',
-              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
-            })
-              .then(r => r.json())
-              .then(data => { this.setClientResult(c.id, { healthy: data.healthy, message: data.message || '' }); })
-              .catch(() => { this.setClientResult(c.id, { healthy: false, message: 'Test failed' }); })
-          )
-        ))
+        .then(clients => this.runClientChecksSequentially(clients))
         .finally(() => { this.testingAll = false; });
     },
 
@@ -1268,17 +1277,7 @@ function clientsSettings() {
         headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
       })
         .then(r => r.json())
-        .then(clients => Promise.all(
-          clients.map(c =>
-            fetch(`/api/v1/clients/${c.id}/test`, {
-              method: 'POST',
-              headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
-            })
-              .then(r => r.json())
-              .then(data => { this.setClientResult(c.id, { healthy: data.healthy, message: data.message || '' }); })
-              .catch(() => { this.setClientResult(c.id, { healthy: false, message: 'Test failed' }); })
-          )
-        ));
+        .then(clients => this.runClientChecksSequentially(clients));
     },
 
     saveConfig(formEl) {

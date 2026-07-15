@@ -1,15 +1,22 @@
 """Download client API routes — CRUD and test connection."""
 
+import asyncio
 from datetime import UTC, datetime
 
 import httpx
 import structlog
 from fastapi import APIRouter
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from pullbox.api.deps import DbSession, InteractiveOperatorUser
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
 from pullbox.core.exceptions import NotFoundError, ProviderError
+from pullbox.core.sqlite_lock import (
+    SQLITE_LOCK_RETRY_ATTEMPTS,
+    is_sqlite_locked_error,
+    sqlite_lock_retry_delay,
+)
 from pullbox.models.client import DownloadClientConfig
 from pullbox.schemas.client import ClientCreate, ClientResponse, ClientUpdate
 
@@ -62,6 +69,46 @@ def _redact_client(client: DownloadClientConfig) -> dict[str, object]:
         "created_at": client.created_at,
         "updated_at": client.updated_at,
     }
+
+
+async def _persist_client_test_status_with_retry(
+    session: DbSession,
+    client_id: int,
+    *,
+    healthy: bool,
+    message: str,
+    checked_at: datetime,
+) -> None:
+    """Persist client test status, retrying transient SQLite write locks."""
+    for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+        client = await session.get(DownloadClientConfig, client_id)
+        if not client:
+            raise NotFoundError("Download client", client_id)
+
+        client.last_test_message = message
+        if healthy:
+            client.last_success_at = checked_at
+            client.last_error = None
+        else:
+            client.last_failure_at = checked_at
+            client.last_error = message
+
+        try:
+            await session.flush()
+            return
+        except OperationalError as exc:
+            await session.rollback()
+            if not is_sqlite_locked_error(exc) or attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                raise
+            delay_seconds = sqlite_lock_retry_delay(attempt)
+            logger.warning(
+                "client_test_status_persist_retrying_after_sqlite_lock",
+                client_id=client_id,
+                attempt=attempt,
+                max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
+                delay_seconds=delay_seconds,
+            )
+            await asyncio.sleep(delay_seconds)
 
 
 def _decryption_failure_response() -> dict[str, object]:
@@ -389,10 +436,13 @@ async def test_client(
             raise ProviderError("download", f"Unknown client type: {client.client_type}")
     except ValueError as exc:
         message = str(_decryption_failure_response()["message"])
-        client.last_failure_at = datetime.now(UTC)
-        client.last_error = message
-        client.last_test_message = message
-        await session.flush()
+        await _persist_client_test_status_with_retry(
+            session,
+            client_id,
+            healthy=False,
+            message=message,
+            checked_at=datetime.now(UTC),
+        )
         logger.warning("client_test_decrypt_failed", client_id=client_id, error=str(exc))
         return _decryption_failure_response()
 
@@ -402,14 +452,13 @@ async def test_client(
 
     result = await dl_provider.test_connection()
     checked_at = datetime.now(UTC)
-    client.last_test_message = result.message
-    if result.healthy:
-        client.last_success_at = checked_at
-        client.last_error = None
-    else:
-        client.last_failure_at = checked_at
-        client.last_error = result.message
-    await session.flush()
+    await _persist_client_test_status_with_retry(
+        session,
+        client_id,
+        healthy=result.healthy,
+        message=result.message,
+        checked_at=checked_at,
+    )
 
     logger.info(
         "client_test_connection",

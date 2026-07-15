@@ -92,6 +92,22 @@ class TestSettingsRouteContracts:
         assert 'placeholder="/downloads"' in response.text
         assert 'placeholder="/data/downloads"' in response.text
 
+    async def test_settings_client_bulk_tests_are_serialized_to_avoid_write_storm(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=clients")
+
+        assert response.status_code == 200
+        block = _script_block(
+            response.text,
+            "    async testClientConnection(clientId) {",
+            "    saveConfig(formEl)",
+        )
+        assert "Promise.all(" not in block
+        assert "for (const client of clients)" in block
+        assert "await this.testClientConnection(client.id)" in block
+
     async def test_settings_metadata_is_minimal_and_shows_last_five_key_chars(
         self,
         authenticated_client,
