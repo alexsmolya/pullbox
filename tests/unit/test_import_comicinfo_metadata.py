@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from datetime import date
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from pullbox.models.issue import Issue
-from pullbox.services.import_comicinfo_metadata import issue_needs_comicinfo_enrichment
+from pullbox.services.import_comicinfo_metadata import (
+    enrich_issue_for_comicinfo,
+    issue_needs_comicinfo_enrichment,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,3 +30,24 @@ async def test_issue_needs_comicinfo_enrichment_skips_complete_transient_issue(
     )
 
     assert await issue_needs_comicinfo_enrichment(db_session, issue) is False
+
+
+@pytest.mark.asyncio
+async def test_enrich_issue_propagates_sqlite_lock_for_outer_retry(
+    db_session: AsyncSession,
+) -> None:
+    issue = Issue(comicvine_id=1234)
+    lock_error = OperationalError(
+        "UPDATE issues SET description = ?",
+        {},
+        Exception("database is locked"),
+    )
+    metadata_service = AsyncMock()
+    metadata_service.fetch_issue.side_effect = lock_error
+
+    with pytest.raises(OperationalError, match="database is locked"):
+        await enrich_issue_for_comicinfo(
+            db_session,
+            issue,
+            metadata_service=metadata_service,
+        )

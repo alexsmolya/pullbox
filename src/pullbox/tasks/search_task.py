@@ -567,6 +567,11 @@ async def search_series_issues(
                 pass2_outcomes = []
             search_fanout_ms = int((time.monotonic() - search_started_at) * 1000)
 
+            # Persist indexer health immediately after network fan-out. The
+            # routing phase performs additional client I/O and must not inherit
+            # a pending writer transaction from health tracking.
+            await session.commit()
+
             sent = 0
             queued = 0
             pass2_by_issue = {outcome.target.issue_id: outcome for outcome in pass2_outcomes}

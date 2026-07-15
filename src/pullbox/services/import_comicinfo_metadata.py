@@ -9,6 +9,7 @@ import structlog
 from sqlalchemy import func as sa_func
 from sqlalchemy import select as sa_select
 
+from pullbox.core.sqlite_lock import is_sqlite_locked_error
 from pullbox.models.creator import IssueCreator
 from pullbox.models.issue import Issue
 
@@ -90,6 +91,8 @@ async def enrich_issue_for_comicinfo(
             comicvine_issue_id=issue.comicvine_id,
             error=str(exc),
         )
+        if is_sqlite_locked_error(exc):
+            raise
         return issue
 
     if timing is not None:

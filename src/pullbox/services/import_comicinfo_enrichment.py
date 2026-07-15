@@ -5,14 +5,21 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import select as sa_select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import joinedload
 
+from pullbox.core.sqlite_lock import (
+    SQLITE_LOCK_RETRY_ATTEMPTS,
+    is_sqlite_locked_error,
+    sqlite_lock_retry_delay,
+)
 from pullbox.models.import_job import ImportedFile, ImportedFileStatus, ImportJob, ImportJobStatus
 from pullbox.models.issue import Issue
 from pullbox.models.library import LibraryFile
@@ -32,6 +39,18 @@ ImportComicInfoLogEvent = Callable[..., Awaitable[None]]
 comicinfo_enrichment_tasks: set[asyncio.Task[None]] = set()
 _comicinfo_enrichment_semaphore: asyncio.Semaphore | None = None
 _comicinfo_enrichment_semaphore_loop: asyncio.AbstractEventLoop | None = None
+
+
+@dataclass(frozen=True)
+class PreparedComicInfoEnrichment:
+    """Database-independent inputs for one deferred archive rewrite."""
+
+    artifact_path: Path
+    payload: dict[str, Any]
+    library_file_id: int
+    library_file_name: str
+    issue_id: int
+    issue_cv_id: int | None
 
 
 def reset_comicinfo_enrichment_gate() -> None:
@@ -118,26 +137,34 @@ async def run_import_comicinfo_enrichment(
     """Refresh deferred ComicInfo metadata for imported files in one import job."""
     pending_ids = await _load_pending_imported_file_ids(session_factory, job_id=job_id)
     for imported_file_id in pending_ids:
-        async with session_factory() as session:
-            try:
-                await _process_pending_imported_file(
-                    session,
-                    job_id=job_id,
-                    imported_file_id=imported_file_id,
-                    build_comicinfo_payload=build_comicinfo_payload,
-                    apply_comicinfo=apply_comicinfo,
-                    log_event=log_event,
-                )
-                await session.commit()
-            except Exception as exc:
-                await session.rollback()
-                await _mark_pending_file_failed(
-                    session_factory,
-                    job_id=job_id,
-                    imported_file_id=imported_file_id,
-                    error=str(exc),
-                    log_event=log_event,
-                )
+        try:
+            prepared = await _prepare_pending_imported_file_with_retry(
+                session_factory,
+                imported_file_id=imported_file_id,
+                build_comicinfo_payload=build_comicinfo_payload,
+            )
+            if prepared is None:
+                continue
+
+            apply_result = apply_comicinfo(prepared.artifact_path, prepared.payload)
+            if inspect.isawaitable(apply_result):
+                await apply_result
+
+            await _mark_pending_file_complete_with_retry(
+                session_factory,
+                job_id=job_id,
+                imported_file_id=imported_file_id,
+                prepared=prepared,
+                log_event=log_event,
+            )
+        except Exception as exc:
+            await _mark_pending_file_failed(
+                session_factory,
+                job_id=job_id,
+                imported_file_id=imported_file_id,
+                error=str(exc),
+                log_event=log_event,
+            )
 
 
 async def _load_pending_imported_file_ids(
@@ -192,18 +219,58 @@ def _is_pending_comicinfo_enrichment_diagnostics(diagnostics: Any) -> bool:
     return isinstance(details, dict) and details.get("status") == "pending"
 
 
-async def _process_pending_imported_file(
-    session: AsyncSession,
+async def _prepare_pending_imported_file_with_retry(
+    session_factory: async_sessionmaker[AsyncSession],
     *,
-    job_id: int,
     imported_file_id: int,
     build_comicinfo_payload: ImportComicInfoBuildPayload,
-    apply_comicinfo: ImportComicInfoApply,
-    log_event: ImportComicInfoLogEvent,
-) -> None:
+) -> PreparedComicInfoEnrichment | None:
+    """Prepare metadata and commit it before any archive mutation begins."""
+    for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+        async with session_factory() as session:
+            try:
+                prepared = await _prepare_pending_imported_file(
+                    session,
+                    imported_file_id=imported_file_id,
+                    build_comicinfo_payload=build_comicinfo_payload,
+                )
+                await session.commit()
+                return prepared
+            except OperationalError as exc:
+                await session.rollback()
+                if not is_sqlite_locked_error(exc):
+                    raise
+                if attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                    logger.warning(
+                        "import_comicinfo_prepare_deferred_after_sqlite_lock",
+                        imported_file_id=imported_file_id,
+                        attempts=attempt,
+                    )
+                    return None
+                delay_seconds = sqlite_lock_retry_delay(attempt)
+                logger.warning(
+                    "import_comicinfo_prepare_retrying_after_sqlite_lock",
+                    imported_file_id=imported_file_id,
+                    attempt=attempt,
+                    max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
+                    delay_seconds=delay_seconds,
+                )
+            except Exception:
+                await session.rollback()
+                raise
+        await asyncio.sleep(delay_seconds)
+    return None
+
+
+async def _prepare_pending_imported_file(
+    session: AsyncSession,
+    *,
+    imported_file_id: int,
+    build_comicinfo_payload: ImportComicInfoBuildPayload,
+) -> PreparedComicInfoEnrichment | None:
     imported_file = await session.get(ImportedFile, imported_file_id)
     if not _is_pending_comicinfo_enrichment(imported_file):
-        return
+        return None
     assert imported_file is not None
 
     library_file_id = imported_file.library_file_id
@@ -238,32 +305,87 @@ async def _process_pending_imported_file(
         source_path=artifact_path,
         defer_issue_enrichment=False,
     )
-    apply_result = apply_comicinfo(artifact_path, payload)
-    if inspect.isawaitable(apply_result):
-        await apply_result
-
-    if artifact_path.exists():
-        library_file.file_size = artifact_path.stat().st_size
-        library_file.file_modified_at = datetime.fromtimestamp(
-            artifact_path.stat().st_mtime,
-            tz=UTC,
-        )
-    _set_comicinfo_enrichment_status(
-        imported_file,
-        status="complete",
-        completed_at=datetime.now(UTC).isoformat(),
-    )
-    await log_event(
-        session,
-        job_id,
-        "DEBUG",
-        "import_file_comicinfo_enrichment_completed",
-        message=f"Deferred ComicInfo metadata refreshed: {library_file.file_name}",
-        destination_path=library_file.file_path,
+    return PreparedComicInfoEnrichment(
+        artifact_path=artifact_path,
+        payload=payload,
         library_file_id=library_file.id,
+        library_file_name=library_file.file_name,
         issue_id=issue.id,
         issue_cv_id=issue.comicvine_id,
     )
+
+
+async def _mark_pending_file_complete_with_retry(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    job_id: int,
+    imported_file_id: int,
+    prepared: PreparedComicInfoEnrichment,
+    log_event: ImportComicInfoLogEvent,
+) -> bool:
+    """Persist archive completion in a short, retryable transaction."""
+    for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+        async with session_factory() as session:
+            try:
+                imported_file = await session.get(ImportedFile, imported_file_id)
+                if not _is_pending_comicinfo_enrichment(imported_file):
+                    return True
+                assert imported_file is not None
+
+                library_file = await session.get(LibraryFile, prepared.library_file_id)
+                if library_file is None:
+                    raise ValueError(f"Library file {prepared.library_file_id} no longer exists")
+                if prepared.artifact_path.exists():
+                    artifact_stat = prepared.artifact_path.stat()
+                    library_file.file_size = artifact_stat.st_size
+                    library_file.file_modified_at = datetime.fromtimestamp(
+                        artifact_stat.st_mtime,
+                        tz=UTC,
+                    )
+                _set_comicinfo_enrichment_status(
+                    imported_file,
+                    status="complete",
+                    completed_at=datetime.now(UTC).isoformat(),
+                )
+                await log_event(
+                    session,
+                    job_id,
+                    "DEBUG",
+                    "import_file_comicinfo_enrichment_completed",
+                    message=(
+                        f"Deferred ComicInfo metadata refreshed: {prepared.library_file_name}"
+                    ),
+                    destination_path=str(prepared.artifact_path),
+                    library_file_id=prepared.library_file_id,
+                    issue_id=prepared.issue_id,
+                    issue_cv_id=prepared.issue_cv_id,
+                )
+                await session.commit()
+                return True
+            except OperationalError as exc:
+                await session.rollback()
+                if not is_sqlite_locked_error(exc):
+                    raise
+                if attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                    logger.warning(
+                        "import_comicinfo_completion_deferred_after_sqlite_lock",
+                        imported_file_id=imported_file_id,
+                        attempts=attempt,
+                    )
+                    return False
+                delay_seconds = sqlite_lock_retry_delay(attempt)
+                logger.warning(
+                    "import_comicinfo_completion_retrying_after_sqlite_lock",
+                    imported_file_id=imported_file_id,
+                    attempt=attempt,
+                    max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
+                    delay_seconds=delay_seconds,
+                )
+            except Exception:
+                await session.rollback()
+                raise
+        await asyncio.sleep(delay_seconds)
+    return False
 
 
 async def _mark_pending_file_failed(
@@ -273,27 +395,57 @@ async def _mark_pending_file_failed(
     imported_file_id: int,
     error: str,
     log_event: ImportComicInfoLogEvent,
-) -> None:
-    async with session_factory() as session:
-        imported_file = await session.get(ImportedFile, imported_file_id)
-        if imported_file is None:
-            return
-        _set_comicinfo_enrichment_status(
-            imported_file,
-            status="failed",
-            error=error,
-            failed_at=datetime.now(UTC).isoformat(),
-        )
-        await log_event(
-            session,
-            job_id,
-            "WARNING",
-            "import_file_comicinfo_enrichment_failed",
-            message=f"Deferred ComicInfo metadata refresh failed: {imported_file.file_name}",
-            imported_file_id=imported_file.id,
-            error=error,
-        )
-        await session.commit()
+) -> bool:
+    """Record a non-transient failure without letting a lock abort the queue."""
+    for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+        async with session_factory() as session:
+            try:
+                imported_file = await session.get(ImportedFile, imported_file_id)
+                if imported_file is None:
+                    return True
+                _set_comicinfo_enrichment_status(
+                    imported_file,
+                    status="failed",
+                    error=error,
+                    failed_at=datetime.now(UTC).isoformat(),
+                )
+                await log_event(
+                    session,
+                    job_id,
+                    "WARNING",
+                    "import_file_comicinfo_enrichment_failed",
+                    message=(
+                        f"Deferred ComicInfo metadata refresh failed: {imported_file.file_name}"
+                    ),
+                    imported_file_id=imported_file.id,
+                    error=error,
+                )
+                await session.commit()
+                return True
+            except OperationalError as exc:
+                await session.rollback()
+                if not is_sqlite_locked_error(exc):
+                    raise
+                if attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                    logger.warning(
+                        "import_comicinfo_failure_status_deferred_after_sqlite_lock",
+                        imported_file_id=imported_file_id,
+                        attempts=attempt,
+                    )
+                    return False
+                delay_seconds = sqlite_lock_retry_delay(attempt)
+                logger.warning(
+                    "import_comicinfo_failure_status_retrying_after_sqlite_lock",
+                    imported_file_id=imported_file_id,
+                    attempt=attempt,
+                    max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
+                    delay_seconds=delay_seconds,
+                )
+            except Exception:
+                await session.rollback()
+                raise
+        await asyncio.sleep(delay_seconds)
+    return False
 
 
 def _set_comicinfo_enrichment_status(

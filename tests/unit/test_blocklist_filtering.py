@@ -14,9 +14,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy import event
 
 from pullbox.models.blocklist import BlocklistReason
 from pullbox.models.config import SystemConfig
+from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.providers.base import ReleaseResult
 from pullbox.services.blocklist_service import BlocklistService
 
@@ -277,6 +279,49 @@ class TestFilterResultsByTitle:
         original_len = len(results)
         await svc.filter_results(db_session, results)
         assert len(results) == original_len
+
+    async def test_does_not_autoflush_unrelated_indexer_health_updates(
+        self, db_session: AsyncSession, svc: BlocklistService
+    ) -> None:
+        indexer = IndexerConfig(
+            name="NZBgeek",
+            indexer_type=IndexerType.NEWZNAB,
+            url="https://example.test/newznab",
+            api_key="encrypted-test-key",
+            enabled=True,
+            priority=25,
+            failure_count=1,
+        )
+        db_session.add(indexer)
+        await db_session.commit()
+        indexer.failure_count = 0
+        indexer.last_success_at = datetime.now(UTC)
+
+        statements: list[str] = []
+
+        def _record_statement(
+            _conn: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        engine = db_session.bind
+        assert engine is not None
+        event.listen(engine.sync_engine, "before_cursor_execute", _record_statement)
+        try:
+            filtered = await svc.filter_results(db_session, [_make_release("Saga.073.2026")])
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", _record_statement)
+
+        assert len(filtered) == 1
+        assert not any(
+            statement.lstrip().upper().startswith("UPDATE INDEXER_CONFIGS")
+            for statement in statements
+        )
 
 
 @pytest.mark.slow

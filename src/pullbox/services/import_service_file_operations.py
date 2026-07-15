@@ -275,12 +275,6 @@ class ImportServiceFileOperationsMixin:
         timing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build authoritative ComicInfo.xml fields for a chosen issue."""
-        enriched_issue = await self._enrich_issue_for_comicinfo(
-            session,
-            issue,
-            defer_provider_fetch=defer_issue_enrichment,
-            timing=timing,
-        )
         page_count = None
         if source_path is not None:
             page_count_started_at = time.monotonic()
@@ -299,6 +293,12 @@ class ImportServiceFileOperationsMixin:
                         else None,
                     }
                 )
+        enriched_issue = await self._enrich_issue_for_comicinfo(
+            session,
+            issue,
+            defer_provider_fetch=defer_issue_enrichment,
+            timing=timing,
+        )
         return await build_comicinfo_payload_for_issue(
             session,
             enriched_issue,
