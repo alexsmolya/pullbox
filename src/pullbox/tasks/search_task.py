@@ -507,13 +507,6 @@ async def search_series_issues(
                 return {"wanted": 0, "sent": 0, "queued": 0}
 
             preload_ms = int((time.monotonic() - preload_started_at) * 1000)
-            search_svc = SearchService(
-                runtime.registry,
-                failure_threshold=runtime.failure_threshold,
-            )
-            download_svc = _build_download_service(runtime.registry)
-            intervention_svc = InterventionService(download_svc)
-
             log.info(
                 "search_series_issues_config",
                 series=str(series.title),
@@ -525,52 +518,85 @@ async def search_series_issues(
             )
 
             search_started_at = time.monotonic()
-            if _is_mocked_search_service(search_svc):
-                two_pass_enabled = await _load_mocked_two_pass_enabled(session, runtime)
-                pass1_outcomes = [
-                    await _build_mocked_issue_outcome(
-                        session,
-                        search_svc,
-                        target,
-                        runtime,
+            pass1_outcomes: list[IssueSearchOutcome] = []
+            pass2_outcomes: list[IssueSearchOutcome] = []
+            for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+                try:
+                    if attempt > 1:
+                        retry_runtime = await _build_task_search_runtime(
+                            session,
+                            include_download_clients=True,
+                        )
+                        if retry_runtime is None:
+                            msg = "Search runtime became unavailable during lock retry"
+                            raise RuntimeError(msg)
+                        runtime = retry_runtime
+
+                    search_svc = SearchService(
+                        runtime.registry,
+                        failure_threshold=runtime.failure_threshold,
                     )
-                    for target in targets
-                ]
-                pass2_targets = [
-                    outcome.target
-                    for outcome in pass1_outcomes
-                    if outcome.best_validation is None
-                    and outcome.target.issue_type.value in _TYPE_QUERY_KEYWORDS
-                    and two_pass_enabled
-                ]
-                pass2_outcomes = [
-                    await _build_mocked_issue_outcome(
-                        session,
-                        search_svc,
-                        target,
-                        runtime,
-                        force_generic=True,
+                    if _is_mocked_search_service(search_svc):
+                        two_pass_enabled = await _load_mocked_two_pass_enabled(session, runtime)
+                        pass1_outcomes = [
+                            await _build_mocked_issue_outcome(
+                                session,
+                                search_svc,
+                                target,
+                                runtime,
+                            )
+                            for target in targets
+                        ]
+                        pass2_targets = [
+                            outcome.target
+                            for outcome in pass1_outcomes
+                            if outcome.best_validation is None
+                            and outcome.target.issue_type.value in _TYPE_QUERY_KEYWORDS
+                            and two_pass_enabled
+                        ]
+                        pass2_outcomes = [
+                            await _build_mocked_issue_outcome(
+                                session,
+                                search_svc,
+                                target,
+                                runtime,
+                                force_generic=True,
+                            )
+                            for target in pass2_targets
+                        ]
+                    else:
+                        pass1_outcomes = await search_svc.search_targets_quick_first(
+                            session,
+                            targets,
+                            indexer_configs=runtime.indexer_configs,
+                            eval_kwargs=runtime.eval_kwargs,
+                            validator_kwargs=runtime.validator_kwargs,
+                            source_priority=runtime.source_priority,
+                            enable_deep_fallback=runtime.two_pass_enabled,
+                            concurrency=DEFAULT_WANTED_SEARCH_CONCURRENCY,
+                        )
+                        pass2_outcomes = []
+
+                    # Persist indexer health immediately after network fan-out.
+                    await session.commit()
+                    break
+                except OperationalError as exc:
+                    await session.rollback()
+                    if not is_sqlite_locked_error(exc) or attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                        raise
+                    delay_seconds = sqlite_lock_retry_delay(attempt)
+                    log.warning(
+                        "search_series_retrying_after_sqlite_lock",
+                        attempt=attempt,
+                        max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
+                        delay_seconds=delay_seconds,
+                        stage="search_fanout_persist",
                     )
-                    for target in pass2_targets
-                ]
-            else:
-                pass1_outcomes = await search_svc.search_targets_quick_first(
-                    session,
-                    targets,
-                    indexer_configs=runtime.indexer_configs,
-                    eval_kwargs=runtime.eval_kwargs,
-                    validator_kwargs=runtime.validator_kwargs,
-                    source_priority=runtime.source_priority,
-                    enable_deep_fallback=runtime.two_pass_enabled,
-                    concurrency=DEFAULT_WANTED_SEARCH_CONCURRENCY,
-                )
-                pass2_outcomes = []
+                    await asyncio.sleep(delay_seconds)
             search_fanout_ms = int((time.monotonic() - search_started_at) * 1000)
 
-            # Persist indexer health immediately after network fan-out. The
-            # routing phase performs additional client I/O and must not inherit
-            # a pending writer transaction from health tracking.
-            await session.commit()
+            download_svc = _build_download_service(runtime.registry)
+            intervention_svc = InterventionService(download_svc)
 
             sent = 0
             queued = 0

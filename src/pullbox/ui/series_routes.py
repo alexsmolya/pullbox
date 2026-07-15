@@ -10,7 +10,7 @@ import structlog
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import ColumnElement, case, func, select
+from sqlalchemy import ColumnElement, String, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import contains_eager
 from starlette.responses import Response
@@ -126,6 +126,11 @@ def series_type_code(series_type_value: str) -> str:
     return type_codes.get(series_type_value, series_type_value[:3].upper())
 
 
+def _lower_enum_sort(column: Any) -> ColumnElement[str]:
+    """Return a portable case-insensitive sort for native enum columns."""
+    return func.lower(cast(column, String))
+
+
 def build_series_filters(
     q: str | None,
     status: str | None,
@@ -208,14 +213,16 @@ async def series_list(
         .subquery()
     )
 
+    status_sort = _lower_enum_sort(Series.status)
+    series_type_sort = _lower_enum_sort(Series.series_type)
     sort_map = {
         "title": func.lower(Series.sort_title),
         "year": Series.year_start,
         "date_added": Series.created_at,
         "publisher": func.lower(Publisher.name),
-        "status": func.lower(Series.status),
+        "status": status_sort,
         "issues": func.coalesce(issue_counts.c.owned_count, 0),
-        "series_type": func.lower(Series.series_type),
+        "series_type": series_type_sort,
     }
     sort_col = sort_map.get(sort_field, func.lower(Series.sort_title))
     order_clause = sort_col.desc() if sort_desc else sort_col.asc()
@@ -227,7 +234,7 @@ async def series_list(
         order_clauses.extend(
             [
                 Series.year_start.desc().nullslast(),
-                func.lower(Series.series_type).asc(),
+                series_type_sort.asc(),
             ]
         )
     else:

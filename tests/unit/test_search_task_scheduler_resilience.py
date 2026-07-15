@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from pullbox.models.issue import IssueType
 from pullbox.providers.base import ProviderRegistry
+from pullbox.services.search_service import IssueSearchOutcome, IssueSearchTarget
 from pullbox.tasks import search_task
 
 
@@ -53,6 +56,81 @@ class _FakeSessionFactory:
     def __call__(self) -> _FakeSession:
         self.session_count += 1
         return _FakeSession(self)
+
+
+@pytest.mark.asyncio
+async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch) -> None:
+    """A transient fan-out commit lock must not discard fetched series outcomes."""
+    factory = _FakeSessionFactory()
+    target = IssueSearchTarget(
+        issue_id=123,
+        series_id=456,
+        series_title="Retry Series",
+        issue_number=1.0,
+        issue_type=IssueType.ISSUE,
+        series_year=2026,
+    )
+    outcome = IssueSearchOutcome(
+        target=target,
+        mode="fast",
+        query_count=1,
+        raw_results=[],
+        filtered_results=[],
+        matched=[],
+        rejected=[],
+        best_release=None,
+        best_validation=None,
+        search_details={"results_count": 0},
+        elapsed_ms=1,
+    )
+    runtime = SimpleNamespace(
+        registry=ProviderRegistry(),
+        failure_threshold=3,
+        two_pass_enabled=False,
+        indexer_configs={},
+        eval_kwargs={},
+        validator_kwargs={},
+        source_priority={},
+        type_thresholds={},
+    )
+    search_mock = AsyncMock(return_value=[outcome])
+
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: factory)
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_series_wanted_search_targets",
+        AsyncMock(return_value=[target]),
+    )
+    monkeypatch.setattr(
+        search_task.SearchService,
+        "search_targets_quick_first",
+        search_mock,
+    )
+    monkeypatch.setattr(
+        search_task,
+        "_persist_bulk_search_log",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(search_task, "_build_download_service", MagicMock())
+    monkeypatch.setattr(search_task, "InterventionService", MagicMock())
+    monkeypatch.setattr(search_task, "sqlite_lock_retry_delay", lambda _attempt: 0.0)
+    monkeypatch.setattr(
+        _FakeSession,
+        "get",
+        AsyncMock(return_value=SimpleNamespace(title="Retry Series", year_start=2026)),
+    )
+
+    result = await search_task.search_series_issues(456)
+
+    assert result == {"wanted": 1, "sent": 0, "queued": 0}
+    assert factory.commit_attempts == 2
+    assert factory.rollback_attempts == 1
+    assert search_mock.await_count == 2
 
 
 @pytest.mark.asyncio
