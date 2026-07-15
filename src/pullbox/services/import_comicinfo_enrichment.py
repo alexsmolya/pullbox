@@ -24,6 +24,7 @@ from pullbox.models.import_job import ImportedFile, ImportedFileStatus, ImportJo
 from pullbox.models.issue import Issue
 from pullbox.models.library import LibraryFile
 from pullbox.models.series import Series
+from pullbox.services.import_comicinfo_metadata import is_retryable_provider_error
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -158,6 +159,14 @@ async def run_import_comicinfo_enrichment(
                 log_event=log_event,
             )
         except Exception as exc:
+            if is_retryable_provider_error(exc):
+                logger.warning(
+                    "import_comicinfo_enrichment_deferred_for_provider",
+                    job_id=job_id,
+                    imported_file_id=imported_file_id,
+                    error=str(exc),
+                )
+                break
             await _mark_pending_file_failed(
                 session_factory,
                 job_id=job_id,
@@ -304,6 +313,7 @@ async def _prepare_pending_imported_file(
         issue,
         source_path=artifact_path,
         defer_issue_enrichment=False,
+        propagate_retryable_provider_errors=True,
     )
     return PreparedComicInfoEnrichment(
         artifact_path=artifact_path,

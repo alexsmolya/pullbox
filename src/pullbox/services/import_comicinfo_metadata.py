@@ -9,6 +9,7 @@ import structlog
 from sqlalchemy import func as sa_func
 from sqlalchemy import select as sa_select
 
+from pullbox.core.exceptions import ProviderError, RateLimitError
 from pullbox.core.sqlite_lock import is_sqlite_locked_error
 from pullbox.models.creator import IssueCreator
 from pullbox.models.issue import Issue
@@ -19,6 +20,15 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger(__name__)
+
+
+def is_retryable_provider_error(exc: Exception) -> bool:
+    """Return whether deferred metadata work should remain pending."""
+    if isinstance(exc, RateLimitError):
+        return True
+    if not isinstance(exc, ProviderError) or not isinstance(exc.details, dict):
+        return False
+    return exc.details.get("retryable") is True
 
 
 async def issue_needs_comicinfo_enrichment(
@@ -47,6 +57,7 @@ async def enrich_issue_for_comicinfo(
     *,
     metadata_service: Any,
     defer_provider_fetch: bool = False,
+    propagate_retryable_provider_errors: bool = False,
     timing: dict[str, Any] | None = None,
     log_warning: Callable[..., Any] = logger.warning,
     time_monotonic: Callable[[], float] = time.monotonic,
@@ -91,7 +102,9 @@ async def enrich_issue_for_comicinfo(
             comicvine_issue_id=issue.comicvine_id,
             error=str(exc),
         )
-        if is_sqlite_locked_error(exc):
+        if is_sqlite_locked_error(exc) or (
+            propagate_retryable_provider_errors and is_retryable_provider_error(exc)
+        ):
             raise
         return issue
 

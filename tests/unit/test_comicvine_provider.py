@@ -307,6 +307,7 @@ async def test_request_maps_comicvine_status_errors(
         await provider._client.aclose()
 
     assert exc_info.value.status_code == expected_status
+    assert exc_info.value.retryable is (expected_status == 107)
 
 
 @pytest.mark.asyncio
@@ -327,6 +328,28 @@ async def test_request_maps_http_404_to_not_found_error() -> None:
         await provider._client.aclose()
 
     assert exc_info.value.status_code == 101
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [420, 429, 503])
+async def test_request_preserves_retryable_http_status(status_code: int) -> None:
+    provider = ComicVineProvider(api_key="http-test-key", rate_limit=999_999)
+    response = _make_response(status_code=status_code)
+    response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "provider unavailable",
+        request=MagicMock(),
+        response=response,
+    )
+    provider._client.get = AsyncMock(return_value=response)  # type: ignore[method-assign]
+
+    try:
+        with pytest.raises(ComicVineError, match=f"HTTP {status_code}") as exc_info:
+            await provider._request("/issue/4000-123/")
+    finally:
+        await provider._client.aclose()
+
+    assert exc_info.value.status_code == status_code
+    assert exc_info.value.retryable is True
 
 
 @pytest.mark.asyncio

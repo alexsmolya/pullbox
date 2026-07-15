@@ -92,6 +92,7 @@ if TYPE_CHECKING:
             issue: Issue,
             *,
             defer_provider_fetch: bool = False,
+            propagate_retryable_provider_errors: bool = False,
             timing: dict[str, Any] | None = None,
         ) -> Issue: ...
 
@@ -102,6 +103,7 @@ if TYPE_CHECKING:
             *,
             source_path: Path | None = None,
             defer_issue_enrichment: bool = False,
+            propagate_retryable_provider_errors: bool = False,
             timing: dict[str, Any] | None = None,
         ) -> dict[str, Any]: ...
 
@@ -272,6 +274,7 @@ class ImportServiceFileOperationsMixin:
         *,
         source_path: Path | None = None,
         defer_issue_enrichment: bool = False,
+        propagate_retryable_provider_errors: bool = False,
         timing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build authoritative ComicInfo.xml fields for a chosen issue."""
@@ -297,6 +300,7 @@ class ImportServiceFileOperationsMixin:
             session,
             issue,
             defer_provider_fetch=defer_issue_enrichment,
+            propagate_retryable_provider_errors=propagate_retryable_provider_errors,
             timing=timing,
         )
         return await build_comicinfo_payload_for_issue(
@@ -351,6 +355,7 @@ class ImportServiceFileOperationsMixin:
         issue: Issue,
         *,
         defer_provider_fetch: bool = False,
+        propagate_retryable_provider_errors: bool = False,
         timing: dict[str, Any] | None = None,
     ) -> Issue:
         """Fetch full issue metadata once when ComicInfo needs authoritative fields."""
@@ -359,6 +364,7 @@ class ImportServiceFileOperationsMixin:
             issue,
             metadata_service=self._metadata_service,
             defer_provider_fetch=defer_provider_fetch,
+            propagate_retryable_provider_errors=propagate_retryable_provider_errors,
             timing=timing,
             log_warning=logger.warning,
         )

@@ -167,6 +167,20 @@ async def test_metadata_fetch_wrappers_translate_comicvine_errors(
         await getattr(service, method_name)(*args)
 
 
+@pytest.mark.asyncio
+async def test_fetch_issue_preserves_retryable_provider_details() -> None:
+    provider = MagicMock()
+    provider.get_issue = AsyncMock(
+        side_effect=ComicVineError(420, "HTTP 420: /issue/4000-123/", retryable=True)
+    )
+    service = MetadataService(provider=provider, covers_dir=MagicMock())
+
+    with pytest.raises(ProviderError, match="HTTP 420") as exc_info:
+        await service.fetch_issue(MagicMock(), 123)
+
+    assert exc_info.value.details == {"status_code": 420, "retryable": True}
+
+
 class TestRefreshSeries:
     """Tests for MetadataService.refresh_series."""
 

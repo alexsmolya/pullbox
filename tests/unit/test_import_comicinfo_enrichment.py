@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from pullbox.core.exceptions import ProviderError
 from pullbox.models.import_job import (
     ImportedFile,
     ImportedFileStatus,
@@ -124,10 +125,12 @@ async def test_run_import_comicinfo_enrichment_rewrites_pending_library_file(
         *,
         source_path: Path | None = None,
         defer_issue_enrichment: bool = False,
+        propagate_retryable_provider_errors: bool = False,
     ) -> dict[str, Any]:
         nonlocal build_calls, payload_session
         assert source_path == archive_path
         assert defer_issue_enrichment is False
+        assert propagate_retryable_provider_errors is True
         build_calls += 1
         payload_session = session
         issue.description = "Refreshed ComicVine summary."
@@ -291,6 +294,61 @@ async def test_locked_pending_file_does_not_stop_later_enrichment(
 
 
 @pytest.mark.asyncio
+async def test_retryable_provider_error_stops_enrichment_and_leaves_queue_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def load_pending_ids(_factory: object, *, job_id: int) -> list[int]:
+        assert job_id == 7
+        return [101, 202]
+
+    prepared_ids: list[int] = []
+
+    async def prepare_pending(
+        _factory: object,
+        *,
+        imported_file_id: int,
+        build_comicinfo_payload: object,
+    ) -> PreparedComicInfoEnrichment | None:
+        _ = build_comicinfo_payload
+        prepared_ids.append(imported_file_id)
+        raise ProviderError(
+            "comicvine",
+            "HTTP 420: /issue/4000-1234/",
+            details={"status_code": 420, "retryable": True},
+        )
+
+    async def should_not_mark_failed(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("retryable enrichment must remain pending")
+
+    monkeypatch.setattr(enrichment_module, "_load_pending_imported_file_ids", load_pending_ids)
+    monkeypatch.setattr(
+        enrichment_module,
+        "_prepare_pending_imported_file_with_retry",
+        prepare_pending,
+    )
+    monkeypatch.setattr(enrichment_module, "_mark_pending_file_failed", should_not_mark_failed)
+
+    def should_not_apply(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("partial ComicInfo must not be applied")
+
+    async def unused_build_payload(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise AssertionError("preparation was replaced for this control-flow test")
+
+    async def unused_log_event(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("no durable file event is expected")
+
+    await run_import_comicinfo_enrichment(
+        object(),  # type: ignore[arg-type]
+        job_id=7,
+        build_comicinfo_payload=unused_build_payload,
+        apply_comicinfo=should_not_apply,
+        log_event=unused_log_event,
+    )
+
+    assert prepared_ids == [101]
+
+
+@pytest.mark.asyncio
 async def test_run_pending_import_comicinfo_enrichment_recovers_completed_jobs_after_restart(
     async_engine,
     tmp_path: Path,
@@ -414,9 +472,11 @@ async def test_run_pending_import_comicinfo_enrichment_recovers_completed_jobs_a
         *,
         source_path: Path | None = None,
         defer_issue_enrichment: bool = False,
+        propagate_retryable_provider_errors: bool = False,
     ) -> dict[str, Any]:
         _ = session, issue, source_path
         assert defer_issue_enrichment is False
+        assert propagate_retryable_provider_errors is True
         return {"Series": "Recovered Series", "Number": "1"}
 
     def apply_comicinfo(artifact_path: Path, payload: dict[str, Any]) -> None:
