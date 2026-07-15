@@ -11,6 +11,7 @@ from sqlalchemy import case, func, inspect, select, update
 from sqlalchemy.orm import contains_eager
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
+from pullbox.core.events import IssueWanted, get_event_bus
 from pullbox.core.exceptions import NotFoundError, ValidationError
 from pullbox.core.library_policy import load_search_on_add_default
 from pullbox.models.issue import Issue, IssueStatus
@@ -40,6 +41,7 @@ router = APIRouter(prefix="/series", tags=["series"])
 
 # Strong references to background tasks to prevent garbage collection
 _background_tasks: set[asyncio.Task[object]] = set()
+_BULK_UPDATE_CHUNK_SIZE = 500
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -249,14 +251,52 @@ async def bulk_update_series(
     _user: AuthenticatedUser,
     session: DbSession,
 ) -> dict[str, int]:
-    """Bulk-update monitored status for multiple series."""
+    """Bulk-update monitoring and reconcile the related issue states."""
     series_ids = list(dict.fromkeys(body.series_ids))
-    result = await session.execute(
-        update(Series).where(Series.id.in_(series_ids)).values(monitored=body.monitored)
-    )
-    updated = int(result.rowcount or 0)  # type: ignore[attr-defined]
+    updated = 0
+    issues_updated = 0
+    event_bus = get_event_bus()
+    for offset in range(0, len(series_ids), _BULK_UPDATE_CHUNK_SIZE):
+        chunk = series_ids[offset : offset + _BULK_UPDATE_CHUNK_SIZE]
+        result = await session.execute(
+            update(Series).where(Series.id.in_(chunk)).values(monitored=body.monitored)
+        )
+        updated += int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+        if body.monitored:
+            issue_result = await session.execute(
+                update(Issue)
+                .where(
+                    Issue.series_id.in_(chunk),
+                    Issue.status == IssueStatus.SKIPPED,
+                    Issue.manual_skip.is_(False),
+                )
+                .values(status=IssueStatus.WANTED)
+                .returning(Issue.id, Issue.series_id)
+            )
+            wanted_issues = list(issue_result.all())
+            issues_updated += len(wanted_issues)
+            for issue_id, series_id in wanted_issues:
+                await event_bus.emit(IssueWanted(issue_id=issue_id, series_id=series_id))
+        else:
+            issue_result = await session.execute(
+                update(Issue)
+                .where(
+                    Issue.series_id.in_(chunk),
+                    Issue.status.in_([IssueStatus.WANTED, IssueStatus.DOWNLOADING]),
+                )
+                .values(status=IssueStatus.SKIPPED)
+            )
+            issues_updated += int(issue_result.rowcount or 0)  # type: ignore[attr-defined]
+
     skipped = len(series_ids) - updated
-    logger.info("bulk_update_series", updated=updated, skipped=skipped)
+    logger.info(
+        "bulk_update_series",
+        updated=updated,
+        skipped=skipped,
+        issues_updated=issues_updated,
+        monitored=body.monitored,
+    )
     return {"updated": updated, "skipped": skipped}
 
 

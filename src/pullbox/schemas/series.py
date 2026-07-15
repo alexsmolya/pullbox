@@ -67,10 +67,18 @@ class SeriesResponse(BaseModel):
     updated_at: datetime
 
 
+SERIES_BULK_UPDATE_MAX_IDS = 10_000
+
+
 class SeriesBulkUpdate(BaseModel):
     """Request body for bulk-updating series monitored status."""
 
-    series_ids: list[int] = Field(..., min_length=1, max_length=100, description="IDs to update")
+    series_ids: list[int] = Field(
+        ...,
+        min_length=1,
+        max_length=SERIES_BULK_UPDATE_MAX_IDS,
+        description="IDs to update",
+    )
     monitored: bool = Field(..., description="New monitored status")
 
 
