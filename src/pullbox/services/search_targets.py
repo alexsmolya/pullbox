@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -13,8 +14,6 @@ from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.indexer import IndexerConfig
@@ -53,6 +52,9 @@ class IssueSearchOutcome:
     search_details: dict[str, object]
     elapsed_ms: int
     used_fallback: bool = False
+
+
+SearchOutcomeCallback = Callable[[IssueSearchOutcome], Awaitable[None]]
 
 
 class SearchIssueTargetFunc(Protocol):
@@ -150,6 +152,7 @@ async def search_issue_targets(
     auto_fallback: bool = False,
     force_generic: bool = False,
     concurrency: int = 5,
+    on_outcome: SearchOutcomeCallback | None = None,
 ) -> list[IssueSearchOutcome]:
     """Search issue targets with bounded concurrency."""
     if not targets:
@@ -159,7 +162,7 @@ async def search_issue_targets(
 
     async def _search(target: IssueSearchTarget) -> IssueSearchOutcome:
         async with semaphore:
-            return await search_issue_target_func(
+            outcome = await search_issue_target_func(
                 session,
                 target,
                 mode=mode,
@@ -170,6 +173,9 @@ async def search_issue_targets(
                 auto_fallback=auto_fallback,
                 force_generic=force_generic,
             )
+            if on_outcome is not None:
+                await on_outcome(outcome)
+            return outcome
 
     return await asyncio.gather(*[_search(target) for target in targets])
 

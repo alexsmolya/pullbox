@@ -134,17 +134,45 @@ async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_search_wanted_retries_search_phase_after_sqlite_lock(monkeypatch) -> None:
-    """The fan-out persistence phase should retry on transient SQLite locks."""
+async def test_search_wanted_retries_pending_history_before_provider_search(monkeypatch) -> None:
+    """A pending-row lock must be retried without duplicating provider searches."""
     factory = _FakeSessionFactory()
-    search_mock = AsyncMock(side_effect=[{123: ["dummy"]}, {123: ["dummy"]}])
+    target = IssueSearchTarget(
+        issue_id=123,
+        series_id=456,
+        series_title="Retry Series",
+        issue_number=1.0,
+        issue_type=IssueType.ISSUE,
+        series_year=2026,
+    )
+    runtime = SimpleNamespace(
+        registry=ProviderRegistry(),
+        failure_threshold=3,
+        two_pass_enabled=False,
+        indexer_configs={},
+        eval_kwargs={},
+        validator_kwargs={},
+        source_priority=None,
+        type_thresholds={},
+    )
+    search_mock = AsyncMock(return_value={123: ["dummy"]})
+
+    async def _create_pending_logs(session, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        await session.commit()
+        return {123: 1}
 
     monkeypatch.setattr(search_task, "get_session_factory", lambda: factory)
     monkeypatch.setattr(
         search_task,
-        "build_registry",
-        AsyncMock(return_value=(ProviderRegistry(), [])),
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
     )
+    monkeypatch.setattr(
+        search_task,
+        "_load_rotated_wanted_issue_targets",
+        AsyncMock(return_value=[target]),
+    )
+    monkeypatch.setattr(search_task, "_create_pending_wanted_search_logs", _create_pending_logs)
     monkeypatch.setattr(search_task.SearchService, "search_wanted", search_mock)
     monkeypatch.setattr(
         search_task.BlocklistService,
@@ -155,9 +183,9 @@ async def test_search_wanted_retries_search_phase_after_sqlite_lock(monkeypatch)
 
     await search_task.search_wanted()
 
-    # One failed fan-out commit, one successful retry, then one per-attempt
-    # search-history commit for the now-visible no-match result.
+    # One failed pending-row commit, one successful retry, then the completed
+    # no-match history commit. The provider is called only after setup succeeds.
     assert factory.commit_attempts == 3
     assert factory.rollback_attempts == 1
-    assert factory.session_count == 3
-    assert search_mock.await_count == 2
+    assert factory.session_count == 1
+    assert search_mock.await_count == 1

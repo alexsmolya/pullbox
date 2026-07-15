@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -116,6 +117,22 @@ def _outcome(
     )
 
 
+def _no_result_outcome(target: IssueSearchTarget) -> IssueSearchOutcome:
+    return IssueSearchOutcome(
+        target=target,
+        mode="fast",
+        query_count=5,
+        raw_results=[],
+        filtered_results=[],
+        matched=[],
+        rejected=[],
+        best_release=None,
+        best_validation=None,
+        search_details={"results_count": 0, "query_count": 5},
+        elapsed_ms=10,
+    )
+
+
 @pytest.mark.asyncio
 async def test_search_wanted_uses_bounded_fast_search_not_deep_manual_fanout(
     db_factory: async_sessionmaker[AsyncSession],
@@ -124,15 +141,7 @@ async def test_search_wanted_uses_bounded_fast_search_not_deep_manual_fanout(
     """Wanted sweeps should use the bounded shared quick-first batch strategy."""
     from pullbox.tasks import search_task
 
-    target = IssueSearchTarget(
-        issue_id=1,
-        series_id=10,
-        series_title="Absolute Flash",
-        issue_number=1.0,
-        issue_type=IssueType.ISSUE,
-        issue_title="Issue #1",
-        series_year=2025,
-    )
+    target = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=949)
     runtime = SearchRuntime(
         registry=ProviderRegistry(),
         indexer_configs={},
@@ -166,6 +175,249 @@ async def test_search_wanted_uses_bounded_fast_search_not_deep_manual_fanout(
     search_targets_quick_first.assert_awaited_once()
     assert search_targets_quick_first.await_args.kwargs["concurrency"] == 1
     assert search_targets_quick_first.await_args.kwargs["enable_deep_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_search_wanted_run_ignores_indexer_backoff(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pressing Run on Search Wanted must make a real indexer attempt."""
+    from pullbox.tasks import search_task
+
+    target = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=950)
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=None,
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+    )
+    ignore_backoff_values: list[bool] = []
+
+    class _CapturingSearchService(SearchService):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+            ignore_backoff_values.append(self._ignore_indexer_backoff)
+
+        async def search_targets_quick_first(self, *args: object, **kwargs: object):
+            return [_no_result_outcome(target)]
+
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
+    monkeypatch.setattr(search_task, "get_current_task_trigger_type", lambda: "manual")
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_wanted_issue_search_targets",
+        AsyncMock(return_value=[target]),
+    )
+    monkeypatch.setattr(search_task, "SearchService", _CapturingSearchService)
+
+    await search_task.search_wanted()
+
+    assert ignore_backoff_values == [True]
+
+
+@pytest.mark.asyncio
+async def test_search_wanted_persists_running_history_before_network_completion(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Search History must prove a wanted sweep is active while an indexer is slow."""
+    from pullbox.tasks import search_task
+
+    target = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=951)
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=None,
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+    )
+    search_started = asyncio.Event()
+    release_search = asyncio.Event()
+
+    async def _slow_search(*args: object, **kwargs: object) -> list[IssueSearchOutcome]:
+        search_started.set()
+        await release_search.wait()
+        return [_no_result_outcome(target)]
+
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_wanted_issue_search_targets",
+        AsyncMock(return_value=[target]),
+    )
+    monkeypatch.setattr(
+        SearchService,
+        "search_targets_quick_first",
+        _slow_search,
+    )
+
+    task = asyncio.create_task(search_task.search_wanted())
+    try:
+        await asyncio.wait_for(search_started.wait(), timeout=1)
+        async with db_factory() as session:
+            logs = list((await session.execute(select(SearchLog))).scalars())
+
+        assert len(logs) == 1
+        assert logs[0].search_type == SearchType.AUTOMATED
+        assert logs[0].details["run_state"] == "running"
+        assert logs[0].details["action_status"] == "searching"
+    finally:
+        release_search.set()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_search_wanted_routes_and_finalizes_each_outcome_before_batch_returns(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Completed issue searches must not wait behind the rest of the 50-item batch."""
+    from pullbox.tasks import search_task
+
+    first = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=952)
+    second = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=953)
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=None,
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+    )
+    first_outcome = _outcome(first, confidence=MatchConfidence.HIGH)
+    second_outcome = _no_result_outcome(second)
+    event_order: list[str] = []
+
+    async def _progressive_search(
+        *args: object,
+        on_outcome=None,
+        **kwargs: object,
+    ) -> list[IssueSearchOutcome]:
+        if on_outcome is not None:
+            await on_outcome(first_outcome)
+            event_order.append("first_callback_complete")
+            await on_outcome(second_outcome)
+        event_order.append("batch_returned")
+        return [first_outcome, second_outcome]
+
+    download_svc = AsyncMock()
+    download_svc.send_to_client = AsyncMock(
+        side_effect=lambda *args, **kwargs: event_order.append("first_routed")
+    )
+    intervention_svc = AsyncMock()
+    intervention_svc.has_pending_for_issue = AsyncMock(return_value=False)
+
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_wanted_issue_search_targets",
+        AsyncMock(return_value=[first, second]),
+    )
+    monkeypatch.setattr(
+        SearchService,
+        "search_targets_quick_first",
+        _progressive_search,
+    )
+    monkeypatch.setattr(search_task, "_build_download_service", lambda registry: download_svc)
+    monkeypatch.setattr(
+        search_task,
+        "InterventionService",
+        lambda download_service: intervention_svc,
+    )
+
+    await search_task.search_wanted()
+
+    assert event_order.index("first_routed") < event_order.index("batch_returned")
+    download_svc.send_to_client.assert_awaited_once()
+    async with db_factory() as session:
+        logs = list(
+            (await session.execute(select(SearchLog).order_by(SearchLog.issue_id))).scalars()
+        )
+
+    assert len(logs) == 2
+    assert all(log.details["run_state"] == "completed" for log in logs)
+
+
+@pytest.mark.asyncio
+async def test_search_wanted_marks_unfinished_rows_failed_after_fanout_error(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider failure must not leave untouched history rows running forever."""
+    from pullbox.tasks import search_task
+
+    first = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=954)
+    second = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=955)
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=None,
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+    )
+
+    async def _failing_search(
+        *args: object,
+        on_outcome=None,
+        **kwargs: object,
+    ) -> list[IssueSearchOutcome]:
+        assert on_outcome is not None
+        await on_outcome(_no_result_outcome(first))
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_wanted_issue_search_targets",
+        AsyncMock(return_value=[first, second]),
+    )
+    monkeypatch.setattr(
+        SearchService,
+        "search_targets_quick_first",
+        _failing_search,
+    )
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await search_task.search_wanted()
+
+    async with db_factory() as session:
+        logs = list(
+            (await session.execute(select(SearchLog).order_by(SearchLog.issue_id))).scalars()
+        )
+
+    assert len(logs) == 2
+    assert logs[0].details["run_state"] == "completed"
+    assert logs[1].details["run_state"] == "failed"
+    assert logs[1].details["action_status"] == "error"
 
 
 @pytest.mark.asyncio

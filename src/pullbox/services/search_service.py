@@ -521,6 +521,7 @@ class SearchService:
         source_priority: list[str] | None = None,
         enable_deep_fallback: bool = True,
         concurrency: int = DEFAULT_WANTED_SEARCH_CONCURRENCY,
+        on_outcome: _search_targets.SearchOutcomeCallback | None = None,
     ) -> list[IssueSearchOutcome]:
         """Search a batch of issue targets with the shared quick-first strategy."""
 
@@ -557,6 +558,7 @@ class SearchService:
             validator_kwargs=validator_kwargs,
             source_priority=source_priority,
             concurrency=concurrency,
+            on_outcome=on_outcome,
         )
 
     async def search_targets(
