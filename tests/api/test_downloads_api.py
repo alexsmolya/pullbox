@@ -20,6 +20,7 @@ from pullbox.models.download import DownloadClientType, DownloadHistory, Downloa
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series
 from pullbox.models.user import APIKey, User
+from pullbox.providers.download.qbittorrent import QBittorrentError
 from pullbox.services.auth_service import AuthService
 
 if TYPE_CHECKING:
@@ -350,6 +351,47 @@ class TestDownloadRetry:
         assert download.external_id == "torrent-hash"
         issue = await _get_issue(db_factory, issue_id)
         assert issue.status == IssueStatus.DOWNLOADING
+
+    @pytest.mark.asyncio
+    async def test_retry_failed_torrent_returns_provider_error_without_advancing_state(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.OWNED)
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            client_type=DownloadClientType.QBITTORRENT,
+            download_url="https://example.com/absolute-wonder-woman-012.torrent",
+            downloaded_path=None,
+            error_message="Cancelled by user",
+        )
+        provider_message = "Torrent was not added to qBittorrent."
+        mock_client = AsyncMock()
+        mock_client.client_type = "qbittorrent"
+        mock_client.add_torrent = AsyncMock(side_effect=QBittorrentError(provider_message))
+
+        with patch(
+            "pullbox.composition.providers.register_download_clients",
+            new_callable=AsyncMock,
+        ) as mock_register:
+
+            async def _register(_session: object, registry: object) -> None:
+                registry.register_download_client(2, mock_client)  # type: ignore[union-attr]
+
+            mock_register.side_effect = _register
+
+            response = await client.post(f"/api/v1/downloads/{download_id}/retry")
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == provider_message
+        download = await _get_download(db_factory, download_id)
+        assert download.state == DownloadState.FAILED
+        assert download.external_id == "download-ext"
+        assert download.error_message == "Cancelled by user"
+        issue = await _get_issue(db_factory, issue_id)
+        assert issue.status == IssueStatus.OWNED
 
     @pytest.mark.asyncio
     async def test_retry_download_rejects_post_processing_failures(

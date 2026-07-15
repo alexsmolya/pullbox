@@ -327,12 +327,13 @@ class BlocklistService:
 
         from pullbox.core.release_parser import parse_release_title
 
-        # Load all blocked normalized titles in one query
-        bl_result = await session.execute(select(BlocklistEntry.release_title_normalized))
-        blocked_titles = {row[0] for row in bl_result.all()}
-
-        # Load blocked groups from config
-        blocked_groups = await BlocklistService.get_blocked_groups(session)
+        # Search fan-out updates indexer health in memory. These read-only lookups
+        # must not flush those writes and hold SQLite's writer lock while later
+        # network queries are still running.
+        with session.no_autoflush:
+            bl_result = await session.execute(select(BlocklistEntry.release_title_normalized))
+            blocked_titles = {row[0] for row in bl_result.all()}
+            blocked_groups = await BlocklistService.get_blocked_groups(session)
 
         kept: list[ReleaseResult] = []
         removed = 0

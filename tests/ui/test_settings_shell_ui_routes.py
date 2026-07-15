@@ -23,6 +23,12 @@ pytest_plugins = ["conftest_security"]
 os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-settings-ui")
 
 
+def _script_block(html: str, start_marker: str, end_marker: str) -> str:
+    start = html.index(start_marker)
+    end = html.index(end_marker, start)
+    return html[start:end]
+
+
 @pytest.mark.asyncio
 class TestSettingsRouteContracts:
     """Verify the settings area renders a stable mounted shell."""
@@ -85,6 +91,22 @@ class TestSettingsRouteContracts:
         )
         assert 'placeholder="/downloads"' in response.text
         assert 'placeholder="/data/downloads"' in response.text
+
+    async def test_settings_client_bulk_tests_are_serialized_to_avoid_write_storm(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=clients")
+
+        assert response.status_code == 200
+        block = _script_block(
+            response.text,
+            "    async testClientConnection(clientId) {",
+            "    saveConfig(formEl)",
+        )
+        assert "Promise.all(" not in block
+        assert "for (const client of clients)" in block
+        assert "await this.testClientConnection(client.id)" in block
 
     async def test_settings_metadata_is_minimal_and_shows_last_five_key_chars(
         self,
@@ -163,6 +185,35 @@ class TestSettingsRouteContracts:
         assert "const stored = '" not in response.text
         assert "\\u0027; window.__pullboxXss = true; //" in response.text
 
+    async def test_settings_indexer_bulk_tests_are_serialized_to_avoid_write_storm(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        block = _script_block(
+            response.text,
+            "    async testIndexerConnection(indexerId) {",
+            "    // ── Prowlarr",
+        )
+        assert "Promise.all(" not in block
+        assert "for (const idx of indexers)" in block
+        assert "await this.testIndexerConnection(idx.id)" in block
+        assert (
+            ".then(indexers => this.runIndexerChecksSequentially("
+            "indexers.filter(idx => idx.enabled)))"
+        ) in block
+
+    async def test_settings_indexers_do_not_run_connection_tests_on_page_load(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert "_silentTestAll" not in response.text
+
     async def test_settings_media_naming_preview_escapes_template_values_and_results(
         self,
         authenticated_client,
@@ -180,6 +231,17 @@ class TestSettingsRouteContracts:
         assert "\\u0027); window.__pullboxXss = true; //" in response.text
         assert "escapeHtml(ex.input || '')" in response.text
         assert "escapeHtml(ex.output || '')" in response.text
+
+    async def test_settings_media_import_save_uses_enabled_pointer_cursor(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=media")
+
+        assert response.status_code == 200
+        assert (
+            ":class=\"isDirty ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'\""
+        ) in response.text
 
     async def test_settings_media_naming_previews_use_stable_panel_contract(
         self,

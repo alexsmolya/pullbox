@@ -230,7 +230,7 @@ class TestSystemRouteContracts:
         assert logs.status_code == 200
 
         assert 'data-testid="system-tasks-table"' in tasks.text
-        assert 'class="downloads-table-wrap"' in tasks.text
+        assert 'class="downloads-table-wrap is-clipped"' in tasks.text
         assert 'role="region"' in tasks.text
         assert 'aria-label="Scheduled tasks table"' in tasks.text
         assert 'tabindex="0"' in tasks.text

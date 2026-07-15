@@ -118,13 +118,12 @@ class TestSearch:
             {"t": "search", "q": "Annual Special 1.5"}
         )
 
-    async def test_search_returns_empty_list_when_request_fails(self) -> None:
+    async def test_search_propagates_request_failure(self) -> None:
         indexer = _make_indexer()
         indexer._request = AsyncMock(side_effect=NewznabError("timeout"))  # type: ignore[method-assign]
 
-        results = await indexer.search(SearchQuery(series_title="Batman", issue_number=1.0))
-
-        assert results == []
+        with pytest.raises(NewznabError, match="timeout"):
+            await indexer.search(SearchQuery(series_title="Batman", issue_number=1.0))
 
     async def test_search_returns_empty_list_for_malformed_xml(self) -> None:
         indexer = _make_indexer()

@@ -294,7 +294,10 @@ class TestSearchHistoryShellRouteContracts:
 
         assert response.status_code == 200
         assert 'hx-get="/search-history"' in response.text
-        assert 'hx-trigger="every 2s"' in response.text
+        assert 'hx-trigger="every 2s [window.searchHistoryRefreshEnabled()]"' in response.text
         assert 'hx-sync="this:replace"' in response.text
+        assert (
+            "x-bind:data-search-history-expanded=\"expanded ? 'true' : 'false'\"" in response.text
+        )
         assert "Searching" in response.text
         assert "Search is still running for this issue." not in response.text

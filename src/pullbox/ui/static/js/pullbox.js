@@ -15226,6 +15226,14 @@ function pullboxLiveUpdatesEnabled() {
   return !areLiveUpdatesPaused();
 }
 
+function searchHistoryRefreshEnabled() {
+  if (!pullboxLiveUpdatesEnabled()) {
+    return false;
+  }
+
+  return !document.querySelector("[data-search-history-expanded='true']");
+}
+
 function importHistoryToolbarActive() {
   var toolbar = document.querySelector("[data-testid='import-history-toolbar']");
   if (!toolbar) {
@@ -15526,6 +15534,7 @@ function liveUpdatesController() {
 
 applyLiveUpdatesState(areLiveUpdatesPaused());
 window.pullboxLiveUpdatesEnabled = pullboxLiveUpdatesEnabled;
+window.searchHistoryRefreshEnabled = searchHistoryRefreshEnabled;
 window.downloadsHistoryRefreshEnabled = downloadsHistoryRefreshEnabled;
 window.postProcessingHistoryRefreshEnabled = postProcessingHistoryRefreshEnabled;
 window.postProcessingQueueRefreshEnabled = postProcessingQueueRefreshEnabled;
@@ -16448,18 +16457,15 @@ function _parseSeriesPaginationBundle(responseText) {
 
   var summary = wrapper.querySelector("#series-summary");
   var dock = wrapper.querySelector("#page-footer-dock");
+  var resultsBody = wrapper.querySelector("#series-results-body");
 
-  if (!summary || !dock) {
+  if (!summary || !dock || !resultsBody) {
     return null;
   }
 
   var summaryHtml = summary.innerHTML;
   var dockHtml = dock.innerHTML;
-
-  summary.remove();
-  dock.remove();
-
-  var resultsHtml = wrapper.innerHTML.trim();
+  var resultsHtml = resultsBody.outerHTML.trim();
   if (!resultsHtml) {
     return null;
   }
@@ -16568,24 +16574,41 @@ function _applySeriesPaginationBundle(bundle) {
     return null;
   }
 
+  var resultsWrapper = document.createElement("div");
+  resultsWrapper.innerHTML = bundle.resultsHtml;
+  var replacementResultsBody = resultsWrapper.querySelector("#series-results-body");
+  if (!replacementResultsBody || !resultsBody.parentNode) {
+    return null;
+  }
+
   summary.innerHTML = bundle.summaryHtml;
-  resultsBody.innerHTML = bundle.resultsHtml;
   dock.innerHTML = bundle.dockHtml;
+
+  var resultsParent = resultsBody.parentNode;
+  var resultsNextSibling = resultsBody.nextSibling;
+  if (window.htmx && typeof window.htmx.remove === "function") {
+    window.htmx.remove(resultsBody);
+  } else {
+    resultsBody.remove();
+  }
+  resultsParent.insertBefore(replacementResultsBody, resultsNextSibling);
 
   if (window.htmx && typeof window.htmx.process === "function") {
     window.htmx.process(summary);
     window.htmx.process(dock);
+    window.htmx.process(replacementResultsBody);
   }
 
   if (window.Alpine) {
     Alpine.initTree(summary);
     Alpine.initTree(dock);
+    Alpine.initTree(replacementResultsBody);
   }
 
   seedSearchFieldStates(summary);
   seedSearchFieldStates(dock);
 
-  return resultsBody;
+  return replacementResultsBody;
 }
 
 function _dispatchSyntheticHtmxAfterSettle(target) {

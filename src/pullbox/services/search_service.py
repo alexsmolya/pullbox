@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.base import Indexer, ProviderRegistry
+    from pullbox.services.search_indexers import IndexerSearchAttempt
     from pullbox.services.search_types import SearchEvalKwargs, ValidatorKwargs
 
 logger = structlog.get_logger(__name__)
@@ -814,7 +815,7 @@ class SearchService:
         query: SearchQuery,
         cfg: IndexerConfig | None = None,
         failure_threshold: int = DEFAULT_INDEXER_FAILURE_THRESHOLD,
-    ) -> list[ReleaseResult]:
+    ) -> IndexerSearchAttempt:
         """Compatibility facade for a single indexer search attempt."""
         return await _search_indexers.search_single_indexer(
             indexer,
