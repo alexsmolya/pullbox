@@ -446,9 +446,19 @@ class TestSeriesRouteContracts:
         assert 'data-testid="series-catalog-state-badge"' in response.text
         assert 'data-catalog-refresh-active="true"' in response.text
         assert 'hx-trigger="every 10s"' in response.text
+        assert 'hx-swap="morph:outerHTML"' in response.text
         assert 'hx-push-url="false"' in response.text
         assert 'hx-sync="#series-results-body:replace"' in response.text
         assert "Metadata syncing" in response.text
+
+        fragment_response = await authenticated_client.get(
+            "/series?q=Batman",
+            headers={"HX-Request": "true"},
+        )
+
+        assert fragment_response.status_code == 200
+        assert 'data-catalog-refresh-active="true"' in fragment_response.text
+        assert 'hx-swap="morph:outerHTML"' in fragment_response.text
 
     async def test_series_grid_surfaces_catalog_sync_state(
         self,
