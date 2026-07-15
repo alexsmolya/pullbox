@@ -248,7 +248,7 @@
             type="submit"
             data-testid="settings-media-import-save"
             :disabled="!isDirty"
-            :class="!isDirty && 'opacity-50 cursor-not-allowed'"
+            :class="isDirty ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'"
             class="btn-primary"
           >
             Save import rules

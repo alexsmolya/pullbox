@@ -232,6 +232,17 @@ class TestSettingsRouteContracts:
         assert "escapeHtml(ex.input || '')" in response.text
         assert "escapeHtml(ex.output || '')" in response.text
 
+    async def test_settings_media_import_save_uses_enabled_pointer_cursor(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=media")
+
+        assert response.status_code == 200
+        assert (
+            ":class=\"isDirty ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'\""
+        ) in response.text
+
     async def test_settings_media_naming_previews_use_stable_panel_contract(
         self,
         authenticated_client,
