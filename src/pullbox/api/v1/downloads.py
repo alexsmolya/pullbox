@@ -10,6 +10,7 @@ from pullbox.core.exceptions import NotFoundError
 from pullbox.models.blocklist import BlocklistReason
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
+from pullbox.providers.download.qbittorrent import QBittorrentError
 from pullbox.schemas.blocklist import BlocklistEntryResponse
 from pullbox.schemas.download import DownloadHistoryItem, DownloadQueueItem
 from pullbox.schemas.pagination import PaginatedResponse
@@ -374,10 +375,21 @@ async def retry_download(
 
     # Re-send to client
     dl_type = DownloadClientType(str(download.download_client))
-    if dl_type.is_torrent:
-        external_id = await client.add_torrent(download.download_url, download.title)
-    else:
-        external_id = await client.add_nzb(download.download_url, download.title)
+    try:
+        if dl_type.is_torrent:
+            external_id = await client.add_torrent(download.download_url, download.title)
+        else:
+            external_id = await client.add_nzb(download.download_url, download.title)
+    except QBittorrentError as exc:
+        logger.warning(
+            "download_retry_client_rejected",
+            download_id=download.id,
+            issue_id=download.issue_id,
+            indexer_id=download.indexer_id,
+            client_type=dl_type.value,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     download.external_id = external_id
     download.state = DownloadState.SENT
