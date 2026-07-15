@@ -15226,6 +15226,14 @@ function pullboxLiveUpdatesEnabled() {
   return !areLiveUpdatesPaused();
 }
 
+function searchHistoryRefreshEnabled() {
+  if (!pullboxLiveUpdatesEnabled()) {
+    return false;
+  }
+
+  return !document.querySelector("[data-search-history-expanded='true']");
+}
+
 function importHistoryToolbarActive() {
   var toolbar = document.querySelector("[data-testid='import-history-toolbar']");
   if (!toolbar) {
@@ -15526,6 +15534,7 @@ function liveUpdatesController() {
 
 applyLiveUpdatesState(areLiveUpdatesPaused());
 window.pullboxLiveUpdatesEnabled = pullboxLiveUpdatesEnabled;
+window.searchHistoryRefreshEnabled = searchHistoryRefreshEnabled;
 window.downloadsHistoryRefreshEnabled = downloadsHistoryRefreshEnabled;
 window.postProcessingHistoryRefreshEnabled = postProcessingHistoryRefreshEnabled;
 window.postProcessingQueueRefreshEnabled = postProcessingQueueRefreshEnabled;

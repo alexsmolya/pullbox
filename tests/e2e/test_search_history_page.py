@@ -174,6 +174,30 @@ class TestSearchHistoryPage:
             diagnostics_toggle.click()
             diagnostics_panel.wait_for(state="visible")
 
+    def test_search_history_poll_pauses_while_detail_is_expanded(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        search_history = SearchHistoryPage(authed_page, seeded_server)
+        search_history.goto()
+
+        assert authed_page.evaluate("() => window.searchHistoryRefreshEnabled()") is True
+
+        search_history.first_detail_toggle.click()
+        search_history.first_detail_row.wait_for(state="visible", timeout=5000)
+        authed_page.wait_for_function(
+            "() => window.searchHistoryRefreshEnabled() === false",
+            timeout=5000,
+        )
+
+        search_history.first_detail_toggle.click()
+        search_history.first_detail_row.wait_for(state="hidden", timeout=5000)
+        authed_page.wait_for_function(
+            "() => window.searchHistoryRefreshEnabled() === true",
+            timeout=5000,
+        )
+
     def test_search_history_remembered_detail_reloads_after_navigation(
         self,
         authed_page,

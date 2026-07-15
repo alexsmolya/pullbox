@@ -33,7 +33,7 @@
   data-testid="search-history-results-body"
   {% if search_history_has_active_logs %}
     hx-get="{{ search_history_refresh_url }}"
-    hx-trigger="every 2s"
+    hx-trigger="every 2s [window.searchHistoryRefreshEnabled()]"
     hx-target="this"
     hx-swap="outerHTML"
     hx-sync="this:replace"
@@ -64,6 +64,7 @@
                     detailUrl: '/htmx/search-history/logs/{{ log.id }}/detail',
                     detailTarget: '#search-history-detail-content-{{ log.id }}'
                   })"
+          x-bind:data-search-history-expanded="expanded ? 'true' : 'false'"
         >
           <tr id="search-history-row-{{ log.id }}">
             <td>
