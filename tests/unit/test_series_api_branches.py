@@ -17,7 +17,7 @@ from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.publisher import Publisher
 from pullbox.models.search_log import SearchLog
-from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.models.series import Series, SeriesStatus, SeriesStatusOverride, SeriesType
 from pullbox.schemas.series import (
     SeriesBulkDelete,
     SeriesCreate,
@@ -241,6 +241,7 @@ async def test_add_update_refresh_and_folder_routes_delegate(
 ) -> None:
     service = SimpleNamespace(
         add_from_comicvine=AsyncMock(return_value=SimpleNamespace(id=10)),
+        set_status_override=AsyncMock(),
         toggle_monitoring=AsyncMock(),
         rename_all_series_folders=AsyncMock(return_value={"renamed": 2, "skipped": 1}),
         rename_series_folder=AsyncMock(return_value="/comics/Absolute Superman (2025)"),
@@ -281,9 +282,30 @@ async def test_add_update_refresh_and_folder_routes_delegate(
     assert updated.id == 10
     service.toggle_monitoring.assert_awaited_once_with(db_session, 10, False)
 
+    await series_api.update_series(
+        10,
+        SeriesUpdate(status_override=SeriesStatusOverride.ENDED),
+        _user(),
+        db_session,
+    )
+    service.set_status_override.assert_awaited_once_with(
+        db_session,
+        10,
+        SeriesStatusOverride.ENDED,
+    )
+
+    await series_api.update_series(
+        10,
+        SeriesUpdate(status_override=None),
+        _user(),
+        db_session,
+    )
+    service.set_status_override.assert_awaited_with(db_session, 10, None)
+
     no_toggle = await series_api.update_series(11, SeriesUpdate(), _user(), db_session)
     assert no_toggle.id == 11
     assert service.toggle_monitoring.await_count == 1
+    assert service.set_status_override.await_count == 2
 
     assert await series_api.rename_all_folders(_user(), db_session) == {
         "renamed": 2,

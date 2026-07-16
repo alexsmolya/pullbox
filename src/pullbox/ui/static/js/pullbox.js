@@ -14730,6 +14730,7 @@ function seriesDetailPage(config) {
     coverModalUrl: "",
     monitored: false,
     saving: false,
+    statusSaving: false,
     refreshing: false,
     searching: false,
     issueSearchState: {},
@@ -14949,6 +14950,38 @@ function seriesDetailPage(config) {
         .catch(function () {
           self.dispatchToast("Failed to update monitoring", "error");
           self.saving = false;
+        });
+    },
+
+    updateStatusOverride: function (statusOverride) {
+      var self = this;
+      if (self.statusSaving) return;
+      self.statusSaving = true;
+      fetch(cfg.updateUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": self.csrfToken(),
+        },
+        body: JSON.stringify({ status_override: statusOverride }),
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("Failed to update series status");
+          self.dispatchToast(
+            statusOverride === null
+              ? "Automatic status restored"
+              : statusOverride === "ended"
+                ? "Series marked as ended"
+                : "Series marked as continuing",
+            "success"
+          );
+          setTimeout(function () {
+            window.location.assign(self.currentDetailUrl());
+          }, 500);
+        })
+        .catch(function () {
+          self.dispatchToast("Failed to update series status", "error");
+          self.statusSaving = false;
         });
     },
 

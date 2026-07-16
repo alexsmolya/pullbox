@@ -66,6 +66,9 @@
           data-tip-size="narrow"
         ></span>
         {{ status_badge(series.status.value) }}
+        {% if series.status_override %}
+        <span class="pill pill-warning">Manual status</span>
+        {% endif %}
         <span class="pill {{ 'pill-info' if series.monitored else 'pill-neutral' }}">{{ "Monitored" if series.monitored else "Paused" }}</span>
         {% if series.publisher %}
         <span class="pill pill-neutral">{{ series.publisher.name }}</span>
