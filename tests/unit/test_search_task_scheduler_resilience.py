@@ -107,6 +107,11 @@ async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch
         AsyncMock(return_value=[target]),
     )
     monkeypatch.setattr(
+        search_task,
+        "_ensure_pending_series_search_logs",
+        AsyncMock(return_value={target.issue_id: 999}),
+    )
+    monkeypatch.setattr(
         search_task.SearchService,
         "search_targets_quick_first",
         search_mock,
@@ -128,7 +133,9 @@ async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch
     result = await search_task.search_series_issues(456)
 
     assert result == {"wanted": 1, "sent": 0, "queued": 0}
-    assert factory.commit_attempts == 2
+    # One failed fan-out commit, one successful retry, then the pre-route
+    # durability commit that protects indexer health from routing rollbacks.
+    assert factory.commit_attempts == 3
     assert factory.rollback_attempts == 1
     assert search_mock.await_count == 2
 
