@@ -1536,6 +1536,34 @@ class TestSeriesRouteContracts:
         assert all(query.get("sort") == ["-title"] for query in parsed)
         assert all(query.get("per_page") == ["1"] for query in parsed)
 
+    async def test_series_sort_dropdown_includes_acquisition_options(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        descending = await authenticated_client.get("/series?sort=-acquisition&per_page=25")
+        ascending = await authenticated_client.get("/series?sort=acquisition&per_page=25")
+
+        assert descending.status_code == 200
+        assert 'data-dropdown-value="-acquisition"' in descending.text
+        assert "Acquisition (Most to Least)" in descending.text
+        assert ascending.status_code == 200
+        assert 'data-dropdown-value="acquisition"' in ascending.text
+        assert "Acquisition (Least to Most)" in ascending.text
+
+    async def test_acquisition_sort_orders_by_completion_percentage(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        ascending = await authenticated_client.get("/series?sort=acquisition&per_page=100")
+        descending = await authenticated_client.get("/series?sort=-acquisition&per_page=100")
+
+        assert ascending.status_code == 200
+        assert descending.status_code == 200
+        assert _extract_series_titles(ascending.text)[0] == "Batman"
+        assert _extract_series_titles(descending.text)[0] == "Planetary"
+
     @pytest.mark.parametrize(
         "sort",
         [
@@ -1547,6 +1575,8 @@ class TestSeriesRouteContracts:
             "-publisher",
             "issues",
             "-issues",
+            "acquisition",
+            "-acquisition",
             "series_type",
             "-series_type",
             "status",
