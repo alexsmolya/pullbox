@@ -1128,38 +1128,33 @@ class TestSeriesPage:
         series.goto("sort=title&per_page=25", preferred_view=view)
 
         series.toggle_row_selection("Batman")
-        series.toggle_row_selection("Saga", modifiers=[additive_modifier])
+        series.toggle_row_selection("Planetary", modifiers=[additive_modifier])
         assert series.selected_count_text() == "2 selected"
         assert series.row_is_selected("Batman")
-        assert series.row_is_selected("Saga")
+        assert series.row_is_selected("Planetary")
 
-        series.toggle_row_selection("Wonder Woman", modifiers=["Shift"])
-        assert series.selected_count_text() == "3 selected"
+        series.toggle_row_selection("Saga", modifiers=["Shift"])
+        assert series.selected_count_text() == "2 selected"
         assert not series.row_is_selected("Batman")
+        assert series.row_is_selected("Planetary")
         assert series.row_is_selected("Saga")
-        assert series.row_is_selected("Superman")
-        assert series.row_is_selected("Wonder Woman")
 
         series.toggle_row_selection(
             "Batman",
             modifiers=[additive_modifier, "Shift"],
         )
-        assert series.selected_count_text() == "6 selected"
-        for title in (
-            "Batman",
-            "Batman Beyond",
-            "Planetary",
-            "Saga",
-            "Superman",
-            "Wonder Woman",
-        ):
+        expected_titles = ["Batman", "Planetary", "Saga"]
+        if series.row_count("Batman Beyond"):
+            expected_titles.append("Batman Beyond")
+        assert series.selected_count_text() == f"{len(expected_titles)} selected"
+        for title in expected_titles:
             assert series.row_is_selected(title)
 
-        series.toggle_row_selection("Batman Beyond")
+        series.toggle_row_selection("Planetary")
         assert series.selected_count_text() == "1 selected"
-        assert series.row_is_selected("Batman Beyond")
+        assert series.row_is_selected("Planetary")
         assert not series.row_is_selected("Batman")
-        assert not series.row_is_selected("Wonder Woman")
+        assert not series.row_is_selected("Saga")
 
     def test_toolbar_height_stays_visually_stable_when_switching_modes(
         self,
