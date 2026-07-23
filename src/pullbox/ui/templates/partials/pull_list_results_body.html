@@ -9,6 +9,7 @@
   {%- set sort_qs_parts = ["sort=" ~ next_sort] -%}
   {%- if filter_value %}{% set _ = sort_qs_parts.append("filter=" ~ filter_value) %}{% endif -%}
   {%- if search_query %}{% set _ = sort_qs_parts.append("search=" ~ (search_query|urlencode)) %}{% endif -%}
+  {%- if per_page != 25 %}{% set _ = sort_qs_parts.append("per_page=" ~ per_page) %}{% endif -%}
   <th class="{{ extra_classes }} {{ width }}">
     <button
       type="button"
