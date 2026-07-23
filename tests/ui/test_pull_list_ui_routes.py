@@ -170,6 +170,18 @@ class TestPullListRouteContracts:
         assert 'hx-include="#pull-list-filter-form"' in response.text
         assert 'hx-put="/api/v1/series/' not in response.text
 
+    async def test_pull_list_series_links_preserve_their_origin(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        series_id = await _seed_pull_list_series(sec_db)
+
+        response = await authenticated_client.get("/pull-list")
+
+        assert response.status_code == 200
+        assert f'href="/series/{series_id}?from=pull-list"' in response.text
+
     async def test_pull_list_pause_action_updates_monitoring_and_removes_row(
         self,
         authenticated_client,

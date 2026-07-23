@@ -183,6 +183,26 @@ class TestSeriesDetailPage:
         assert authed_page.locator("[data-testid='series-page']").first.is_visible()
         assert authed_page.locator("[data-testid='page-footer-dock']").first.is_visible()
 
+    def test_back_link_returns_to_pull_list_when_opened_from_pull_list(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.goto(f"{seeded_server}/pull-list")
+        series_link = authed_page.locator("[data-testid='pull-list-series-link']").first
+        series_link.wait_for(state="visible", timeout=5000)
+
+        series_link.click()
+        authed_page.wait_for_url("**/series/*?from=pull-list", timeout=5000)
+        back_link = authed_page.locator("[data-testid='series-detail-back-link']").first
+
+        assert back_link.text_content().strip() == "Back to pull list"
+        assert back_link.get_attribute("href") == "/pull-list"
+
+        back_link.click()
+        authed_page.wait_for_url("**/pull-list", timeout=5000)
+        assert authed_page.locator("[data-testid='pull-list-page']").first.is_visible()
+
     def test_breadcrumb_restores_series_per_page_selection(
         self,
         authed_page,

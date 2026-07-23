@@ -1,6 +1,7 @@
 """Series and issue detail UI routes."""
 
 from collections.abc import Callable, Mapping
+from typing import Annotated
 from urllib.parse import unquote
 
 import structlog
@@ -131,6 +132,7 @@ async def series_detail(
     issue_status: str | None = Query(None),
     page: int = Query(1, ge=1),
     issue_sort: str = Query("-issue_number"),
+    source: Annotated[str | None, Query(alias="from")] = None,
 ) -> Response:
     """Render the series detail page with issues."""
     result = await session.execute(
@@ -168,6 +170,7 @@ async def series_detail(
             series=series,
             file_count=file_count,
             delete_file_count=delete_context.linked_file_count,
+            detail_origin=source if source == "pull-list" else None,
             **issues_ctx,
         ),
     )
