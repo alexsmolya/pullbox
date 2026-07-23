@@ -73,7 +73,11 @@
       setLazyTableDetailState(button, rowId, false);
       return;
     }
-    setLazyTableDetailState(button, rowId, Boolean(row));
+    var expanded = Boolean(row);
+    if (button && button.dataset) {
+      button.dataset.lazyDetailDesiredOpen = expanded ? "true" : "false";
+    }
+    setLazyTableDetailState(button, rowId, expanded);
   };
 
   window.pbLazyTableDetailAfterRequest = function (button, rowId) {
@@ -171,6 +175,16 @@
   document.body.addEventListener("htmx:beforeSwap", function (evt) {
     var elt = evt.detail.elt;
     if (!isPollingElement(elt)) return;
+
+    // A poll may already be in flight when a lazy detail opens. Preserve the
+    // interactive row instead of letting that stale response replace it.
+    if (
+      elt.querySelector &&
+      elt.querySelector("[data-lazy-detail-desired-open='true']")
+    ) {
+      evt.detail.shouldSwap = false;
+      return;
+    }
 
     var response = normalizePollingResponseForTarget(elt, evt.detail.serverResponse);
     var key = elt.id;

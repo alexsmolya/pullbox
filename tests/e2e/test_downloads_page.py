@@ -686,6 +686,45 @@ class TestDownloadsPage:
             "ariaExpanded": "true",
         }
 
+    def test_poll_swap_is_blocked_while_lazy_detail_wants_to_remain_open(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        downloads = DownloadsPage(authed_page, seeded_server)
+        downloads.goto(tab="history")
+
+        should_swap = authed_page.evaluate(
+            """
+            () => {
+              const target = document.createElement('div');
+              target.id = 'lazy-detail-poll-race-test';
+              target.setAttribute('hx-trigger', 'every 3s');
+
+              const button = document.createElement('button');
+              button.dataset.lazyDetailDesiredOpen = 'true';
+              target.appendChild(button);
+              document.body.appendChild(target);
+
+              const detail = {
+                elt: target,
+                serverResponse: '<div id="lazy-detail-poll-race-test">updated</div>',
+                shouldSwap: true,
+              };
+              target.dispatchEvent(
+                new CustomEvent('htmx:beforeSwap', {
+                  bubbles: true,
+                  detail,
+                })
+              );
+              target.remove();
+              return detail.shouldSwap;
+            }
+            """
+        )
+
+        assert should_swap is False
+
     def test_downloads_history_refresh_gate_pauses_when_results_are_hovered(
         self,
         authed_page,
