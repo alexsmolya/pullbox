@@ -728,6 +728,32 @@ class TestSeriesPage:
         assert "series-wall-ring-fill-green" in grid_contract["ringClass"]
         assert grid_contract["ringText"] == "100"
 
+    def test_list_view_places_lifecycle_status_after_year(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series = SeriesListPage(authed_page, seeded_server)
+        series.goto("per_page=25", preferred_view="list")
+
+        headers = [
+            value.strip().lower()
+            for value in authed_page.locator(
+                "[data-testid='series-mission-control-table'] thead th"
+            ).all_inner_texts()
+        ]
+        status_cells = authed_page.locator("[data-testid='series-lifecycle-status']")
+
+        assert headers.index("status") == headers.index("year") + 1
+        assert headers.index("owned") == headers.index("status") + 1
+        assert status_cells.count() > 0
+        assert status_cells.first.is_visible()
+        assert status_cells.first.inner_text().strip().lower() in {
+            "continuing",
+            "ended",
+            "unknown",
+        }
+
     def test_series_toolbar_dropdown_chevron_stays_tight_to_trigger_edge(
         self,
         authed_page,

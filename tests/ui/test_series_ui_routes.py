@@ -271,6 +271,12 @@ class TestSeriesRouteContracts:
         assert 'data-testid="series-delete-options-panel"' in response.text
         assert 'data-testid="series-mission-control-view"' in response.text
         assert 'data-testid="series-mission-control-table"' in response.text
+        year_header_index = response.text.index('<th style="width: 64px">Year</th>')
+        status_header_index = response.text.index('<th class="c" style="width: 92px">Status</th>')
+        owned_header_index = response.text.index('<th class="c" style="width: 78px">Owned</th>')
+        assert year_header_index < status_header_index < owned_header_index
+        assert response.text.count('data-testid="series-lifecycle-status"') == 2
+        assert 'data-series-status="continuing"' in response.text
         assert 'data-testid="series-collector-wall-view"' not in response.text
         assert 'data-testid="series-mission-control-footer"' not in response.text
         assert 'id="series-summary"' in response.text
@@ -288,6 +294,20 @@ class TestSeriesRouteContracts:
             not in response.text
         )
         assert "transition:true" not in response.text
+
+    async def test_list_view_renders_ended_and_continuing_status_pills(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/series?per_page=20")
+
+        assert response.status_code == 200
+        assert response.text.count('data-testid="series-lifecycle-status"') == 6
+        assert 'data-series-status="continuing"' in response.text
+        assert 'data-series-status="ended"' in response.text
+        assert '<span class="pill pill-success">\n  Continuing\n</span>' in response.text
+        assert '<span class="pill pill-neutral">\n  Ended\n</span>' in response.text
 
     async def test_htmx_request_returns_oob_bundle_only(
         self,
