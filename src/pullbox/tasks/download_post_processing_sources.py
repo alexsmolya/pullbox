@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -11,7 +12,6 @@ from sqlalchemy import select
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -204,3 +204,26 @@ async def _resolve_local_path(
         )
 
     return raw_path
+
+
+async def _resolve_local_download_root(
+    session: AsyncSession,
+    download: DownloadHistory,
+) -> Path | None:
+    """Return the configured local root that bounds source cleanup."""
+    from pullbox.models.client import DownloadClientConfig
+
+    result = await session.execute(
+        select(DownloadClientConfig).where(
+            DownloadClientConfig.client_type == download.download_client,
+            DownloadClientConfig.enabled.is_(True),
+        )
+    )
+    client_cfg = result.scalars().first()
+    if client_cfg is None or not client_cfg.download_dir:
+        return None
+    download_dir = client_cfg.download_dir.strip()
+    if not download_dir:
+        return None
+
+    return Path(download_dir).expanduser().resolve(strict=False)
