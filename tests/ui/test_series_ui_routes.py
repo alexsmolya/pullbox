@@ -246,6 +246,9 @@ class TestSeriesRouteContracts:
         assert 'data-tip-pos="left"' in response.text
         assert 'data-testid="series-view-compact"' not in response.text
         assert 'data-testid="series-select-mode-toggle"' in response.text
+        assert "handleSelectionClick" in response.text
+        assert "$event.shiftKey" in response.text
+        assert "$event.metaKey || $event.ctrlKey" in response.text
         assert 'data-testid="series-select-toolbar"' in response.text
         assert 'data-testid="series-selection-controls-row"' in response.text
         assert 'data-testid="series-select-mode-done"' in response.text

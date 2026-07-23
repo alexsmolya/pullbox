@@ -449,6 +449,9 @@ class TestHandlersDirect:
         assert "Approving..." in body
         assert "Rejecting..." in body
         assert ':disabled="bulkActionBusy || selectedIds.length === 0"' in body
+        assert "handleSelectionClick" in body
+        assert "$event.shiftKey" in body
+        assert "$event.metaKey || $event.ctrlKey" in body
         assert not re.search(
             r'data-testid="intervention-select-mode-toggle"[^>]*\sdisabled(?:\s|>|=)', body
         )

@@ -1102,7 +1102,7 @@ class TestSeriesPage:
         assert series.row_is_selected("Batman")
 
         series.click_next_page()
-        series.toggle_row_selection("Saga")
+        series.toggle_row_selection("Saga", modifiers=["ControlOrMeta"])
         assert series.selected_count_text() == "2 selected"
 
         series.click_prev_page()
@@ -1112,6 +1112,54 @@ class TestSeriesPage:
         assert series.selected_count_text() == "0 selected"
         assert not series.select_mode_toolbar.is_visible()
         assert not series.row_is_selected("Batman")
+
+    @pytest.mark.parametrize(
+        ("view", "additive_modifier"),
+        [("list", "ControlOrMeta"), ("grid", "ControlOrMeta")],
+    )
+    def test_checkbox_selection_supports_file_explorer_modifiers(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+        view: str,
+        additive_modifier: str,
+    ) -> None:
+        series = SeriesListPage(authed_page, seeded_server)
+        series.goto("sort=title&per_page=25", preferred_view=view)
+
+        series.toggle_row_selection("Batman")
+        series.toggle_row_selection("Saga", modifiers=[additive_modifier])
+        assert series.selected_count_text() == "2 selected"
+        assert series.row_is_selected("Batman")
+        assert series.row_is_selected("Saga")
+
+        series.toggle_row_selection("Wonder Woman", modifiers=["Shift"])
+        assert series.selected_count_text() == "3 selected"
+        assert not series.row_is_selected("Batman")
+        assert series.row_is_selected("Saga")
+        assert series.row_is_selected("Superman")
+        assert series.row_is_selected("Wonder Woman")
+
+        series.toggle_row_selection(
+            "Batman",
+            modifiers=[additive_modifier, "Shift"],
+        )
+        assert series.selected_count_text() == "6 selected"
+        for title in (
+            "Batman",
+            "Batman Beyond",
+            "Planetary",
+            "Saga",
+            "Superman",
+            "Wonder Woman",
+        ):
+            assert series.row_is_selected(title)
+
+        series.toggle_row_selection("Batman Beyond")
+        assert series.selected_count_text() == "1 selected"
+        assert series.row_is_selected("Batman Beyond")
+        assert not series.row_is_selected("Batman")
+        assert not series.row_is_selected("Wonder Woman")
 
     def test_toolbar_height_stays_visually_stable_when_switching_modes(
         self,
@@ -1280,7 +1328,7 @@ class TestSeriesPage:
         assert series.row_for_title("Wonder Woman").is_visible()
 
         series.toggle_row_selection("Batman Beyond")
-        series.toggle_row_selection("Wonder Woman")
+        series.toggle_row_selection("Wonder Woman", modifiers=["ControlOrMeta"])
         series.open_bulk_delete_confirm()
 
         assert series.bulk_delete_confirm_visible()

@@ -53,7 +53,7 @@
                     data-intervention-id="{{ pm.id }}"
                     data-testid="intervention-item-checkbox-{{ pm.id }}"
                     class="checkbox-pb"
-                    @change="toggleSelection({{ pm.id }}, $event.target.checked)"
+                    @click="handleSelectionClick({{ pm.id }}, $event.target.checked, $event.shiftKey, $event.metaKey || $event.ctrlKey)"
                     :checked="isSelected({{ pm.id }})"
                   >
                 </td>
