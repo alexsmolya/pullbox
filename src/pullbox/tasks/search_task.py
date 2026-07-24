@@ -314,6 +314,7 @@ async def _persist_wanted_search_outcome(
         return issue_grabbed, issue_queued, 0
     except Exception:
         await session.rollback()
+        await _refresh_search_runtime_after_rollback(session, runtime)
         logger.exception("search_wanted_issue_failed", issue_id=target.issue_id)
         await _save_search_wanted_cursor(session, target)
         if pending_log_id is not None:
@@ -475,6 +476,7 @@ async def _persist_series_search_outcome(
         return issue_grabbed, issue_queued, 0
     except Exception:
         await session.rollback()
+        await _refresh_search_runtime_after_rollback(session, runtime)
         if pending_log_id is not None:
             await _complete_pending_bulk_search_logs(
                 session,
@@ -485,6 +487,15 @@ async def _persist_series_search_outcome(
             )
         issue_log.exception("search_series_issue_failed", search_pass=selected_pass)
         return 0, 0, 1
+
+
+async def _refresh_search_runtime_after_rollback(
+    session: AsyncSession,
+    runtime: SearchRuntime,
+) -> None:
+    """Reload ORM-backed runtime state expired by a routing rollback."""
+    for indexer_config in runtime.indexer_configs.values():
+        await session.refresh(indexer_config)
 
 
 async def _complete_pending_search_logs(

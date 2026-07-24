@@ -3,6 +3,7 @@
 from collections.abc import Callable, Mapping
 from typing import Annotated
 from typing import cast as typing_cast
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse
@@ -320,6 +321,15 @@ async def pull_list(
         "downloading_ratio": min(int(downloading_series_total or 0) / max_series_metric, 1.0),
         "paused_ratio": min(int(paused_total or 0) / max_series_metric, 1.0),
     }
+    pull_list_return_url = "/pull-list?" + urlencode(
+        {
+            "filter": filter_value,
+            "search": search_query,
+            "sort": sort_value,
+            "page": page,
+            "per_page": per_page,
+        }
+    )
 
     ctx = _ctx(
         request,
@@ -333,6 +343,7 @@ async def pull_list(
         filter_value=filter_value,
         search_query=search_query,
         sort=sort_value,
+        pull_list_return_url=pull_list_return_url,
     )
 
     if request.headers.get("HX-Request"):

@@ -53,7 +53,7 @@
               <div class="min-w-0">
                 <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
                   <a
-                    href="/series/{{ s.id }}?from=pull-list"
+                    href="/series/{{ s.id }}?from=pull-list&return_to={{ pull_list_return_url|urlencode }}"
                     hx-boost="false"
                     class="series-mission-control-name block truncate"
                     data-testid="pull-list-series-link"
