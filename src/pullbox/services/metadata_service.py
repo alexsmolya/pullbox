@@ -24,7 +24,13 @@ from pullbox.core.naming import (
 from pullbox.models.creator import Creator, IssueCreator
 from pullbox.models.issue import Issue, IssueType
 from pullbox.models.publisher import Publisher
-from pullbox.models.series import IssueCatalogState, Series, SeriesStatus, SeriesType
+from pullbox.models.series import (
+    IssueCatalogState,
+    Series,
+    SeriesStatus,
+    SeriesStatusOverride,
+    SeriesType,
+)
 from pullbox.providers.metadata.comicvine import ComicVineError
 from pullbox.services.cover_cache_service import purge_series_cover_cache
 
@@ -152,7 +158,10 @@ class MetadataService:
             existing.sort_title = meta.sort_title or meta.title
             if meta.year_start is not None:
                 existing.year_start = meta.year_start
-            if meta.year_end is not None:
+            if existing.status_override == SeriesStatusOverride.CONTINUING:
+                existing.status = SeriesStatus.CONTINUING
+                existing.year_end = None
+            elif meta.year_end is not None:
                 existing.year_end = meta.year_end
             if meta.status and existing.status_override is None:
                 existing.status = SeriesStatus(meta.status)

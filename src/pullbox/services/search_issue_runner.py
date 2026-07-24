@@ -10,6 +10,7 @@ from pullbox.services.search_scoring import DEFAULT_MAX_SIZE_MB, DEFAULT_MIN_SIZ
 from pullbox.services.search_targets import IssueSearchOutcome
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Awaitable, Callable
 
     import structlog
@@ -72,6 +73,7 @@ async def search_issue_target(
     build_search_details_func: BuildSearchDetailsFunc,
     log_type_detection_func: LogTypeDetectionFunc,
     log: structlog.stdlib.BoundLogger,
+    session_lock: asyncio.Lock | None = None,
     run_query_batch_with_provenance_func: Callable[
         ...,
         Awaitable[tuple[list[ReleaseResult], dict[str, str], list[dict[str, object]]]],
@@ -136,7 +138,11 @@ async def search_issue_target(
     if source_priority:
         raw_results = sort_by_source_priority_func(raw_results, source_priority)
 
-    filtered_results = await filter_results_func(session, raw_results)
+    if session_lock is None:
+        filtered_results = await filter_results_func(session, raw_results)
+    else:
+        async with session_lock:
+            filtered_results = await filter_results_func(session, raw_results)
 
     validator = validator_factory(**resolved_validator_kwargs)
     matched, rejected = validator.validate_all_results(

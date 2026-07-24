@@ -72,6 +72,7 @@ class SearchIssueTargetFunc(Protocol):
         source_priority: list[str] | None = None,
         auto_fallback: bool = False,
         force_generic: bool = False,
+        session_lock: asyncio.Lock | None = None,
     ) -> Awaitable[IssueSearchOutcome]: ...
 
 
@@ -159,6 +160,8 @@ async def search_issue_targets(
         return []
 
     semaphore = asyncio.Semaphore(min(concurrency, len(targets)) or 1)
+    # Provider requests stay concurrent, but every AsyncSession operation is serialized.
+    session_lock = asyncio.Lock()
 
     async def _search(target: IssueSearchTarget) -> IssueSearchOutcome:
         async with semaphore:
@@ -172,10 +175,12 @@ async def search_issue_targets(
                 source_priority=source_priority,
                 auto_fallback=auto_fallback,
                 force_generic=force_generic,
+                session_lock=session_lock,
             )
-            if on_outcome is not None:
+        if on_outcome is not None:
+            async with session_lock:
                 await on_outcome(outcome)
-            return outcome
+        return outcome
 
     return await asyncio.gather(*[_search(target) for target in targets])
 

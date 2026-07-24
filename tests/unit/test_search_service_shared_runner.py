@@ -522,6 +522,150 @@ async def test_run_query_batch_and_search_targets_cover_concurrency(
 
 
 @pytest.mark.asyncio
+async def test_search_targets_serialize_outcome_callbacks_without_serializing_searches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SearchService(ProviderRegistry())
+    search_in_flight = 0
+    max_search_in_flight = 0
+    callback_in_flight = 0
+    max_callback_in_flight = 0
+
+    async def fake_search_issue_target(  # type: ignore[no-untyped-def]
+        self,
+        session,
+        target,
+        **kwargs,
+    ) -> IssueSearchOutcome:
+        nonlocal max_search_in_flight, search_in_flight
+        search_in_flight += 1
+        max_search_in_flight = max(max_search_in_flight, search_in_flight)
+        await asyncio.sleep(0.01)
+        search_in_flight -= 1
+        return _make_outcome(target)
+
+    async def process_outcome(outcome: IssueSearchOutcome) -> None:
+        nonlocal callback_in_flight, max_callback_in_flight
+        callback_in_flight += 1
+        max_callback_in_flight = max(max_callback_in_flight, callback_in_flight)
+        await asyncio.sleep(0.01)
+        callback_in_flight -= 1
+
+    monkeypatch.setattr(
+        service,
+        "search_issue_target",
+        MethodType(fake_search_issue_target, service),
+    )
+    targets = [_make_target(issue_id=issue_id) for issue_id in (1, 2, 3)]
+
+    await service.search_targets_quick_first(
+        object(),
+        targets,
+        concurrency=3,
+        on_outcome=process_outcome,
+    )
+
+    assert max_search_in_flight == 3
+    assert max_callback_in_flight == 1
+
+
+@pytest.mark.asyncio
+async def test_slow_outcome_callback_does_not_consume_search_concurrency_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SearchService(ProviderRegistry())
+    searched_issue_ids: list[int] = []
+    all_searches_started = asyncio.Event()
+    callback_started = asyncio.Event()
+    release_callback = asyncio.Event()
+
+    async def fake_search_issue_target(  # type: ignore[no-untyped-def]
+        self,
+        session,
+        target,
+        **kwargs,
+    ) -> IssueSearchOutcome:
+        searched_issue_ids.append(target.issue_id)
+        if len(searched_issue_ids) == 4:
+            all_searches_started.set()
+        await asyncio.sleep(0)
+        return _make_outcome(target, _make_release(f"Series {target.issue_id}"))
+
+    async def process_outcome(outcome: IssueSearchOutcome) -> None:
+        callback_started.set()
+        await release_callback.wait()
+
+    monkeypatch.setattr(
+        service,
+        "search_issue_target",
+        MethodType(fake_search_issue_target, service),
+    )
+    targets = [_make_target(issue_id=issue_id) for issue_id in (1, 2, 3, 4)]
+    search_task = asyncio.create_task(
+        service.search_targets_quick_first(
+            object(),
+            targets,
+            concurrency=2,
+            on_outcome=process_outcome,
+        )
+    )
+
+    await asyncio.wait_for(callback_started.wait(), timeout=1)
+    try:
+        await asyncio.wait_for(all_searches_started.wait(), timeout=0.1)
+    finally:
+        release_callback.set()
+        await search_task
+
+    assert sorted(searched_issue_ids) == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_search_targets_serialize_shared_session_filtering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SearchService(ProviderRegistry())
+    query_in_flight = 0
+    max_query_in_flight = 0
+    filter_in_flight = 0
+    max_filter_in_flight = 0
+
+    async def run_query_batch(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal max_query_in_flight, query_in_flight
+        query_in_flight += 1
+        max_query_in_flight = max(max_query_in_flight, query_in_flight)
+        await asyncio.sleep(0.01)
+        query_in_flight -= 1
+        return [], {}, []
+
+    async def filter_results(session: object, results: list[ReleaseResult]):  # type: ignore[no-untyped-def]
+        nonlocal filter_in_flight, max_filter_in_flight
+        filter_in_flight += 1
+        max_filter_in_flight = max(max_filter_in_flight, filter_in_flight)
+        await asyncio.sleep(0.01)
+        filter_in_flight -= 1
+        return results
+
+    blocklist_service = __import__(
+        "pullbox.services.blocklist_service",
+        fromlist=["BlocklistService"],
+    ).BlocklistService
+    monkeypatch.setattr(service, "_run_query_batch_with_provenance", run_query_batch)
+    monkeypatch.setattr(blocklist_service, "filter_results", filter_results)
+    targets = [_make_target(issue_id=issue_id) for issue_id in (1, 2, 3)]
+
+    await service.search_targets(
+        object(),
+        targets,
+        mode="fast",
+        concurrency=3,
+    )
+
+    assert max_query_in_flight == 3
+    assert max_filter_in_flight == 1
+
+
+@pytest.mark.asyncio
 async def test_search_indexers_coalesces_identical_inflight_queries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

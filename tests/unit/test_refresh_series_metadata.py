@@ -289,6 +289,50 @@ class TestRefreshSeries:
             assert updated.status_override == SeriesStatusOverride.ENDED
 
     @pytest.mark.asyncio
+    async def test_upsert_continuing_override_rejects_provider_end_year(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Provider refreshes must not reintroduce an end year for a continuing override."""
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=171785,
+                title="Still Continuing",
+                sort_title="Still Continuing",
+                year_start=2025,
+                year_end=None,
+                status=SeriesStatus.CONTINUING,
+                status_override=SeriesStatusOverride.CONTINUING,
+                series_type=SeriesType.STANDARD,
+            )
+            session.add(series)
+            await session.flush()
+
+            updated = await service.upsert_series_metadata(
+                session,
+                171785,
+                SeriesMetadata(
+                    provider_id="171785",
+                    title="Still Continuing",
+                    sort_title="Still Continuing",
+                    year_start=2025,
+                    year_end=2026,
+                    status=SeriesStatus.ENDED.value,
+                    publisher=None,
+                    description=None,
+                    cover_url=None,
+                    issue_count=12,
+                    comicvine_url="https://comicvine.gamespot.com/still-continuing/4050-171785/",
+                ),
+            )
+
+            assert updated.status == SeriesStatus.CONTINUING
+            assert updated.status_override == SeriesStatusOverride.CONTINUING
+            assert updated.year_end is None
+
+    @pytest.mark.asyncio
     async def test_refresh_without_force_skips_when_fresh(
         self,
         db_factory: async_sessionmaker[AsyncSession],

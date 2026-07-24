@@ -412,6 +412,7 @@ class SearchService:
         source_priority: list[str] | None = None,
         auto_fallback: bool = False,
         force_generic: bool = False,
+        session_lock: asyncio.Lock | None = None,
     ) -> IssueSearchOutcome:
         """Run the shared issue-search pipeline for one target."""
 
@@ -460,6 +461,7 @@ class SearchService:
             build_search_details_func=build_search_details,
             log_type_detection_func=log_type_detection,
             log=logger,
+            session_lock=session_lock,
         )
 
     async def search_issue_target_quick_first(
@@ -472,6 +474,7 @@ class SearchService:
         validator_kwargs: ValidatorKwargs | None = None,
         source_priority: list[str] | None = None,
         enable_deep_fallback: bool = True,
+        session_lock: asyncio.Lock | None = None,
     ) -> IssueSearchOutcome:
         """Run the shared quick-first issue search strategy.
 
@@ -488,6 +491,7 @@ class SearchService:
             eval_kwargs=eval_kwargs,
             validator_kwargs=validator_kwargs,
             source_priority=source_priority,
+            session_lock=session_lock,
         )
         if fast_outcome.matched or not enable_deep_fallback:
             fast_outcome.search_details["search_strategy"] = (
@@ -505,6 +509,7 @@ class SearchService:
             validator_kwargs=validator_kwargs,
             source_priority=source_priority,
             auto_fallback=True,
+            session_lock=session_lock,
         )
         deep_outcome.search_details["search_strategy"] = "quick_first_deep_fallback"
         deep_outcome.search_details["fast_search"] = fast_summary
@@ -536,6 +541,7 @@ class SearchService:
             source_priority: list[str] | None = None,
             auto_fallback: bool = False,
             force_generic: bool = False,
+            session_lock: asyncio.Lock | None = None,
         ) -> IssueSearchOutcome:
             del mode, auto_fallback, force_generic
             return await self.search_issue_target_quick_first(
@@ -546,6 +552,7 @@ class SearchService:
                 validator_kwargs=validator_kwargs,
                 source_priority=source_priority,
                 enable_deep_fallback=enable_deep_fallback,
+                session_lock=session_lock,
             )
 
         return await _search_targets.search_issue_targets(
