@@ -37,7 +37,13 @@ from pullbox.models.provider_cache import MetadataProviderCacheEntry
 from pullbox.models.publisher import Publisher
 from pullbox.models.scheduler_task_stat import ScheduledTaskStat
 from pullbox.models.search_log import SearchLog, SearchType
-from pullbox.models.series import IssueCatalogState, Series, SeriesStatus, SeriesType
+from pullbox.models.series import (
+    IssueCatalogState,
+    Series,
+    SeriesStatus,
+    SeriesStatusOverride,
+    SeriesType,
+)
 from pullbox.models.story_arc import IssueStoryArc, StoryArc
 from pullbox.models.user import APIKey, User
 from pullbox.models.whats_new import WhatsNewCacheKind, WhatsNewReleaseCache
@@ -105,6 +111,7 @@ __all__ = [
     "SearchType",
     "Series",
     "SeriesStatus",
+    "SeriesStatusOverride",
     "SeriesType",
     "StoryArc",
     "SuggestionStatus",

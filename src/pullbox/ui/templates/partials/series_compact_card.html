@@ -19,7 +19,7 @@
         data-series-row-checkbox
         class="h-4 w-4 rounded border-pb-border-hover bg-pb-card-hover text-pb-interactive focus:ring-pb-interactive"
         x-bind:checked="isSelected({{ s.id }})"
-        x-on:change="toggleSelection({{ s.id }}, $event.target.checked)"
+        x-on:click="handleSelectionClick({{ s.id }}, $event.target.checked, $event.shiftKey, $event.metaKey || $event.ctrlKey)"
         aria-label="Select {{ s.title }}"
       >
     </div>

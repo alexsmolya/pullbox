@@ -1,7 +1,9 @@
 """Pull list UI route and context loading."""
 
 from collections.abc import Callable, Mapping
+from typing import Annotated
 from typing import cast as typing_cast
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse
@@ -16,7 +18,6 @@ from pullbox.models.series import Series
 
 router = APIRouter()
 
-_PULL_LIST_PER_PAGE = 25
 _PULL_LIST_FILTERS = {"wanted", "complete", "paused"}
 _PULL_LIST_SORTS = {
     "title",
@@ -77,6 +78,7 @@ async def pull_list(
     search: str | None = Query(None),
     sort: str | None = Query("title"),
     page: int = Query(1, ge=1),
+    per_page: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> Response:
     """Render the pull list page with monitored series and issue counts."""
     filter_value = filter if filter in _PULL_LIST_FILTERS else ""
@@ -226,9 +228,9 @@ async def pull_list(
             select(func.count(Series.id)).select_from(counts_join).where(*filters)
         )
     ).scalar_one()
-    total_pages = max(1, (total + _PULL_LIST_PER_PAGE - 1) // _PULL_LIST_PER_PAGE)
+    total_pages = max(1, (total + per_page - 1) // per_page)
     page = min(page, total_pages)
-    offset = (page - 1) * _PULL_LIST_PER_PAGE
+    offset = (page - 1) * per_page
     progress_sort = case(
         (
             func.coalesce(issue_counts_sq.c.total_issues, 0) > 0,
@@ -275,7 +277,7 @@ async def pull_list(
         .outerjoin(issue_counts_sq, issue_counts_sq.c.series_id == Series.id)
         .where(*filters)
         .order_by(order_clause, Series.sort_title.asc(), Series.id.asc())
-        .limit(_PULL_LIST_PER_PAGE)
+        .limit(per_page)
         .offset(offset)
     )
 
@@ -319,6 +321,15 @@ async def pull_list(
         "downloading_ratio": min(int(downloading_series_total or 0) / max_series_metric, 1.0),
         "paused_ratio": min(int(paused_total or 0) / max_series_metric, 1.0),
     }
+    pull_list_return_url = "/pull-list?" + urlencode(
+        {
+            "filter": filter_value,
+            "search": search_query,
+            "sort": sort_value,
+            "page": page,
+            "per_page": per_page,
+        }
+    )
 
     ctx = _ctx(
         request,
@@ -327,10 +338,12 @@ async def pull_list(
         pull_metrics=pull_metrics,
         total=total,
         page=page,
+        per_page=per_page,
         total_pages=total_pages,
         filter_value=filter_value,
         search_query=search_query,
         sort=sort_value,
+        pull_list_return_url=pull_list_return_url,
     )
 
     if request.headers.get("HX-Request"):
@@ -362,6 +375,7 @@ async def update_pull_list_monitoring(
     search: str | None = Form(None),
     sort: str | None = Form("title"),
     page: int = Form(1),
+    per_page: Annotated[int, Form(ge=1, le=100)] = 25,
 ) -> Response:
     """Update monitoring from the pull list and return the refreshed list fragment."""
     from pullbox.composition.services import build_domain_series_service
@@ -378,4 +392,5 @@ async def update_pull_list_monitoring(
         search=search,
         sort=sort,
         page=max(page, 1),
+        per_page=per_page,
     )

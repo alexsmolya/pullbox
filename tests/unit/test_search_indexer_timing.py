@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -125,3 +126,34 @@ async def test_search_indexers_records_failure_without_losing_healthy_results() 
     assert failed_config.last_failure_at is not None
     assert healthy_config.failure_count == 0
     assert healthy_config.last_success_at is not None
+
+
+@pytest.mark.asyncio
+async def test_manual_search_ignores_backoff_and_restores_indexer_health() -> None:
+    registry = ProviderRegistry()
+    indexer = _FakeIndexer(
+        "NZBgeek",
+        [_release("Infernal Hulk 001 [2026] [Digital].cbz")],
+    )
+    registry.register_indexer(1, indexer)
+    config = IndexerConfig(
+        name="NZBgeek",
+        indexer_type=IndexerType.NEWZNAB,
+        url="https://prowlarr.test/15",
+        api_key="encrypted",
+        failure_count=5,
+    )
+    config.disabled_until = datetime.now(UTC) + timedelta(hours=2)
+    config.last_error = "Prowlarr restarted"
+
+    results = await search_indexers(
+        registry,
+        SearchQuery(series_title="Infernal Hulk", issue_number=1),
+        indexer_configs={1: config},
+        ignore_backoff=True,
+    )
+
+    assert [result.title for result in results] == ["Infernal Hulk 001 [2026] [Digital].cbz"]
+    assert config.failure_count == 0
+    assert config.disabled_until is None
+    assert config.last_error is None

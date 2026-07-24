@@ -54,6 +54,8 @@
   "-publisher": "Publisher Z-A",
   "-issues": "Most owned",
   "issues": "Least owned",
+  "-acquisition": "Acquisition (most to least)",
+  "acquisition": "Acquisition (least to most)",
   "series_type": "Type A-Z",
   "-series_type": "Type Z-A",
   "status": "Status",
@@ -74,6 +76,7 @@
   x-data="{
     selectedIds: [],
     visibleSelectionIds: [],
+    selectionAnchorId: null,
     bulkBusy: false,
     selectAllMatchingBusy: false,
     totalMatchingCount: {{ total }},
@@ -141,10 +144,18 @@
     isSelected(seriesId) {
       return this.selectedIds.includes(String(seriesId));
     },
-    toggleSelection(seriesId, checked) {
-      const nextId = String(seriesId);
-      const remaining = this.selectedIds.filter((id) => id !== nextId);
-      this.selectedIds = checked ? [...remaining, nextId] : remaining;
+    handleSelectionClick(seriesId, checked, shiftKey, additiveKey) {
+      const resolved = window.pbResolveCheckboxSelection({
+        selectedIds: this.selectedIds,
+        visibleIds: this.visibleIds(),
+        itemId: String(seriesId),
+        anchorId: this.selectionAnchorId,
+        checked,
+        shiftKey,
+        additiveKey,
+      });
+      this.selectedIds = resolved.selectedIds;
+      this.selectionAnchorId = resolved.anchorId;
       if (this.selectedIds.length === 0) {
         this.resetDeleteConfirm();
       }
@@ -179,6 +190,7 @@
     },
     doneSelectMode() {
       this.selectedIds = [];
+      this.selectionAnchorId = null;
       this.resetDeleteConfirm();
       this.exitSelectMode();
     },
@@ -204,6 +216,7 @@
       const hiddenSelections = this.selectedIds.filter((id) => !visible.includes(id));
       if (!checked) {
         this.selectedIds = hiddenSelections;
+        this.selectionAnchorId = null;
         if (this.selectedIds.length === 0) {
           this.resetDeleteConfirm();
           this.exitSelectMode();
@@ -212,6 +225,7 @@
       }
       const uniqueVisible = Array.from(new Set(visible));
       this.selectedIds = [...hiddenSelections, ...uniqueVisible];
+      this.selectionAnchorId = null;
     },
     selectAllVisible() {
       if (this.bulkBusy) {
@@ -251,6 +265,7 @@
         const payload = await response.json();
         const ids = Array.isArray(payload.ids) ? payload.ids.map((id) => String(id)) : [];
         this.selectedIds = ids;
+        this.selectionAnchorId = null;
         if (Number.isFinite(payload.total)) {
           this.totalMatchingCount = payload.total;
         }
@@ -265,6 +280,7 @@
         return;
       }
       this.selectedIds = [];
+      this.selectionAnchorId = null;
       this.resetDeleteConfirm();
     },
     async loadDeleteContext(seriesIds) {
@@ -406,6 +422,7 @@
       }
 
       this.selectedIds = [];
+      this.selectionAnchorId = null;
       this.resetDeleteConfirm();
       this.exitSelectMode();
 
@@ -557,6 +574,7 @@
         }
 
         this.selectedIds = [];
+        this.selectionAnchorId = null;
         this.resetDeleteConfirm();
         this.exitSelectMode();
         await this.refreshResults();
@@ -767,6 +785,8 @@
               ("-publisher", "Publisher Z–A"),
               ("-issues", "Most Owned"),
               ("issues", "Least Owned"),
+              ("-acquisition", "Acquisition (Most to Least)"),
+              ("acquisition", "Acquisition (Least to Most)"),
               ("series_type", "Type A–Z"),
               ("-series_type", "Type Z–A"),
               ("status", "Status"),

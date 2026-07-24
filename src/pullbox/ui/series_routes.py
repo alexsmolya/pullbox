@@ -10,7 +10,7 @@ import structlog
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import ColumnElement, String, case, cast, func, select
+from sqlalchemy import ColumnElement, Float, String, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import contains_eager
 from starlette.responses import Response
@@ -215,6 +215,14 @@ async def series_list(
 
     status_sort = _lower_enum_sort(Series.status)
     series_type_sort = _lower_enum_sort(Series.series_type)
+    acquisition_sort = case(
+        (
+            func.coalesce(issue_counts.c.total_issues, 0) > 0,
+            cast(func.coalesce(issue_counts.c.owned_count, 0), Float)
+            / cast(issue_counts.c.total_issues, Float),
+        ),
+        else_=0.0,
+    )
     sort_map = {
         "title": func.lower(Series.sort_title),
         "year": Series.year_start,
@@ -222,6 +230,7 @@ async def series_list(
         "publisher": func.lower(Publisher.name),
         "status": status_sort,
         "issues": func.coalesce(issue_counts.c.owned_count, 0),
+        "acquisition": acquisition_sort,
         "series_type": series_type_sort,
     }
     sort_col = sort_map.get(sort_field, func.lower(Series.sort_title))

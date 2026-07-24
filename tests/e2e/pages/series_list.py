@@ -263,10 +263,12 @@ class SeriesListPage(BasePage):
             .count()
         )
 
-    def toggle_row_selection(self, title: str) -> None:
+    def toggle_row_selection(self, title: str, *, modifiers: list[str] | None = None) -> None:
         """Toggle a row checkbox by series title."""
         self.open_select_mode()
-        self.row_for_title(title).locator("[data-testid='series-row-checkbox']").first.click()
+        self.row_for_title(title).locator("[data-testid='series-row-checkbox']").first.click(
+            modifiers=modifiers or []
+        )
 
     def click_row_delete(self, title: str) -> None:
         """Open the shared delete modal from a row action."""

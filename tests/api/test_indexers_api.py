@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
@@ -379,6 +380,9 @@ class TestIndexerConnectionRoutes:
                 name=f"{indexer_type.value} source",
                 indexer_type=indexer_type,
             )
+            indexer.failure_count = 5
+            indexer.disabled_until = datetime.now(UTC) + timedelta(hours=6)
+            indexer.last_error = "Search failed while Prowlarr restarted"
 
             result = await indexers_api.test_indexer(indexer.id, object(), session)  # type: ignore[arg-type]
             await session.refresh(indexer)
@@ -390,6 +394,8 @@ class TestIndexerConnectionRoutes:
         }
         assert indexer.last_success_at is not None
         assert indexer.last_error is None
+        assert indexer.failure_count == 0
+        assert indexer.disabled_until is None
 
     async def test_indexer_test_route_persists_failure_and_requires_existing_indexer(
         self,

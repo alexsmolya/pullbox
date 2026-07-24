@@ -4,7 +4,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from pullbox.models.series import IssueCatalogState, SeriesStatus, SeriesType
+from pullbox.models.series import (
+    IssueCatalogState,
+    SeriesStatus,
+    SeriesStatusOverride,
+    SeriesType,
+)
 
 
 class SeriesCreate(BaseModel):
@@ -27,6 +32,10 @@ class SeriesUpdate(BaseModel):
     """Request body for updating a series."""
 
     monitored: bool | None = Field(None, description="Whether the series is monitored")
+    status_override: SeriesStatusOverride | None = Field(
+        None,
+        description="Manual lifecycle status, or null to resume automatic status updates",
+    )
 
 
 class SeriesResponse(BaseModel):
@@ -41,6 +50,7 @@ class SeriesResponse(BaseModel):
     year_start: int | None = None
     year_end: int | None = None
     status: SeriesStatus
+    status_override: SeriesStatusOverride | None = None
     series_type: SeriesType = SeriesType.STANDARD
     parent_series_id: int | None = None
     description: str | None = None

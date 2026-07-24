@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
@@ -1043,6 +1044,14 @@ class TestPostProcessingIntegrityCheck:
                     value_type="string",
                 )
             )
+            session.add(
+                DownloadClientConfig(
+                    name="SABnzbd",
+                    client_type=DownloadClientType.SABNZBD,
+                    url="http://sabnzbd:8080",
+                    download_dir=str(source_dir.parent),
+                )
+            )
             await session.flush()
 
             series = Series(
@@ -1082,6 +1091,7 @@ class TestPostProcessingIntegrityCheck:
             assert download.final_path is not None
             assert Path(download.final_path).exists()
             assert not release_path.exists()
+            assert not source_dir.exists()
 
         summaries = [
             payload
@@ -1100,6 +1110,7 @@ class TestPostProcessingIntegrityCheck:
         assert summary["destination_prep_ms"] is not None
         assert summary["transfer_ms"] is not None
         assert summary["post_processing_duration_ms"] is not None
+        assert any(event == "post_processing_source_cleaned" for _, event, _ in fake_logger.events)
 
     @pytest.mark.asyncio
     async def test_standard_torrent_move_post_processing_moves_source_file(

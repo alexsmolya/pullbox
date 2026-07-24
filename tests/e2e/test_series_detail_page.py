@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.e2e.pages.series_detail import SeriesDetailPage
@@ -182,6 +184,32 @@ class TestSeriesDetailPage:
         assert "/series" in authed_page.url
         assert authed_page.locator("[data-testid='series-page']").first.is_visible()
         assert authed_page.locator("[data-testid='page-footer-dock']").first.is_visible()
+
+    def test_back_link_returns_to_pull_list_when_opened_from_pull_list(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.goto(f"{seeded_server}/pull-list")
+        series_link = authed_page.locator("[data-testid='pull-list-series-link']").first
+        series_link.wait_for(state="visible", timeout=5000)
+
+        series_link.click()
+        authed_page.wait_for_url(
+            re.compile(r"/series/\d+\?from=pull-list&return_to="),
+            timeout=5000,
+        )
+        back_link = authed_page.locator("[data-testid='series-detail-back-link']").first
+
+        assert back_link.text_content().strip() == "Back to pull list"
+        assert back_link.get_attribute("href") == (
+            "/pull-list?filter=&search=&sort=title&page=1&per_page=25"
+        )
+
+        back_link.click()
+        authed_page.wait_for_url(re.compile(r"/pull-list\?"), timeout=5000)
+        assert authed_page.url.endswith("/pull-list?filter=&search=&sort=title&page=1&per_page=25")
+        assert authed_page.locator("[data-testid='pull-list-page']").first.is_visible()
 
     def test_breadcrumb_restores_series_per_page_selection(
         self,

@@ -155,9 +155,16 @@ class TestReleaseSearchRouteFunction:
             return runtime
 
         class FakeSearchService:
-            def __init__(self, *, registry: object, failure_threshold: int) -> None:
+            def __init__(
+                self,
+                *,
+                registry: object,
+                failure_threshold: int,
+                ignore_indexer_backoff: bool,
+            ) -> None:
                 assert registry is runtime.registry
                 assert failure_threshold == 3
+                assert ignore_indexer_backoff is True
 
             async def search(
                 self,

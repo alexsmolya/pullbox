@@ -21,15 +21,17 @@
 >
   <div class="series-domain-breadcrumb-row">
     <a
-      href="/series"
+      href="{{ detail_back_url }}"
       data-testid="series-detail-back-link"
+      {% if detail_origin != 'pull-list' %}
       data-series-index-link="true"
+      {% endif %}
       class="series-domain-back-link"
     >
       <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
         <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
       </svg>
-      Back to series
+      {{ 'Back to pull list' if detail_origin == 'pull-list' else 'Back to series' }}
     </a>
     <nav data-testid="series-detail-breadcrumbs" class="series-domain-breadcrumbs" aria-label="Breadcrumb">
       <a href="/series" data-series-index-link="true">All Series</a>

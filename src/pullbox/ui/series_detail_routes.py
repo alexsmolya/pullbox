@@ -1,7 +1,8 @@
 """Series and issue detail UI routes."""
 
 from collections.abc import Callable, Mapping
-from urllib.parse import unquote
+from typing import Annotated
+from urllib.parse import unquote, urlsplit
 
 import structlog
 from fastapi import APIRouter, Query, Request
@@ -54,6 +55,16 @@ def _ctx(request: Request, user: object | None = None, **kwargs: object) -> dict
         raise RuntimeError(msg)
     context: Mapping[str, object] = _build_context(request, user, **kwargs)
     return dict(context)
+
+
+def _pull_list_return_url(return_to: str | None) -> str:
+    """Accept only an application-local Pull List URL for detail navigation."""
+    if not return_to:
+        return "/pull-list"
+    parsed = urlsplit(return_to)
+    if parsed.scheme or parsed.netloc or parsed.path != "/pull-list":
+        return "/pull-list"
+    return parsed.path + (f"?{parsed.query}" if parsed.query else "")
 
 
 async def load_series_issues_context(
@@ -131,6 +142,8 @@ async def series_detail(
     issue_status: str | None = Query(None),
     page: int = Query(1, ge=1),
     issue_sort: str = Query("-issue_number"),
+    source: Annotated[str | None, Query(alias="from")] = None,
+    return_to: str | None = Query(None),
 ) -> Response:
     """Render the series detail page with issues."""
     result = await session.execute(
@@ -168,6 +181,10 @@ async def series_detail(
             series=series,
             file_count=file_count,
             delete_file_count=delete_context.linked_file_count,
+            detail_origin=source if source == "pull-list" else None,
+            detail_back_url=(
+                _pull_list_return_url(return_to) if source == "pull-list" else "/series"
+            ),
             **issues_ctx,
         ),
     )

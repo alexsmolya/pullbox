@@ -4,6 +4,7 @@
 {% if filter_value %}{% set _ = _base_params.append("filter=" ~ filter_value) %}{% endif %}
 {% if search_query %}{% set _ = _base_params.append("search=" ~ (search_query|urlencode)) %}{% endif %}
 {% if sort and sort != "title" %}{% set _ = _base_params.append("sort=" ~ sort) %}{% endif %}
+{% if per_page != 25 %}{% set _ = _base_params.append("per_page=" ~ per_page) %}{% endif %}
 {% set _pull_base = "/pull-list" ~ ("?" ~ _base_params|join("&") if _base_params else "") %}
 {% set _dock_status = [
   {"led": "green", "label": "monitored", "value": pull_metrics.monitored_series|string},

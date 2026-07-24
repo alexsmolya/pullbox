@@ -1391,6 +1391,7 @@ class TestHelperFunctions:
         )
 
         threshold = DEFAULT_INDEXER_FAILURE_THRESHOLD
+        assert INDEXER_BACKOFF_SECONDS == [900, 3600, 7200]
         # At threshold
         assert calculate_backoff(threshold) == INDEXER_BACKOFF_SECONDS[0]
         # Above threshold

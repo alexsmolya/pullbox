@@ -246,6 +246,9 @@ class TestSeriesRouteContracts:
         assert 'data-tip-pos="left"' in response.text
         assert 'data-testid="series-view-compact"' not in response.text
         assert 'data-testid="series-select-mode-toggle"' in response.text
+        assert "handleSelectionClick" in response.text
+        assert "$event.shiftKey" in response.text
+        assert "$event.metaKey || $event.ctrlKey" in response.text
         assert 'data-testid="series-select-toolbar"' in response.text
         assert 'data-testid="series-selection-controls-row"' in response.text
         assert 'data-testid="series-select-mode-done"' in response.text
@@ -271,6 +274,12 @@ class TestSeriesRouteContracts:
         assert 'data-testid="series-delete-options-panel"' in response.text
         assert 'data-testid="series-mission-control-view"' in response.text
         assert 'data-testid="series-mission-control-table"' in response.text
+        year_header_index = response.text.index('<th style="width: 64px">Year</th>')
+        status_header_index = response.text.index('<th class="c" style="width: 92px">Status</th>')
+        owned_header_index = response.text.index('<th class="c" style="width: 78px">Owned</th>')
+        assert year_header_index < status_header_index < owned_header_index
+        assert response.text.count('data-testid="series-lifecycle-status"') == 2
+        assert 'data-series-status="continuing"' in response.text
         assert 'data-testid="series-collector-wall-view"' not in response.text
         assert 'data-testid="series-mission-control-footer"' not in response.text
         assert 'id="series-summary"' in response.text
@@ -288,6 +297,20 @@ class TestSeriesRouteContracts:
             not in response.text
         )
         assert "transition:true" not in response.text
+
+    async def test_list_view_renders_ended_and_continuing_status_pills(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/series?per_page=20")
+
+        assert response.status_code == 200
+        assert response.text.count('data-testid="series-lifecycle-status"') == 6
+        assert 'data-series-status="continuing"' in response.text
+        assert 'data-series-status="ended"' in response.text
+        assert '<span class="pill pill-success">\n  Continuing\n</span>' in response.text
+        assert '<span class="pill pill-neutral">\n  Ended\n</span>' in response.text
 
     async def test_htmx_request_returns_oob_bundle_only(
         self,
@@ -1516,6 +1539,34 @@ class TestSeriesRouteContracts:
         assert all(query.get("sort") == ["-title"] for query in parsed)
         assert all(query.get("per_page") == ["1"] for query in parsed)
 
+    async def test_series_sort_dropdown_includes_acquisition_options(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        descending = await authenticated_client.get("/series?sort=-acquisition&per_page=25")
+        ascending = await authenticated_client.get("/series?sort=acquisition&per_page=25")
+
+        assert descending.status_code == 200
+        assert 'data-dropdown-value="-acquisition"' in descending.text
+        assert "Acquisition (Most to Least)" in descending.text
+        assert ascending.status_code == 200
+        assert 'data-dropdown-value="acquisition"' in ascending.text
+        assert "Acquisition (Least to Most)" in ascending.text
+
+    async def test_acquisition_sort_orders_by_completion_percentage(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        ascending = await authenticated_client.get("/series?sort=acquisition&per_page=100")
+        descending = await authenticated_client.get("/series?sort=-acquisition&per_page=100")
+
+        assert ascending.status_code == 200
+        assert descending.status_code == 200
+        assert _extract_series_titles(ascending.text)[0] == "Batman"
+        assert _extract_series_titles(descending.text)[0] == "Planetary"
+
     @pytest.mark.parametrize(
         "sort",
         [
@@ -1527,6 +1578,8 @@ class TestSeriesRouteContracts:
             "-publisher",
             "issues",
             "-issues",
+            "acquisition",
+            "-acquisition",
             "series_type",
             "-series_type",
             "status",

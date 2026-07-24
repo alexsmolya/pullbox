@@ -24,7 +24,13 @@ from pullbox.core.naming import (
 from pullbox.models.creator import Creator, IssueCreator
 from pullbox.models.issue import Issue, IssueType
 from pullbox.models.publisher import Publisher
-from pullbox.models.series import IssueCatalogState, Series, SeriesStatus, SeriesType
+from pullbox.models.series import (
+    IssueCatalogState,
+    Series,
+    SeriesStatus,
+    SeriesStatusOverride,
+    SeriesType,
+)
 from pullbox.providers.metadata.comicvine import ComicVineError
 from pullbox.services.cover_cache_service import purge_series_cover_cache
 
@@ -152,9 +158,12 @@ class MetadataService:
             existing.sort_title = meta.sort_title or meta.title
             if meta.year_start is not None:
                 existing.year_start = meta.year_start
-            if meta.year_end is not None:
+            if existing.status_override == SeriesStatusOverride.CONTINUING:
+                existing.status = SeriesStatus.CONTINUING
+                existing.year_end = None
+            elif meta.year_end is not None:
                 existing.year_end = meta.year_end
-            if meta.status:
+            if meta.status and existing.status_override is None:
                 existing.status = SeriesStatus(meta.status)
             existing.description = meta.description
             existing.issue_count = meta.issue_count or 0
@@ -612,7 +621,7 @@ class MetadataService:
         return created
 
     @staticmethod
-    async def _derive_series_end_year(session: AsyncSession, series: Series) -> int | None:
+    async def derive_series_end_year(session: AsyncSession, series: Series) -> int | None:
         """Derive a closed end year for a series from issue dates or start year."""
         from sqlalchemy import func as sa_func
 
@@ -636,10 +645,18 @@ class MetadataService:
         within the last 6 months, assume continuing; otherwise assume ended.
         """
 
+        if series.status_override is not None:
+            series.status = SeriesStatus(series.status_override.value)
+            if series.status == SeriesStatus.CONTINUING:
+                series.year_end = None
+            elif series.year_end is None:
+                series.year_end = await MetadataService.derive_series_end_year(session, series)
+            return
+
         # Non-standard types are always ended by definition.
         if series.series_type != SeriesType.STANDARD:
             series.status = SeriesStatus.ENDED
-            series.year_end = await MetadataService._derive_series_end_year(session, series)
+            series.year_end = await MetadataService.derive_series_end_year(session, series)
             return
 
         from sqlalchemy import func as sa_func

@@ -131,6 +131,32 @@
                   fit_width=true
                 ) }}
               </div>
+
+              <div class="series-toolbar-field">
+                <span class="series-toolbar-label">Per Page</span>
+                {% set per_page_options = [
+                  ("25", "25"),
+                  ("50", "50"),
+                  ("100", "100"),
+                ] %}
+                {% if per_page not in [25, 50, 100] %}
+                  {% set per_page_options = [(per_page|string, per_page|string)] + per_page_options %}
+                {% endif %}
+                {{ dropdown_select(
+                  name="per_page",
+                  value=per_page|string,
+                  size="sm",
+                  options=per_page_options,
+                  root_testid="pull-list-per-page-select",
+                  hx_get="/pull-list",
+                  hx_target="#pull-list-results-body",
+                  hx_swap="outerHTML",
+                  hx_push_url="true",
+                  hx_include="#pull-list-filter-form",
+                  class_name="series-registry-dropdown",
+                  fit_width=true
+                ) }}
+              </div>
             </div>
 
             <div class="series-toolbar-actions">

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import sys
+from html import unescape
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -85,6 +87,9 @@ class TestPullListRouteContracts:
         assert 'data-search-field-contract="baseline-v2"' in response.text
         assert 'data-search-field-mode="remote"' in response.text
         assert 'data-testid="pull-list-filter-select"' in response.text
+        assert 'data-testid="pull-list-per-page-select"' in response.text
+        assert 'name="per_page"' in response.text
+        assert 'value="25"' in response.text
         assert 'data-dropdown-select-contract="v1"' in response.text
         assert "Paused (Unmonitored)" not in response.text
         assert 'data-testid="pull-list-add-series"' in response.text
@@ -105,6 +110,45 @@ class TestPullListRouteContracts:
         assert "What the pull list is for" not in response.text
         assert "Current filter" not in response.text
         assert '<select id="pull-filter"' not in response.text
+
+    async def test_pull_list_per_page_controls_the_global_result_page(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add_all(
+                [
+                    Series(
+                        title=f"Pull List Page Size {index}",
+                        sort_title=f"pull list page size {index}",
+                        monitored=True,
+                    )
+                    for index in range(3)
+                ]
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/pull-list?per_page=1&page=2")
+
+        assert response.status_code == 200
+        assert response.text.count('data-testid="pull-list-row-') == 1
+        assert 'data-testid="pull-list-per-page-select"' in response.text
+        assert 'data-dropdown-value="1"' in response.text
+        assert 'data-testid="page-dock-pagination"' in response.text
+        assert "per_page=1" in response.text
+
+    async def test_pull_list_sort_preserves_the_selected_page_size(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        await _seed_pull_list_series(sec_db)
+
+        response = await authenticated_client.get("/pull-list?per_page=50")
+
+        assert response.status_code == 200
+        assert 'hx-get="/pull-list?sort=-wanted&amp;per_page=50"' in response.text
 
     async def test_pull_list_empty_state_stays_inside_table_shell(
         self,
@@ -169,6 +213,22 @@ class TestPullListRouteContracts:
         assert 'hx-target="#pull-list-results-body"' in response.text
         assert 'hx-include="#pull-list-filter-form"' in response.text
         assert 'hx-put="/api/v1/series/' not in response.text
+
+    async def test_pull_list_series_links_preserve_their_origin(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        series_id = await _seed_pull_list_series(sec_db)
+
+        return_url = "/pull-list?filter=wanted&search=Extremely&sort=-wanted&page=1&per_page=50"
+        response = await authenticated_client.get(return_url)
+
+        assert response.status_code == 200
+        match = re.search(rf'href="(/series/{series_id}\?[^\"]+)"', response.text)
+        assert match is not None
+        link_query = parse_qs(urlparse(unescape(match.group(1))).query)
+        assert link_query == {"from": ["pull-list"], "return_to": [return_url]}
 
     async def test_pull_list_pause_action_updates_monitoring_and_removes_row(
         self,

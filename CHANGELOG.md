@@ -23,6 +23,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [1.0.6] - 2026-07-23
+
+Patch release focused on reliable wanted searches, user-controlled series
+lifecycle status, and faster large-library management.
+
+### Added
+
+- Added manual continuing and ended lifecycle overrides on series details;
+  metadata refreshes preserve the user-selected status.
+- Added configurable Pull List page sizes, lifecycle status in the series list,
+  acquisition most-to-least and least-to-most sorting, and file-explorer-style
+  checkbox selection with Shift and Command/Ctrl modifiers.
+
+### Fixed
+
+- Made automatic and manual wanted searches recover promptly from indexer
+  backoff, stream outcomes progressively, and preserve search-on-add results.
+- Serialized shared database-session work during concurrent searches without
+  reducing provider request concurrency.
+- Cleaned completed Usenet source directories and preserved expanded download
+  history details during live refreshes.
+- Preserved Pull List breadcrumb context when opening and returning from series
+  details.
+- Prevented provider metadata refreshes from restoring an end year on series
+  manually marked as continuing.
+
+### CI / Build
+
+- Updated Tailwind dependencies and pinned GitHub Actions releases.
+
 ## [1.0.5] - 2026-07-15
 
 Patch release focused on production reliability under sustained background work

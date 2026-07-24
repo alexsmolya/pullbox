@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -266,6 +267,117 @@ async def test_search_series_issues_real_path_uses_quick_first_batch_strategy(
 
 
 @pytest.mark.asyncio
+async def test_search_series_issues_exposes_running_history_before_provider_completes(
+    task_db: dict[str, object],
+) -> None:
+    factory = task_db["factory"]
+    provider_started = asyncio.Event()
+    release_provider = asyncio.Event()
+
+    async def _search_targets(*_args, **_kwargs):
+        provider_started.set()
+        await release_provider.wait()
+        return []
+
+    with (
+        patch("pullbox.tasks.search_task.get_session_factory", return_value=factory),
+        patch(
+            "pullbox.tasks.search_task.build_registry",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), {}),
+        ),
+        patch(
+            "pullbox.tasks.search_task.SearchService.search_targets_quick_first",
+            new_callable=AsyncMock,
+            side_effect=_search_targets,
+        ),
+    ):
+        search_task_run = asyncio.create_task(
+            search_task.search_series_issues(task_db["tpb_series_id"])
+        )
+        await asyncio.wait_for(provider_started.wait(), timeout=1)
+
+        async with factory() as session:
+            result = await session.execute(select(SearchLog).order_by(SearchLog.id))
+            logs = list(result.scalars().all())
+
+        assert len(logs) == 1
+        assert logs[0].search_type == SearchType.BULK
+        assert (logs[0].details or {}).get("run_state") == "running"
+        assert (logs[0].details or {}).get("action_status") == "searching"
+        assert search_task_run.done() is False
+
+        release_provider.set()
+        await search_task_run
+
+
+@pytest.mark.asyncio
+async def test_search_series_issues_routes_each_outcome_before_batch_completes(
+    task_db: dict[str, object],
+) -> None:
+    factory = task_db["factory"]
+    target = IssueSearchTarget(
+        issue_id=task_db["tpb_issue_id"],
+        series_id=task_db["tpb_series_id"],
+        series_title="Search Task TPB",
+        issue_number=1.0,
+        issue_type=IssueType.TPB,
+        issue_title="Vol. 1: Deluxe",
+        series_year=2025,
+    )
+    release = _make_release("Search Task TPB Vol 1")
+    validation = _make_validation(release)
+    outcome = _make_outcome(target, release=release, validation=validation, mode="fast")
+    outcome_processed = asyncio.Event()
+    release_batch = asyncio.Event()
+
+    async def _search_targets(*_args, **kwargs):
+        await kwargs["on_outcome"](outcome)
+        outcome_processed.set()
+        await release_batch.wait()
+        return [outcome]
+
+    with (
+        patch("pullbox.tasks.search_task.get_session_factory", return_value=factory),
+        patch(
+            "pullbox.tasks.search_task.build_registry",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), {}),
+        ),
+        patch(
+            "pullbox.tasks.search_task.SearchService.search_targets_quick_first",
+            new_callable=AsyncMock,
+            side_effect=_search_targets,
+        ),
+        patch("pullbox.tasks.search_task.DownloadService") as mock_download_cls,
+        patch("pullbox.tasks.search_task.InterventionService") as mock_intervention_cls,
+    ):
+        mock_download_cls.return_value.send_to_client = AsyncMock(return_value=MagicMock())
+        mock_intervention = mock_intervention_cls.return_value
+        mock_intervention.has_pending_for_issue = AsyncMock(return_value=False)
+        mock_intervention.create_pending_match = AsyncMock()
+
+        search_task_run = asyncio.create_task(
+            search_task.search_series_issues(task_db["tpb_series_id"])
+        )
+        await asyncio.wait_for(outcome_processed.wait(), timeout=1)
+
+        mock_download_cls.return_value.send_to_client.assert_awaited_once()
+        async with factory() as session:
+            result = await session.execute(select(SearchLog).order_by(SearchLog.id))
+            logs = list(result.scalars().all())
+
+        assert len(logs) == 1
+        assert logs[0].results_grabbed == 1
+        assert (logs[0].details or {}).get("run_state") == "completed"
+        assert (logs[0].details or {}).get("action_status") == "downloading"
+        assert search_task_run.done() is False
+
+        release_batch.set()
+        assert await search_task_run == {"wanted": 1, "sent": 1, "queued": 0}
+
+
+@pytest.mark.asyncio
 async def test_search_series_issues_persists_indexer_health_before_download_routing(
     task_db: dict[str, object],
 ) -> None:
@@ -494,3 +606,126 @@ async def test_search_wanted_real_path_logs_issue_failures_without_bubbling(
         await search_task.search_wanted()
 
     mock_download.send_to_client.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_search_wanted_keeps_runtime_configs_loaded_after_routing_rollback(
+    task_db: dict[str, object],
+) -> None:
+    factory = task_db["factory"]
+    indexer_id = task_db["indexer_id"]
+    target = IssueSearchTarget(
+        issue_id=task_db["wanted_issue_id"],
+        series_id=44,
+        series_title="Search Task Wanted",
+        issue_number=9.0,
+        issue_type=IssueType.ISSUE,
+        issue_title="Issue #9",
+        series_year=2025,
+    )
+    release = _make_release("Search Task Wanted 009")
+    validation = _make_validation(release)
+    outcome = _make_outcome(target, release=release, validation=validation, mode="fast")
+    config_accessed_after_rollback = False
+
+    async def _build_registry(session, **_kwargs):  # type: ignore[no-untyped-def]
+        indexer = await session.get(IndexerConfig, indexer_id)
+        assert indexer is not None
+        return MagicMock(), {indexer.id: indexer}
+
+    async def _search_targets(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal config_accessed_after_rollback
+        await kwargs["on_outcome"](outcome)
+        indexer = kwargs["indexer_configs"][indexer_id]
+        config_accessed_after_rollback = indexer.enabled
+        return [outcome]
+
+    async def _fail_after_db_access(session, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        assert await session.get(Issue, target.issue_id) is not None
+        raise RuntimeError("routing failed")
+
+    with (
+        patch("pullbox.tasks.search_task.get_session_factory", return_value=factory),
+        patch(
+            "pullbox.tasks.search_task.build_registry",
+            new_callable=AsyncMock,
+            side_effect=_build_registry,
+        ),
+        patch(
+            "pullbox.tasks.search_task.SearchService.search_targets_quick_first",
+            new_callable=AsyncMock,
+            side_effect=_search_targets,
+        ),
+        patch("pullbox.tasks.search_task.DownloadService") as mock_download_cls,
+        patch("pullbox.tasks.search_task.InterventionService") as mock_intervention_cls,
+    ):
+        mock_download_cls.return_value.send_to_client = AsyncMock(side_effect=_fail_after_db_access)
+        mock_intervention = mock_intervention_cls.return_value
+        mock_intervention.has_pending_for_issue = AsyncMock(return_value=False)
+        mock_intervention.create_pending_match = AsyncMock()
+
+        await search_task.search_wanted()
+
+    assert config_accessed_after_rollback is True
+
+
+@pytest.mark.asyncio
+async def test_search_series_keeps_runtime_configs_loaded_after_routing_rollback(
+    task_db: dict[str, object],
+) -> None:
+    factory = task_db["factory"]
+    indexer_id = task_db["indexer_id"]
+    target = IssueSearchTarget(
+        issue_id=task_db["tpb_issue_id"],
+        series_id=task_db["tpb_series_id"],
+        series_title="Search Task TPB",
+        issue_number=1.0,
+        issue_type=IssueType.TPB,
+        issue_title="Vol. 1: Deluxe",
+        series_year=2025,
+    )
+    release = _make_release("Search Task TPB v01")
+    validation = _make_validation(release)
+    outcome = _make_outcome(target, release=release, validation=validation, mode="fast")
+    config_accessed_after_rollback = False
+
+    async def _build_registry(session, **_kwargs):  # type: ignore[no-untyped-def]
+        indexer = await session.get(IndexerConfig, indexer_id)
+        assert indexer is not None
+        return MagicMock(), {indexer.id: indexer}
+
+    async def _search_targets(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal config_accessed_after_rollback
+        await kwargs["on_outcome"](outcome)
+        indexer = kwargs["indexer_configs"][indexer_id]
+        config_accessed_after_rollback = indexer.enabled
+        return [outcome]
+
+    async def _fail_after_db_access(session, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        assert await session.get(Issue, target.issue_id) is not None
+        raise RuntimeError("routing failed")
+
+    with (
+        patch("pullbox.tasks.search_task.get_session_factory", return_value=factory),
+        patch(
+            "pullbox.tasks.search_task.build_registry",
+            new_callable=AsyncMock,
+            side_effect=_build_registry,
+        ),
+        patch(
+            "pullbox.tasks.search_task.SearchService.search_targets_quick_first",
+            new_callable=AsyncMock,
+            side_effect=_search_targets,
+        ),
+        patch("pullbox.tasks.search_task.DownloadService") as mock_download_cls,
+        patch("pullbox.tasks.search_task.InterventionService") as mock_intervention_cls,
+    ):
+        mock_download_cls.return_value.send_to_client = AsyncMock(side_effect=_fail_after_db_access)
+        mock_intervention = mock_intervention_cls.return_value
+        mock_intervention.has_pending_for_issue = AsyncMock(return_value=False)
+        mock_intervention.create_pending_match = AsyncMock()
+
+        result = await search_task.search_series_issues(task_db["tpb_series_id"])
+
+    assert result == {"wanted": 1, "sent": 0, "queued": 0}
+    assert config_accessed_after_rollback is True

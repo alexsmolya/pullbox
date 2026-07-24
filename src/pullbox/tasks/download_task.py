@@ -130,6 +130,7 @@ _build_post_processing_integrity_exception = (
     _download_sources._build_post_processing_integrity_exception
 )
 _find_comic_file = _download_sources._find_comic_file
+_resolve_local_download_root = _download_sources._resolve_local_download_root
 _resolve_local_path = _download_sources._resolve_local_path
 _process_completed_lock = _download_queue._process_completed_lock
 _STALLED_DOWNLOAD_TIMEOUT = _download_stall_recovery._STALLED_DOWNLOAD_TIMEOUT
@@ -431,7 +432,6 @@ async def _run_post_processing(
             probe_source=_probe_post_processing_source,
             build_integrity_exception=_build_post_processing_integrity_exception,
         )
-        source_dir = source_validation.source_dir
         probe_root = source_validation.probe_root
         comic_file = source_validation.comic_file
 
@@ -569,13 +569,40 @@ async def _run_post_processing(
         # Only clean up when using "move" — copy/hardlink/symlink should preserve.
         if should_cleanup_source_dir(method, download.download_client):
             cleanup_start = _time.monotonic()
-            await get_running_loop().run_in_executor(None, cleanup_source_dir, comic_file)
-            trace.cleanup_ms = round((_time.monotonic() - cleanup_start) * 1000, 1)
-            log.debug(
-                "post_processing_source_cleaned",
-                source_dir=str(comic_file.parent if comic_file else source_dir),
-                client=str(download.download_client.value),
+            cleanup_root = await _resolve_local_download_root(session, download)
+            cleanup_dir = probe_root if probe_root != comic_file else comic_file.parent
+            cleanup_result = await get_running_loop().run_in_executor(
+                None,
+                cleanup_source_dir,
+                cleanup_dir,
+                cleanup_root,
             )
+            trace.cleanup_ms = round((_time.monotonic() - cleanup_start) * 1000, 1)
+            cleanup_context = {
+                "source_dir": str(cleanup_dir),
+                "download_root": str(cleanup_root) if cleanup_root else None,
+                "client": str(download.download_client.value),
+                "reason": cleanup_result.reason,
+            }
+            if cleanup_result.removed:
+                log.debug("post_processing_source_cleaned", **cleanup_context)
+            elif cleanup_result.reason == "error":
+                log.warning(
+                    "post_processing_source_cleanup_failed",
+                    **cleanup_context,
+                    error=cleanup_result.error,
+                )
+            elif cleanup_result.reason in {"root_missing", "unsafe_path"}:
+                log.warning(
+                    "post_processing_source_cleanup_skipped",
+                    **cleanup_context,
+                    hint=(
+                        "Configure Download Directory to the local completed-download root "
+                        "and ensure the source job is beneath it."
+                    ),
+                )
+            else:
+                log.debug("post_processing_source_cleanup_skipped", **cleanup_context)
 
         # 6. Update records
         download.final_path = str(dest_path)

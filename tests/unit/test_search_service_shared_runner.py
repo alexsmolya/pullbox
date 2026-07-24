@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from types import MethodType, SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -521,6 +522,150 @@ async def test_run_query_batch_and_search_targets_cover_concurrency(
 
 
 @pytest.mark.asyncio
+async def test_search_targets_serialize_outcome_callbacks_without_serializing_searches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SearchService(ProviderRegistry())
+    search_in_flight = 0
+    max_search_in_flight = 0
+    callback_in_flight = 0
+    max_callback_in_flight = 0
+
+    async def fake_search_issue_target(  # type: ignore[no-untyped-def]
+        self,
+        session,
+        target,
+        **kwargs,
+    ) -> IssueSearchOutcome:
+        nonlocal max_search_in_flight, search_in_flight
+        search_in_flight += 1
+        max_search_in_flight = max(max_search_in_flight, search_in_flight)
+        await asyncio.sleep(0.01)
+        search_in_flight -= 1
+        return _make_outcome(target)
+
+    async def process_outcome(outcome: IssueSearchOutcome) -> None:
+        nonlocal callback_in_flight, max_callback_in_flight
+        callback_in_flight += 1
+        max_callback_in_flight = max(max_callback_in_flight, callback_in_flight)
+        await asyncio.sleep(0.01)
+        callback_in_flight -= 1
+
+    monkeypatch.setattr(
+        service,
+        "search_issue_target",
+        MethodType(fake_search_issue_target, service),
+    )
+    targets = [_make_target(issue_id=issue_id) for issue_id in (1, 2, 3)]
+
+    await service.search_targets_quick_first(
+        object(),
+        targets,
+        concurrency=3,
+        on_outcome=process_outcome,
+    )
+
+    assert max_search_in_flight == 3
+    assert max_callback_in_flight == 1
+
+
+@pytest.mark.asyncio
+async def test_slow_outcome_callback_does_not_consume_search_concurrency_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SearchService(ProviderRegistry())
+    searched_issue_ids: list[int] = []
+    all_searches_started = asyncio.Event()
+    callback_started = asyncio.Event()
+    release_callback = asyncio.Event()
+
+    async def fake_search_issue_target(  # type: ignore[no-untyped-def]
+        self,
+        session,
+        target,
+        **kwargs,
+    ) -> IssueSearchOutcome:
+        searched_issue_ids.append(target.issue_id)
+        if len(searched_issue_ids) == 4:
+            all_searches_started.set()
+        await asyncio.sleep(0)
+        return _make_outcome(target, _make_release(f"Series {target.issue_id}"))
+
+    async def process_outcome(outcome: IssueSearchOutcome) -> None:
+        callback_started.set()
+        await release_callback.wait()
+
+    monkeypatch.setattr(
+        service,
+        "search_issue_target",
+        MethodType(fake_search_issue_target, service),
+    )
+    targets = [_make_target(issue_id=issue_id) for issue_id in (1, 2, 3, 4)]
+    search_task = asyncio.create_task(
+        service.search_targets_quick_first(
+            object(),
+            targets,
+            concurrency=2,
+            on_outcome=process_outcome,
+        )
+    )
+
+    await asyncio.wait_for(callback_started.wait(), timeout=1)
+    try:
+        await asyncio.wait_for(all_searches_started.wait(), timeout=0.1)
+    finally:
+        release_callback.set()
+        await search_task
+
+    assert sorted(searched_issue_ids) == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_search_targets_serialize_shared_session_filtering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SearchService(ProviderRegistry())
+    query_in_flight = 0
+    max_query_in_flight = 0
+    filter_in_flight = 0
+    max_filter_in_flight = 0
+
+    async def run_query_batch(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal max_query_in_flight, query_in_flight
+        query_in_flight += 1
+        max_query_in_flight = max(max_query_in_flight, query_in_flight)
+        await asyncio.sleep(0.01)
+        query_in_flight -= 1
+        return [], {}, []
+
+    async def filter_results(session: object, results: list[ReleaseResult]):  # type: ignore[no-untyped-def]
+        nonlocal filter_in_flight, max_filter_in_flight
+        filter_in_flight += 1
+        max_filter_in_flight = max(max_filter_in_flight, filter_in_flight)
+        await asyncio.sleep(0.01)
+        filter_in_flight -= 1
+        return results
+
+    blocklist_service = __import__(
+        "pullbox.services.blocklist_service",
+        fromlist=["BlocklistService"],
+    ).BlocklistService
+    monkeypatch.setattr(service, "_run_query_batch_with_provenance", run_query_batch)
+    monkeypatch.setattr(blocklist_service, "filter_results", filter_results)
+    targets = [_make_target(issue_id=issue_id) for issue_id in (1, 2, 3)]
+
+    await service.search_targets(
+        object(),
+        targets,
+        mode="fast",
+        concurrency=3,
+    )
+
+    assert max_query_in_flight == 3
+    assert max_filter_in_flight == 1
+
+
+@pytest.mark.asyncio
 async def test_search_indexers_coalesces_identical_inflight_queries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -644,6 +789,72 @@ async def test_search_indexers_keeps_unconfigured_registries_cache_isolated(
     assert first == [release]
     assert second == [release]
     assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_query_variants_count_as_one_indexer_failure() -> None:
+    indexer = AsyncMock()
+    indexer.name = "NZBgeek"
+    indexer.search = AsyncMock(side_effect=TimeoutError("Prowlarr restarted"))
+    registry = ProviderRegistry()
+    registry.register_indexer(1, indexer)
+    config = IndexerConfig(
+        name="NZBgeek",
+        indexer_type=IndexerType.NEWZNAB,
+        url="https://prowlarr.test/15",
+        api_key="encrypted",
+        failure_count=0,
+    )
+    config.disabled_until = None
+    service = SearchService(registry)
+    queries = [
+        SearchQuery(series_title=query)
+        for query in (
+            "Infernal Hulk 1",
+            "Infernal Hulk 01",
+            "Infernal Hulk #01",
+            "Infernal Hulk 001",
+            "Infernal Hulk #001",
+        )
+    ]
+
+    results = await service._run_query_batch(queries, indexer_configs={1: config})
+
+    assert results == []
+    assert indexer.search.await_count == 5
+    assert config.failure_count == 1
+    assert config.disabled_until is None
+
+
+@pytest.mark.asyncio
+async def test_manual_search_bypasses_backoff_and_automated_empty_cache() -> None:
+    release = _make_release("Infernal Hulk 001 [2026] [Digital].cbz")
+    indexer = AsyncMock()
+    indexer.name = "NZBgeek"
+    indexer.search = AsyncMock(return_value=[release])
+    registry = ProviderRegistry()
+    registry.register_indexer(1, indexer)
+    config = IndexerConfig(
+        name="NZBgeek",
+        indexer_type=IndexerType.NEWZNAB,
+        url="https://prowlarr.test/15",
+        api_key="encrypted",
+        failure_count=3,
+    )
+    config.disabled_until = datetime.now(UTC) + timedelta(hours=2)
+    indexer_configs = {1: config}
+    query = SearchQuery(series_title="Infernal Hulk", issue_number=1, year=2026)
+
+    automated = SearchService(registry)
+    assert await automated.search(query, indexer_configs=indexer_configs) == []
+
+    manual = SearchService(registry, ignore_indexer_backoff=True)
+    results = await manual.search(query, indexer_configs=indexer_configs)
+
+    assert results == [release]
+    indexer.search.assert_awaited_once()
+    assert config.failure_count == 0
+    assert config.disabled_until is None
 
 
 @pytest.mark.asyncio

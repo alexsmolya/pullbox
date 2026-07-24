@@ -156,6 +156,7 @@ async def test_pull_list_route_filters_sorts_metrics_and_templates(
         search="",
         sort="bogus",
         page=1,
+        per_page=1,
     )
 
     assert wanted.template_name == "pages/pull_list.html"
@@ -184,3 +185,6 @@ async def test_pull_list_route_filters_sorts_metrics_and_templates(
     assert paused.context["pull_data"][0]["series"].title == "Wonder Woman"
     assert fallback.context["filter_value"] == ""
     assert fallback.context["sort"] == "title"
+    assert fallback.context["per_page"] == 1
+    assert fallback.context["total_pages"] == 3
+    assert len(fallback.context["pull_data"]) == 1
