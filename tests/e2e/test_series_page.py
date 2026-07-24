@@ -1151,8 +1151,8 @@ class TestSeriesPage:
             assert series.row_is_selected(title)
 
         series.toggle_row_selection("Planetary")
-        assert series.selected_count_text() == "1 selected"
-        assert series.row_is_selected("Planetary")
+        assert series.selected_count_text() == "0 selected"
+        assert not series.row_is_selected("Planetary")
         assert not series.row_is_selected("Batman")
         assert not series.row_is_selected("Saga")
 

@@ -21,7 +21,7 @@
 >
   <div class="series-domain-breadcrumb-row">
     <a
-      href="{{ '/pull-list' if detail_origin == 'pull-list' else '/series' }}"
+      href="{{ detail_back_url }}"
       data-testid="series-detail-back-link"
       {% if detail_origin != 'pull-list' %}
       data-series-index-link="true"

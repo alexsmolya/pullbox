@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import sys
+from html import unescape
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -219,10 +221,14 @@ class TestPullListRouteContracts:
     ) -> None:  # type: ignore[no-untyped-def]
         series_id = await _seed_pull_list_series(sec_db)
 
-        response = await authenticated_client.get("/pull-list")
+        return_url = "/pull-list?filter=wanted&search=Extremely&sort=-wanted&page=1&per_page=50"
+        response = await authenticated_client.get(return_url)
 
         assert response.status_code == 200
-        assert f'href="/series/{series_id}?from=pull-list"' in response.text
+        match = re.search(rf'href="(/series/{series_id}\?[^\"]+)"', response.text)
+        assert match is not None
+        link_query = parse_qs(urlparse(unescape(match.group(1))).query)
+        assert link_query == {"from": ["pull-list"], "return_to": [return_url]}
 
     async def test_pull_list_pause_action_updates_monitoring_and_removes_row(
         self,

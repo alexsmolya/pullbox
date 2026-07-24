@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.e2e.pages.series_detail import SeriesDetailPage
@@ -193,14 +195,20 @@ class TestSeriesDetailPage:
         series_link.wait_for(state="visible", timeout=5000)
 
         series_link.click()
-        authed_page.wait_for_url("**/series/*?from=pull-list", timeout=5000)
+        authed_page.wait_for_url(
+            re.compile(r"/series/\d+\?from=pull-list&return_to="),
+            timeout=5000,
+        )
         back_link = authed_page.locator("[data-testid='series-detail-back-link']").first
 
         assert back_link.text_content().strip() == "Back to pull list"
-        assert back_link.get_attribute("href") == "/pull-list"
+        assert back_link.get_attribute("href") == (
+            "/pull-list?filter=&search=&sort=title&page=1&per_page=25"
+        )
 
         back_link.click()
-        authed_page.wait_for_url("**/pull-list", timeout=5000)
+        authed_page.wait_for_url(re.compile(r"/pull-list\?"), timeout=5000)
+        assert authed_page.url.endswith("/pull-list?filter=&search=&sort=title&page=1&per_page=25")
         assert authed_page.locator("[data-testid='pull-list-page']").first.is_visible()
 
     def test_breadcrumb_restores_series_per_page_selection(

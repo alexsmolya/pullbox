@@ -257,8 +257,32 @@ class TestSeriesDetailRouteContracts:
         authenticated_client,
         seeded_series_detail_ui_data,
     ) -> None:  # type: ignore[no-untyped-def]
+        return_url = "/pull-list?filter=missing&search=Batman&sort=-wanted&page=2&per_page=50"
         response = await authenticated_client.get(
-            f"/series/{seeded_series_detail_ui_data['series_id']}?from=pull-list"
+            f"/series/{seeded_series_detail_ui_data['series_id']}",
+            params={"from": "pull-list", "return_to": return_url},
+        )
+
+        assert response.status_code == 200
+        back_link_test_id = response.text.index('data-testid="series-detail-back-link"')
+        back_link_start = response.text.rindex("<a", 0, back_link_test_id)
+        back_link_end = response.text.index("</a>", back_link_start)
+        back_link_html = response.text[back_link_start:back_link_end]
+        assert (
+            'href="/pull-list?filter=missing&amp;search=Batman&amp;sort=-wanted&amp;page=2&amp;per_page=50"'
+            in back_link_html
+        )
+        assert "Back to pull list" in back_link_html
+        assert 'data-series-index-link="true"' not in back_link_html
+
+    async def test_pull_list_origin_rejects_an_external_return_url(
+        self,
+        authenticated_client,
+        seeded_series_detail_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(
+            f"/series/{seeded_series_detail_ui_data['series_id']}",
+            params={"from": "pull-list", "return_to": "https://example.test/steal"},
         )
 
         assert response.status_code == 200
@@ -267,8 +291,6 @@ class TestSeriesDetailRouteContracts:
         back_link_end = response.text.index("</a>", back_link_start)
         back_link_html = response.text[back_link_start:back_link_end]
         assert 'href="/pull-list"' in back_link_html
-        assert "Back to pull list" in back_link_html
-        assert 'data-series-index-link="true"' not in back_link_html
 
     async def test_unmonitored_series_action_switch_uses_positive_monitoring_semantics(
         self,

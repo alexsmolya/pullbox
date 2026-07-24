@@ -55,7 +55,7 @@ window.pbResolveCheckboxSelection = function (options) {
   }
 
   return {
-    selectedIds: [itemId],
+    selectedIds: options.checked ? [itemId] : [],
     anchorId: itemId,
   };
 };
