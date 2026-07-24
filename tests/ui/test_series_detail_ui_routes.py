@@ -156,6 +156,8 @@ class TestSeriesDetailRouteContracts:
         assert 'hx-history="false"' in response.text
         assert 'data-testid="series-detail-back-link"' in response.text
         assert 'data-series-index-link="true"' in response.text
+        assert 'href="/series"' in response.text
+        assert "Back to series" in response.text
         assert 'data-testid="series-detail-breadcrumbs"' in response.text
         assert 'data-testid="series-detail-hero"' in response.text
         assert 'data-testid="series-detail-cover-link"' in response.text
@@ -208,12 +210,17 @@ class TestSeriesDetailRouteContracts:
         assert '@change="toggleMonitoring($event.target.checked)"' in monitor_control_html
         assert 'data-testid="series-action-refresh"' in response.text
         assert 'data-testid="series-action-search"' in response.text
+        assert 'data-testid="series-action-status-toggle"' in response.text
+        assert "Mark as ended" in response.text
+        assert '@click="updateStatusOverride(&#34;ended&#34;)"' in response.text
+        assert 'data-testid="series-action-status-auto"' not in response.text
         assert 'data-testid="series-action-delete"' in response.text
         assert 'data-testid="series-detail-issues-section"' in response.text
         assert 'data-testid="series-detail-issues-summary"' in response.text
         assert 'data-testid="series-detail-issues-table"' in response.text
         assert 'data-testid="series-detail-issues-status-select"' in response.text
         assert 'data-tip="Search"' in response.text
+
         assert 'data-tip="Manual search"' in response.text
         assert 'data-testid="series-detail-telemetry-strip"' not in response.text
         assert 'data-testid="series-issue-status-toggle"' not in response.text
@@ -245,6 +252,24 @@ class TestSeriesDetailRouteContracts:
         assert "window.__autoSearching" not in response.text
         assert "htmx.ajax('POST', '/htmx/series/" not in response.text
 
+    async def test_pull_list_origin_changes_the_series_detail_back_link(
+        self,
+        authenticated_client,
+        seeded_series_detail_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(
+            f"/series/{seeded_series_detail_ui_data['series_id']}?from=pull-list"
+        )
+
+        assert response.status_code == 200
+        back_link_test_id = response.text.index('data-testid="series-detail-back-link"')
+        back_link_start = response.text.rindex("<a", 0, back_link_test_id)
+        back_link_end = response.text.index("</a>", back_link_start)
+        back_link_html = response.text[back_link_start:back_link_end]
+        assert 'href="/pull-list"' in back_link_html
+        assert "Back to pull list" in back_link_html
+        assert 'data-series-index-link="true"' not in back_link_html
+
     async def test_unmonitored_series_action_switch_uses_positive_monitoring_semantics(
         self,
         authenticated_client,
@@ -264,6 +289,46 @@ class TestSeriesDetailRouteContracts:
         assert ':checked="monitored"' in monitor_control_html
         assert ":aria-checked=\"monitored ? 'true' : 'false'\"" in monitor_control_html
         assert '@change="toggleMonitoring($event.target.checked)"' in monitor_control_html
+        assert "Mark as continuing" in response.text
+        assert '@click="updateStatusOverride(&#34;continuing&#34;)"' in response.text
+
+    async def test_manual_status_override_offers_comicvine_restore_action(
+        self,
+        authenticated_client,
+        seeded_series_detail_ui_data,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.series import Series, SeriesStatus, SeriesStatusOverride
+
+        async with sec_db() as session:
+            series = await session.get(Series, seeded_series_detail_ui_data["series_id"])
+            assert series is not None
+            series.status = SeriesStatus.ENDED
+            series.status_override = SeriesStatusOverride.ENDED
+            await session.commit()
+
+        response = await authenticated_client.get(
+            f"/series/{seeded_series_detail_ui_data['series_id']}"
+        )
+
+        assert response.status_code == 200
+        assert "Mark as continuing" in response.text
+        assert 'data-testid="series-action-status-auto"' in response.text
+        assert "Use ComicVine status" in response.text
+        assert 'class="pill pill-warning">Manual status</span>' in response.text
+
+    async def test_series_detail_status_actions_use_explicit_override_api(
+        self,
+    ) -> None:
+        script = Path("src/pullbox/ui/static/js/pullbox.js").read_text(encoding="utf-8")
+        actions = Path("src/pullbox/ui/templates/partials/series_detail_actions.html").read_text(
+            encoding="utf-8"
+        )
+
+        assert "updateStatusOverride: function (statusOverride)" in script
+        assert "status_override: statusOverride" in script
+        assert 'data-testid="series-action-status-toggle"' in actions
+        assert "updateStatusOverride(null)" in actions
 
     async def test_alternate_names_empty_state_has_no_none_placeholder(
         self,

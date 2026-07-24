@@ -728,6 +728,32 @@ class TestSeriesPage:
         assert "series-wall-ring-fill-green" in grid_contract["ringClass"]
         assert grid_contract["ringText"] == "100"
 
+    def test_list_view_places_lifecycle_status_after_year(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series = SeriesListPage(authed_page, seeded_server)
+        series.goto("per_page=25", preferred_view="list")
+
+        headers = [
+            value.strip().lower()
+            for value in authed_page.locator(
+                "[data-testid='series-mission-control-table'] thead th"
+            ).all_inner_texts()
+        ]
+        status_cells = authed_page.locator("[data-testid='series-lifecycle-status']")
+
+        assert headers.index("status") == headers.index("year") + 1
+        assert headers.index("owned") == headers.index("status") + 1
+        assert status_cells.count() > 0
+        assert status_cells.first.is_visible()
+        assert status_cells.first.inner_text().strip().lower() in {
+            "continuing",
+            "ended",
+            "unknown",
+        }
+
     def test_series_toolbar_dropdown_chevron_stays_tight_to_trigger_edge(
         self,
         authed_page,
@@ -1076,7 +1102,7 @@ class TestSeriesPage:
         assert series.row_is_selected("Batman")
 
         series.click_next_page()
-        series.toggle_row_selection("Saga")
+        series.toggle_row_selection("Saga", modifiers=["ControlOrMeta"])
         assert series.selected_count_text() == "2 selected"
 
         series.click_prev_page()
@@ -1086,6 +1112,49 @@ class TestSeriesPage:
         assert series.selected_count_text() == "0 selected"
         assert not series.select_mode_toolbar.is_visible()
         assert not series.row_is_selected("Batman")
+
+    @pytest.mark.parametrize(
+        ("view", "additive_modifier"),
+        [("list", "ControlOrMeta"), ("grid", "ControlOrMeta")],
+    )
+    def test_checkbox_selection_supports_file_explorer_modifiers(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+        view: str,
+        additive_modifier: str,
+    ) -> None:
+        series = SeriesListPage(authed_page, seeded_server)
+        series.goto("sort=title&per_page=25", preferred_view=view)
+
+        series.toggle_row_selection("Batman")
+        series.toggle_row_selection("Planetary", modifiers=[additive_modifier])
+        assert series.selected_count_text() == "2 selected"
+        assert series.row_is_selected("Batman")
+        assert series.row_is_selected("Planetary")
+
+        series.toggle_row_selection("Saga", modifiers=["Shift"])
+        assert series.selected_count_text() == "2 selected"
+        assert not series.row_is_selected("Batman")
+        assert series.row_is_selected("Planetary")
+        assert series.row_is_selected("Saga")
+
+        series.toggle_row_selection(
+            "Batman",
+            modifiers=[additive_modifier, "Shift"],
+        )
+        expected_titles = ["Batman", "Planetary", "Saga"]
+        if series.row_count("Batman Beyond"):
+            expected_titles.append("Batman Beyond")
+        assert series.selected_count_text() == f"{len(expected_titles)} selected"
+        for title in expected_titles:
+            assert series.row_is_selected(title)
+
+        series.toggle_row_selection("Planetary")
+        assert series.selected_count_text() == "1 selected"
+        assert series.row_is_selected("Planetary")
+        assert not series.row_is_selected("Batman")
+        assert not series.row_is_selected("Saga")
 
     def test_toolbar_height_stays_visually_stable_when_switching_modes(
         self,
@@ -1254,7 +1323,7 @@ class TestSeriesPage:
         assert series.row_for_title("Wonder Woman").is_visible()
 
         series.toggle_row_selection("Batman Beyond")
-        series.toggle_row_selection("Wonder Woman")
+        series.toggle_row_selection("Wonder Woman", modifiers=["ControlOrMeta"])
         series.open_bulk_delete_confirm()
 
         assert series.bulk_delete_confirm_visible()

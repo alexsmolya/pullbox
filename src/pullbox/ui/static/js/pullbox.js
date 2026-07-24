@@ -1,5 +1,65 @@
 /* Pullbox — client-side utilities for toast notifications and HTMX events. */
 
+window.pbResolveCheckboxSelection = function (options) {
+  var selectedIds = Array.isArray(options.selectedIds) ? options.selectedIds.slice() : [];
+  var visibleIds = Array.isArray(options.visibleIds) ? options.visibleIds.slice() : [];
+  var itemKey = String(options.itemId);
+  var visibleItemId = visibleIds.find(function (id) {
+    return String(id) === itemKey;
+  });
+  var itemId = visibleItemId === undefined ? options.itemId : visibleItemId;
+
+  function unique(ids) {
+    var seen = Object.create(null);
+    return ids.filter(function (id) {
+      var key = String(id);
+      if (seen[key]) {
+        return false;
+      }
+      seen[key] = true;
+      return true;
+    });
+  }
+
+  if (options.shiftKey) {
+    var anchorKey = options.anchorId === null ? "" : String(options.anchorId);
+    var anchorIndex = visibleIds.findIndex(function (id) {
+      return String(id) === anchorKey;
+    });
+    var itemIndex = visibleIds.findIndex(function (id) {
+      return String(id) === itemKey;
+    });
+    var rangeIds = [itemId];
+
+    if (anchorIndex >= 0 && itemIndex >= 0) {
+      rangeIds = visibleIds.slice(
+        Math.min(anchorIndex, itemIndex),
+        Math.max(anchorIndex, itemIndex) + 1
+      );
+    }
+
+    return {
+      selectedIds: options.additiveKey ? unique(selectedIds.concat(rangeIds)) : unique(rangeIds),
+      anchorId: anchorIndex >= 0 ? options.anchorId : itemId,
+    };
+  }
+
+  if (options.additiveKey) {
+    var remainingIds = selectedIds.filter(function (id) {
+      return String(id) !== itemKey;
+    });
+    return {
+      selectedIds: options.checked ? unique(remainingIds.concat([itemId])) : remainingIds,
+      anchorId: itemId,
+    };
+  }
+
+  return {
+    selectedIds: [itemId],
+    anchorId: itemId,
+  };
+};
+
 /*
  * Poll-cache: suppress redundant HTMX swaps for polling requests.
  * When a polled endpoint returns identical HTML to the previous response,
@@ -73,7 +133,11 @@
       setLazyTableDetailState(button, rowId, false);
       return;
     }
-    setLazyTableDetailState(button, rowId, Boolean(row));
+    var expanded = Boolean(row);
+    if (button && button.dataset) {
+      button.dataset.lazyDetailDesiredOpen = expanded ? "true" : "false";
+    }
+    setLazyTableDetailState(button, rowId, expanded);
   };
 
   window.pbLazyTableDetailAfterRequest = function (button, rowId) {
@@ -171,6 +235,16 @@
   document.body.addEventListener("htmx:beforeSwap", function (evt) {
     var elt = evt.detail.elt;
     if (!isPollingElement(elt)) return;
+
+    // A poll may already be in flight when a lazy detail opens. Preserve the
+    // interactive row instead of letting that stale response replace it.
+    if (
+      elt.querySelector &&
+      elt.querySelector("[data-lazy-detail-desired-open='true']")
+    ) {
+      evt.detail.shouldSwap = false;
+      return;
+    }
 
     var response = normalizePollingResponseForTarget(elt, evt.detail.serverResponse);
     var key = elt.id;
@@ -12985,6 +13059,7 @@ function interventionPage() {
   var cfg = arguments.length > 0 && arguments[0] ? arguments[0] : {};
   return {
     selectedIds: [],
+    selectionAnchorId: null,
     toolbarMode: "browse",
     bulkActionBusy: null,
     selectAllMatchingBusy: false,
@@ -13226,6 +13301,7 @@ function interventionPage() {
               })
           : [];
         this.selectedIds = ids;
+        this.selectionAnchorId = null;
         this.selectionFilterSignature = this.queueFilterSignature();
         if (Number.isFinite(payload.total)) {
           this.totalMatchingCount = payload.total;
@@ -13292,24 +13368,25 @@ function interventionPage() {
 
     clearSelection: function () {
       this.selectedIds = [];
+      this.selectionAnchorId = null;
       this.persistSelection();
       this.syncSelectionUi();
     },
 
-    toggleSelection: function (id, checked) {
-      if (checked) {
-        if (!this.isSelected(id)) {
-          this.selectedIds.push(id);
-          this.toolbarMode = "select";
-          this.selectionFilterSignature = this.queueFilterSignature();
-          this.persistSelection();
-          this.syncSelectionUi();
-        }
-        return;
-      }
-      this.selectedIds = this.selectedIds.filter(function (itemId) {
-        return itemId !== id;
+    handleSelectionClick: function (id, checked, shiftKey, additiveKey) {
+      var resolved = window.pbResolveCheckboxSelection({
+        selectedIds: this.selectedIds,
+        visibleIds: this.visibleIds(),
+        itemId: id,
+        anchorId: this.selectionAnchorId,
+        checked: checked,
+        shiftKey: shiftKey,
+        additiveKey: additiveKey,
       });
+      this.selectedIds = resolved.selectedIds;
+      this.selectionAnchorId = resolved.anchorId;
+      this.toolbarMode = "select";
+      this.selectionFilterSignature = this.queueFilterSignature();
       this.persistSelection();
       this.syncSelectionUi();
     },
@@ -13326,6 +13403,7 @@ function interventionPage() {
         }
       });
       this.selectedIds = merged;
+      this.selectionAnchorId = null;
       this.toolbarMode = "select";
       this.selectionFilterSignature = this.queueFilterSignature();
       this.persistSelection();
@@ -13360,6 +13438,9 @@ function interventionPage() {
       this.selectedIds = this.selectedIds.filter(function (itemId) {
         return itemId !== numericId;
       });
+      if (String(this.selectionAnchorId) === String(numericId)) {
+        this.selectionAnchorId = null;
+      }
       this.persistSelection();
       this.syncSelectionUi();
     },
@@ -14730,6 +14811,7 @@ function seriesDetailPage(config) {
     coverModalUrl: "",
     monitored: false,
     saving: false,
+    statusSaving: false,
     refreshing: false,
     searching: false,
     issueSearchState: {},
@@ -14949,6 +15031,38 @@ function seriesDetailPage(config) {
         .catch(function () {
           self.dispatchToast("Failed to update monitoring", "error");
           self.saving = false;
+        });
+    },
+
+    updateStatusOverride: function (statusOverride) {
+      var self = this;
+      if (self.statusSaving) return;
+      self.statusSaving = true;
+      fetch(cfg.updateUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": self.csrfToken(),
+        },
+        body: JSON.stringify({ status_override: statusOverride }),
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("Failed to update series status");
+          self.dispatchToast(
+            statusOverride === null
+              ? "Automatic status restored"
+              : statusOverride === "ended"
+                ? "Series marked as ended"
+                : "Series marked as continuing",
+            "success"
+          );
+          setTimeout(function () {
+            window.location.assign(self.currentDetailUrl());
+          }, 500);
+        })
+        .catch(function () {
+          self.dispatchToast("Failed to update series status", "error");
+          self.statusSaving = false;
         });
     },
 

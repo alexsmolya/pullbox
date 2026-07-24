@@ -319,6 +319,7 @@ async def _run_issue_search(
     search_svc = SearchService(
         registry=runtime.registry,
         failure_threshold=runtime.failure_threshold,
+        ignore_indexer_backoff=True,
     )
     outcome = await search_svc.search_issue_target(
         session,

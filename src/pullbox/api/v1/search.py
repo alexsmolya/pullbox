@@ -84,6 +84,7 @@ async def search_releases(
     search_svc = SearchService(
         registry=runtime.registry,
         failure_threshold=runtime.failure_threshold,
+        ignore_indexer_backoff=True,
     )
     query = SearchQuery(series_title=series, issue_number=issue, year=year)
     all_results = await search_svc.search(query, indexer_configs=runtime.indexer_configs)

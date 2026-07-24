@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -13,8 +14,6 @@ from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.indexer import IndexerConfig
@@ -55,6 +54,9 @@ class IssueSearchOutcome:
     used_fallback: bool = False
 
 
+SearchOutcomeCallback = Callable[[IssueSearchOutcome], Awaitable[None]]
+
+
 class SearchIssueTargetFunc(Protocol):
     """Callable shape for searching a single issue target."""
 
@@ -70,6 +72,7 @@ class SearchIssueTargetFunc(Protocol):
         source_priority: list[str] | None = None,
         auto_fallback: bool = False,
         force_generic: bool = False,
+        session_lock: asyncio.Lock | None = None,
     ) -> Awaitable[IssueSearchOutcome]: ...
 
 
@@ -150,16 +153,19 @@ async def search_issue_targets(
     auto_fallback: bool = False,
     force_generic: bool = False,
     concurrency: int = 5,
+    on_outcome: SearchOutcomeCallback | None = None,
 ) -> list[IssueSearchOutcome]:
     """Search issue targets with bounded concurrency."""
     if not targets:
         return []
 
     semaphore = asyncio.Semaphore(min(concurrency, len(targets)) or 1)
+    # Provider requests stay concurrent, but every AsyncSession operation is serialized.
+    session_lock = asyncio.Lock()
 
     async def _search(target: IssueSearchTarget) -> IssueSearchOutcome:
         async with semaphore:
-            return await search_issue_target_func(
+            outcome = await search_issue_target_func(
                 session,
                 target,
                 mode=mode,
@@ -169,7 +175,12 @@ async def search_issue_targets(
                 source_priority=source_priority,
                 auto_fallback=auto_fallback,
                 force_generic=force_generic,
+                session_lock=session_lock,
             )
+        if on_outcome is not None:
+            async with session_lock:
+                await on_outcome(outcome)
+        return outcome
 
     return await asyncio.gather(*[_search(target) for target in targets])
 

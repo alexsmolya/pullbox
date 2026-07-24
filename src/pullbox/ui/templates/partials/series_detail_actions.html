@@ -68,6 +68,35 @@
   </button>
 
   <button
+    data-testid="series-action-status-toggle"
+    @click="updateStatusOverride({{ '"continuing"' if series.status.value == 'ended' else '"ended"' }})"
+    :disabled="statusSaving"
+    class="{{ secondary_action_classes }}"
+  >
+    <span x-show="!statusSaving" class="flex items-center gap-1.5">
+      {% if series.status.value == "ended" %}Mark as continuing{% else %}Mark as ended{% endif %}
+    </span>
+    <span x-show="statusSaving" x-cloak class="flex items-center gap-1.5">
+      <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
+      Saving...
+    </span>
+  </button>
+
+  {% if series.status_override %}
+  <button
+    data-testid="series-action-status-auto"
+    @click="updateStatusOverride(null)"
+    :disabled="statusSaving"
+    class="{{ secondary_action_classes }}"
+  >
+    {% if series.comicvine_id %}Use ComicVine status{% else %}Use automatic status{% endif %}
+  </button>
+  {% endif %}
+
+  <button
     data-testid="series-action-delete"
     @click="window.dispatchEvent(new CustomEvent('series-delete-open'))"
     class="{{ danger_action_classes }}"

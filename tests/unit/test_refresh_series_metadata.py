@@ -23,7 +23,7 @@ from pullbox.core.exceptions import NotFoundError, ProviderError
 from pullbox.models import Base
 from pullbox.models.creator import Creator, IssueCreator
 from pullbox.models.issue import Issue, IssueStatus, IssueType
-from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.models.series import Series, SeriesStatus, SeriesStatusOverride, SeriesType
 from pullbox.providers.base import IssueMetadata, IssueSummary, SeriesMetadata
 from pullbox.providers.metadata.comicvine import ComicVineError
 from pullbox.services.metadata_service import MetadataService
@@ -247,6 +247,92 @@ class TestRefreshSeries:
             assert updated.metadata_source == "comicvine"
 
     @pytest.mark.asyncio
+    async def test_upsert_preserves_manual_status_override(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """ComicVine refreshes must not replace a user-owned lifecycle status."""
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=171785,
+                title="Manual Status",
+                sort_title="Manual Status",
+                year_start=2025,
+                status=SeriesStatus.ENDED,
+                status_override=SeriesStatusOverride.ENDED,
+                series_type=SeriesType.STANDARD,
+            )
+            session.add(series)
+            await session.flush()
+
+            updated = await service.upsert_series_metadata(
+                session,
+                171785,
+                SeriesMetadata(
+                    provider_id="171785",
+                    title="Manual Status",
+                    sort_title="Manual Status",
+                    year_start=2025,
+                    year_end=None,
+                    status=SeriesStatus.CONTINUING.value,
+                    publisher=None,
+                    description=None,
+                    cover_url=None,
+                    issue_count=1,
+                    comicvine_url="https://comicvine.gamespot.com/manual-status/4050-171785/",
+                ),
+            )
+
+            assert updated.status == SeriesStatus.ENDED
+            assert updated.status_override == SeriesStatusOverride.ENDED
+
+    @pytest.mark.asyncio
+    async def test_upsert_continuing_override_rejects_provider_end_year(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Provider refreshes must not reintroduce an end year for a continuing override."""
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=171785,
+                title="Still Continuing",
+                sort_title="Still Continuing",
+                year_start=2025,
+                year_end=None,
+                status=SeriesStatus.CONTINUING,
+                status_override=SeriesStatusOverride.CONTINUING,
+                series_type=SeriesType.STANDARD,
+            )
+            session.add(series)
+            await session.flush()
+
+            updated = await service.upsert_series_metadata(
+                session,
+                171785,
+                SeriesMetadata(
+                    provider_id="171785",
+                    title="Still Continuing",
+                    sort_title="Still Continuing",
+                    year_start=2025,
+                    year_end=2026,
+                    status=SeriesStatus.ENDED.value,
+                    publisher=None,
+                    description=None,
+                    cover_url=None,
+                    issue_count=12,
+                    comicvine_url="https://comicvine.gamespot.com/still-continuing/4050-171785/",
+                ),
+            )
+
+            assert updated.status == SeriesStatus.CONTINUING
+            assert updated.status_override == SeriesStatusOverride.CONTINUING
+            assert updated.year_end is None
+
+    @pytest.mark.asyncio
     async def test_refresh_without_force_skips_when_fresh(
         self,
         db_factory: async_sessionmaker[AsyncSession],
@@ -428,6 +514,43 @@ class TestInferSeriesStatus:
 
             assert series.status == SeriesStatus.ENDED
             assert series.year_end == 2014
+
+    @pytest.mark.asyncio
+    async def test_inference_preserves_manual_continuing_override(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Issue-date inference must not replace a manual lifecycle override."""
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+        old_release = date.today() - timedelta(days=365)
+
+        async with db_factory() as session:
+            series = Series(
+                title="Still Going",
+                sort_title="Still Going",
+                year_start=2020,
+                year_end=2024,
+                status=SeriesStatus.CONTINUING,
+                status_override=SeriesStatusOverride.CONTINUING,
+                series_type=SeriesType.STANDARD,
+            )
+            session.add(series)
+            await session.flush()
+            session.add(
+                Issue(
+                    series_id=series.id,
+                    issue_number=1.0,
+                    release_date=old_release,
+                    status=IssueStatus.OWNED,
+                )
+            )
+            await session.flush()
+
+            await service.infer_series_status(session, series)
+
+            assert series.status == SeriesStatus.CONTINUING
+            assert series.status_override == SeriesStatusOverride.CONTINUING
+            assert series.year_end is None
 
     @pytest.mark.asyncio
     async def test_nonstandard_series_without_issue_dates_falls_back_to_start_year(

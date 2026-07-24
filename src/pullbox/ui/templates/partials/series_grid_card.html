@@ -43,7 +43,7 @@
         data-series-row-checkbox
         class="checkbox-pb"
         x-bind:checked="isSelected({{ s.id }})"
-        x-on:change="toggleSelection({{ s.id }}, $event.target.checked)"
+        x-on:click="handleSelectionClick({{ s.id }}, $event.target.checked, $event.shiftKey, $event.metaKey || $event.ctrlKey)"
         aria-label="Select {{ s.title }}"
       >
     </label>

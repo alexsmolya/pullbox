@@ -400,12 +400,13 @@ async def update_series(
     _user: AuthenticatedUser,
     session: DbSession,
 ) -> SeriesResponse:
-    """Update series monitoring configuration."""
+    """Update series monitoring and lifecycle configuration."""
     series_svc = await _build_series_service(session)
 
-    # Handle monitored flag via service toggle
     if body.monitored is not None:
         await series_svc.toggle_monitoring(session, series_id, body.monitored)
+    if "status_override" in body.model_fields_set:
+        await series_svc.set_status_override(session, series_id, body.status_override)
 
     return await _load_series_response(session, series_id)
 

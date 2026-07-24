@@ -18,7 +18,12 @@ from pullbox.core.naming import format_series_folder
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile, LibraryRoot
-from pullbox.models.series import IssueCatalogState, Series
+from pullbox.models.series import (
+    IssueCatalogState,
+    Series,
+    SeriesStatus,
+    SeriesStatusOverride,
+)
 from pullbox.providers.base import IssueSummary, SeriesMetadata
 from pullbox.services.cover_cache_service import purge_series_cover_cache
 from pullbox.services.series_delete_targets import (
@@ -611,6 +616,38 @@ class SeriesService:
             "series_monitoring_toggled",
             series_id=series_id,
             monitored=enabled,
+        )
+        return series
+
+    async def set_status_override(
+        self,
+        session: AsyncSession,
+        series_id: int,
+        status_override: SeriesStatusOverride | None,
+    ) -> Series:
+        """Set or clear a user-owned series lifecycle status."""
+        series = await session.get(Series, series_id)
+        if not series:
+            raise NotFoundError("Series", series_id)
+
+        series.status_override = status_override
+        if status_override is None:
+            if series.comicvine_id is not None:
+                series = await self._metadata.refresh_series(session, series_id, force=True)
+            else:
+                await self._metadata.infer_series_status(session, series)
+        else:
+            series.status = SeriesStatus(status_override.value)
+            if status_override == SeriesStatusOverride.CONTINUING:
+                series.year_end = None
+            else:
+                series.year_end = await self._metadata.derive_series_end_year(session, series)
+
+        logger.info(
+            "series_status_override_updated",
+            series_id=series_id,
+            status=series.status.value,
+            status_override=status_override.value if status_override else None,
         )
         return series
 

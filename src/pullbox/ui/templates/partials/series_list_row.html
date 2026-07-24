@@ -1,4 +1,5 @@
 {#- Mission Control row for the series registry. Expects: item, s, owned_count. -#}
+{% from "components/status_badge.html" import status_badge %}
 {% set catalog_state = s.issue_catalog_state.value if s.issue_catalog_state else 'complete' %}
 {% set catalog_state_label = {
   'hydrating': 'Metadata syncing',
@@ -19,7 +20,7 @@
       data-series-row-checkbox
       class="checkbox-pb"
       x-bind:checked="isSelected({{ s.id }})"
-      x-on:change="toggleSelection({{ s.id }}, $event.target.checked)"
+      x-on:click="handleSelectionClick({{ s.id }}, $event.target.checked, $event.shiftKey, $event.metaKey || $event.ctrlKey)"
       aria-label="Select {{ s.title }}"
     >
   </td>
@@ -56,6 +57,13 @@
     {% else %}
       —
     {% endif %}
+  </td>
+  <td
+    class="c"
+    data-testid="series-lifecycle-status"
+    data-series-status="{{ s.status.value }}"
+  >
+    {{ status_badge(s.status.value) }}
   </td>
   <td class="c">
     <span class="series-mission-control-owned">{{ owned_count }}/{{ item.total_issues }}</span>

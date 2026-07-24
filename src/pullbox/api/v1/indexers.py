@@ -76,6 +76,8 @@ async def _persist_indexer_test_status_with_retry(
         if healthy:
             indexer.last_success_at = checked_at
             indexer.last_error = None
+            indexer.failure_count = 0
+            indexer.disabled_until = None
         else:
             indexer.last_failure_at = checked_at
             indexer.last_error = message

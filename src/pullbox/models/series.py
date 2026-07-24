@@ -69,6 +69,13 @@ class SeriesStatus(enum.StrEnum):
     UNKNOWN = "unknown"
 
 
+class SeriesStatusOverride(enum.StrEnum):
+    """User-owned lifecycle states that metadata refreshes must preserve."""
+
+    CONTINUING = "continuing"
+    ENDED = "ended"
+
+
 class IssueCatalogState(enum.StrEnum):
     """Whether the local issue list is complete for this ComicVine series."""
 
@@ -89,6 +96,10 @@ class Series(Base, IdentityMixin, TimestampMixin):
     year_end: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[SeriesStatus] = mapped_column(
         SQLAlchemyEnum(SeriesStatus), default=SeriesStatus.CONTINUING
+    )
+    status_override: Mapped[SeriesStatusOverride | None] = mapped_column(
+        SQLAlchemyEnum(SeriesStatusOverride),
+        nullable=True,
     )
     description: Mapped[str | None] = mapped_column(Text)
     cover_path: Mapped[str | None] = mapped_column(String(500))

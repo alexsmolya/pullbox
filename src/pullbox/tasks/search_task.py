@@ -22,6 +22,7 @@ from sqlalchemy.exc import OperationalError
 from pullbox.composition.events import build_domain_event_bus
 from pullbox.core.config_resolver import get_int_setting, load_system_config_values, parse_bool
 from pullbox.core.log_deduper import log_deduped_warning
+from pullbox.core.scheduler import get_current_task_trigger_type
 from pullbox.core.sqlite_lock import (
     SQLITE_LOCK_RETRY_ATTEMPTS,
     is_sqlite_locked_error,
@@ -36,7 +37,6 @@ if TYPE_CHECKING:
 
 from pullbox.composition.providers import build_registry
 from pullbox.models.config import SystemConfig
-from pullbox.models.issue import IssueType
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series
 from pullbox.services import search_runtime as _search_runtime
@@ -164,7 +164,330 @@ async def _persist_bulk_search_log(
     await session.commit()
 
 
-async def _complete_pending_bulk_search_logs(
+async def _create_pending_wanted_search_logs(
+    session: AsyncSession,
+    targets: list[IssueSearchTarget],
+    *,
+    trigger_type: str,
+) -> dict[int, int]:
+    """Expose one running history row per wanted target before network work starts."""
+
+    pending_logs: list[SearchLog] = []
+    for target in targets:
+        search_log = SearchLog(
+            issue_id=target.issue_id,
+            series_title=target.series_title,
+            issue_number=target.issue_number,
+            search_type=SearchType.AUTOMATED,
+            results_found=0,
+            results_grabbed=0,
+            results_queued=0,
+            results_rejected=0,
+            details={
+                "run_state": "running",
+                "action_status": "searching",
+                "task_id": "search_wanted",
+                "trigger_type": trigger_type,
+            },
+        )
+        session.add(search_log)
+        pending_logs.append(search_log)
+
+    await session.flush()
+    pending_log_ids = {
+        target.issue_id: search_log.id
+        for target, search_log in zip(targets, pending_logs, strict=True)
+    }
+    await session.commit()
+    return pending_log_ids
+
+
+async def _ensure_pending_series_search_logs(
+    session: AsyncSession,
+    targets: list[IssueSearchTarget],
+    *,
+    series_id: int,
+    existing_log_ids_by_issue: dict[int, int],
+) -> dict[int, int]:
+    """Expose missing bulk-search rows before a series search starts."""
+
+    pending_log_ids = dict(existing_log_ids_by_issue)
+    new_logs: list[tuple[IssueSearchTarget, SearchLog]] = []
+    for target in targets:
+        if target.issue_id in pending_log_ids:
+            continue
+        search_log = SearchLog(
+            issue_id=target.issue_id,
+            series_title=target.series_title,
+            issue_number=target.issue_number,
+            search_type=SearchType.BULK,
+            results_found=0,
+            results_grabbed=0,
+            results_queued=0,
+            results_rejected=0,
+            details={
+                "run_state": "running",
+                "action_status": "searching",
+                "task_id": f"search_series_{series_id}",
+                "trigger_type": "automated",
+            },
+        )
+        session.add(search_log)
+        new_logs.append((target, search_log))
+
+    if not new_logs:
+        return pending_log_ids
+
+    await session.flush()
+    pending_log_ids.update({target.issue_id: search_log.id for target, search_log in new_logs})
+    await session.commit()
+    return pending_log_ids
+
+
+async def _persist_wanted_search_outcome(
+    session: AsyncSession,
+    *,
+    outcome: IssueSearchOutcome,
+    pending_log_id: int | None,
+    runtime: SearchRuntime,
+    download_svc: DownloadService,
+    intervention_svc: InterventionService,
+) -> tuple[int, int, int]:
+    """Route and persist one completed wanted-search outcome."""
+
+    target = outcome.target
+    issue_grabbed = 0
+    issue_queued = 0
+    best_confidence: str | None = None
+    action_status = "no_results" if not outcome.raw_results else "no_match"
+    try:
+        if outcome.best_validation is not None and outcome.best_release is not None:
+            validation = outcome.best_validation
+            best = outcome.best_release
+            best_confidence = validation.confidence.value
+            if should_auto_grab(
+                validation.confidence,
+                target.issue_type,
+                runtime.type_thresholds,
+            ):
+                await download_svc.send_to_client(session, best, target.issue_id)
+                issue_grabbed = 1
+                action_status = "downloading"
+            elif not await intervention_svc.has_pending_for_issue(session, target.issue_id):
+                await intervention_svc.create_pending_match(
+                    session,
+                    target.issue_id,
+                    best,
+                    validation,
+                )
+                issue_queued = 1
+                action_status = "queued"
+            else:
+                action_status = "pending_exists"
+
+        search_log = await session.get(SearchLog, pending_log_id) if pending_log_id else None
+        if search_log is None:
+            search_log = SearchLog(
+                issue_id=target.issue_id,
+                series_title=target.series_title,
+                issue_number=target.issue_number,
+                search_type=SearchType.AUTOMATED,
+            )
+            session.add(search_log)
+
+        search_log.results_found = len(outcome.raw_results)
+        search_log.results_grabbed = issue_grabbed
+        search_log.results_queued = issue_queued
+        search_log.results_rejected = max(
+            0,
+            len(outcome.raw_results) - issue_grabbed - issue_queued,
+        )
+        search_log.details = _merge_search_log_details(
+            existing_details=search_log.details or {},
+            next_details=outcome.search_details,
+            run_state="completed",
+            action_status=action_status,
+        )
+        search_log.best_confidence = best_confidence
+        await _save_search_wanted_cursor(session, target)
+        await session.commit()
+        return issue_grabbed, issue_queued, 0
+    except Exception:
+        await session.rollback()
+        logger.exception("search_wanted_issue_failed", issue_id=target.issue_id)
+        await _save_search_wanted_cursor(session, target)
+        if pending_log_id is not None:
+            await _complete_pending_search_logs(
+                session,
+                {target.issue_id: pending_log_id},
+                action_status="error",
+                run_state="failed",
+                error_message="Search processing failed for this issue.",
+            )
+        else:
+            session.add(
+                SearchLog(
+                    issue_id=target.issue_id,
+                    series_title=target.series_title,
+                    issue_number=target.issue_number,
+                    search_type=SearchType.AUTOMATED,
+                    results_found=len(outcome.raw_results),
+                    results_grabbed=0,
+                    results_queued=0,
+                    results_rejected=len(outcome.raw_results),
+                    details=_merge_search_log_details(
+                        existing_details=None,
+                        next_details=outcome.search_details,
+                        run_state="failed",
+                        action_status="error",
+                        error_message="Search processing failed for this issue.",
+                    ),
+                    best_confidence=best_confidence,
+                )
+            )
+            await session.commit()
+        return 0, 0, 1
+
+
+async def _persist_series_search_outcome(
+    session: AsyncSession,
+    *,
+    log: structlog.stdlib.BoundLogger,
+    primary_outcome: IssueSearchOutcome,
+    fallback_outcome: IssueSearchOutcome | None,
+    pending_log_id: int | None,
+    runtime: SearchRuntime,
+    download_svc: DownloadService,
+    intervention_svc: InterventionService,
+) -> tuple[int, int, int]:
+    """Route and persist one completed series-search outcome."""
+
+    target = primary_outcome.target
+    issue_log = log.bind(issue_id=target.issue_id, issue_number=target.issue_number)
+    issue_log.info(
+        "search_series_issue_results",
+        indexer_results=len(primary_outcome.raw_results),
+        search_pass=1,
+        mode=primary_outcome.mode,
+        query_count=primary_outcome.query_count,
+        elapsed_ms=primary_outcome.elapsed_ms,
+    )
+    if fallback_outcome is not None:
+        issue_log.info(
+            "search_series_issue_results",
+            indexer_results=len(fallback_outcome.raw_results),
+            search_pass=2,
+            mode=fallback_outcome.mode,
+            query_count=fallback_outcome.query_count,
+            elapsed_ms=fallback_outcome.elapsed_ms,
+        )
+
+    selected_outcome = primary_outcome
+    selected_pass = 1
+    if (
+        primary_outcome.best_validation is None
+        and fallback_outcome is not None
+        and fallback_outcome.best_validation is not None
+    ):
+        selected_outcome = fallback_outcome
+        selected_pass = 2
+
+    issue_grabbed = 0
+    issue_queued = 0
+    try:
+        if selected_outcome.best_validation is None or selected_outcome.best_release is None:
+            issue_log.info("search_series_issue_no_match", search_pass=selected_pass)
+        else:
+            validation = selected_outcome.best_validation
+            best = selected_outcome.best_release
+            if should_auto_grab(
+                validation.confidence,
+                target.issue_type,
+                runtime.type_thresholds,
+            ):
+                await download_svc.send_to_client(session, best, target.issue_id)
+                issue_grabbed = 1
+                issue_log.info(
+                    "search_series_issue_auto_grab",
+                    best_title=best.title,
+                    best_indexer=best.indexer_name,
+                    confidence=validation.confidence.value,
+                )
+            elif await intervention_svc.has_pending_for_issue(session, target.issue_id):
+                issue_log.info(
+                    "search_series_issue_pending_exists",
+                    best_title=best.title,
+                    search_pass=selected_pass,
+                )
+            else:
+                await intervention_svc.create_pending_match(
+                    session,
+                    target.issue_id,
+                    best,
+                    validation,
+                )
+                issue_queued = 1
+                issue_log.info(
+                    "search_series_issue_queued",
+                    best_title=best.title,
+                    confidence=validation.confidence.value,
+                    search_pass=selected_pass,
+                )
+
+        details = dict(selected_outcome.search_details)
+        if fallback_outcome is not None:
+            total_found = len(primary_outcome.raw_results) + len(fallback_outcome.raw_results)
+            details["results_count"] = total_found
+            details["search_passes"] = 2
+            details["pass1_results_count"] = len(primary_outcome.raw_results)
+            details["pass2_results_count"] = len(fallback_outcome.raw_results)
+        else:
+            results_count_value = details.get("results_count")
+            total_found = (
+                int(results_count_value)
+                if isinstance(results_count_value, int | float | str)
+                else len(selected_outcome.raw_results)
+            )
+            details.setdefault(
+                "search_passes",
+                selected_outcome.search_details.get("search_passes", 1),
+            )
+        best_confidence = (
+            selected_outcome.best_validation.confidence.value
+            if selected_outcome.best_validation is not None
+            else None
+        )
+
+        await _persist_bulk_search_log(
+            session,
+            target=target,
+            pending_log_id=pending_log_id,
+            results_found=total_found,
+            results_grabbed=issue_grabbed,
+            results_queued=issue_queued,
+            results_rejected=max(0, total_found - issue_grabbed - issue_queued),
+            details=details,
+            best_confidence=best_confidence,
+            action_status=(
+                "downloading" if issue_grabbed else "queued" if issue_queued else "no_results"
+            ),
+        )
+        return issue_grabbed, issue_queued, 0
+    except Exception:
+        await session.rollback()
+        if pending_log_id is not None:
+            await _complete_pending_bulk_search_logs(
+                session,
+                {target.issue_id: pending_log_id},
+                action_status="error",
+                run_state="failed",
+                error_message="Search processing failed for this issue.",
+            )
+        issue_log.exception("search_series_issue_failed", search_pass=selected_pass)
+        return 0, 0, 1
+
+
+async def _complete_pending_search_logs(
     session: AsyncSession,
     pending_log_ids_by_issue: dict[int, int],
     *,
@@ -172,7 +495,7 @@ async def _complete_pending_bulk_search_logs(
     run_state: str = "completed",
     error_message: str | None = None,
 ) -> None:
-    """Resolve any still-running bulk-search rows for a cancelled/failed launch path."""
+    """Resolve still-running search rows after a cancelled or failed launch path."""
 
     touched = False
     for pending_log_id in pending_log_ids_by_issue.values():
@@ -190,6 +513,25 @@ async def _complete_pending_bulk_search_logs(
 
     if touched:
         await session.commit()
+
+
+async def _complete_pending_bulk_search_logs(
+    session: AsyncSession,
+    pending_log_ids_by_issue: dict[int, int],
+    *,
+    action_status: str,
+    run_state: str = "completed",
+    error_message: str | None = None,
+) -> None:
+    """Resolve still-running bulk-search rows while preserving the existing seam."""
+
+    await _complete_pending_search_logs(
+        session,
+        pending_log_ids_by_issue,
+        action_status=action_status,
+        run_state=run_state,
+        error_message=error_message,
+    )
 
 
 async def _build_task_search_runtime(
@@ -506,6 +848,12 @@ async def search_series_issues(
                 log.info("search_series_issues_no_wanted")
                 return {"wanted": 0, "sent": 0, "queued": 0}
 
+            remaining_pending_log_ids = await _ensure_pending_series_search_logs(
+                session,
+                targets,
+                series_id=series_id,
+                existing_log_ids_by_issue=remaining_pending_log_ids,
+            )
             preload_ms = int((time.monotonic() - preload_started_at) * 1000)
             log.info(
                 "search_series_issues_config",
@@ -520,6 +868,53 @@ async def search_series_issues(
             search_started_at = time.monotonic()
             pass1_outcomes: list[IssueSearchOutcome] = []
             pass2_outcomes: list[IssueSearchOutcome] = []
+            processed_issue_ids: set[int] = set()
+            processed_outcomes: list[IssueSearchOutcome] = []
+            download_svc = _build_download_service(runtime.registry)
+            intervention_svc = InterventionService(download_svc)
+            sent = 0
+            queued = 0
+            failed = 0
+            routing_ms = 0
+
+            async def _process_outcome_pair(
+                primary_outcome: IssueSearchOutcome,
+                fallback_outcome: IssueSearchOutcome | None = None,
+            ) -> None:
+                nonlocal failed, queued, routing_ms, sent
+                if runtime is None:  # Defensive guard for the retry-assigned closure.
+                    msg = "Search runtime became unavailable during outcome processing"
+                    raise RuntimeError(msg)
+                issue_id = primary_outcome.target.issue_id
+                if issue_id in processed_issue_ids:
+                    return
+
+                routing_started_at = time.monotonic()
+                # Preserve provider health even if downstream routing rolls back.
+                await session.commit()
+                issue_sent, issue_queued, issue_failed = await _persist_series_search_outcome(
+                    session,
+                    log=log,
+                    primary_outcome=primary_outcome,
+                    fallback_outcome=fallback_outcome,
+                    pending_log_id=remaining_pending_log_ids.get(issue_id),
+                    runtime=runtime,
+                    download_svc=download_svc,
+                    intervention_svc=intervention_svc,
+                )
+                sent += issue_sent
+                queued += issue_queued
+                failed += issue_failed
+                routing_ms += int((time.monotonic() - routing_started_at) * 1000)
+                processed_issue_ids.add(issue_id)
+                remaining_pending_log_ids.pop(issue_id, None)
+                processed_outcomes.append(primary_outcome)
+                if fallback_outcome is not None:
+                    processed_outcomes.append(fallback_outcome)
+
+            async def _process_outcome(outcome: IssueSearchOutcome) -> None:
+                await _process_outcome_pair(outcome)
+
             for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
                 try:
                     if attempt > 1:
@@ -574,6 +969,7 @@ async def search_series_issues(
                             source_priority=runtime.source_priority,
                             enable_deep_fallback=runtime.two_pass_enabled,
                             concurrency=DEFAULT_WANTED_SEARCH_CONCURRENCY,
+                            on_outcome=_process_outcome,
                         )
                         pass2_outcomes = []
 
@@ -595,156 +991,23 @@ async def search_series_issues(
                     await asyncio.sleep(delay_seconds)
             search_fanout_ms = int((time.monotonic() - search_started_at) * 1000)
 
-            download_svc = _build_download_service(runtime.registry)
-            intervention_svc = InterventionService(download_svc)
-
-            sent = 0
-            queued = 0
             pass2_by_issue = {outcome.target.issue_id: outcome for outcome in pass2_outcomes}
-            routing_started_at = time.monotonic()
-
             for pass1_outcome in pass1_outcomes:
-                target = pass1_outcome.target
-                issue_log = log.bind(issue_id=target.issue_id, issue_number=target.issue_number)
-                pass2_outcome = pass2_by_issue.get(target.issue_id)
-
-                issue_log.info(
-                    "search_series_issue_results",
-                    indexer_results=len(pass1_outcome.raw_results),
-                    search_pass=1,
-                    mode=pass1_outcome.mode,
-                    query_count=pass1_outcome.query_count,
-                    elapsed_ms=pass1_outcome.elapsed_ms,
+                await _process_outcome_pair(
+                    pass1_outcome,
+                    pass2_by_issue.get(pass1_outcome.target.issue_id),
                 )
-                if pass2_outcome is not None:
-                    issue_log.info(
-                        "search_series_issue_results",
-                        indexer_results=len(pass2_outcome.raw_results),
-                        search_pass=2,
-                        mode=pass2_outcome.mode,
-                        query_count=pass2_outcome.query_count,
-                        elapsed_ms=pass2_outcome.elapsed_ms,
-                    )
 
-                selected_outcome = pass1_outcome
-                selected_pass = 1
-                if (
-                    pass1_outcome.best_validation is None
-                    and pass2_outcome is not None
-                    and pass2_outcome.best_validation is not None
-                ):
-                    selected_outcome = pass2_outcome
-                    selected_pass = 2
-
-                issue_grabbed = 0
-                issue_queued = 0
-                pending_log_id = remaining_pending_log_ids.get(target.issue_id)
-                try:
-                    if (
-                        selected_outcome.best_validation is None
-                        or selected_outcome.best_release is None
-                    ):
-                        issue_log.info("search_series_issue_no_match", search_pass=selected_pass)
-                    else:
-                        validation = selected_outcome.best_validation
-                        best = selected_outcome.best_release
-                        if should_auto_grab(
-                            validation.confidence,
-                            target.issue_type,
-                            runtime.type_thresholds,
-                        ):
-                            await download_svc.send_to_client(session, best, target.issue_id)
-                            issue_grabbed = 1
-                            sent += 1
-                            issue_log.info(
-                                "search_series_issue_auto_grab",
-                                best_title=best.title,
-                                best_indexer=best.indexer_name,
-                                confidence=validation.confidence.value,
-                            )
-                        elif await intervention_svc.has_pending_for_issue(session, target.issue_id):
-                            issue_log.info(
-                                "search_series_issue_pending_exists",
-                                best_title=best.title,
-                                search_pass=selected_pass,
-                            )
-                        else:
-                            await intervention_svc.create_pending_match(
-                                session,
-                                target.issue_id,
-                                best,
-                                validation,
-                            )
-                            issue_queued = 1
-                            queued += 1
-                            issue_log.info(
-                                "search_series_issue_queued",
-                                best_title=best.title,
-                                confidence=validation.confidence.value,
-                                search_pass=selected_pass,
-                            )
-
-                    details = dict(selected_outcome.search_details)
-                    if pass2_outcome is not None:
-                        total_found = len(pass1_outcome.raw_results) + len(
-                            pass2_outcome.raw_results
-                        )
-                        details["results_count"] = total_found
-                        details["search_passes"] = 2
-                        details["pass1_results_count"] = len(pass1_outcome.raw_results)
-                        details["pass2_results_count"] = len(pass2_outcome.raw_results)
-                    else:
-                        results_count_value = details.get("results_count")
-                        total_found = (
-                            int(results_count_value)
-                            if isinstance(results_count_value, int | float | str)
-                            else len(selected_outcome.raw_results)
-                        )
-                        details.setdefault(
-                            "search_passes",
-                            selected_outcome.search_details.get("search_passes", 1),
-                        )
-                    best_confidence = (
-                        selected_outcome.best_validation.confidence.value
-                        if selected_outcome.best_validation is not None
-                        else None
-                    )
-
-                    await _persist_bulk_search_log(
-                        session,
-                        target=target,
-                        pending_log_id=pending_log_id,
-                        results_found=total_found,
-                        results_grabbed=issue_grabbed,
-                        results_queued=issue_queued,
-                        results_rejected=max(0, total_found - issue_grabbed - issue_queued),
-                        details=details,
-                        best_confidence=best_confidence,
-                        action_status=(
-                            "downloading"
-                            if issue_grabbed
-                            else "queued"
-                            if issue_queued
-                            else "no_results"
-                        ),
-                    )
-                    remaining_pending_log_ids.pop(target.issue_id, None)
-                except Exception:
-                    await session.rollback()
-                    if pending_log_id is not None:
-                        await _complete_pending_bulk_search_logs(
-                            session,
-                            {target.issue_id: pending_log_id},
-                            action_status="error",
-                            run_state="failed",
-                            error_message="Search processing failed for this issue.",
-                        )
-                        remaining_pending_log_ids.pop(target.issue_id, None)
-                    issue_log.exception("search_series_issue_failed", search_pass=selected_pass)
-
-                await asyncio.sleep(0)
-
-            routing_ms = int((time.monotonic() - routing_started_at) * 1000)
+            if remaining_pending_log_ids:
+                await _complete_pending_bulk_search_logs(
+                    session,
+                    remaining_pending_log_ids,
+                    action_status="error",
+                    run_state="failed",
+                    error_message="Search returned no outcome for this issue.",
+                )
+                failed += len(remaining_pending_log_ids)
+                remaining_pending_log_ids.clear()
 
             log.info(
                 "search_series_issues_complete",
@@ -754,7 +1017,8 @@ async def search_series_issues(
                 preload_ms=preload_ms,
                 search_fanout_ms=search_fanout_ms,
                 routing_ms=routing_ms,
-                **_search_outcome_log_diagnostics([*pass1_outcomes, *pass2_outcomes]),
+                failed=failed,
+                **_search_outcome_log_diagnostics(processed_outcomes),
             )
             return {"wanted": len(targets), "sent": sent, "queued": queued}
         except Exception:
@@ -774,13 +1038,17 @@ async def search_series_issues(
 async def search_wanted() -> None:
     """Search indexers for all wanted issues and route matches."""
     factory = get_session_factory()
+    trigger_type = get_current_task_trigger_type()
     runtime: SearchRuntime | None = None
+    targets: list[IssueSearchTarget] = []
+    pending_log_ids: dict[int, int] = {}
     wanted_outcomes: list[IssueSearchOutcome] = []
     preload_ms = 0
     search_fanout_ms = 0
+    routing_ms = 0
 
-    for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
-        async with factory() as session:
+    async with factory() as session:
+        for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
             try:
                 preload_started_at = time.monotonic()
                 local_runtime = await _build_task_search_runtime(
@@ -797,61 +1065,16 @@ async def search_wanted() -> None:
                     return
 
                 targets = await _load_rotated_wanted_issue_targets(session)
+                if not targets:
+                    logger.debug("search_wanted_no_targets")
+                    return
                 preload_ms = int((time.monotonic() - preload_started_at) * 1000)
-                search_svc = SearchService(
-                    local_runtime.registry,
-                    failure_threshold=local_runtime.failure_threshold,
+                pending_log_ids = await _create_pending_wanted_search_logs(
+                    session,
+                    targets,
+                    trigger_type=trigger_type,
                 )
-                search_started_at = time.monotonic()
-                if _is_mocked_search_service(search_svc):
-                    results_map = await search_svc.search_wanted(
-                        session,
-                        indexer_configs=local_runtime.indexer_configs,
-                    )
-                    if not targets and results_map:
-                        targets = [
-                            IssueSearchTarget(
-                                issue_id=issue_id,
-                                series_id=0,
-                                series_title="Unknown",
-                                issue_number=0.0,
-                                issue_type=IssueType.ISSUE,
-                            )
-                            for issue_id in results_map
-                        ]
-                    local_outcomes = [
-                        await _build_mocked_wanted_outcome(
-                            session,
-                            search_svc,
-                            target,
-                            local_runtime,
-                            results_map.get(target.issue_id, []),
-                        )
-                        for target in targets
-                        if results_map.get(target.issue_id)
-                    ]
-                else:
-                    local_outcomes = await search_svc.search_targets_quick_first(
-                        session,
-                        targets,
-                        indexer_configs=local_runtime.indexer_configs,
-                        eval_kwargs=local_runtime.eval_kwargs,
-                        validator_kwargs=local_runtime.validator_kwargs,
-                        source_priority=local_runtime.source_priority,
-                        enable_deep_fallback=local_runtime.two_pass_enabled,
-                        concurrency=DEFAULT_WANTED_SEARCH_CONCURRENCY,
-                    )
-                search_fanout_ms = int((time.monotonic() - search_started_at) * 1000)
-                if targets:
-                    await _save_search_wanted_cursor(session, targets[-1])
-
-                # Persist indexer health updates from the search fan-out before the
-                # per-issue routing phase begins. This keeps those writes short-lived
-                # instead of holding a pending transaction across the full task run.
-                await session.commit()
-
                 runtime = local_runtime
-                wanted_outcomes = local_outcomes
                 break
             except OperationalError as exc:
                 await session.rollback()
@@ -863,119 +1086,103 @@ async def search_wanted() -> None:
                     attempt=attempt,
                     max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
                     delay_seconds=delay_seconds,
-                    stage="search_fanout_persist",
+                    stage="pending_history_persist",
                 )
+                await asyncio.sleep(delay_seconds)
             except Exception:
                 await session.rollback()
                 raise
-        await asyncio.sleep(delay_seconds)
 
-    if runtime is None:
-        return
+        if runtime is None:
+            return
 
-    if not wanted_outcomes:
-        logger.debug("search_wanted_no_results")
-        return
+        search_svc = SearchService(
+            runtime.registry,
+            failure_threshold=runtime.failure_threshold,
+            ignore_indexer_backoff=trigger_type == "manual",
+        )
+        download_svc = _build_download_service(runtime.registry)
+        intervention_svc = InterventionService(download_svc)
+        processed_issue_ids: set[int] = set()
+        sent = 0
+        queued = 0
+        failed = 0
 
-    download_svc = _build_download_service(runtime.registry)
-    intervention_svc = InterventionService(download_svc)
+        async def _process_outcome(outcome: IssueSearchOutcome) -> None:
+            nonlocal failed, queued, routing_ms, sent
+            issue_id = outcome.target.issue_id
+            if issue_id in processed_issue_ids:
+                return
 
-    sent = 0
-    queued = 0
-    failed = 0
-    async with factory() as session:
-        try:
             routing_started_at = time.monotonic()
-            for outcome in wanted_outcomes:
-                target = outcome.target
-                issue_grabbed = 0
-                issue_queued = 0
-                best_confidence: str | None = None
-                action_status = "no_results" if not outcome.raw_results else "no_match"
-                run_state = "completed"
-                error_message: str | None = None
-                try:
-                    if outcome.best_validation is not None and outcome.best_release is not None:
-                        validation = outcome.best_validation
-                        best = outcome.best_release
-                        best_confidence = validation.confidence.value
-                        if should_auto_grab(
-                            validation.confidence,
-                            target.issue_type,
-                            runtime.type_thresholds,
-                        ):
-                            await download_svc.send_to_client(session, best, target.issue_id)
-                            sent += 1
-                            issue_grabbed = 1
-                            action_status = "downloading"
-                        elif not await intervention_svc.has_pending_for_issue(
-                            session, target.issue_id
-                        ):
-                            await intervention_svc.create_pending_match(
-                                session, target.issue_id, best, validation
-                            )
-                            queued += 1
-                            issue_queued = 1
-                            action_status = "queued"
-                        else:
-                            action_status = "pending_exists"
+            issue_sent, issue_queued, issue_failed = await _persist_wanted_search_outcome(
+                session,
+                outcome=outcome,
+                pending_log_id=pending_log_ids.get(issue_id),
+                runtime=runtime,
+                download_svc=download_svc,
+                intervention_svc=intervention_svc,
+            )
+            sent += issue_sent
+            queued += issue_queued
+            failed += issue_failed
+            routing_ms += int((time.monotonic() - routing_started_at) * 1000)
+            processed_issue_ids.add(issue_id)
+            wanted_outcomes.append(outcome)
 
-                    session.add(
-                        SearchLog(
-                            issue_id=target.issue_id,
-                            series_title=target.series_title,
-                            issue_number=target.issue_number,
-                            search_type=SearchType.AUTOMATED,
-                            results_found=len(outcome.raw_results),
-                            results_grabbed=issue_grabbed,
-                            results_queued=issue_queued,
-                            results_rejected=max(
-                                0,
-                                len(outcome.raw_results) - issue_grabbed - issue_queued,
-                            ),
-                            details=_merge_search_log_details(
-                                existing_details=None,
-                                next_details=outcome.search_details,
-                                run_state=run_state,
-                                action_status=action_status,
-                                error_message=error_message,
-                            ),
-                            best_confidence=best_confidence,
-                        )
+        try:
+            search_started_at = time.monotonic()
+            if _is_mocked_search_service(search_svc):
+                results_map = await search_svc.search_wanted(
+                    session,
+                    indexer_configs=runtime.indexer_configs,
+                )
+                local_outcomes = [
+                    await _build_mocked_wanted_outcome(
+                        session,
+                        search_svc,
+                        target,
+                        runtime,
+                        results_map.get(target.issue_id, []),
                     )
-                    # Commit per issue to avoid holding SQLite's writer lock
-                    # across the full wanted-search run.
-                    await session.commit()
-                except Exception:
-                    await session.rollback()
-                    failed += 1
-                    run_state = "failed"
-                    action_status = "error"
-                    error_message = "Search processing failed for this issue."
-                    logger.exception("search_wanted_issue_failed", issue_id=target.issue_id)
-                    session.add(
-                        SearchLog(
-                            issue_id=target.issue_id,
-                            series_title=target.series_title,
-                            issue_number=target.issue_number,
-                            search_type=SearchType.AUTOMATED,
-                            results_found=len(outcome.raw_results),
-                            results_grabbed=0,
-                            results_queued=0,
-                            results_rejected=len(outcome.raw_results),
-                            details=_merge_search_log_details(
-                                existing_details=None,
-                                next_details=outcome.search_details,
-                                run_state=run_state,
-                                action_status=action_status,
-                                error_message=error_message,
-                            ),
-                            best_confidence=best_confidence,
-                        )
-                    )
-                    await session.commit()
+                    for target in targets
+                ]
+            else:
+                local_outcomes = await search_svc.search_targets_quick_first(
+                    session,
+                    targets,
+                    indexer_configs=runtime.indexer_configs,
+                    eval_kwargs=runtime.eval_kwargs,
+                    validator_kwargs=runtime.validator_kwargs,
+                    source_priority=runtime.source_priority,
+                    enable_deep_fallback=runtime.two_pass_enabled,
+                    concurrency=DEFAULT_WANTED_SEARCH_CONCURRENCY,
+                    on_outcome=_process_outcome,
+                )
 
-            routing_ms = int((time.monotonic() - routing_started_at) * 1000)
+            # Test doubles and compatibility implementations may not invoke the
+            # callback. Finalize their returned outcomes without duplicating real ones.
+            for outcome in local_outcomes:
+                await _process_outcome(outcome)
+
+            remaining_log_ids = {
+                issue_id: log_id
+                for issue_id, log_id in pending_log_ids.items()
+                if issue_id not in processed_issue_ids
+            }
+            if remaining_log_ids:
+                await _save_search_wanted_cursor(session, targets[-1])
+                await _complete_pending_search_logs(
+                    session,
+                    remaining_log_ids,
+                    action_status="error",
+                    run_state="failed",
+                    error_message="Search returned no outcome for this issue.",
+                )
+                failed += len(remaining_log_ids)
+
+            total_elapsed_ms = int((time.monotonic() - search_started_at) * 1000)
+            search_fanout_ms = max(0, total_elapsed_ms - routing_ms)
 
             logger.info(
                 "search_wanted_complete",
@@ -988,8 +1195,36 @@ async def search_wanted() -> None:
                 routing_ms=routing_ms,
                 **_search_outcome_log_diagnostics(wanted_outcomes),
             )
+        except asyncio.CancelledError:
+            await session.rollback()
+            remaining_log_ids = {
+                issue_id: log_id
+                for issue_id, log_id in pending_log_ids.items()
+                if issue_id not in processed_issue_ids
+            }
+            await _complete_pending_search_logs(
+                session,
+                remaining_log_ids,
+                action_status="cancelled",
+                run_state="cancelled",
+                error_message="Search was cancelled before completion.",
+            )
+            raise
         except Exception:
             await session.rollback()
+            remaining_log_ids = {
+                issue_id: log_id
+                for issue_id, log_id in pending_log_ids.items()
+                if issue_id not in processed_issue_ids
+            }
+            await _complete_pending_search_logs(
+                session,
+                remaining_log_ids,
+                action_status="error",
+                run_state="failed",
+                error_message="Search failed before completion.",
+            )
+            logger.exception("search_wanted_failed")
             raise
 
 
