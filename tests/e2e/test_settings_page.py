@@ -513,6 +513,8 @@ class TestSettingsPage:
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
     ) -> None:
+        page_errors: list[str] = []
+        authed_page.on("pageerror", lambda exc: page_errors.append(str(exc)))
         settings = SettingsPage(authed_page, seeded_server)
         settings.goto("direct")
 
@@ -520,6 +522,11 @@ class TestSettingsPage:
         authed_page.locator("[data-testid='settings-direct-add-provider']").click()
 
         modal = authed_page.locator("[data-testid='settings-direct-modal']")
+        authed_page.wait_for_timeout(100)
+        component_data = authed_page.locator("[x-data^='directProviderSettings']").get_attribute(
+            "x-data"
+        )
+        assert not page_errors, {"errors": page_errors, "x_data": component_data}
         modal.wait_for(state="visible", timeout=5000)
         assert modal.is_visible()
         assert modal.get_by_label("Provider endpoint").is_visible()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -60,3 +61,41 @@ def test_backup_restore_preserves_decryptable_direct_provider_ciphertext(
     assert restored_ciphertext == original_ciphertext
     assert decrypt_secret(restored_ciphertext) == "provider-bearer-token"
     assert "provider-bearer-token" not in restored_ciphertext
+
+
+def test_backup_restore_preserves_decryptable_resolver_auth_headers(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "pullbox.db"
+    backup_dir = tmp_path / "backups"
+    original_ciphertext = encrypt_secret("resolver-auth-token")
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE direct_resolver_configs "
+            "(id INTEGER PRIMARY KEY, encrypted_auth_headers JSON)"
+        )
+        connection.execute(
+            "INSERT INTO direct_resolver_configs VALUES (?, ?)",
+            (1, json.dumps({"Authorization": original_ciphertext})),
+        )
+
+    service = BackupService(backup_dir=backup_dir, db_path=db_path)
+    backup = service.create_backup()
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE direct_resolver_configs SET encrypted_auth_headers = ? WHERE id = 1",
+            (json.dumps({"Authorization": encrypt_secret("replacement-token")}),),
+        )
+    assert service.restore_backup(backup.filename) is True
+
+    with sqlite3.connect(db_path) as connection:
+        restored_json = connection.execute(
+            "SELECT encrypted_auth_headers FROM direct_resolver_configs WHERE id = 1"
+        ).fetchone()[0]
+
+    restored_ciphertext = json.loads(restored_json)["Authorization"]
+    assert restored_ciphertext == original_ciphertext
+    assert decrypt_secret(restored_ciphertext) == "resolver-auth-token"
+    assert "resolver-auth-token" not in restored_ciphertext

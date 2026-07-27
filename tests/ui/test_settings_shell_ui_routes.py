@@ -384,6 +384,49 @@ class TestSettingsRouteContracts:
         assert "encrypted-token-must-not-render" not in response.text
         assert "encrypted-account-token-must-not-render" not in response.text
 
+    async def test_direct_download_settings_render_bounded_browser_resolver_controls(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.direct_acquisition import DirectResolverConfig, DirectResolverState
+
+        async with sec_db() as session:
+            session.add(
+                DirectResolverConfig(
+                    name="default",
+                    endpoint="http://resolver:8191",
+                    enabled=True,
+                    state=DirectResolverState.HEALTHY,
+                    allow_private_http=True,
+                    timeout_seconds=60,
+                    max_concurrency=1,
+                    encrypted_auth_headers={
+                        "Authorization": "encrypted-resolver-secret-must-not-render"
+                    },
+                    auth_metadata={"configured_header_names": ["Authorization"]},
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-resolver-card"' in response.text
+        assert 'data-testid="settings-direct-resolver-endpoint"' in response.text
+        assert 'data-testid="settings-direct-resolver-enabled"' in response.text
+        assert 'data-testid="settings-direct-resolver-test"' in response.text
+        assert "Browser challenge resolver" in response.text
+        assert "FlareSolverr-compatible" in response.text
+        assert "does not guarantee CAPTCHA" in response.text
+        assert "Trawl MITM mode is not supported" in response.text
+        assert "Prowlarr keeps its own resolver configuration" in response.text
+        assert "Last connection test" in response.text
+        assert "Last healthy response" in response.text
+        assert "Last classified error" in response.text
+        assert "Authorization" in response.text
+        assert "encrypted-resolver-secret-must-not-render" not in response.text
+
     async def test_general_settings_renders_https_controls(
         self,
         authenticated_client,

@@ -335,14 +335,21 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["blocklist_auto_add"] = (bl_auto.value.lower() == "true") if bl_auto else True
     elif tab == "direct":
         from pullbox.schemas.direct_provider import DirectProviderResponse
+        from pullbox.schemas.direct_resolver import DirectResolverResponse
         from pullbox.services.direct_provider_registration import list_direct_providers
+        from pullbox.services.direct_resolver_service import get_direct_resolver
 
         providers = await list_direct_providers(session)
+        resolver = await get_direct_resolver(session)
         ctx["direct_providers"] = providers
         ctx["direct_provider_seed"] = [
             DirectProviderResponse.model_validate(provider).model_dump(mode="json")
             for provider in providers
         ]
+        ctx["direct_resolver"] = resolver
+        ctx["direct_resolver_seed"] = DirectResolverResponse.model_validate(resolver).model_dump(
+            mode="json"
+        )
     elif tab == "utilities":
         result = await session.execute(
             select(SystemConfig).where(

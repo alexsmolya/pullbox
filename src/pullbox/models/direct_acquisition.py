@@ -55,9 +55,89 @@ class DirectProviderState(enum.StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class DirectResolverState(enum.StrEnum):
+    DISABLED = "disabled"
+    UNKNOWN = "unknown"
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    AUTHENTICATION_REQUIRED = "authentication_required"
+    INCOMPATIBLE = "incompatible"
+    UNAVAILABLE = "unavailable"
+
+
 class DirectProviderTrustLevel(enum.StrEnum):
     VERIFIED_PULLBOX = "verified_pullbox"
     CUSTOM = "custom"
+
+
+class DirectResolverConfig(Base, IdentityMixin, TimestampMixin):
+    """Singleton configuration for an optional browser challenge resolver."""
+
+    __tablename__ = "direct_resolver_configs"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_direct_resolver_name"),
+        CheckConstraint(
+            "timeout_seconds > 0 AND timeout_seconds <= 300",
+            name="ck_direct_resolver_timeout",
+        ),
+        CheckConstraint(
+            "max_concurrency >= 1 AND max_concurrency <= 4",
+            name="ck_direct_resolver_concurrency",
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(100),
+        default="default",
+        server_default="default",
+        nullable=False,
+    )
+    endpoint: Mapped[str] = mapped_column(String(1000), default="", server_default="")
+    enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
+    )
+    state: Mapped[DirectResolverState] = mapped_column(
+        _enum_type(DirectResolverState, "directresolverstate"),
+        default=DirectResolverState.DISABLED,
+        server_default=DirectResolverState.DISABLED.value,
+        nullable=False,
+    )
+    allow_private_http: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
+    )
+    timeout_seconds: Mapped[int] = mapped_column(
+        Integer,
+        default=60,
+        server_default="60",
+        nullable=False,
+    )
+    max_concurrency: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
+    encrypted_auth_headers: Mapped[dict[str, object]] = mapped_column(
+        JSON,
+        default=dict,
+        server_default="{}",
+        nullable=False,
+    )
+    auth_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSON,
+        default=dict,
+        server_default="{}",
+        nullable=False,
+    )
+    last_health_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_tested_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
 
 
 class DirectArtifactHostKind(enum.StrEnum):

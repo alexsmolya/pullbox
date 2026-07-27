@@ -372,6 +372,7 @@ class TestMigrationChain:
         command.upgrade(cfg, "head")
 
         expected_indexes = {
+            "direct_resolver_configs": set(),
             "direct_provider_configs": {
                 "ix_direct_provider_configs_state",
                 "ix_direct_provider_configs_enabled_priority",
@@ -435,8 +436,37 @@ class TestMigrationChain:
             engine.dispose()
 
         assert {
+            "direct_resolver_configs",
             "direct_provider_configs",
             "direct_host_configs",
             "direct_acquisition_attempts",
             "direct_artifact_attempts",
         }.issubset(tables)
+
+    def test_direct_resolver_migration_has_bounded_secret_configuration(self, alembic_cfg) -> None:
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            inspector = inspect(engine)
+            columns = {
+                item["name"]: item for item in inspector.get_columns("direct_resolver_configs")
+            }
+            unique_constraints = {
+                item["name"] for item in inspector.get_unique_constraints("direct_resolver_configs")
+            }
+            check_constraints = {
+                item["name"] for item in inspector.get_check_constraints("direct_resolver_configs")
+            }
+        finally:
+            engine.dispose()
+
+        assert columns["encrypted_auth_headers"]["nullable"] is False
+        assert columns["timeout_seconds"]["nullable"] is False
+        assert columns["max_concurrency"]["nullable"] is False
+        assert "uq_direct_resolver_name" in unique_constraints
+        assert {
+            "ck_direct_resolver_timeout",
+            "ck_direct_resolver_concurrency",
+        }.issubset(check_constraints)
