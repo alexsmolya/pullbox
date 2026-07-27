@@ -11,6 +11,20 @@ from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
 from pullbox.models.creator import Creator, IssueCreator
 from pullbox.models.dashboard import DashboardMetricRollup, DashboardStorageSnapshot
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectArtifactAttempt,
+    DirectArtifactFailureClass,
+    DirectArtifactHostKind,
+    DirectArtifactRouteKind,
+    DirectArtifactState,
+    DirectHostAccountState,
+    DirectHostConfig,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.health import (
     HealthCheckResult,
@@ -67,6 +81,18 @@ __all__ = [
     "Creator",
     "DashboardMetricRollup",
     "DashboardStorageSnapshot",
+    "DirectAcquisitionAttempt",
+    "DirectAcquisitionState",
+    "DirectArtifactAttempt",
+    "DirectArtifactFailureClass",
+    "DirectArtifactHostKind",
+    "DirectArtifactRouteKind",
+    "DirectArtifactState",
+    "DirectHostAccountState",
+    "DirectHostConfig",
+    "DirectProviderConfig",
+    "DirectProviderState",
+    "DirectProviderTrustLevel",
     "DownloadClientConfig",
     "DownloadClientType",
     "DownloadHistory",

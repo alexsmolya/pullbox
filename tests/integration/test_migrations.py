@@ -11,12 +11,13 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import MetaData, Table, create_engine, func, inspect, select, text
 
 from alembic import command
 
 # Path to the alembic directory (relative to this test file)
 _ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"
+_DIRECT_ACQUISITION_PARENT_REVISION = "d9f0a1b2c345"
 
 
 @pytest.fixture
@@ -362,3 +363,80 @@ class TestMigrationChain:
 
         assert rows[0][1] == 2014
         assert rows[1][1] == 2020
+
+    def test_direct_acquisition_tables_are_created_empty_with_recovery_indexes(
+        self, alembic_cfg
+    ) -> None:
+        """Direct acquisition persistence is dormant, indexed, and empty after upgrade."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        expected_indexes = {
+            "direct_provider_configs": {
+                "ix_direct_provider_configs_state",
+                "ix_direct_provider_configs_enabled_priority",
+            },
+            "direct_host_configs": {
+                "ix_direct_host_configs_account_state",
+                "ix_direct_host_configs_enabled_preference",
+            },
+            "direct_acquisition_attempts": {
+                "ix_direct_acquisition_attempts_state_retry",
+                "ix_direct_acquisition_attempts_issue_created",
+                "ix_direct_acquisition_attempts_provider_state",
+            },
+            "direct_artifact_attempts": {
+                "ix_direct_artifact_attempts_acquisition_sequence",
+                "ix_direct_artifact_attempts_state_retry",
+                "ix_direct_artifact_attempts_host_state",
+            },
+        }
+
+        engine = create_engine(sync_url)
+        try:
+            inspector = inspect(engine)
+            tables = set(inspector.get_table_names())
+            assert set(expected_indexes).issubset(tables)
+
+            with engine.connect() as conn:
+                metadata = MetaData()
+                for table, required_indexes in expected_indexes.items():
+                    indexes = {index["name"] for index in inspector.get_indexes(table)}
+                    assert required_indexes.issubset(indexes)
+                    reflected = Table(table, metadata, autoload_with=conn)
+                    count = conn.execute(select(func.count()).select_from(reflected)).scalar_one()
+                    assert count == 0
+        finally:
+            engine.dispose()
+
+    def test_direct_acquisition_migration_downgrades_and_reapplies(self, alembic_cfg) -> None:
+        """The dormant direct-download schema can be removed and recreated safely."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, _DIRECT_ACQUISITION_PARENT_REVISION)
+
+        engine = create_engine(sync_url)
+        try:
+            tables = set(inspect(engine).get_table_names())
+        finally:
+            engine.dispose()
+
+        assert "direct_provider_configs" not in tables
+        assert "direct_host_configs" not in tables
+        assert "direct_acquisition_attempts" not in tables
+        assert "direct_artifact_attempts" not in tables
+
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            tables = set(inspect(engine).get_table_names())
+        finally:
+            engine.dispose()
+
+        assert {
+            "direct_provider_configs",
+            "direct_host_configs",
+            "direct_acquisition_attempts",
+            "direct_artifact_attempts",
+        }.issubset(tables)
