@@ -1,0 +1,500 @@
+{#- Settings: Direct Downloads tab -#}
+{% from "components/settings_shell.html" import alert_banner, section_header %}
+{%- set state_pills = {
+  'disabled': 'pill-muted',
+  'healthy': 'pill-success',
+  'degraded': 'pill-warning',
+  'rate_limited': 'pill-warning',
+  'authentication_required': 'pill-error',
+  'incompatible': 'pill-error',
+  'unavailable': 'pill-error'
+} -%}
+
+<div
+  class="space-y-6 pt-6"
+  x-data="directProviderSettings({{ direct_provider_seed|default([], true)|tojson }})"
+  @keydown.escape.window="closeModal()"
+>
+  <section class="section-card" data-testid="settings-direct-registry-card">
+    {% call section_header(
+      title="Direct-download providers",
+      description="Register, test, configure, and prioritize provider services. Providers stay disabled until they pass a connection test and you explicitly enable them.",
+      eyebrow="Connections",
+      title_style="plain"
+    ) %}
+      <button
+        type="button"
+        class="btn-primary btn-sm gap-2"
+        data-testid="settings-direct-add-provider"
+        @click="openAdd()"
+      >
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+        </svg>
+        Add Provider
+      </button>
+    {% endcall %}
+
+    <div class="section-body">
+      {% call alert_banner(
+        tone="warning",
+        icon="shield",
+        title="Provider trust boundary",
+        description="Direct-download providers run as separately deployed services. A verified Pullbox identity does not verify the running image or deployment. Only register endpoints and images you trust.",
+        class_name="mb-5",
+        attrs='data-testid="settings-direct-trust-warning"'
+      ) %}{% endcall %}
+
+      <div class="settings-connection-list" data-testid="settings-direct-provider-list">
+        {% if direct_providers %}
+          {% for provider in direct_providers %}
+          {%- set state = provider.state.value -%}
+          <article
+            class="settings-connection-card {% if not provider.enabled %}settings-connection-card-muted{% endif %}"
+            data-testid="settings-direct-provider-{{ provider.id }}"
+          >
+            <div class="flex items-start gap-4">
+              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-pb-info-dim text-pb-info">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4.5 18.75h15"/>
+                </svg>
+              </div>
+
+              <div class="min-w-0 flex-1 space-y-3">
+                <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-pb-text">{{ provider.display_name }}</p>
+                    <p class="mt-1 break-all font-mono text-[11px] text-pb-text-dim">{{ provider.endpoint }}</p>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      class="btn-ghost btn-sm"
+                      data-testid="settings-direct-provider-test-{{ provider.id }}"
+                      :disabled="busyId === {{ provider.id }}"
+                      @click="testProvider({{ provider.id }})"
+                    >Test</button>
+                    <button
+                      type="button"
+                      class="btn-ghost btn-sm"
+                      data-testid="settings-direct-provider-configure-{{ provider.id }}"
+                      @click="openConfigure({{ provider.id }})"
+                    >Configure</button>
+                    {% if provider.enabled %}
+                    <button
+                      type="button"
+                      class="btn-ghost btn-sm"
+                      data-testid="settings-direct-provider-disable-{{ provider.id }}"
+                      :disabled="busyId === {{ provider.id }}"
+                      @click="setEnabled({{ provider.id }}, false)"
+                    >Disable</button>
+                    {% else %}
+                    <button
+                      type="button"
+                      class="btn-primary btn-sm"
+                      data-testid="settings-direct-provider-enable-{{ provider.id }}"
+                      :disabled="busyId === {{ provider.id }}"
+                      @click="setEnabled({{ provider.id }}, true)"
+                    >Enable</button>
+                    {% endif %}
+                    <button
+                      type="button"
+                      class="downloads-action-btn is-danger"
+                      data-testid="settings-direct-provider-remove-{{ provider.id }}"
+                      data-tip="Remove"
+                      data-tip-pos="left"
+                      aria-label="Remove {{ provider.display_name }}"
+                      @click="removeProvider({{ provider.id }})"
+                    >
+                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="pill {{ 'pill-success' if provider.enabled else 'pill-muted' }}">{{ 'Enabled' if provider.enabled else 'Disabled' }}</span>
+                  <span class="pill {{ state_pills.get(state, 'pill-muted') }}">{{ state|replace('_', ' ')|title }}</span>
+                  <span class="pill {{ 'pill-info' if provider.trust_level.value == 'verified_pullbox' else 'pill-warning' }}">
+                    {{ 'Pullbox identity' if provider.trust_level.value == 'verified_pullbox' else 'Custom provider' }}
+                  </span>
+                  <span class="pill pill-muted">Priority {{ provider.priority }}</span>
+                  {% if provider.provider_version %}<span class="pill pill-muted">v{{ provider.provider_version }}</span>{% endif %}
+                  {% if provider.negotiated_protocol %}<span class="pill pill-info">Protocol v1</span>{% endif %}
+                </div>
+
+                <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                  <div>
+                    <dt class="text-pb-text-dim">Provider ID</dt>
+                    <dd class="mt-0.5 break-all font-mono text-pb-text-sec">{{ provider.provider_id }}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-pb-text-dim">Publisher</dt>
+                    <dd class="mt-0.5 text-pb-text-sec">{{ provider.publisher or 'Not declared' }}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-pb-text-dim">Bearer token</dt>
+                    <dd class="mt-0.5 text-pb-text-sec">{{ 'Configured' if provider.bearer_token_configured else 'Missing' }}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-pb-text-dim">Resolver handoff</dt>
+                    <dd class="mt-0.5 text-pb-text-sec">{{ 'Enabled' if provider.resolver_enabled else 'Disabled' }}</dd>
+                  </div>
+                </dl>
+
+                {% if provider.configuration_controls %}
+                <details class="rounded-lg border border-pb-border bg-pb-bg/30 px-3 py-2">
+                  <summary class="cursor-pointer text-xs font-medium text-pb-text-sec">Provider configuration</summary>
+                  <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                    {% for control in provider.configuration_controls %}
+                    <div>
+                      <p class="text-xs font-medium text-pb-text">{{ control.title }}</p>
+                      <p class="mt-0.5 text-[11px] text-pb-text-dim">
+                        {% if control.secret %}
+                          {{ 'Configured' if control.name in provider.configured_secret_fields else 'Not configured' }}
+                        {% else %}
+                          {{ provider.public_configuration.get(control.name, control.default if control.default is not none else 'Not configured') }}
+                        {% endif %}
+                      </p>
+                    </div>
+                    {% endfor %}
+                  </div>
+                </details>
+                {% endif %}
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        {% else %}
+          <div class="info-panel info-panel-muted" data-testid="settings-direct-empty-state">
+            <p class="text-sm font-semibold text-pb-text">No direct-download providers configured.</p>
+            <p class="mt-2 text-sm leading-6 text-pb-text-sec">
+              Deploy a compatible provider service, then register its private endpoint and bearer token here.
+            </p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <div
+    x-show="showModal"
+    x-cloak
+    class="modal-shell"
+    data-testid="settings-direct-modal"
+  >
+    <div class="modal-backdrop" @click="closeModal()"></div>
+    <div class="modal-panel max-h-[90vh] max-w-xl">
+      <div class="modal-header">
+        <div>
+          <p class="section-eyebrow" x-text="modalMode === 'add' ? 'Registration' : 'Provider settings'"></p>
+          <h3 class="text-sm font-semibold text-pb-text" x-text="modalTitle()"></h3>
+        </div>
+        <button type="button" class="icon-btn icon-btn-sm" aria-label="Close provider settings" @click="closeModal()">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="saveModal()">
+        <div class="modal-body">
+          <div class="space-y-4 px-5 py-4">
+            <template x-if="modalMode === 'add'">
+              <div class="space-y-4">
+                <div>
+                  <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="direct-provider-endpoint">Provider endpoint</label>
+                  <input id="direct-provider-endpoint" type="url" class="input-pb font-mono" autocomplete="url" placeholder="http://provider:8780" x-model.trim="form.endpoint" required>
+                  <p class="mt-1 text-[11px] text-pb-text-dim">Use HTTPS for public endpoints. Private-network HTTP requires an explicit acknowledgement.</p>
+                </div>
+                <div>
+                  <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="direct-provider-token">Bearer token</label>
+                  <input id="direct-provider-token" type="password" class="input-pb font-mono" autocomplete="new-password" minlength="32" x-model="form.bearer_token" required>
+                </div>
+                <label class="flex cursor-pointer items-start gap-3 text-xs text-pb-text-sec">
+                  <input type="checkbox" class="checkbox-pb mt-0.5" x-model="form.allow_private_http">
+                  <span>Allow unencrypted HTTP only when this endpoint resolves to a trusted private or loopback network.</span>
+                </label>
+                <label class="flex cursor-pointer items-start gap-3 text-xs text-pb-text-sec">
+                  <input type="checkbox" class="checkbox-pb mt-0.5" x-model="form.confirm_custom_provider">
+                  <span>I understand that custom provider code runs outside Pullbox and may receive search metadata and provider-scoped credentials.</span>
+                </label>
+              </div>
+            </template>
+
+            <template x-if="modalMode === 'configure'">
+              <div class="space-y-4">
+                <div class="inline-alert inline-alert-info">
+                  <p class="text-xs">Changing credentials or provider configuration disables this provider until it is tested and enabled again.</p>
+                </div>
+                <div>
+                  <label class="mb-1.5 block text-xs font-medium text-pb-text-sec">Replace bearer token</label>
+                  <input type="password" class="input-pb font-mono" autocomplete="new-password" minlength="32" placeholder="Leave blank to keep the saved token" x-model="form.bearer_token">
+                </div>
+                <label class="flex cursor-pointer items-center gap-3 text-xs text-pb-text-sec">
+                  <input type="checkbox" class="checkbox-pb" x-model="form.resolver_enabled">
+                  <span>Allow this provider to receive the configured resolver profile when a source requires browser challenge handling.</span>
+                </label>
+
+                <template x-for="control in activeProvider.configuration_controls" :key="control.name">
+                  <div>
+                    <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" x-text="control.title"></label>
+
+                    <template x-if="control.value_type === 'boolean' && !control.secret">
+                      <label class="flex cursor-pointer items-center gap-3 text-xs text-pb-text-sec">
+                        <input type="checkbox" class="checkbox-pb" x-model="form.configuration[control.name]">
+                        <span x-text="control.description || 'Enabled'"></span>
+                      </label>
+                    </template>
+
+                    <template x-if="control.choices.length && !control.secret">
+                      <select class="input-pb" x-model="form.configuration[control.name]">
+                        <template x-for="choice in control.choices" :key="String(choice)">
+                          <option :value="choice" x-text="choice"></option>
+                        </template>
+                      </select>
+                    </template>
+
+                    <template x-if="!control.secret && !control.choices.length && control.value_type !== 'boolean'">
+                      <input
+                        class="input-pb"
+                        :class="control.value_type === 'string' ? '' : 'font-mono'"
+                        :type="control.value_type === 'string' ? 'text' : 'number'"
+                        :min="control.minimum"
+                        :max="control.maximum"
+                        :minlength="control.min_length"
+                        :maxlength="control.max_length"
+                        :placeholder="control.placeholder || ''"
+                        x-model="form.configuration[control.name]"
+                      >
+                    </template>
+
+                    <template x-if="control.secret">
+                      <div>
+                        <input
+                          type="password"
+                          class="input-pb font-mono"
+                          autocomplete="new-password"
+                          :placeholder="secretConfigured(control.name) ? 'Configured - leave blank to keep' : (control.placeholder || '')"
+                          x-model="form.configuration[control.name]"
+                        >
+                        <p class="mt-1 text-[11px] text-pb-text-dim" x-text="secretConfigured(control.name) ? 'Configured' : 'Not configured'"></p>
+                      </div>
+                    </template>
+
+                    <p x-show="control.description && control.value_type !== 'boolean'" class="mt-1 text-[11px] text-pb-text-dim" x-text="control.description"></p>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <div>
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="direct-provider-priority">Priority</label>
+              <div class="flex items-center gap-3">
+                <input id="direct-provider-priority" type="number" class="input-pb w-24 font-mono" min="0" max="1000" x-model.number="form.priority" required>
+                <span class="text-[11px] text-pb-text-dim">Lower values are tried first.</span>
+              </div>
+            </div>
+          </div>
+
+          <div x-show="modalError" x-cloak class="border-t border-pb-border px-5 py-3">
+            <div class="inline-alert inline-alert-danger"><p class="text-xs" x-text="modalError"></p></div>
+          </div>
+        </div>
+
+        <div class="modal-footer justify-end">
+          <button type="button" class="btn-ghost btn-sm" @click="closeModal()">Cancel</button>
+          <button type="submit" class="btn-primary btn-sm" :disabled="saving">
+            <span x-text="saving ? 'Saving...' : (modalMode === 'add' ? 'Register Provider' : 'Save Changes')"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function directProviderSettings(initialProviders) {
+  return {
+    providers: initialProviders,
+    showModal: false,
+    modalMode: 'add',
+    activeProvider: { configuration_controls: [], configured_secret_fields: [] },
+    busyId: null,
+    saving: false,
+    modalError: '',
+    form: {},
+
+    blankForm() {
+      return {
+        endpoint: '',
+        bearer_token: '',
+        allow_private_http: false,
+        confirm_custom_provider: false,
+        priority: 50,
+        resolver_enabled: false,
+        configuration: {},
+      };
+    },
+
+    modalTitle() {
+      return this.modalMode === 'add'
+        ? 'Add direct-download provider'
+        : `Configure ${this.activeProvider.display_name || 'provider'}`;
+    },
+
+    openAdd() {
+      this.modalMode = 'add';
+      this.activeProvider = { configuration_controls: [], configured_secret_fields: [] };
+      this.form = this.blankForm();
+      this.modalError = '';
+      this.showModal = true;
+    },
+
+    openConfigure(id) {
+      const provider = this.providers.find(item => item.id === id);
+      if (!provider) return;
+      this.modalMode = 'configure';
+      this.activeProvider = provider;
+      this.form = this.blankForm();
+      this.form.priority = provider.priority;
+      this.form.resolver_enabled = provider.resolver_enabled;
+      provider.configuration_controls.forEach(control => {
+        if (control.secret) {
+          this.form.configuration[control.name] = '';
+          return;
+        }
+        const existing = provider.public_configuration[control.name];
+        this.form.configuration[control.name] = existing ?? control.default ?? (control.value_type === 'boolean' ? false : '');
+      });
+      this.modalError = '';
+      this.showModal = true;
+    },
+
+    closeModal() {
+      if (this.saving) return;
+      this.showModal = false;
+      this.modalError = '';
+    },
+
+    secretConfigured(name) {
+      return this.activeProvider.configured_secret_fields.includes(name);
+    },
+
+    normalizedValue(control, value) {
+      if (control.value_type === 'integer') return Number.parseInt(value, 10);
+      if (control.value_type === 'number') return Number(value);
+      if (control.value_type === 'boolean') return Boolean(value);
+      return String(value ?? '');
+    },
+
+    async api(path, options = {}) {
+      const headers = { ...(options.headers || {}), 'X-CSRF-Token': '{{ csrf_token }}' };
+      if (options.body) headers['Content-Type'] = 'application/json';
+      const response = await fetch(path, { ...options, headers });
+      if (response.status === 204) return null;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Provider request failed.');
+      return data;
+    },
+
+    refresh() {
+      window.location.assign('/settings?tab=direct');
+    },
+
+    async saveModal() {
+      if (this.saving) return;
+      this.saving = true;
+      this.modalError = '';
+      try {
+        if (this.modalMode === 'add') {
+          await this.api('/api/v1/direct-providers', {
+            method: 'POST',
+            body: JSON.stringify({
+              endpoint: this.form.endpoint,
+              bearer_token: this.form.bearer_token,
+              allow_private_http: this.form.allow_private_http,
+              confirm_custom_provider: this.form.confirm_custom_provider,
+              priority: Number(this.form.priority),
+            }),
+          });
+          if (typeof showToast === 'function') showToast({ message: 'Direct-download provider registered.', level: 'success' });
+        } else {
+          const publicConfiguration = {};
+          const secretConfiguration = {};
+          this.activeProvider.configuration_controls.forEach(control => {
+            const value = this.form.configuration[control.name];
+            if (control.secret) {
+              if (value) secretConfiguration[control.name] = value;
+            } else {
+              publicConfiguration[control.name] = this.normalizedValue(control, value);
+            }
+          });
+          const body = {
+            priority: Number(this.form.priority),
+            resolver_enabled: this.form.resolver_enabled,
+            public_configuration: publicConfiguration,
+          };
+          if (this.form.bearer_token) body.bearer_token = this.form.bearer_token;
+          if (Object.keys(secretConfiguration).length) body.secret_configuration = secretConfiguration;
+          await this.api(`/api/v1/direct-providers/${this.activeProvider.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify(body),
+          });
+          if (typeof showToast === 'function') showToast({ message: 'Provider settings saved.', level: 'success' });
+        }
+        this.showModal = false;
+        this.refresh();
+      } catch (error) {
+        this.modalError = error.message;
+        this.saving = false;
+      }
+    },
+
+    async testProvider(id) {
+      if (this.busyId !== null) return;
+      this.busyId = id;
+      try {
+        const result = await this.api(`/api/v1/direct-providers/${id}/test`, { method: 'POST' });
+        if (typeof showToast === 'function') showToast({ message: result.message, level: result.usable ? 'success' : 'error' });
+        this.refresh();
+      } catch (error) {
+        if (typeof showToast === 'function') showToast({ message: error.message, level: 'error' });
+        this.busyId = null;
+      }
+    },
+
+    async setEnabled(id, enabled) {
+      if (this.busyId !== null) return;
+      this.busyId = id;
+      try {
+        await this.api(`/api/v1/direct-providers/${id}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
+        if (typeof showToast === 'function') showToast({ message: enabled ? 'Provider enabled.' : 'Provider disabled.', level: 'success' });
+        this.refresh();
+      } catch (error) {
+        if (typeof showToast === 'function') showToast({ message: error.message, level: 'error' });
+        this.busyId = null;
+      }
+    },
+
+    async removeProvider(id) {
+      const provider = this.providers.find(item => item.id === id);
+      if (!provider) return;
+      const confirmed = await pbConfirm({
+        title: 'Remove Direct-Download Provider',
+        message: `Remove "${provider.display_name}"? Historical acquisition records will keep their provider identity, but this connection cannot be restored.`,
+        confirmText: 'Remove',
+      });
+      if (!confirmed) return;
+      try {
+        await this.api(`/api/v1/direct-providers/${id}`, { method: 'DELETE' });
+        if (typeof showToast === 'function') showToast({ message: 'Provider removed.', level: 'success' });
+        this.refresh();
+      } catch (error) {
+        if (typeof showToast === 'function') showToast({ message: error.message, level: 'error' });
+      }
+    },
+  };
+}
+</script>

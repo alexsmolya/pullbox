@@ -487,7 +487,16 @@ class TestSettingsPage:
         general_box = general_card.bounding_box()
         assert general_box is not None
 
-        for tab in ("media", "clients", "indexers", "metadata", "search", "utilities", "ui"):
+        for tab in (
+            "media",
+            "clients",
+            "indexers",
+            "direct",
+            "metadata",
+            "search",
+            "utilities",
+            "ui",
+        ):
             settings.switch_tab(tab)
             target_card = authed_page.locator(
                 f"[data-testid='settings-panel-{tab}'] .section-card"
@@ -498,6 +507,27 @@ class TestSettingsPage:
             assert abs(target_box["y"] - general_box["y"]) <= 2, (
                 f"{tab} top card y={target_box['y']} does not match general y={general_box['y']}"
             )
+
+    def test_direct_download_provider_registration_modal_is_native_and_closable(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("direct")
+
+        assert authed_page.locator("[data-testid='settings-direct-trust-warning']").is_visible()
+        authed_page.locator("[data-testid='settings-direct-add-provider']").click()
+
+        modal = authed_page.locator("[data-testid='settings-direct-modal']")
+        modal.wait_for(state="visible", timeout=5000)
+        assert modal.is_visible()
+        assert modal.get_by_label("Provider endpoint").is_visible()
+        assert modal.get_by_label("Bearer token").is_visible()
+        assert modal.get_by_role("button", name="Register Provider").is_visible()
+
+        modal.get_by_role("button", name="Cancel").click()
+        modal.wait_for(state="hidden")
 
     def test_settings_tab_switch_resets_scroll_to_top(
         self,

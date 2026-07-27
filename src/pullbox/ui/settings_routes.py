@@ -47,6 +47,11 @@ SETTINGS_TABS: tuple[dict[str, str], ...] = (
         "icon": "M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z",
     },
     {
+        "key": "direct",
+        "label": "Direct Downloads",
+        "icon": "M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4.5 18.75h15",
+    },
+    {
         "key": "metadata",
         "label": "Metadata",
         "icon": "M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z",  # noqa: E501
@@ -73,6 +78,7 @@ _SETTINGS_TABS = (
     "media",
     "clients",
     "indexers",
+    "direct",
     "metadata",
     "search",
     "utilities",
@@ -327,6 +333,16 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["blocklist_expiry_days"] = bl_expiry.value if bl_expiry else "90"
         bl_auto = await session.get(SystemConfig, "blocklist.auto_add_on_failure")
         ctx["blocklist_auto_add"] = (bl_auto.value.lower() == "true") if bl_auto else True
+    elif tab == "direct":
+        from pullbox.schemas.direct_provider import DirectProviderResponse
+        from pullbox.services.direct_provider_registration import list_direct_providers
+
+        providers = await list_direct_providers(session)
+        ctx["direct_providers"] = providers
+        ctx["direct_provider_seed"] = [
+            DirectProviderResponse.model_validate(provider).model_dump(mode="json")
+            for provider in providers
+        ]
     elif tab == "utilities":
         result = await session.execute(
             select(SystemConfig).where(

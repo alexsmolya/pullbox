@@ -13,6 +13,11 @@ from pullbox.config import get_settings
 from pullbox.core.encryption import encrypt_secret
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import (
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.download import DownloadClientType
 from pullbox.utilities.settings import resolve_utility_directory
 
@@ -297,6 +302,87 @@ class TestSettingsRouteContracts:
         assert "Share anonymous usage stats" in response.text
         assert 'data-testid="settings-general-usage-stats-toggle"' in response.text
         assert "install and version information" in response.text
+
+    async def test_direct_download_settings_render_native_secret_free_provider_controls(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="community.example",
+                    display_name="Example Direct Provider",
+                    endpoint="http://direct-provider:8780",
+                    priority=25,
+                    state=DirectProviderState.HEALTHY,
+                    trust_level=DirectProviderTrustLevel.CUSTOM,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-token-must-not-render",
+                    encrypted_configuration={
+                        "account_token": "encrypted-account-token-must-not-render"
+                    },
+                    configuration_metadata={
+                        "allow_private_http": True,
+                        "public_values": {"result_limit": 20},
+                        "configured_secret_fields": ["account_token"],
+                    },
+                    manifest_snapshot={
+                        "protocol_version": "direct-download-provider/v1",
+                        "provider_id": "community.example",
+                        "display_name": "Example Direct Provider",
+                        "description": "A provider fixture.",
+                        "provider_version": "1.2.3",
+                        "supported_protocol_versions": ["direct-download-provider/v1"],
+                        "publisher": "Example Publisher",
+                        "license": "MIT",
+                        "source_domains": ["example.test"],
+                        "capabilities": {
+                            "search": True,
+                            "resolve": True,
+                            "health": True,
+                            "configuration_schema": True,
+                        },
+                        "configuration_schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "result_limit": {
+                                    "type": "integer",
+                                    "title": "Result limit",
+                                    "minimum": 1,
+                                    "maximum": 100,
+                                },
+                                "account_token": {
+                                    "type": "string",
+                                    "title": "Account token",
+                                    "x-pullbox-secret": True,
+                                },
+                            },
+                        },
+                    },
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-tab-direct"' in response.text
+        assert 'data-testid="settings-panel-direct"' in response.text
+        assert 'data-testid="settings-direct-add-provider"' in response.text
+        assert 'data-testid="settings-direct-provider-1"' in response.text
+        assert "Example Direct Provider" in response.text
+        assert "http://direct-provider:8780" in response.text
+        assert "Result limit" in response.text
+        assert "Account token" in response.text
+        assert "Configured" in response.text
+        assert "identity does not verify the running image" in response.text
+        assert 'data-testid="settings-direct-provider-test-1"' in response.text
+        assert 'data-testid="settings-direct-provider-enable-1"' in response.text
+        assert 'data-testid="settings-direct-provider-remove-1"' in response.text
+        assert "encrypted-token-must-not-render" not in response.text
+        assert "encrypted-account-token-must-not-render" not in response.text
 
     async def test_general_settings_renders_https_controls(
         self,

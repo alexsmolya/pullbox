@@ -12,6 +12,11 @@ import pytest
 
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import (
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.download import DownloadClientType
 from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.ui import settings_routes
@@ -78,6 +83,7 @@ async def test_settings_runtime_seams_require_configuration(
 
     assert settings_routes._normalize_settings_tab("nope") == "general"
     assert settings_routes._normalize_settings_tab("search") == "search"
+    assert settings_routes._normalize_settings_tab("direct") == "direct"
 
 
 def test_status_seed_helpers_prefer_live_state_then_cookie_cache() -> None:
@@ -192,6 +198,55 @@ async def test_load_settings_tab_covers_all_data_tabs(
                 priority=1,
                 last_failure_at=now - timedelta(minutes=1),
             ),
+            DirectProviderConfig(
+                provider_id="community.example",
+                display_name="Example Direct Provider",
+                endpoint="http://direct-provider:8780",
+                priority=25,
+                state=DirectProviderState.HEALTHY,
+                trust_level=DirectProviderTrustLevel.CUSTOM,
+                negotiated_protocol="direct-download-provider/v1",
+                encrypted_bearer_token="encrypted-token-must-not-render",
+                configuration_metadata={
+                    "allow_private_http": True,
+                    "public_values": {"result_limit": 20},
+                    "configured_secret_fields": ["account_token"],
+                },
+                manifest_snapshot={
+                    "protocol_version": "direct-download-provider/v1",
+                    "provider_id": "community.example",
+                    "display_name": "Example Direct Provider",
+                    "description": "A provider fixture.",
+                    "provider_version": "1.2.3",
+                    "supported_protocol_versions": ["direct-download-provider/v1"],
+                    "publisher": "Example Publisher",
+                    "license": "MIT",
+                    "source_domains": ["example.test"],
+                    "capabilities": {
+                        "search": True,
+                        "resolve": True,
+                        "health": True,
+                        "configuration_schema": True,
+                    },
+                    "configuration_schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "result_limit": {
+                                "type": "integer",
+                                "title": "Result limit",
+                                "minimum": 1,
+                                "maximum": 100,
+                            },
+                            "account_token": {
+                                "type": "string",
+                                "title": "Account token",
+                                "x-pullbox-secret": True,
+                            },
+                        },
+                    },
+                },
+            ),
         ]
     )
     await db_session.flush()
@@ -229,6 +284,11 @@ async def test_load_settings_tab_covers_all_data_tabs(
     assert indexers["blocked_groups"] == ["bad", "worse"]
     assert indexers["blocklist_expiry_days"] == "30"
     assert indexers["blocklist_auto_add"] is False
+
+    direct = await settings_routes.load_settings_tab(_request(), db_session, "direct")
+    assert direct["direct_providers"][0].display_name == "Example Direct Provider"  # type: ignore[index]
+    assert direct["direct_providers"][0].bearer_token_configured is True  # type: ignore[index]
+    assert "encrypted-token-must-not-render" not in repr(direct["direct_providers"])
 
     utilities = await settings_routes.load_settings_tab(_request(), db_session, "utilities")
     assert utilities["configs"]["utility_worker_count"] == "2"  # type: ignore[index]
