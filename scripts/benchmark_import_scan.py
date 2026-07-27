@@ -26,6 +26,7 @@ from pullbox.models import publisher as _publisher_models  # noqa: F401
 from pullbox.models import series as _series_models  # noqa: F401
 from pullbox.models.base import Base
 from pullbox.models.import_job import ImportJob, ImportJobStatus, ImportSourceType
+from pullbox.performance.baseline import current_process_peak_rss_bytes
 from pullbox.providers.base import IssueSummary, SeriesSearchResult
 from pullbox.services.import_provider_cache import CachedImportMetadataProvider
 from pullbox.services.import_service import ImportService
@@ -223,6 +224,7 @@ async def main() -> None:
                     "provider_issue_summary_calls": provider.issue_summary_calls,
                     "provider_issue_number_calls": provider.issue_number_calls,
                     "db_commit_count": commit_count,
+                    "peak_rss_bytes": current_process_peak_rss_bytes(),
                     "final_status": job.status.value,
                     "scan_total_dirs": job.scan_total_dirs,
                     "scan_total_files": job.scan_total_files,

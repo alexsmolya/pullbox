@@ -27,6 +27,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from pullbox.models.issue import IssueType  # noqa: E402
+from pullbox.performance.baseline import current_process_peak_rss_bytes  # noqa: E402
 from pullbox.providers.base import (  # noqa: E402
     IndexerCapabilities,
     ProviderHealthResult,
@@ -72,6 +73,7 @@ class FakeIndexer:
         self._year = year
         self._delay_ms = delay_ms
         self._is_torrent = is_torrent
+        self.search_calls = 0
 
     @property
     def name(self) -> str:
@@ -90,6 +92,7 @@ class FakeIndexer:
         return self._is_torrent
 
     async def search(self, query: SearchQuery) -> list[ReleaseResult]:
+        self.search_calls += 1
         if self._delay_ms > 0:
             await asyncio.sleep(self._delay_ms / 1000)
 
@@ -148,18 +151,21 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
     )
 
     registry = ProviderRegistry()
+    indexers: list[FakeIndexer] = []
     for index in range(int(args.indexer_count)):
+        indexer = FakeIndexer(
+            name=f"BenchmarkIndexer{index + 1}",
+            result_count=int(args.result_count),
+            series_title=series_title,
+            issue_number=issue_number,
+            year=year,
+            delay_ms=int(args.delay_ms),
+            is_torrent=index % 2 == 1,
+        )
+        indexers.append(indexer)
         registry.register_indexer(
             index + 1,
-            FakeIndexer(
-                name=f"BenchmarkIndexer{index + 1}",
-                result_count=int(args.result_count),
-                series_title=series_title,
-                issue_number=issue_number,
-                year=year,
-                delay_ms=int(args.delay_ms),
-                is_torrent=index % 2 == 1,
-            ),
+            indexer,
         )
 
     service = SearchService(registry)
@@ -195,6 +201,7 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
         "elapsed_ms": elapsed_ms,
         "outcome_elapsed_ms": outcome.elapsed_ms,
         "query_count": outcome.query_count,
+        "indexer_request_count": sum(indexer.search_calls for indexer in indexers),
         "raw_results_count": len(outcome.raw_results),
         "filtered_results_count": len(outcome.filtered_results),
         "matched_count": len(outcome.matched),
@@ -202,6 +209,7 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
         "best_release_title": outcome.best_release.title if outcome.best_release else None,
         "search_details_rejected_count": outcome.search_details.get("rejected_count"),
         "slow_indexers_count": len(slow_indexers) if isinstance(slow_indexers, list) else 0,
+        "peak_rss_bytes": current_process_peak_rss_bytes(),
     }
 
 
