@@ -18,6 +18,8 @@ from pullbox.providers.artifact_hosts.contract import (
 )
 from pullbox.providers.artifact_hosts.mega import (
     MegaArtifactHostAdapter,
+    MegaBridgeCancelledError,
+    MegaBridgePausedError,
     MegaBridgeRunner,
     MegaBridgeTransferError,
 )
@@ -150,7 +152,7 @@ time.sleep(30)
         assert (current, total) == (7, 100)
         cancel_event.set()
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(MegaBridgeCancelledError):
         await asyncio.wait_for(
             MegaBridgeRunner(command=(sys.executable, str(executable))).transfer(
                 public_link="https://mega.nz/file/id#key",
@@ -162,6 +164,45 @@ time.sleep(30)
             timeout=5,
         )
 
+    assert not destination.exists()
+
+
+@pytest.mark.asyncio
+async def test_mega_bridge_pause_terminates_and_restarts_safely_from_zero(
+    tmp_path: Path,
+) -> None:
+    executable = _write_fake_bridge(
+        tmp_path,
+        body="""
+request = read_request()
+destination = Path(request["destination"])
+destination.write_bytes(b"partial")
+emit("PROGRESS 7 100")
+time.sleep(30)
+""",
+    )
+    root = tmp_path / "quarantine"
+    root.mkdir()
+    destination = root / "attempt.part"
+    pause_event = asyncio.Event()
+
+    async def pause_after_progress(current: int, total: int) -> None:
+        assert (current, total) == (7, 100)
+        pause_event.set()
+
+    with pytest.raises(MegaBridgePausedError) as caught:
+        await asyncio.wait_for(
+            MegaBridgeRunner(command=(sys.executable, str(executable))).transfer(
+                public_link="https://mega.nz/file/id#key",
+                destination=destination,
+                quarantine_root=root,
+                pause_event=pause_event,
+                progress_callback=pause_after_progress,
+            ),
+            timeout=5,
+        )
+
+    assert caught.value.bytes_transferred == 0
     assert not destination.exists()
 
 

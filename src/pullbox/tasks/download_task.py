@@ -59,6 +59,7 @@ from pullbox.tasks.download_post_processing_destination import (
 )
 from pullbox.tasks.download_post_processing_runtime import PostProcessingRuntime
 from pullbox.tasks.download_post_processing_source_validation import (
+    ResolveLocalPath,
     resolve_and_validate_source,
 )
 from pullbox.tasks.download_post_processing_transfer import transfer_and_register_library_file
@@ -381,6 +382,9 @@ async def process_completed() -> None:
 async def _run_post_processing(
     session: AsyncSession,
     download: DownloadHistory,
+    *,
+    resolve_local_path: ResolveLocalPath | None = None,
+    cleanup_source: bool = True,
 ) -> None:
     """Transfer the downloaded file to the library and update all records.
 
@@ -428,7 +432,7 @@ async def _run_post_processing(
             trace=trace,
             runtime=runtime,
             log=log,
-            resolve_local_path=_resolve_local_path,
+            resolve_local_path=resolve_local_path or _resolve_local_path,
             probe_source=_probe_post_processing_source,
             build_integrity_exception=_build_post_processing_integrity_exception,
         )
@@ -567,7 +571,7 @@ async def _run_post_processing(
         # 5b. Clean up empty source directory for usenet downloads (SABnzbd/NZBGet).
         # Torrent clients manage their own files (seeding), so we never touch those.
         # Only clean up when using "move" — copy/hardlink/symlink should preserve.
-        if should_cleanup_source_dir(method, download.download_client):
+        if cleanup_source and should_cleanup_source_dir(method, download.download_client):
             cleanup_start = _time.monotonic()
             cleanup_root = await _resolve_local_download_root(session, download)
             cleanup_dir = probe_root if probe_root != comic_file else comic_file.parent

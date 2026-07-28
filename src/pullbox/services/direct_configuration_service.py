@@ -35,6 +35,11 @@ _HOST_CREDENTIAL_FIELDS: dict[DirectArtifactHostKind, frozenset[str]] = {
 }
 
 
+def credential_fields_for_host(host_kind: DirectArtifactHostKind) -> tuple[str, ...]:
+    """Return the closed write-only credential contract for one host."""
+    return tuple(sorted(_HOST_CREDENTIAL_FIELDS[host_kind]))
+
+
 @dataclass(frozen=True, slots=True)
 class DirectProviderConfigRead:
     """Secret-free provider configuration projection for future APIs."""

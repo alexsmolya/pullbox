@@ -102,6 +102,33 @@ class MegaBridgeTransferError(RuntimeError):
         )
 
 
+class MegaBridgePausedError(MegaBridgeTransferError):
+    """MEGA pause outcome; SDK transfers restart from zero on resume."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="mega_transfer_paused",
+            message="The MEGA transfer was paused and will restart from the beginning.",
+            failure_class=DirectArtifactFailureClass.USER_ACTION,
+            retryable=True,
+            intervention=False,
+        )
+        self.bytes_transferred = 0
+
+
+class MegaBridgeCancelledError(MegaBridgeTransferError):
+    """Explicit user cancellation, distinct from process shutdown."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="mega_transfer_cancelled",
+            message="The MEGA transfer was cancelled.",
+            failure_class=DirectArtifactFailureClass.USER_ACTION,
+            retryable=False,
+            intervention=False,
+        )
+
+
 class MegaBridgeRunner:
     """Run one SDK-backed MEGA transfer without putting secrets in argv or env."""
 
@@ -129,6 +156,7 @@ class MegaBridgeRunner:
         session: str | None = None,
         expected_size: int | None = None,
         cancel_event: asyncio.Event | None = None,
+        pause_event: asyncio.Event | None = None,
         progress_callback: MegaProgressCallback | None = None,
     ) -> MegaBridgeTransferResult:
         """Download one MEGA artifact into an unused app-owned quarantine path."""
@@ -138,7 +166,7 @@ class MegaBridgeRunner:
         if expected_size is not None and expected_size < 0:
             raise ValueError("Expected MEGA transfer size cannot be negative.")
         if cancel_event is not None and cancel_event.is_set():
-            raise asyncio.CancelledError
+            raise MegaBridgeCancelledError
 
         proc = await asyncio.create_subprocess_exec(
             *self._command,
@@ -154,6 +182,7 @@ class MegaBridgeRunner:
 
         stderr_task = asyncio.create_task(_read_stderr_bounded(proc.stderr))
         cancel_task = asyncio.create_task(cancel_event.wait()) if cancel_event is not None else None
+        pause_task = asyncio.create_task(pause_event.wait()) if pause_event is not None else None
         completed_bytes: int | None = None
         filename_hint: str | None = None
         event_count = 0
@@ -176,6 +205,8 @@ class MegaBridgeRunner:
                 waiters: set[asyncio.Task[object]] = {line_task}
                 if cancel_task is not None:
                     waiters.add(cancel_task)
+                if pause_task is not None:
+                    waiters.add(pause_task)
                 done, _pending = await asyncio.wait(
                     waiters,
                     timeout=timeout,
@@ -184,7 +215,11 @@ class MegaBridgeRunner:
                 if cancel_task is not None and cancel_task in done:
                     line_task.cancel()
                     await _terminate_process(proc)
-                    raise asyncio.CancelledError
+                    raise MegaBridgeCancelledError
+                if pause_task is not None and pause_task in done:
+                    line_task.cancel()
+                    await _terminate_process(proc)
+                    raise MegaBridgePausedError
                 if line_task not in done:
                     line_task.cancel()
                     raise _timeout_error("mega_bridge_idle_timeout")
@@ -243,6 +278,8 @@ class MegaBridgeRunner:
         finally:
             if cancel_task is not None:
                 cancel_task.cancel()
+            if pause_task is not None:
+                pause_task.cancel()
             if not stderr_task.done():
                 stderr_task.cancel()
 
