@@ -58,6 +58,7 @@ async def test_mega_bridge_sends_link_and_session_only_over_stdin(
         tmp_path,
         body="""
 request = read_request()
+assert request[\"session\"] == \"revocable-account-session\"
 destination = Path(request[\"destination\"])
 destination.write_bytes(b\"comic\")
 emit(\"META 5 69737375652e63627a\")

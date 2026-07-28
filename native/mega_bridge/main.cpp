@@ -208,7 +208,14 @@ bool validateAccountSession(mega::MegaApi& api, const std::string& accountSessio
     }
     mega::SynchronousRequestListener listener;
     api.fastLogin(accountSession.c_str(), &listener);
-    return waitForRequest(listener, true);
+    if (!waitForRequest(listener, true))
+    {
+        return false;
+    }
+
+    mega::SynchronousRequestListener nodesListener;
+    api.fetchNodes(&nodesListener);
+    return waitForRequest(nodesListener, true);
 }
 
 std::string selectedFolderFileHandle(const std::string& link)
@@ -417,6 +424,8 @@ int main()
     if (!readBridgeRequest(request))
     {
         emitError("mega_bridge_protocol_error", false, true);
+        eraseSecret(request.link);
+        eraseSecret(request.accountSession);
         return 2;
     }
 
@@ -441,29 +450,44 @@ int main()
         return 1;
     }
 
-    bool success = false;
+    const auto accountCachePath = cachePath / "account";
+    const auto publicCachePath = cachePath / "public";
+    std::filesystem::create_directories(accountCachePath, pathError);
+    if (!pathError)
     {
-        mega::MegaApi api("", cachePath.string().c_str(), "Pullbox/1.1", 1);
-        if (validateAccountSession(api, request.accountSession))
+        std::filesystem::create_directories(publicCachePath, pathError);
+    }
+    if (pathError)
+    {
+        emitError("mega_bridge_cache_unavailable", true, false);
+        eraseSecret(request.link);
+        eraseSecret(request.accountSession);
+        std::filesystem::remove_all(cachePath, pathError);
+        return 1;
+    }
+
+    bool success = false;
+    const bool folderLink = isFolderLink(request.link);
+    if (!folderLink && !request.accountSession.empty())
+    {
+        mega::MegaApi accountApi(nullptr, accountCachePath.string().c_str(), "Pullbox/1.1", 1);
+        if (validateAccountSession(accountApi, request.accountSession))
         {
-            std::unique_ptr<mega::MegaNode> node;
-            if (isFolderLink(request.link))
+            auto node = resolveFileNode(accountApi, request.link);
+            if (node)
             {
-                mega::MegaApi folderApi("", cachePath.string().c_str(), "Pullbox/1.1", 1);
-                node = resolveFolderNode(folderApi, request.link);
-                if (node)
-                {
-                    success = transferNode(folderApi, *node, request.destination);
-                }
+                success = transferNode(accountApi, *node, request.destination);
             }
-            else
-            {
-                node = resolveFileNode(api, request.link);
-                if (node)
-                {
-                    success = transferNode(api, *node, request.destination);
-                }
-            }
+        }
+    }
+    else
+    {
+        mega::MegaApi publicApi(nullptr, publicCachePath.string().c_str(), "Pullbox/1.1", 1);
+        auto node = folderLink ? resolveFolderNode(publicApi, request.link)
+                               : resolveFileNode(publicApi, request.link);
+        if (node)
+        {
+            success = transferNode(publicApi, *node, request.destination);
         }
     }
 

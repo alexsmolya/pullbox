@@ -1,4 +1,4 @@
-"""DataNodes public and premium-session page-flow adapter."""
+"""DataNodes public page-flow adapter with visible challenge handling."""
 
 from __future__ import annotations
 
@@ -57,15 +57,13 @@ class DataNodesAdapter:
             expected_kind=self.host_kind,
             credentials=credentials,
         )
-        session = credentials.get("premium_session")
-        session_headers = {"Cookie": f"session={session}"} if session else {}
         page = await request_bounded(
             self._http_client,
             "GET",
             source_url,
             resolver=self._resolver,
             allowed_domains=_DATANODES_DOMAINS,
-            headers={"Accept": "text/html", **session_headers},
+            headers={"Accept": "text/html"},
         )
         document = page.text
         _reject_challenge(document)
@@ -82,7 +80,7 @@ class DataNodesAdapter:
                 post_url,
                 resolver=self._resolver,
                 allowed_domains=_DATANODES_DOMAINS,
-                headers={"Accept": "text/html", **session_headers},
+                headers={"Accept": "text/html"},
                 data={**form.fields, "method_free": "Free Download >>"},
             )
             _reject_challenge(response.text)
@@ -97,7 +95,6 @@ class DataNodesAdapter:
         return ResolvedTransfer(
             host_kind=self.host_kind,
             url=transfer_url,
-            headers=session_headers,
             expected_size=request.expected_size,
             etag=request.etag,
             last_modified=request.last_modified,

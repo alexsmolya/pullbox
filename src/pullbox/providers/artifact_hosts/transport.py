@@ -6,11 +6,11 @@ import asyncio
 import inspect
 import shutil
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 
@@ -209,7 +209,7 @@ class HttpArtifactTransport:
         resume_offset: int,
     ) -> httpx.Response:
         current_url = resolved.url
-        original_host = _hostname(current_url)
+        credential_origin: tuple[str, int] | None = None
         for redirect_count in range(self._policy.max_redirects + 1):
             try:
                 target = await validate_artifact_url(
@@ -220,18 +220,17 @@ class HttpArtifactTransport:
             except ArtifactHostResolutionError as exc:
                 raise _from_resolution_error(exc) from exc
 
-            if target.host != original_host and _has_sensitive_headers(resolved.headers):
-                raise ArtifactTransferError(
-                    code="artifact_redirect_credentials_blocked",
-                    message="The artifact host attempted an unsafe credentialed redirect.",
-                    failure_class=DirectArtifactFailureClass.SAFETY,
-                    retryable=False,
-                    intervention=True,
-                )
+            if credential_origin is None:
+                credential_origin = (target.host, target.port)
+            include_sensitive = (target.host, target.port) == credential_origin
 
             request_url, host_header = pinned_request_target(target)
             request_headers = {
-                **dict(resolved.headers),
+                **{
+                    name: value
+                    for name, value in resolved.headers.items()
+                    if include_sensitive or name.lower() not in _SENSITIVE_HEADER_NAMES
+                },
                 "Accept-Encoding": "identity",
                 "Host": host_header,
             }
@@ -570,19 +569,6 @@ def _is_expired(resolved: ResolvedTransfer) -> bool:
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
     return expires_at <= datetime.now(UTC)
-
-
-def _hostname(url: str) -> str:
-    try:
-        return (urlsplit(url).hostname or "").lower().rstrip(".")
-    except ValueError:
-        return ""
-
-
-def _has_sensitive_headers(headers: object) -> bool:
-    if not isinstance(headers, Mapping):
-        return False
-    return any(str(name).lower() in _SENSITIVE_HEADER_NAMES for name in headers)
 
 
 def _disk_free_bytes(path: Path) -> int:

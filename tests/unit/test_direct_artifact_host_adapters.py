@@ -29,9 +29,7 @@ from pullbox.providers.artifact_hosts.terabox import TeraBoxAdapter
 
 NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
 PIXELDRAIN_KEY = "pixeldrain-secret"
-MEDIAFIRE_SESSION = "mediafire-secret"
 TERABOX_SESSION = "terabox-secret"
-DATANODES_SESSION = "datanodes-secret"
 
 
 async def _resolve_public(_host: str, _port: int) -> Sequence[str]:
@@ -296,23 +294,105 @@ async def test_mediafire_resolves_the_bounded_public_download_anchor() -> None:
     assert transfer.headers == {}
 
 
-async def test_mediafire_account_session_is_origin_bound_and_layout_drift_is_visible() -> None:
-    async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["Cookie"] == f"session={MEDIAFIRE_SESSION}"
-        return httpx.Response(200, text="<html>layout changed</html>")
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+async def test_mediafire_rejects_unsupported_browser_session_credentials() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: pytest.fail("network request made"))
+    ) as client:
         with pytest.raises(ArtifactHostResolutionError) as raised:
             await MediaFireAdapter(client, resolver=_resolve_public).resolve(
                 _request(
                     DirectArtifactHostKind.MEDIAFIRE,
                     "https://www.mediafire.com/file/example/fixture.cbz/file",
                 ),
-                credentials={"session": MEDIAFIRE_SESSION},
+                credentials={"session": "mediafire-secret"},
             )
 
-    assert raised.value.code == "artifact_host_contract_changed"
-    assert MEDIAFIRE_SESSION not in repr(raised.value)
+    assert raised.value.code == "invalid_host_credentials"
+
+
+async def test_terabox_follows_the_current_official_share_redirect() -> None:
+    seen_hosts: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_hosts.append(request.headers["Host"])
+        assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
+        if request.headers["Host"] == "1024terabox.com":
+            return httpx.Response(
+                302,
+                headers={"Location": "https://www.terabox.app/s/1fixture"},
+            )
+        if request.headers["Host"] == "www.terabox.app":
+            return httpx.Response(
+                200,
+                text='<script>window.jsToken = "js-token";</script>',
+                headers={"Content-Type": "text/html"},
+            )
+        assert request.url.path == "/share/list"
+        return httpx.Response(
+            200,
+            json={
+                "errno": 0,
+                "list": [
+                    {
+                        "isdir": 0,
+                        "server_filename": "fixture.cbz",
+                        "size": 32768,
+                        "dlink": "https://d.terabox.com/file/signed?token=secret",
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await TeraBoxAdapter(client, resolver=_resolve_public).resolve(
+            _request(
+                DirectArtifactHostKind.TERABOX,
+                "https://1024terabox.com/s/1fixture",
+            ),
+            credentials={"session_token": TERABOX_SESSION},
+        )
+
+    assert seen_hosts == ["1024terabox.com", "www.terabox.app", "www.terabox.com"]
+    assert transfer.expected_size == 32768
+
+
+async def test_terabox_extracts_the_current_percent_encoded_js_token() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
+        if request.url.path == "/s/1fixture":
+            return httpx.Response(
+                200,
+                text=(
+                    "<script>try { eval(decodeURIComponent(`"
+                    "function%20fn(a)%7Bwindow.jsToken%20%3D%20a%7D%3B"
+                    "fn(%22encoded-js-token%22)`)) } catch (ex) {}</script>"
+                ),
+                headers={"Content-Type": "text/html"},
+            )
+        assert request.url.path == "/share/list"
+        assert request.url.params["jsToken"] == "encoded-js-token"
+        return httpx.Response(
+            200,
+            json={
+                "errno": 0,
+                "list": [
+                    {
+                        "isdir": 0,
+                        "server_filename": "fixture.cbz",
+                        "size": 32768,
+                        "dlink": "https://d.terabox.com/file/signed?token=secret",
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await TeraBoxAdapter(client, resolver=_resolve_public).resolve(
+            _request(DirectArtifactHostKind.TERABOX, "https://www.1024tera.com/s/1fixture"),
+            credentials={"session_token": TERABOX_SESSION},
+        )
+
+    assert transfer.expected_size == 32768
 
 
 async def test_terabox_session_resolves_share_metadata_to_a_direct_link() -> None:
@@ -363,6 +443,40 @@ async def test_terabox_expired_session_requires_reauthentication() -> None:
         )
     )
     async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ArtifactHostResolutionError) as raised:
+            await TeraBoxAdapter(client, resolver=_resolve_public).resolve(
+                _request(DirectArtifactHostKind.TERABOX, "https://terabox.com/s/1fixture"),
+                credentials={"cookie": TERABOX_SESSION},
+            )
+
+    assert raised.value.code == "artifact_host_auth_required"
+    assert raised.value.failure_class is DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED
+    assert TERABOX_SESSION not in repr(raised.value)
+
+
+async def test_terabox_missing_direct_link_requires_reauthentication() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/s/1fixture":
+            return httpx.Response(
+                200,
+                text='<script>window.jsToken = "js-token";</script>',
+                headers={"Content-Type": "text/html"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "errno": 0,
+                "list": [
+                    {
+                        "isdir": 0,
+                        "server_filename": "fixture.cbz",
+                        "size": 32768,
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(ArtifactHostResolutionError) as raised:
             await TeraBoxAdapter(client, resolver=_resolve_public).resolve(
                 _request(DirectArtifactHostKind.TERABOX, "https://terabox.com/s/1fixture"),
@@ -430,10 +544,9 @@ async def test_datanodes_challenge_enters_visible_intervention() -> None:
                     DirectArtifactHostKind.DATANODES,
                     "https://datanodes.to/fixture/fixture.cbz",
                 ),
-                credentials={"premium_session": DATANODES_SESSION},
+                credentials={},
             )
 
     assert raised.value.code == "artifact_host_challenge"
     assert raised.value.failure_class is DirectArtifactFailureClass.ARTIFACT_HOST_CHALLENGE
     assert raised.value.intervention is True
-    assert DATANODES_SESSION not in repr(raised.value)

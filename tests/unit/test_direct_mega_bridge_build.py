@@ -43,6 +43,22 @@ def test_mega_bridge_uses_stdin_protocol_and_official_sdk_controls() -> None:
     assert "session=" not in source
 
 
+def test_mega_bridge_uses_account_session_for_files_without_leaking_into_folders() -> None:
+    source = BRIDGE_SOURCE.read_text(encoding="utf-8")
+
+    assert 'const auto accountCachePath = cachePath / "account";' in source
+    assert 'const auto publicCachePath = cachePath / "public";' in source
+    assert "validateAccountSession(accountApi, request.accountSession)" in source
+    assert "mega::MegaApi accountApi(nullptr" in source
+    assert "mega::MegaApi publicApi(nullptr" in source
+    assert "appKey" not in source
+    assert "api.fetchNodes(&nodesListener)" in source
+    assert source.index("api.fastLogin") < source.index("api.fetchNodes")
+    assert "resolveFileNode(accountApi, request.link)" in source
+    assert "resolveFolderNode(publicApi, request.link)" in source
+    assert "resolveFolderNode(accountApi, request.link)" not in source
+
+
 def test_mega_bridge_build_disables_unneeded_sdk_features() -> None:
     cmake = BRIDGE_CMAKE.read_text(encoding="utf-8")
 

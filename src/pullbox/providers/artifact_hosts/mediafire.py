@@ -1,4 +1,4 @@
-"""MediaFire public-share resolution with optional user session binding."""
+"""MediaFire anonymous public-share resolution."""
 
 from __future__ import annotations
 
@@ -50,19 +50,14 @@ class MediaFireAdapter:
             expected_kind=self.host_kind,
             credentials=credentials,
         )
-        headers = _session_headers(credentials)
         page = await request_bounded(
             self._http_client,
             "GET",
             source_url,
             resolver=self._resolver,
             allowed_domains=_MEDIAFIRE_DOMAINS,
-            headers={"Accept": "text/html", **headers},
+            headers={"Accept": "text/html"},
         )
-        if page.status_code in {401, 403} and headers:
-            from pullbox.providers.artifact_hosts.helpers import auth_required
-
-            raise auth_required()
         if page.status_code != 200:
             raise contract_changed()
         parsed = parse_host_page(page.text)
@@ -78,7 +73,6 @@ class MediaFireAdapter:
         return ResolvedTransfer(
             host_kind=self.host_kind,
             url=transfer_url,
-            headers=headers,
             expected_size=request.expected_size,
             etag=request.etag,
             last_modified=request.last_modified,
@@ -87,8 +81,3 @@ class MediaFireAdapter:
             range_supported=False,
             allowed_domains=_MEDIAFIRE_DOMAINS,
         )
-
-
-def _session_headers(credentials: Mapping[str, str]) -> dict[str, str]:
-    session = credentials.get("session")
-    return {"Cookie": f"session={session}"} if session else {}

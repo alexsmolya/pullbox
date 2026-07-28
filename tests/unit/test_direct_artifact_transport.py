@@ -344,6 +344,53 @@ async def test_http_transport_revalidates_redirect_and_rejects_private_target(
 
 
 @pytest.mark.asyncio
+async def test_http_transport_strips_sensitive_headers_on_cross_host_redirect(
+    tmp_path: Path,
+) -> None:
+    seen_headers: list[httpx.Headers] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(request.headers)
+        if request.headers["host"] == "files.example.com":
+            return httpx.Response(
+                302,
+                headers={"location": "https://cdn.example.com/issue.cbz"},
+            )
+        assert request.headers["host"] == "cdn.example.com"
+        return httpx.Response(200, content=b"fixture")
+
+    root, destination = _quarantine_paths(tmp_path)
+    resolved = ResolvedTransfer(
+        host_kind=DirectArtifactHostKind.TERABOX,
+        url="https://files.example.com/issue.cbz",
+        headers={
+            "Cookie": "session=secret",
+            "Authorization": "Bearer secret",
+            "X-Artifact-Request": "fixture",
+        },
+        expected_size=7,
+        allowed_domains=("example.com",),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+        ).transfer(
+            resolved=resolved,
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert seen_headers[0]["cookie"] == "session=secret"
+    assert seen_headers[0]["authorization"] == "Bearer secret"
+    assert seen_headers[0]["x-artifact-request"] == "fixture"
+    assert "cookie" not in seen_headers[1]
+    assert "authorization" not in seen_headers[1]
+    assert seen_headers[1]["x-artifact-request"] == "fixture"
+    assert destination.read_bytes() == b"fixture"
+
+
+@pytest.mark.asyncio
 async def test_http_transport_idle_timeout_is_retryable_and_preserves_crash_checkpoint(
     tmp_path: Path,
 ) -> None:

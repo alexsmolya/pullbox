@@ -459,8 +459,19 @@ class TestSettingsRouteContracts:
         assert 'data-testid="settings-direct-host-toggle-pixeldrain"' in response.text
         assert "Artifact hosts" in response.text
         assert "PixelDrain" in response.text
+        assert "MEGA" in response.text
         assert "TeraBox" in response.text
         assert "API key" in response.text
+        assert (
+            "Public links work anonymously. Account-backed access uses a revocable session."
+            in response.text
+        )
+        assert "developer application key" not in response.text
+        assert (
+            "Free public attempts use visible challenge handling. Premium mode is not enabled."
+            in response.text
+        )
+        assert "Premium session" not in response.text
         assert "Account required" in response.text
         assert "pixeldrain-secret-must-not-render" not in response.text
 

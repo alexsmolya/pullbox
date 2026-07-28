@@ -29,9 +29,9 @@ _HOST_CREDENTIAL_FIELDS: dict[DirectArtifactHostKind, frozenset[str]] = {
     DirectArtifactHostKind.PIXELDRAIN: frozenset({"api_key"}),
     DirectArtifactHostKind.MEGA: frozenset({"session"}),
     DirectArtifactHostKind.ROOTZ: frozenset(),
-    DirectArtifactHostKind.MEDIAFIRE: frozenset({"session"}),
+    DirectArtifactHostKind.MEDIAFIRE: frozenset(),
     DirectArtifactHostKind.TERABOX: frozenset({"session_token", "cookie"}),
-    DirectArtifactHostKind.DATANODES: frozenset({"premium_session"}),
+    DirectArtifactHostKind.DATANODES: frozenset(),
 }
 
 

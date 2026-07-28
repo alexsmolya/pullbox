@@ -59,7 +59,13 @@ async def test_list_exposes_every_closed_host_without_writing_defaults(
     mediafire = next(
         setting for setting in settings if setting.host_kind is DirectArtifactHostKind.MEDIAFIRE
     )
-    assert mediafire.allowed_credential_fields == ("session",)
+    assert mediafire.allowed_credential_fields == ()
+    mega = next(setting for setting in settings if setting.host_kind is DirectArtifactHostKind.MEGA)
+    assert mega.allowed_credential_fields == ("session",)
+    datanodes = next(
+        setting for setting in settings if setting.host_kind is DirectArtifactHostKind.DATANODES
+    )
+    assert datanodes.allowed_credential_fields == ()
 
 
 @pytest.mark.asyncio
@@ -110,6 +116,23 @@ async def test_update_preserves_secret_when_only_preference_changes(
     assert updated.enabled is True
     assert updated.preference == 5
     assert updated.configured_credential_fields == ("session",)
+    stored = await session.get(DirectHostConfig, updated.id)
+    assert stored is not None
+    assert is_encrypted(str(stored.encrypted_credentials["session"]))
+
+
+@pytest.mark.asyncio
+async def test_mega_rejects_obsolete_application_key_setting(
+    session: AsyncSession,
+) -> None:
+    with pytest.raises(ValidationError, match="Unsupported credential field"):
+        await update_direct_host_setting(
+            session,
+            DirectArtifactHostKind.MEGA,
+            enabled=True,
+            preference=50,
+            credential_updates={"app_key": "obsolete-application-key"},
+        )
 
 
 @pytest.mark.asyncio

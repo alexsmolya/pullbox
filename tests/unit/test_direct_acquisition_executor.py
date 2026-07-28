@@ -248,6 +248,26 @@ class _PausedMegaRunner:
         raise MegaBridgePausedError
 
 
+class _SuccessfulMegaRunner:
+    def __init__(self) -> None:
+        self.session: str | None = None
+
+    async def transfer(self, **kwargs: Any) -> MegaBridgeTransferResult:
+        self.session = kwargs["session"]
+        assert "app_key" not in kwargs
+        destination = kwargs["destination"]
+        with zipfile.ZipFile(destination, "w") as archive:
+            archive.writestr("001.jpg", b"synthetic fixture")
+        size = destination.stat().st_size
+        await kwargs["progress_callback"](size, size)
+        return MegaBridgeTransferResult(
+            bytes_transferred=size,
+            filename_hint="issue.cbz",
+            command_summary="pullbox-mega-bridge",
+            _destination=destination,
+        )
+
+
 def _executor(
     tmp_path: Path,
     *,
@@ -645,6 +665,55 @@ async def test_mega_pause_discards_partial_and_restarts_from_zero(
     assert artifact.bytes_transferred == 0
     assert artifact.etag is None
     assert not Path(artifact.quarantine_path or "").exists()
+
+
+@pytest.mark.asyncio
+async def test_executor_forwards_mega_session_to_bridge_only(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    account_session = "mega-revocable-session"
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.host_kind = DirectArtifactHostKind.MEGA
+    session.add(attempt)
+    await session.commit()
+
+    async def mega_source() -> HostResolutionRequest:
+        return HostResolutionRequest(
+            artifact_identity="artifact-1",
+            host_kind=DirectArtifactHostKind.MEGA,
+            share_url="https://mega.nz/file/fixture#fixture-key",
+            final_url=None,
+        )
+
+    resolved = ResolvedTransfer(
+        host_kind=DirectArtifactHostKind.MEGA,
+        url="https://mega.nz/file/fixture#fixture-key",
+        allowed_domains=("mega.nz",),
+        transport_protocol=ArtifactTransferProtocol.MEGA_BRIDGE,
+        bridge_session=account_session,
+    )
+    mega_runner = _SuccessfulMegaRunner()
+    executor = DirectAcquisitionExecutor(
+        host_resolver=_FakeResolver(resolved),
+        http_transport=object(),
+        mega_runner=mega_runner,
+        quarantine=DirectArtifactQuarantine(tmp_path / "quarantine"),
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    result = await executor.execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=mega_source,
+    )
+
+    assert result.state is DirectAcquisitionState.COMPLETED
+    assert mega_runner.session == account_session
+    assert account_session not in repr(attempt.progress_snapshot)
 
 
 @pytest.mark.asyncio

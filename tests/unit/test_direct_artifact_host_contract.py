@@ -34,6 +34,8 @@ from pullbox.providers.artifact_hosts.registry import classify_artifact_host
         ),
         ("https://terabox.com/s/example", DirectArtifactHostKind.TERABOX),
         ("https://www.1024terabox.com/s/example", DirectArtifactHostKind.TERABOX),
+        ("https://www.1024tera.com/s/example", DirectArtifactHostKind.TERABOX),
+        ("https://www.terabox.app/s/example", DirectArtifactHostKind.TERABOX),
         ("https://datanodes.to/example", DirectArtifactHostKind.DATANODES),
         ("https://s1.datanodes.to/d/example/fixture.cbz", DirectArtifactHostKind.DATANODES),
         ("https://files.example.test/fixture.cbz", DirectArtifactHostKind.GENERIC_HTTPS),
@@ -89,21 +91,11 @@ def test_unknown_https_is_only_a_generic_transport_candidate() -> None:
         (DirectArtifactHostKind.ROOTZ, {}, ArtifactHostCredentialMode.ANONYMOUS),
         (DirectArtifactHostKind.MEDIAFIRE, {}, ArtifactHostCredentialMode.ANONYMOUS),
         (
-            DirectArtifactHostKind.MEDIAFIRE,
-            {"session": "secret"},
-            ArtifactHostCredentialMode.ACCOUNT,
-        ),
-        (
             DirectArtifactHostKind.TERABOX,
             {"cookie": "secret"},
             ArtifactHostCredentialMode.ACCOUNT,
         ),
         (DirectArtifactHostKind.DATANODES, {}, ArtifactHostCredentialMode.ANONYMOUS),
-        (
-            DirectArtifactHostKind.DATANODES,
-            {"premium_session": "secret"},
-            ArtifactHostCredentialMode.ACCOUNT,
-        ),
     ],
 )
 def test_host_credential_modes_are_explicit(
@@ -112,6 +104,38 @@ def test_host_credential_modes_are_explicit(
     expected: ArtifactHostCredentialMode,
 ) -> None:
     assert credential_mode_for_host(kind, credentials) is expected
+
+
+def test_mediafire_rejects_unsupported_browser_session_credentials() -> None:
+    with pytest.raises(ArtifactHostResolutionError) as raised:
+        credential_mode_for_host(
+            DirectArtifactHostKind.MEDIAFIRE,
+            {"session": "secret"},
+        )
+
+    assert raised.value.code == "invalid_host_credentials"
+
+
+def test_mega_rejects_obsolete_application_key_credentials() -> None:
+    with pytest.raises(ArtifactHostResolutionError) as raised:
+        credential_mode_for_host(
+            DirectArtifactHostKind.MEGA,
+            {"app_key": "obsolete-application-key"},
+        )
+
+    assert raised.value.code == "invalid_host_credentials"
+    assert raised.value.intervention is True
+
+
+def test_datanodes_rejects_unverified_premium_session_credentials() -> None:
+    with pytest.raises(ArtifactHostResolutionError) as raised:
+        credential_mode_for_host(
+            DirectArtifactHostKind.DATANODES,
+            {"premium_session": "unverified-session"},
+        )
+
+    assert raised.value.code == "invalid_host_credentials"
+    assert raised.value.intervention is True
 
 
 def test_terabox_without_a_session_requires_visible_authentication() -> None:

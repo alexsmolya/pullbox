@@ -38,6 +38,12 @@ async def test_host_settings_list_exposes_closed_registry_without_secrets(
     assert all(item["id"] is None for item in payload)
     pixeldrain = next(item for item in payload if item["host_kind"] == "pixeldrain")
     assert pixeldrain["allowed_credential_fields"] == ["api_key"]
+    mega = next(item for item in payload if item["host_kind"] == "mega")
+    assert mega["allowed_credential_fields"] == ["session"]
+    mediafire = next(item for item in payload if item["host_kind"] == "mediafire")
+    assert mediafire["allowed_credential_fields"] == []
+    datanodes = next(item for item in payload if item["host_kind"] == "datanodes")
+    assert datanodes["allowed_credential_fields"] == []
     assert "credential_updates" not in response.text
 
 
@@ -84,6 +90,66 @@ async def test_account_required_host_rejects_enable_without_session(
 
     assert response.status_code == 422
     assert "requires an account session" in response.text
+
+
+async def test_mega_setting_encrypts_session_without_returning_it(
+    authenticated_client: AsyncClient,
+    sec_db: async_sessionmaker[AsyncSession],
+) -> None:
+    session_secret = "mega-revocable-session"
+    response = await authenticated_client.patch(
+        "/api/v1/direct-hosts/mega",
+        headers=_csrf_header(authenticated_client),
+        json={
+            "enabled": True,
+            "credential_updates": {"session": session_secret},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["configured_credential_fields"] == ["session"]
+    assert session_secret not in response.text
+    async with sec_db() as session:
+        stored = (
+            await session.execute(
+                select(DirectHostConfig).where(
+                    DirectHostConfig.host_kind == DirectArtifactHostKind.MEGA
+                )
+            )
+        ).scalar_one()
+        assert is_encrypted(str(stored.encrypted_credentials["session"]))
+
+
+async def test_mega_setting_rejects_obsolete_application_key(
+    authenticated_client: AsyncClient,
+) -> None:
+    response = await authenticated_client.patch(
+        "/api/v1/direct-hosts/mega",
+        headers=_csrf_header(authenticated_client),
+        json={
+            "enabled": True,
+            "credential_updates": {"app_key": "obsolete-application-key"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Unsupported credential field" in response.text
+
+
+async def test_datanodes_setting_rejects_unverified_premium_session(
+    authenticated_client: AsyncClient,
+) -> None:
+    response = await authenticated_client.patch(
+        "/api/v1/direct-hosts/datanodes",
+        headers=_csrf_header(authenticated_client),
+        json={
+            "enabled": True,
+            "credential_updates": {"premium_session": "unverified-session"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "does not accept credentials" in response.text
 
 
 async def test_host_setting_routes_require_interactive_authentication(

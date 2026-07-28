@@ -27,11 +27,13 @@ _HOST_FAMILIES: tuple[tuple[DirectArtifactHostKind, frozenset[str]], ...] = (
         frozenset(
             {
                 "1024terabox.com",
+                "1024tera.com",
                 "4funbox.com",
                 "dubox.com",
                 "mirrobox.com",
                 "momerybox.com",
                 "terabox.com",
+                "terabox.app",
                 "teraboxapp.com",
                 "teraboxlink.com",
                 "terasharefile.com",

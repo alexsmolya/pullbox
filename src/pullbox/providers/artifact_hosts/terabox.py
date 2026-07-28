@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from pullbox.models.direct_acquisition import DirectArtifactHostKind
 from pullbox.providers.artifact_hosts.contract import HostResolutionRequest, ResolvedTransfer
@@ -27,11 +27,13 @@ if TYPE_CHECKING:
 
 _TERABOX_DOMAINS = (
     "1024terabox.com",
+    "1024tera.com",
     "4funbox.com",
     "dubox.com",
     "mirrobox.com",
     "momerybox.com",
     "terabox.com",
+    "terabox.app",
     "teraboxapp.com",
     "teraboxlink.com",
     "terasharefile.com",
@@ -39,12 +41,17 @@ _TERABOX_DOMAINS = (
 _TERABOX_TRANSFER_DOMAINS = (
     "baidupcs.com",
     "terabox.com",
+    "terabox.app",
     "teraboxapp.com",
     "teraboxcdn.com",
 )
+_MAX_TOKEN_SCRIPT_LENGTH = 4096
 _JS_TOKEN_PATTERNS = (
     re.compile(r"\bjsToken\s*=\s*['\"]([^'\"]{4,2048})['\"]"),
     re.compile(r"['\"]jsToken['\"]\s*:\s*['\"]([^'\"]{4,2048})['\"]"),
+)
+_ENCODED_TOKEN_PATTERN = re.compile(
+    r"\bfn\(\s*(['\"])([^'\"]{4,2048})\1\s*\)",
 )
 _AUTH_ERRNOS = frozenset({-6, -9, 400141, 4000020})
 
@@ -123,7 +130,9 @@ class TeraBoxAdapter:
         item = items[0]
         transfer_url = item.get("dlink")
         if not isinstance(transfer_url, str):
-            raise contract_changed()
+            # TeraBox returns public metadata with errno=0 for expired sessions,
+            # but withholds the signed download link until the user reauthenticates.
+            raise auth_required()
         await validate_artifact_url(
             transfer_url,
             allowed_domains=_TERABOX_TRANSFER_DOMAINS,
@@ -161,4 +170,13 @@ def _extract_js_token(document: str) -> str:
         match = pattern.search(document)
         if match:
             return match.group(1)
+    marker = document.find("jsToken")
+    if marker >= 0:
+        start = document.rfind("<script", 0, marker)
+        end = document.find("</script>", marker)
+        if start >= 0 and end >= 0 and end - start <= _MAX_TOKEN_SCRIPT_LENGTH:
+            decoded = unquote(document[start:end])
+            match = _ENCODED_TOKEN_PATTERN.search(decoded)
+            if match:
+                return match.group(2)
     raise contract_changed()

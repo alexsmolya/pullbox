@@ -23,18 +23,17 @@
 {%- set host_descriptions = {
   'generic_https': 'Validated final-file links only. HTML landing pages are rejected.',
   'pixeldrain': 'Anonymous downloads with an optional account API key.',
-  'mega': 'Public links with an optional revocable account session.',
+  'mega': 'Public links work anonymously. Account-backed access uses a revocable session.',
   'rootz': 'Anonymous short-link resolution. No account credential is used.',
-  'mediafire': 'Anonymous public shares with an optional browser session.',
+  'mediafire': 'Anonymous public shares through MediaFire download pages.',
   'terabox': 'Account required. Uses an encrypted user-owned session or cookie.',
-  'datanodes': 'Free public attempts with visible challenge handling and an optional premium session.'
+  'datanodes': 'Free public attempts use visible challenge handling. Premium mode is not enabled.'
 } -%}
 {%- set credential_labels = {
   'api_key': 'API key',
   'session': 'Session',
   'session_token': 'Session token',
   'cookie': 'Session cookie',
-  'premium_session': 'Premium session'
 } -%}
 
 <div
@@ -725,7 +724,6 @@ function directProviderSettings(initialProviders, initialResolver, initialHosts)
         session: 'Session',
         session_token: 'Session token',
         cookie: 'Session cookie',
-        premium_session: 'Premium session',
       }[field] || field.replaceAll('_', ' ');
     },
 
