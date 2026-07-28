@@ -21,11 +21,14 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactHostKind,
     DirectArtifactRouteKind,
     DirectArtifactState,
+    DirectHostAccountState,
+    DirectHostConfig,
 )
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.artifact_hosts.contract import (
+    ArtifactHostResolutionError,
     ArtifactTransferProtocol,
     HostResolutionRequest,
     ResolvedTransfer,
@@ -45,6 +48,7 @@ from pullbox.providers.artifact_hosts.transport_contract import (
 from pullbox.services.direct_acquisition_executor import DirectAcquisitionExecutor
 from pullbox.services.direct_artifact_post_processing import DirectPostProcessingResult
 from pullbox.services.direct_artifact_quarantine import DirectArtifactQuarantine
+from pullbox.services.direct_configuration_service import update_host_credentials
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -157,6 +161,25 @@ class _FakeResolver:
         self.calls += 1
         assert request.artifact_identity == "artifact-1"
         assert credentials == {}
+        return self.resolved
+
+
+@dataclass
+class _AccountResolver:
+    resolved: ResolvedTransfer | None = None
+    error: ArtifactHostResolutionError | None = None
+
+    async def resolve(
+        self,
+        request: HostResolutionRequest,
+        *,
+        credentials: Any,
+    ) -> ResolvedTransfer:
+        assert request.host_kind is DirectArtifactHostKind.PIXELDRAIN
+        assert credentials == {"api_key": "configured-pixeldrain-key"}
+        if self.error is not None:
+            raise self.error
+        assert self.resolved is not None
         return self.resolved
 
 
@@ -435,6 +458,113 @@ async def test_executor_recovers_inflight_transfer_from_persisted_checkpoint(
     assert transport.checkpoint is not None
     assert transport.checkpoint.bytes_transferred == len(b"partial")
     assert transport.checkpoint.etag == '"stable"'
+
+
+@pytest.mark.asyncio
+async def test_credentialed_resolution_records_healthy_account_state(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.host_kind = DirectArtifactHostKind.PIXELDRAIN
+    config = DirectHostConfig(
+        host_kind=DirectArtifactHostKind.PIXELDRAIN,
+        enabled=True,
+    )
+    update_host_credentials(config, {"api_key": "configured-pixeldrain-key"})
+    session.add_all([attempt, config])
+    await session.commit()
+    resolved = ResolvedTransfer(
+        host_kind=DirectArtifactHostKind.PIXELDRAIN,
+        url="https://pixeldrain.com/api/file/fixture",
+        etag='"stable"',
+        allowed_domains=("pixeldrain.com",),
+    )
+
+    async def source() -> HostResolutionRequest:
+        return HostResolutionRequest(
+            artifact_identity="artifact-1",
+            host_kind=DirectArtifactHostKind.PIXELDRAIN,
+            share_url="https://pixeldrain.com/u/fixture",
+            final_url=None,
+        )
+
+    executor = DirectAcquisitionExecutor(
+        host_resolver=_AccountResolver(resolved=resolved),
+        http_transport=_SuccessfulTransport(),
+        mega_runner=object(),
+        quarantine=DirectArtifactQuarantine(tmp_path / "quarantine"),
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    result = await executor.execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=source,
+    )
+
+    await session.refresh(config)
+    assert result.state is DirectAcquisitionState.COMPLETED
+    assert config.account_state is DirectHostAccountState.HEALTHY
+    assert config.last_tested_at == NOW
+    assert config.last_error_code is None
+
+
+@pytest.mark.asyncio
+async def test_credentialed_auth_failure_records_reauthentication_state(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.host_kind = DirectArtifactHostKind.PIXELDRAIN
+    config = DirectHostConfig(
+        host_kind=DirectArtifactHostKind.PIXELDRAIN,
+        enabled=True,
+    )
+    update_host_credentials(config, {"api_key": "configured-pixeldrain-key"})
+    session.add_all([attempt, config])
+    await session.commit()
+    error = ArtifactHostResolutionError(
+        code="artifact_host_auth_required",
+        message="This artifact host requires account authentication.",
+        failure_class=DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED,
+        retryable=False,
+        intervention=True,
+    )
+
+    async def source() -> HostResolutionRequest:
+        return HostResolutionRequest(
+            artifact_identity="artifact-1",
+            host_kind=DirectArtifactHostKind.PIXELDRAIN,
+            share_url="https://pixeldrain.com/u/fixture",
+            final_url=None,
+        )
+
+    executor = DirectAcquisitionExecutor(
+        host_resolver=_AccountResolver(error=error),
+        http_transport=object(),
+        mega_runner=object(),
+        quarantine=DirectArtifactQuarantine(tmp_path / "quarantine"),
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    result = await executor.execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=source,
+    )
+
+    await session.refresh(config)
+    assert result.state is DirectAcquisitionState.INTERVENTION
+    assert config.account_state is DirectHostAccountState.AUTHENTICATION_REQUIRED
+    assert config.last_tested_at == NOW
+    assert config.last_error_code == "artifact_host_auth_required"
 
 
 @pytest.mark.asyncio

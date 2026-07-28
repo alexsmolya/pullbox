@@ -22,6 +22,7 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactHostKind,
     DirectArtifactRouteKind,
     DirectArtifactState,
+    DirectHostAccountState,
     DirectHostConfig,
 )
 from pullbox.providers.artifact_hosts.contract import (
@@ -157,15 +158,17 @@ class DirectAcquisitionExecutor:
             await _enter_resolving(session, attempt, artifact, progress)
             request = await source_factory()
             _validate_source_request(request, artifact)
-            credentials = await _load_host_credentials(session, artifact.host_kind)
+            credentials, host_config_id = await _load_host_credentials(
+                session,
+                artifact.host_kind,
+            )
 
             async with self._limiter.slot(artifact.host_kind):
-                resolved = cast(
-                    "ResolvedTransfer",
-                    await self._host_resolver.resolve(
-                        request,
-                        credentials=credentials,
-                    ),
+                resolved = await self._resolve_host(
+                    session,
+                    request=request,
+                    credentials=credentials,
+                    host_config_id=host_config_id,
                 )
                 await _enter_downloading(session, attempt, artifact, workspace, progress)
                 transfer_result = await self._transfer(
@@ -176,6 +179,7 @@ class DirectAcquisitionExecutor:
                     resolved=resolved,
                     source_factory=source_factory,
                     credentials=credentials,
+                    host_config_id=host_config_id,
                     progress=progress,
                     cancel_event=cancel_event,
                     pause_event=pause_event,
@@ -228,6 +232,35 @@ class DirectAcquisitionExecutor:
             await session.commit()
             raise
 
+    async def _resolve_host(
+        self,
+        session: AsyncSession,
+        *,
+        request: HostResolutionRequest,
+        credentials: dict[str, str],
+        host_config_id: int | None,
+    ) -> ResolvedTransfer:
+        try:
+            resolved = cast(
+                "ResolvedTransfer",
+                await self._host_resolver.resolve(request, credentials=credentials),
+            )
+        except ArtifactHostResolutionError as exc:
+            await _record_host_account_result(
+                session,
+                host_config_id=host_config_id,
+                checked_at=self._now(),
+                error=exc,
+            )
+            raise
+        await _record_host_account_result(
+            session,
+            host_config_id=host_config_id,
+            checked_at=self._now(),
+            error=None,
+        )
+        return resolved
+
     async def _transfer(
         self,
         *,
@@ -238,6 +271,7 @@ class DirectAcquisitionExecutor:
         resolved: ResolvedTransfer,
         source_factory: SourceFactory,
         credentials: dict[str, str],
+        host_config_id: int | None,
         progress: _ProgressWriter,
         cancel_event: asyncio.Event | None,
         pause_event: asyncio.Event | None,
@@ -294,12 +328,11 @@ class DirectAcquisitionExecutor:
         async def refresh_transfer() -> ResolvedTransfer:
             refreshed_request = await source_factory()
             _validate_source_request(refreshed_request, artifact)
-            return cast(
-                "ResolvedTransfer",
-                await self._host_resolver.resolve(
-                    refreshed_request,
-                    credentials=credentials,
-                ),
+            return await self._resolve_host(
+                session,
+                request=refreshed_request,
+                credentials=credentials,
+                host_config_id=host_config_id,
             )
 
         result = await self._http_transport.transfer(
@@ -579,13 +612,14 @@ async def _enter_downloading(
 async def _load_host_credentials(
     session: AsyncSession,
     host_kind: DirectArtifactHostKind,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], int | None]:
     result = await session.execute(
         select(DirectHostConfig).where(DirectHostConfig.host_kind == host_kind)
     )
     config = result.scalar_one_or_none()
     if config is None:
-        return {}
+        await session.commit()
+        return {}, None
     if not config.enabled:
         raise ArtifactHostResolutionError(
             code="artifact_host_disabled",
@@ -594,7 +628,39 @@ async def _load_host_credentials(
             retryable=False,
             intervention=True,
         )
-    return load_host_credential_material(config).credentials
+    credentials = load_host_credential_material(config).credentials
+    config_id = config.id if credentials else None
+    await session.commit()
+    return credentials, config_id
+
+
+async def _record_host_account_result(
+    session: AsyncSession,
+    *,
+    host_config_id: int | None,
+    checked_at: datetime,
+    error: ArtifactHostResolutionError | None,
+) -> None:
+    if host_config_id is None:
+        return
+    config = await session.get(DirectHostConfig, host_config_id)
+    if config is None:
+        return
+    config.last_tested_at = checked_at
+    config.last_error_code = error.code if error is not None else None
+    config.quota_remaining = None
+    config.quota_reset_at = None
+    if error is None:
+        config.account_state = DirectHostAccountState.HEALTHY
+    elif error.failure_class is DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED:
+        config.account_state = DirectHostAccountState.AUTHENTICATION_REQUIRED
+    elif error.failure_class is DirectArtifactFailureClass.HOST_QUOTA:
+        config.account_state = DirectHostAccountState.QUOTA_LIMITED
+        config.quota_remaining = 0
+    elif error.failure_class is DirectArtifactFailureClass.TRANSIENT_HOST:
+        config.account_state = DirectHostAccountState.UNAVAILABLE
+    else:
+        config.account_state = DirectHostAccountState.UNKNOWN
 
 
 def _validate_source_request(
