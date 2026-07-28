@@ -85,6 +85,7 @@ async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch
     )
     runtime = SimpleNamespace(
         registry=ProviderRegistry(),
+        direct_providers=(),
         failure_threshold=3,
         two_pass_enabled=False,
         indexer_configs={},
@@ -118,8 +119,8 @@ async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch
     )
     monkeypatch.setattr(
         search_task,
-        "_persist_bulk_search_log",
-        AsyncMock(),
+        "_persist_series_search_outcome",
+        AsyncMock(return_value=(0, 0, 0)),
     )
     monkeypatch.setattr(search_task, "_build_download_service", MagicMock())
     monkeypatch.setattr(search_task, "InterventionService", MagicMock())
@@ -154,6 +155,7 @@ async def test_search_wanted_retries_pending_history_before_provider_search(monk
     )
     runtime = SimpleNamespace(
         registry=ProviderRegistry(),
+        direct_providers=(),
         failure_threshold=3,
         two_pass_enabled=False,
         indexer_configs={},
@@ -168,6 +170,10 @@ async def test_search_wanted_retries_pending_history_before_provider_search(monk
         await session.commit()
         return {123: 1}
 
+    async def _persist_outcome(session, **_kwargs):  # type: ignore[no-untyped-def]
+        await session.commit()
+        return 0, 0, 0
+
     monkeypatch.setattr(search_task, "get_session_factory", lambda: factory)
     monkeypatch.setattr(
         search_task,
@@ -181,6 +187,7 @@ async def test_search_wanted_retries_pending_history_before_provider_search(monk
     )
     monkeypatch.setattr(search_task, "_create_pending_wanted_search_logs", _create_pending_logs)
     monkeypatch.setattr(search_task.SearchService, "search_wanted", search_mock)
+    monkeypatch.setattr(search_task, "_persist_wanted_search_outcome", _persist_outcome)
     monkeypatch.setattr(
         search_task.BlocklistService,
         "filter_results",

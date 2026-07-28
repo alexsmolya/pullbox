@@ -299,7 +299,11 @@ async def htmx_issue_search_results(
     session: DbSession,
 ) -> Response:
     """Return interactive search results as an HTML partial (HTMX)."""
-    from pullbox.api.v1.issues import _build_issue_search_log, _run_issue_search
+    from pullbox.api.v1.issues import (
+        _build_issue_search_log,
+        _persist_direct_bundle_results,
+        _run_issue_search,
+    )
 
     issue = await session.get(Issue, issue_id)
     if issue is None:
@@ -310,7 +314,11 @@ async def htmx_issue_search_results(
         issue_id,
         include_download_clients=False,
     )
-    issue_ctx = {"id": bundle.issue.id, "series_id": bundle.target.series_id}
+    issue_ctx = {
+        "id": bundle.issue.id,
+        "series_id": bundle.target.series_id,
+        "issue_number": bundle.issue.issue_number,
+    }
 
     if bundle.runtime is None:
         return _templates().TemplateResponse(
@@ -328,6 +336,8 @@ async def htmx_issue_search_results(
 
     search_log = _build_issue_search_log(bundle)
     session.add(search_log)
+    await session.flush()
+    await _persist_direct_bundle_results(session, bundle, search_log_id=search_log.id)
     await session.commit()
 
     logger.info(

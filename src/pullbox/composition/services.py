@@ -2,16 +2,33 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+import httpx
 
 from pullbox.composition import providers
 from pullbox.composition.events import build_domain_event_bus, build_scoped_event_bus
 from pullbox.config import get_settings
 from pullbox.core.comicvine_key import get_comicvine_api_key
 from pullbox.models.config import SystemConfig
+from pullbox.providers.artifact_hosts.datanodes import DataNodesAdapter
+from pullbox.providers.artifact_hosts.generic import GenericHttpsAdapter
+from pullbox.providers.artifact_hosts.mediafire import MediaFireAdapter
+from pullbox.providers.artifact_hosts.mega import MegaArtifactHostAdapter, MegaBridgeRunner
+from pullbox.providers.artifact_hosts.pixeldrain import PixelDrainAdapter
+from pullbox.providers.artifact_hosts.resolver import ArtifactHostResolver
+from pullbox.providers.artifact_hosts.rootz import RootzAdapter
+from pullbox.providers.artifact_hosts.terabox import TeraBoxAdapter
+from pullbox.providers.artifact_hosts.transport import HttpArtifactTransport
 from pullbox.providers.metadata.comicvine import ComicVineProvider
 from pullbox.services import download_service
 from pullbox.services.cover_resolver import resolve_covers_dir
+from pullbox.services.direct_acquisition_executor import (
+    DirectAcquisitionExecutor,
+    DirectExecutionResult,
+)
+from pullbox.services.direct_artifact_quarantine import DirectArtifactQuarantine
 from pullbox.services.import_provider_cache import build_persistent_import_metadata_provider
 from pullbox.services.import_service import ImportService
 from pullbox.services.matching_service import MatchingService
@@ -19,11 +36,105 @@ from pullbox.services.metadata_service import MetadataService
 from pullbox.services.series_service import SeriesService
 
 if TYPE_CHECKING:
+    import asyncio
+    from collections.abc import Awaitable, Callable
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.indexer import IndexerConfig
+    from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
     from pullbox.providers.base import ProviderRegistry
     from pullbox.services.download_service import DownloadService
+
+
+_DIRECT_HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=60.0, pool=15.0)
+
+
+class DirectAcquisitionRuntime:
+    """Own the shared native direct-download executor and its HTTP client."""
+
+    def __init__(
+        self,
+        *,
+        executor: DirectAcquisitionExecutor,
+        http_client: httpx.AsyncClient,
+        host_kinds: tuple[object, ...],
+    ) -> None:
+        self._executor = executor
+        self._http_client = http_client
+        self.host_kinds = host_kinds
+        self.closed = False
+
+    async def execute(
+        self,
+        session: AsyncSession,
+        *,
+        acquisition_id: int,
+        artifact_id: int,
+        source_factory: Callable[[], Awaitable[HostResolutionRequest]],
+        cancel_event: asyncio.Event | None = None,
+    ) -> DirectExecutionResult:
+        """Delegate one persisted acquisition to the shared executor."""
+        return await self._executor.execute(
+            session,
+            acquisition_id=acquisition_id,
+            artifact_id=artifact_id,
+            source_factory=source_factory,
+            cancel_event=cancel_event,
+        )
+
+    async def cancel(
+        self,
+        session: AsyncSession,
+        *,
+        acquisition_id: int,
+        artifact_id: int,
+    ) -> bool:
+        """Delegate durable cancellation when no process-local worker is active."""
+        return await self._executor.cancel(
+            session,
+            acquisition_id=acquisition_id,
+            artifact_id=artifact_id,
+        )
+
+    async def aclose(self) -> None:
+        """Close shared network resources exactly once."""
+        if self.closed:
+            return
+        await self._http_client.aclose()
+        self.closed = True
+
+
+def build_direct_acquisition_runtime() -> DirectAcquisitionRuntime:
+    """Construct the closed native host registry and durable executor runtime."""
+    settings = get_settings()
+    http_client = httpx.AsyncClient(
+        timeout=_DIRECT_HTTP_TIMEOUT,
+        follow_redirects=False,
+        trust_env=False,
+    )
+    adapters = (
+        GenericHttpsAdapter(http_client),
+        PixelDrainAdapter(http_client),
+        MegaArtifactHostAdapter(),
+        RootzAdapter(http_client),
+        MediaFireAdapter(http_client),
+        TeraBoxAdapter(http_client),
+        DataNodesAdapter(http_client),
+    )
+    executor = DirectAcquisitionExecutor(
+        host_resolver=ArtifactHostResolver(adapters),
+        http_transport=HttpArtifactTransport(client=http_client),
+        mega_runner=MegaBridgeRunner(),
+        quarantine=DirectArtifactQuarantine(
+            Path(settings.data_dir) / "direct-downloads" / "quarantine"
+        ),
+    )
+    return DirectAcquisitionRuntime(
+        executor=executor,
+        http_client=http_client,
+        host_kinds=tuple(adapter.host_kind for adapter in adapters),
+    )
 
 
 async def build_metadata_service(session: AsyncSession) -> MetadataService:

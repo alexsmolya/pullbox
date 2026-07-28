@@ -17,6 +17,7 @@ from starlette.responses import Response
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
 from pullbox.models.client import DownloadClientConfig
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue
 from pullbox.models.series import Series
@@ -508,12 +509,51 @@ async def load_download_progress_map(
     queue page polls often enough that we prefer a direct client status check
     for active downloads so the UI does not appear hung between scheduler ticks.
     """
+    from pullbox.tasks.download_task import ProgressSnapshot
+
     progress_map = dict(fallback_progress)
     start = time.monotonic()
+    direct_items: dict[int, int] = {}
+    for item in queue_items:
+        if item.download_client is not DownloadClientType.DIRECT or not item.external_id:
+            continue
+        prefix, separator, raw_id = item.external_id.partition(":")
+        if prefix == "direct" and separator and raw_id.isdigit():
+            direct_items[item.id] = int(raw_id)
+
+    if direct_items:
+        attempts = (
+            await session.execute(
+                select(DirectAcquisitionAttempt).where(
+                    DirectAcquisitionAttempt.id.in_(direct_items.values())
+                )
+            )
+        ).scalars()
+        attempts_by_id = {attempt.id: attempt for attempt in attempts}
+        for download_id, attempt_id in direct_items.items():
+            attempt = attempts_by_id.get(attempt_id)
+            if attempt is None:
+                continue
+            snapshot = attempt.progress_snapshot or {}
+            raw_percent = snapshot.get("percent")
+            percent = float(raw_percent) if isinstance(raw_percent, int | float) else 0.0
+            speed = snapshot.get("bytes_per_second")
+            eta = snapshot.get("eta_seconds")
+            total = snapshot.get("total_bytes")
+            progress_map[download_id] = ProgressSnapshot(
+                progress=max(0.0, min(percent / 100, 1.0)),
+                speed_bytes=int(speed) if isinstance(speed, int | float) else None,
+                eta_seconds=int(eta) if isinstance(eta, int | float) else None,
+                size_bytes=int(total) if isinstance(total, int | float) else None,
+                updated_at=time.monotonic(),
+                client_state=str(snapshot.get("stage") or "Direct"),
+            )
     pollable_items = [
         item
         for item in queue_items
-        if is_download_queue_pollable_state(item.state) and item.external_id
+        if item.download_client is not DownloadClientType.DIRECT
+        and is_download_queue_pollable_state(item.state)
+        and item.external_id
     ]
     if not pollable_items:
         return progress_map

@@ -499,16 +499,7 @@ async def htmx_intervention_bulk_approve(
     from pullbox.services.intervention_service import InterventionService
 
     built = await build_domain_download_service(session)
-    if built is None:
-        error_html = (
-            '<div class="rounded-xl bg-red-500/10 border border-red-500/30'
-            ' p-4 text-sm text-red-400">'
-            "No download clients configured. Cannot approve."
-            "</div>"
-        )
-        return Response(content=error_html, media_type="text/html")
-
-    download_svc, _configs = built
+    download_svc = built[0] if built is not None else None
     svc = InterventionService(download_service=download_svc)
 
     for pm_id in pm_ids:
@@ -643,32 +634,44 @@ async def htmx_intervention_approve(
     search = str(form.get("search", "") or "")
     requested_page = int(str(form.get("page", "1") or "1") or "1")
 
-    from pullbox.composition.services import build_domain_download_service
-    from pullbox.services.intervention_service import InterventionService
+    from pullbox.services.intervention_service import (
+        InterventionService,
+        is_direct_pending_match,
+    )
 
-    built = await build_domain_download_service(session)
-    if built is None:
-        return _templates().TemplateResponse(
-            request,
-            "partials/intervention_action_result.html",
-            _ctx(
+    if is_direct_pending_match(pm):
+        svc = InterventionService()
+    else:
+        from pullbox.composition.services import build_domain_download_service
+
+        built = await build_domain_download_service(session)
+        if built is None:
+            return _templates().TemplateResponse(
                 request,
-                user,
-                pending_id=pending_id,
-                heading="Could Not Approve",
-                title=release_title,
-                message="No download clients are configured for this Pullbox instance.",
-                tone="error",
-            ),
-        )
+                "partials/intervention_action_result.html",
+                _ctx(
+                    request,
+                    user,
+                    pending_id=pending_id,
+                    heading="Could Not Approve",
+                    title=release_title,
+                    message="No download clients are configured for this Pullbox instance.",
+                    tone="error",
+                ),
+            )
 
-    download_svc, _configs = built
-    svc = InterventionService(download_service=download_svc)
+        download_svc, _configs = built
+        svc = InterventionService(download_service=download_svc)
 
     try:
         await svc.approve_match(session, pending_id)
     except (ValueError, Exception):
         logger.exception("htmx_intervention_approve_failed", pending_id=pending_id)
+        failure_message = (
+            "Failed to queue this direct release for acquisition."
+            if is_direct_pending_match(pm)
+            else "Failed to send this release to the configured download client."
+        )
         return _templates().TemplateResponse(
             request,
             "partials/intervention_action_result.html",
@@ -678,7 +681,7 @@ async def htmx_intervention_approve(
                 pending_id=pending_id,
                 heading="Could Not Approve",
                 title=release_title,
-                message="Failed to send this release to the configured download client.",
+                message=failure_message,
                 tone="error",
             ),
         )

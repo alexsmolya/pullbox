@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.base import ReleaseResult
+    from pullbox.services.direct_search_coordinator import DirectSearchOutcome
     from pullbox.services.release_validator import ValidationResult
     from pullbox.services.search_types import IssueSearchMode, SearchEvalKwargs, ValidatorKwargs
 
@@ -52,6 +53,7 @@ class IssueSearchOutcome:
     search_details: dict[str, object]
     elapsed_ms: int
     used_fallback: bool = False
+    direct_outcome: DirectSearchOutcome | None = None
 
 
 SearchOutcomeCallback = Callable[[IssueSearchOutcome], Awaitable[None]]

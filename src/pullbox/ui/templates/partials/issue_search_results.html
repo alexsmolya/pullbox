@@ -42,7 +42,7 @@
           this.sortAsc = !this.sortAsc;
         } else {
           this.sortCol = col;
-          this.sortAsc = col === 'title' || col === 'indexer';
+          this.sortAsc = col === 'title' || col === 'source' || col === 'method';
         }
         this.applySorting();
       },
@@ -58,7 +58,7 @@
       sortRows(rows) {
         const col = this.sortCol;
         const asc = this.sortAsc;
-        const numericCols = ['confidence', 'category', 'size', 'age', 'seeders', 'score'];
+        const numericCols = ['confidence', 'size'];
         return rows.sort((a, b) => {
           let va = a.dataset[col] || '';
           let vb = b.dataset[col] || '';
@@ -93,24 +93,18 @@
             <th class="cursor-pointer select-none hover:text-pb-text" @click="sortBy('title')">
               Release <span class="issue-search-sort-indicator" x-text="indicator('title')"></span>
             </th>
-            <th class="w-[92px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('indexer')">
-              Indexer <span class="issue-search-sort-indicator" x-text="indicator('indexer')"></span>
+            <th class="w-[104px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('source')">
+              Source <span class="issue-search-sort-indicator" x-text="indicator('source')"></span>
             </th>
-            <th class="w-[82px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('category')">
-              Category <span class="issue-search-sort-indicator" x-text="indicator('category')"></span>
+            <th class="w-[76px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('method')">
+              Method <span class="issue-search-sort-indicator" x-text="indicator('method')"></span>
             </th>
+            <th class="w-[92px]">Coverage</th>
+            <th class="w-[112px]">Quality</th>
             <th class="w-[72px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('size')">
               Size <span class="issue-search-sort-indicator" x-text="indicator('size')"></span>
             </th>
-            <th class="w-[56px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('age')">
-              Age <span class="issue-search-sort-indicator" x-text="indicator('age')"></span>
-            </th>
-            <th class="w-[78px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('seeders')">
-              Peers <span class="issue-search-sort-indicator" x-text="indicator('seeders')"></span>
-            </th>
-            <th class="w-[56px] cursor-pointer select-none hover:text-pb-text" @click="sortBy('score')">
-              Score <span class="issue-search-sort-indicator" x-text="indicator('score')"></span>
-            </th>
+            <th class="w-[96px]">Route</th>
             <th class="is-right w-[118px]">Action</th>
           </tr>
         </thead>
@@ -121,12 +115,9 @@
               class="matched-row"
               data-confidence="{% if item.confidence == 'high' %}3{% elif item.confidence == 'medium' %}2{% elif item.confidence == 'low' %}1{% else %}0{% endif %}"
               data-title="{{ item.title }}"
-              data-indexer="{{ item.indexer_name }}"
-              data-category="{% if '7030' in (item.category or '')|string %}1{% elif '7020' in (item.category or '')|string %}2{% else %}3{% endif %}"
+              data-source="{{ item.indexer_name }}"
+              data-method="{{ item.method }}"
               data-size="{{ item.size_bytes or 0 }}"
-              data-age="{{ item.age_days if item.age_days is not none else 99999 }}"
-              data-seeders="{{ item.seeders if item.seeders is not none else -1 }}"
-              data-score="{{ item.quality_score }}"
             >
               <td>
                 <span class="pill{% if item.confidence == 'high' %} pill-success{% elif item.confidence == 'medium' or item.confidence == 'low' %} pill-warning{% else %} pill-muted{% endif %}">
@@ -164,40 +155,36 @@
                   </div>
                 {% endif %}
               </td>
-              <td class="downloads-mono-cell">{{ item.indexer_name }}</td>
               <td>
-                {%- set cats = (item.category or '')|string -%}
-                {%- set cats_lower = cats|lower -%}
-                {%- if '7030' in cats or 'comic' in cats_lower -%}
-                  <span class="pill pill-success">Comics</span>
-                {%- elif '7020' in cats or 'ebook' in cats_lower or 'e-book' in cats_lower -%}
-                  <span class="pill pill-info">EBook</span>
-                {%- elif '7010' in cats or ('book' in cats_lower and 'audio' not in cats_lower) -%}
-                  <span class="pill pill-info">Book</span>
-                {%- elif 'audio' in cats_lower -%}
-                  <span class="pill pill-warning">Audio</span>
-                {%- elif cats -%}
-                  <span class="pill pill-muted">{{ cats.split('/')[0][:8] }}</span>
-                {%- else -%}
-                  <span class="downloads-mono-dim-cell">—</span>
-                {%- endif -%}
+                <span class="downloads-mono-cell">{{ item.indexer_name }}</span>
+                {% if item.source_kind == 'direct' %}
+                  <div class="issue-search-release-match">Provider</div>
+                {% else %}
+                  <div class="issue-search-release-match">Indexer</div>
+                {% endif %}
+              </td>
+              <td><span class="pill{% if item.source_kind == 'direct' %} pill-info{% else %} pill-muted{% endif %}">{{ item.method }}</span></td>
+              <td>
+                {% if item.coverage %}
+                  <span class="pill pill-success">Issue {{ item.coverage|join(', ') }}</span>
+                {% else %}
+                  <span class="pill pill-muted">Issue {{ issue.issue_number|issue_num }}</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if item.format %}<span class="pill pill-info">{{ item.format|upper }}</span>{% endif %}
+                {% if item.quality %}<span class="pill pill-muted">{{ item.quality|capitalize }}</span>{% endif %}
+                {% if not item.format and not item.quality %}
+                  <span class="downloads-mono-cell">Score {{ item.quality_score }}</span>
+                {% endif %}
+                {% if item.is_torrent %}
+                  <div class="downloads-mono-cell">{{ item.seeders if item.seeders is not none else '-' }} / {{ item.leechers if item.leechers is not none else '-' }}</div>
+                {% endif %}
               </td>
               <td class="downloads-mono-cell">
                 {% if item.size_bytes %}{{ item.size_bytes|filesize }}{% else %}—{% endif %}
               </td>
-              <td class="downloads-mono-cell">
-                {% if item.age_days is not none %}{{ item.age_days }}d{% else %}—{% endif %}
-              </td>
-              <td class="downloads-mono-cell">
-                {% if item.is_torrent %}
-                  {% set s = item.seeders %}
-                  {% set l = item.leechers %}
-                  {{ s if s is not none else '-' }} / {{ l if l is not none else '-' }}
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td class="downloads-mono-cell">{{ item.quality_score }}</td>
+              <td><span class="pill pill-muted">{{ item.preferred_route or 'Download client' }}</span></td>
               <td
                 class="is-right"
                 x-data='window.issueSearchResultActions({
@@ -209,7 +196,8 @@
               >
                 <div class="issue-search-action-row">
                   <button
-                    data-url="{{ item.download_url }}"
+                    {% if item.download_url %}data-url="{{ item.download_url }}"{% endif %}
+                    {% if item.direct_attempt_id %}data-direct-attempt="{{ item.direct_attempt_id }}"{% endif %}
                     data-indexer="{{ item.indexer_name }}"
                     data-title="{{ item.title }}"
                     data-torrent="{{ item.is_torrent|lower }}"
@@ -256,27 +244,20 @@
                 <div class="issue-search-release-match">{{ item.rejection_reason }}</div>
               </td>
               <td class="downloads-mono-cell">{{ item.indexer_name }}</td>
+              <td><span class="pill pill-muted opacity-60">{{ item.method }}</span></td>
               <td>
-                {%- set cats = (item.category or '')|string -%}
-                {%- set cats_lower = cats|lower -%}
-                {%- if '7030' in cats or 'comic' in cats_lower -%}
-                  <span class="pill pill-success opacity-60">Comics</span>
-                {%- elif '7020' in cats or 'ebook' in cats_lower or 'e-book' in cats_lower -%}
-                  <span class="pill pill-info opacity-60">EBook</span>
-                {%- elif '7010' in cats or ('book' in cats_lower and 'audio' not in cats_lower) -%}
-                  <span class="pill pill-info opacity-60">Book</span>
-                {%- elif 'audio' in cats_lower -%}
-                  <span class="pill pill-warning opacity-60">Audio</span>
-                {%- elif cats -%}
-                  <span class="pill pill-muted">{{ cats.split('/')[0][:8] }}</span>
-                {%- else -%}
-                  <span class="downloads-mono-cell">—</span>
-                {%- endif -%}
+                {% if item.coverage %}<span class="pill pill-muted opacity-60">Issue {{ item.coverage|join(', ') }}</span>{% else %}—{% endif %}
+              </td>
+              <td>
+                {% if item.format %}<span class="pill pill-muted opacity-60">{{ item.format|upper }}</span>{% endif %}
+                {% if item.quality %}<span class="pill pill-muted opacity-60">{{ item.quality|capitalize }}</span>{% endif %}
+                {% if not item.format and not item.quality %}—{% endif %}
+                {% if item.is_torrent %}
+                  <div class="downloads-mono-cell">{{ item.seeders if item.seeders is not none else '-' }} / {{ item.leechers if item.leechers is not none else '-' }}</div>
+                {% endif %}
               </td>
               <td class="downloads-mono-cell">{% if item.size_bytes %}{{ item.size_bytes|filesize }}{% else %}—{% endif %}</td>
-              <td class="downloads-mono-cell">—</td>
-              <td class="downloads-mono-cell">—</td>
-              <td class="downloads-mono-cell">—</td>
+              <td><span class="pill pill-muted opacity-60">{{ item.preferred_route or 'Download client' }}</span></td>
               <td
                 class="is-right"
                 x-data='window.issueSearchResultActions({
@@ -288,7 +269,8 @@
               >
                 <div class="issue-search-action-row">
                   <button
-                    data-url="{{ item.download_url }}"
+                    {% if item.download_url %}data-url="{{ item.download_url }}"{% endif %}
+                    {% if item.direct_attempt_id %}data-direct-attempt="{{ item.direct_attempt_id }}"{% endif %}
                     data-indexer="{{ item.indexer_name }}"
                     data-title="{{ item.title }}"
                     data-torrent="{{ item.is_torrent|lower }}"
@@ -325,7 +307,7 @@
     </svg>
     <p class="issue-search-empty-title">No results found</p>
     <p class="issue-search-empty-copy">
-      No releases matched this issue across configured indexers. Try again later or check your indexer settings.
+      No releases matched this issue across configured search sources. Try again later or check your search settings.
     </p>
   </div>
 {% endif %}

@@ -232,8 +232,8 @@ class DirectArtifactCoverage(DirectContractModel):
 class DirectMirror(DirectContractModel):
     mirror_id: str = Field(min_length=1, max_length=500)
     host_kind: str = Field(min_length=1, max_length=100)
-    share_url: str | None = Field(default=None, max_length=4_000)
-    final_url: str | None = Field(default=None, max_length=4_000)
+    share_url: str | None = Field(default=None, max_length=4_000, repr=False)
+    final_url: str | None = Field(default=None, max_length=4_000, repr=False)
     source_headers: dict[str, str] = Field(default_factory=dict, repr=False)
     size_bytes: int | None = Field(default=None, ge=0)
     checksum: str | None = Field(default=None, max_length=500)

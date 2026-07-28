@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
@@ -24,8 +25,10 @@ from pullbox.models.direct_acquisition import (
     DirectHostAccountState,
     DirectHostConfig,
 )
+from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
+from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.artifact_hosts.contract import (
     ArtifactHostResolutionError,
@@ -119,6 +122,10 @@ def _attempt() -> DirectAcquisitionAttempt:
         state=DirectAcquisitionState.QUEUED,
         plan_revision=1,
         plan_snapshot={"schema_version": 1},
+        candidate_snapshot={
+            "display_title": "Direct Executor 001 (2026)",
+            "semantic_decision": {"confidence": "high", "series_similarity": 1.0},
+        },
         progress_revision=0,
         progress_snapshot={},
     )
@@ -224,6 +231,11 @@ class _FailingTransport:
         raise self.error
 
 
+class _UnexpectedTransport:
+    async def transfer(self, **_kwargs: Any) -> ArtifactTransferResult:
+        raise AssertionError("A post-processing retry must not download the artifact again")
+
+
 class _CancelledTaskTransport:
     async def transfer(self, **kwargs: Any) -> ArtifactTransferResult:
         destination = kwargs["destination"]
@@ -305,6 +317,16 @@ async def test_executor_completes_with_durable_redacted_progress(
 ) -> None:
     attempt = _attempt()
     session.add(attempt)
+    await session.flush()
+    history = DownloadHistory(
+        issue_id=attempt.issue_id,
+        title="Direct Executor 001 (2026)",
+        download_url=f"pullbox-direct://attempt/{attempt.id}",
+        download_client=DownloadClientType.DIRECT,
+        external_id=f"direct:{attempt.id}",
+        state=DownloadState.QUEUED,
+    )
+    session.add(history)
     await session.commit()
     artifact = attempt.artifact_attempts[0]
     source_calls = 0
@@ -334,6 +356,16 @@ async def test_executor_completes_with_durable_redacted_progress(
     assert "signed-secret" not in repr(attempt.progress_snapshot)
     assert source_calls == 1
     assert not (tmp_path / "quarantine" / f"attempt-{attempt.id}").exists()
+    refreshed_history = (
+        await session.execute(
+            select(DownloadHistory).where(DownloadHistory.external_id == f"direct:{attempt.id}")
+        )
+    ).scalar_one()
+    assert refreshed_history.state is DownloadState.IMPORTED
+    assert refreshed_history.file_size == artifact.expected_size
+    assert refreshed_history.final_path == "/library/Issue 1.cbz"
+    assert refreshed_history.imported_at == NOW
+    assert refreshed_history.error_message is None
 
 
 @pytest.mark.asyncio
@@ -399,6 +431,81 @@ async def test_executor_cancellation_is_terminal_and_cleans_quarantine(
 
 
 @pytest.mark.asyncio
+async def test_executor_honors_cancellation_before_resolving_source(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    session.add(attempt)
+    await session.commit()
+    artifact = attempt.artifact_attempts[0]
+    cancel_event = asyncio.Event()
+    cancel_event.set()
+    source_called = False
+
+    async def source_factory() -> HostResolutionRequest:
+        nonlocal source_called
+        source_called = True
+        return _source_request()
+
+    result = await _executor(
+        tmp_path,
+        transport=_SuccessfulTransport(),
+        post_processor=_successful_post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=source_factory,
+        cancel_event=cancel_event,
+    )
+
+    assert source_called is False
+    assert result.state is DirectAcquisitionState.CANCELLED
+    assert artifact.state is DirectArtifactState.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_executor_cancels_recoverable_attempt_and_removes_checkpoint(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    attempt.state = DirectAcquisitionState.RETRY_PENDING
+    artifact = attempt.artifact_attempts[0]
+    artifact.state = DirectArtifactState.RETRY_PENDING
+    session.add(attempt)
+    await session.commit()
+    quarantine = DirectArtifactQuarantine(tmp_path / "quarantine")
+    workspace = quarantine.prepare(acquisition_id=attempt.id, artifact_id=artifact.id)
+    workspace.partial_path.write_bytes(b"restartable checkpoint")
+    artifact.quarantine_path = str(workspace.partial_path)
+    artifact.bytes_transferred = workspace.partial_path.stat().st_size
+    await session.commit()
+    executor = DirectAcquisitionExecutor(
+        host_resolver=object(),
+        http_transport=object(),
+        mega_runner=object(),
+        quarantine=quarantine,
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    cancelled = await executor.cancel(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+    )
+
+    assert cancelled is True
+    assert attempt.state is DirectAcquisitionState.CANCELLED
+    assert artifact.state is DirectArtifactState.CANCELLED
+    assert artifact.quarantine_path is None
+    assert artifact.bytes_transferred == 0
+    assert not workspace.directory.exists()
+
+
+@pytest.mark.asyncio
 async def test_executor_schedules_retry_without_losing_safe_partial(
     session: AsyncSession,
     tmp_path: Path,
@@ -432,6 +539,58 @@ async def test_executor_schedules_retry_without_losing_safe_partial(
     assert attempt.retry_count == 1
     assert artifact.next_retry_at is not None
     assert Path(artifact.quarantine_path or "").exists()
+
+
+@pytest.mark.asyncio
+async def test_executor_retries_post_processing_from_quarantine_without_redownload(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    session.add(attempt)
+    await session.commit()
+    artifact = attempt.artifact_attempts[0]
+
+    async def failed_post_processing(*_args: Any, **_kwargs: Any) -> DirectPostProcessingResult:
+        raise RuntimeError("synthetic placement failure")
+
+    first = await _executor(
+        tmp_path,
+        transport=_SuccessfulTransport(),
+        post_processor=failed_post_processing,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=_async_source,
+    )
+
+    assert first.state is DirectAcquisitionState.INTERVENTION
+    assert attempt.failure_class is DirectArtifactFailureClass.POST_PROCESS
+    assert artifact.quarantine_path is not None
+    assert Path(artifact.quarantine_path).exists()
+    source_called = False
+
+    async def unexpected_source() -> HostResolutionRequest:
+        nonlocal source_called
+        source_called = True
+        raise AssertionError("Post-processing retry must reuse the quarantine artifact")
+
+    second = await _executor(
+        tmp_path,
+        transport=_UnexpectedTransport(),
+        post_processor=_successful_post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=unexpected_source,
+    )
+
+    assert source_called is False
+    assert second.state is DirectAcquisitionState.COMPLETED
+    assert artifact.state is DirectArtifactState.COMPLETED
+    assert artifact.quarantine_path is None
 
 
 @pytest.mark.asyncio
@@ -745,6 +904,12 @@ async def test_post_processing_failure_keeps_valid_artifact_for_intervention(
     assert attempt.failure_class is DirectArtifactFailureClass.POST_PROCESS
     assert artifact.quarantine_path is not None
     assert Path(artifact.quarantine_path).exists()
+    pending = (
+        await session.execute(select(PendingMatch).where(PendingMatch.issue_id == attempt.issue_id))
+    ).scalar_one()
+    assert pending.status == PendingMatchStatus.PENDING
+    assert pending.download_url == f"pullbox-direct://attempt/{attempt.id}"
+    assert pending.match_details["failure_code"] == "direct_post_processing_failed"
 
 
 async def _async_source() -> HostResolutionRequest:

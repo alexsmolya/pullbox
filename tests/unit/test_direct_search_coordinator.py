@@ -1,0 +1,333 @@
+"""Direct-provider fan-out through Pullbox's unchanged semantic matcher."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import replace
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, ClassVar
+from unittest.mock import MagicMock, patch
+from uuid import UUID
+
+from pullbox.core.encryption import _get_fernet
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
+from pullbox.models.issue import Issue, IssueStatus, IssueType
+from pullbox.models.library import MatchConfidence
+from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.providers.direct.contract import (
+    DIRECT_PROVIDER_PROTOCOL_V1,
+    DirectCandidate,
+    DirectParsedCandidate,
+    DirectSearchRequest,
+    DirectSearchResponse,
+)
+from pullbox.services.direct_configuration_service import (
+    update_provider_configuration_secrets,
+    write_provider_bearer_token,
+)
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchProvider,
+    load_direct_search_providers,
+    persist_direct_search_discoveries,
+    search_direct_issue_target,
+)
+from pullbox.services.search_targets import IssueSearchTarget
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _target() -> IssueSearchTarget:
+    return IssueSearchTarget(
+        issue_id=17,
+        series_id=7,
+        series_title="Absolute Superman",
+        issue_number=9,
+        issue_type=IssueType.ISSUE,
+        series_year=2025,
+        alternate_names=["Absolute Superman (2025)"],
+    )
+
+
+def _provider(identity: str, priority: int) -> DirectSearchProvider:
+    return DirectSearchProvider(
+        provider_config_id=priority,
+        provider_identity=identity,
+        display_name=identity.rsplit(".", 1)[-1].title(),
+        endpoint=f"http://{identity}:8780",
+        bearer_token=f"{identity}-bearer-token-with-enough-length",
+        allow_private_http=True,
+        protocol_version=DIRECT_PROVIDER_PROTOCOL_V1,
+        provider_priority=priority,
+        provider_config={},
+        source_credentials={},
+        resolver_profile=None,
+        source_domains=(f"{identity}.example",),
+    )
+
+
+def _candidate(provider: DirectSearchProvider, title: str) -> DirectCandidate:
+    return DirectCandidate(
+        provider_candidate_id=f"candidate:{provider.provider_identity}",
+        source_reference=f"https://{provider.provider_identity}.example/release",
+        display_title=title,
+        raw_title=title,
+        parsed=DirectParsedCandidate(
+            series_title="Absolute Superman",
+            issue_numbers=["9"],
+            year=2025,
+            format="cbz",
+        ),
+        provider_confidence=0.95,
+        provenance={"fixture": True},
+    )
+
+
+class _Client:
+    delays: ClassVar[dict[str, float]] = {}
+    responses: ClassVar[dict[str, list[DirectCandidate]]] = {}
+    failures: ClassVar[set[str]] = set()
+    active: ClassVar[int] = 0
+    max_active: ClassVar[int] = 0
+    requests: ClassVar[list[tuple[str, DirectSearchRequest]]] = []
+
+    def __init__(self, provider_id: str) -> None:
+        self.provider_id = provider_id
+
+    async def search(self, request: DirectSearchRequest) -> DirectSearchResponse:
+        type(self).active += 1
+        type(self).max_active = max(type(self).max_active, type(self).active)
+        type(self).requests.append((self.provider_id, request))
+        try:
+            await asyncio.sleep(type(self).delays.get(self.provider_id, 0))
+            if self.provider_id in type(self).failures:
+                raise RuntimeError("secret upstream failure details")
+            return DirectSearchResponse(
+                protocol_version=DIRECT_PROVIDER_PROTOCOL_V1,
+                request_id=request.request_id,
+                candidates=type(self).responses[self.provider_id],
+            )
+        finally:
+            type(self).active -= 1
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _factory(**kwargs: object) -> _Client:
+    return _Client(str(kwargs["provider_id"]))
+
+
+def _reset() -> None:
+    _Client.delays = {}
+    _Client.responses = {}
+    _Client.failures = set()
+    _Client.active = 0
+    _Client.max_active = 0
+    _Client.requests = []
+
+
+async def test_fanout_is_concurrent_and_completion_order_does_not_change_results() -> None:
+    _reset()
+    first = _provider("pullbox.getcomics", 20)
+    second = _provider("pullbox.annas_archive", 10)
+    _Client.delays = {first.provider_identity: 0.03, second.provider_identity: 0.001}
+    _Client.responses = {
+        first.provider_identity: [_candidate(first, "Absolute Superman 009 (2025) (Digital)")],
+        second.provider_identity: [_candidate(second, "Absolute Superman 009 (2025) (Digital)")],
+    }
+
+    outcome = await search_direct_issue_target(
+        _target(),
+        [first, second],
+        client_factory=_factory,
+        now=lambda: datetime(2026, 7, 28, tzinfo=UTC),
+    )
+
+    assert _Client.max_active == 2
+    assert [item.provider.provider_identity for item in outcome.matched] == [
+        "pullbox.annas_archive",
+        "pullbox.getcomics",
+    ]
+    assert all(item.validation.confidence is MatchConfidence.HIGH for item in outcome.matched)
+    assert outcome.failures == ()
+
+
+async def test_one_provider_failure_is_isolated_and_redacted() -> None:
+    _reset()
+    healthy = _provider("pullbox.getcomics", 10)
+    broken = _provider("community.broken", 20)
+    _Client.responses = {
+        healthy.provider_identity: [_candidate(healthy, "Absolute Superman 009 (2025)")],
+        broken.provider_identity: [],
+    }
+    _Client.failures = {broken.provider_identity}
+
+    outcome = await search_direct_issue_target(
+        _target(),
+        [broken, healthy],
+        client_factory=_factory,
+    )
+
+    assert len(outcome.matched) == 1
+    assert outcome.matched[0].provider == healthy
+    assert outcome.failures[0].provider_identity == broken.provider_identity
+    assert outcome.failures[0].code == "provider_search_failed"
+    assert "secret upstream" not in repr(outcome)
+
+
+async def test_rejected_candidate_uses_existing_validator_without_provider_override() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    candidate = _candidate(provider, "Completely Different Series 009 (2025)")
+    candidate = candidate.model_copy(update={"provider_confidence": 1.0})
+    _Client.responses = {provider.provider_identity: [candidate]}
+
+    outcome = await search_direct_issue_target(
+        _target(),
+        [provider],
+        client_factory=_factory,
+    )
+
+    assert outcome.matched == ()
+    assert len(outcome.rejected) == 1
+    assert outcome.rejected[0].validation.is_match is False
+    assert outcome.rejected[0].validation.rejection_reason
+
+
+async def test_request_scopes_each_provider_secret_and_normalized_intent() -> None:
+    _reset()
+    provider = replace(
+        _provider("pullbox.annas_archive", 10),
+        provider_config={"domain": "https://annas-archive.gd"},
+        source_credentials={"member_secret_key": "member-secret"},
+    )
+    _Client.responses = {provider.provider_identity: []}
+
+    await search_direct_issue_target(_target(), [provider], client_factory=_factory)
+
+    request = _Client.requests[0][1]
+    assert request.intent.series_title == "Absolute Superman"
+    assert request.intent.normalized_title == "absolute superman"
+    assert request.intent.issue_number == "9"
+    assert request.provider_config == provider.provider_config
+    assert request.source_credentials == provider.source_credentials
+    assert "member-secret" not in repr(request)
+    assert isinstance(request.request_id, UUID)
+
+
+async def test_loader_decrypts_only_usable_provider_operations(db_session: AsyncSession) -> None:
+    secret_provider = MagicMock()
+    secret_provider.secret_key.return_value = "direct-search-coordinator-test-secret"
+    _get_fernet.cache_clear()
+    with patch("pullbox.core.config_file.get_config_provider", return_value=secret_provider):
+        healthy = DirectProviderConfig(
+            provider_id="pullbox.annas_archive",
+            display_name="Anna's Archive",
+            endpoint="http://annas-provider:8780",
+            enabled=True,
+            priority=10,
+            state=DirectProviderState.HEALTHY,
+            negotiated_protocol=DIRECT_PROVIDER_PROTOCOL_V1,
+            trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+            configuration_metadata={
+                "allow_private_http": True,
+                "public_values": {"domain": "https://annas-archive.gd"},
+                "configured_secret_fields": ["member_secret_key"],
+            },
+            manifest_snapshot={"source_domains": ["annas-archive.gd"]},
+        )
+        write_provider_bearer_token(healthy, "provider-bearer-token-with-enough-length")
+        update_provider_configuration_secrets(
+            healthy,
+            {"member_secret_key": "member-secret"},
+        )
+        healthy.state = DirectProviderState.HEALTHY
+        disabled = DirectProviderConfig(
+            provider_id="community.disabled",
+            display_name="Disabled",
+            endpoint="https://disabled.example",
+            enabled=False,
+            priority=1,
+            state=DirectProviderState.DISABLED,
+            trust_level=DirectProviderTrustLevel.CUSTOM,
+        )
+        db_session.add_all([disabled, healthy])
+        await db_session.flush()
+
+        providers = await load_direct_search_providers(db_session)
+
+    _get_fernet.cache_clear()
+    assert len(providers) == 1
+    assert providers[0].provider_identity == "pullbox.annas_archive"
+    assert providers[0].provider_config == {"domain": "https://annas-archive.gd"}
+    assert providers[0].source_credentials == {"member_secret_key": "member-secret"}
+    assert "member-secret" not in repr(providers[0])
+
+
+async def test_persisted_discovery_is_restart_safe_and_contains_no_urls_or_secrets(
+    db_session: AsyncSession,
+) -> None:
+    series = Series(
+        comicvine_id=700_001,
+        title="Absolute Superman",
+        sort_title="Absolute Superman",
+        year_start=2025,
+        status=SeriesStatus.CONTINUING,
+        series_type=SeriesType.STANDARD,
+        monitored=True,
+        issue_count=1,
+    )
+    db_session.add(series)
+    await db_session.flush()
+    issue = Issue(
+        id=17,
+        series_id=series.id,
+        comicvine_id=700_017,
+        issue_number=9,
+        issue_type=IssueType.ISSUE,
+        status=IssueStatus.WANTED,
+    )
+    provider_row = DirectProviderConfig(
+        id=10,
+        provider_id="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="https://provider.example",
+        enabled=True,
+        priority=10,
+        state=DirectProviderState.HEALTHY,
+        trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+    )
+    db_session.add_all([issue, provider_row])
+    await db_session.flush()
+
+    provider = _provider("pullbox.getcomics", 10)
+    candidate = _candidate(provider, "Absolute Superman 009 (2025)").model_copy(
+        update={
+            "source_reference": "https://pullbox.getcomics.example/book?token=signed-secret",
+            "provenance": {"token": "provider-secret", "layout": "fixture-v1"},
+        }
+    )
+    _reset()
+    _Client.responses = {provider.provider_identity: [candidate]}
+    outcome = await search_direct_issue_target(_target(), [provider], client_factory=_factory)
+
+    discoveries = await persist_direct_search_discoveries(db_session, _target(), outcome)
+    await db_session.flush()
+
+    assert len(discoveries) == 1
+    stored = await db_session.get(DirectAcquisitionAttempt, discoveries[0].attempt_id)
+    assert stored is not None
+    serialized = json.dumps(stored.candidate_snapshot, sort_keys=True)
+    assert "https://" not in serialized
+    assert "signed-secret" not in serialized
+    assert "provider-secret" not in serialized
+    assert stored.provider_candidate_id == candidate.provider_candidate_id
+    assert stored.state.value == "discovered"
+    assert stored.requested_coverage["issue_numbers"] == ["9"]

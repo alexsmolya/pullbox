@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from typing import cast as typing_cast
 
-from sqlalchemy import ColumnElement, case, func, true
+from sqlalchemy import ColumnElement, and_, case, func, true
 
 from pullbox.models.indexer import IndexerConfig
 from pullbox.models.issue import Issue
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 INTERVENTION_TABS = {"queue", "history"}
 INTERVENTION_CONFIDENCE_FILTERS = {"high", "medium", "low"}
-INTERVENTION_PROTOCOL_FILTERS = {"usenet", "torrent"}
+INTERVENTION_PROTOCOL_FILTERS = {"usenet", "torrent", "direct"}
 INTERVENTION_REASON_LABELS = {
     "fuzzy_series": "Fuzzy series match",
     "issue_mismatch": "Issue mismatch",
@@ -94,6 +94,7 @@ def intervention_source_expr() -> ColumnElement[str]:
         "ColumnElement[str]",
         func.coalesce(
             IndexerConfig.name,
+            PendingMatch.match_details["provider_name"].as_string(),
             PendingMatch.match_details["indexer_name"].as_string(),
             "Unknown",
         ),
@@ -131,8 +132,23 @@ def intervention_review_reason_summary(reason_codes: Sequence[str]) -> str:
     return f"{labels[0]} · {labels[1]} +{len(labels) - 2}"
 
 
-def intervention_protocol_label(is_torrent: bool) -> str:
+def intervention_protocol_clause(protocol: str) -> ColumnElement[bool]:
+    """Return the source-method clause without grouping direct rows as Usenet."""
+    source_kind = func.coalesce(
+        PendingMatch.match_details["source_kind"].as_string(),
+        "",
+    )
+    if protocol == "direct":
+        return source_kind == "direct"
+    if protocol == "torrent":
+        return and_(PendingMatch.is_torrent.is_(True), source_kind != "direct")
+    return and_(PendingMatch.is_torrent.is_(False), source_kind != "direct")
+
+
+def intervention_protocol_label(is_torrent: bool, source_kind: str = "") -> str:
     """Return the human-readable protocol label for a pending match."""
+    if source_kind == "direct":
+        return "Direct"
     return "Torrent" if is_torrent else "Usenet"
 
 
@@ -206,7 +222,15 @@ def get_intervention_history_order_by(sort: str) -> list[ColumnElement[object]]:
         (PendingMatch.status == PendingMatchStatus.EXPIRED, 2),
         else_=3,
     )
-    protocol_sort = case((PendingMatch.is_torrent.is_(True), 0), else_=1)
+    source_kind = func.coalesce(
+        PendingMatch.match_details["source_kind"].as_string(),
+        "",
+    )
+    protocol_sort = case(
+        (source_kind == "direct", 2),
+        (PendingMatch.is_torrent.is_(True), 0),
+        else_=1,
+    )
     resolved_sort = intervention_resolved_expr()
 
     sort_map: dict[str, ColumnElement[object]] = {
@@ -243,11 +267,16 @@ def build_intervention_item_meta(pending_match: Any) -> dict[str, object]:
 
     indexer = getattr(pending_match, "indexer", None)
     source_label = (
-        indexer.name if indexer is not None else str(details.get("indexer_name") or "Unknown")
+        indexer.name
+        if indexer is not None
+        else str(details.get("provider_name") or details.get("indexer_name") or "Unknown")
     )
 
     return {
-        "protocol_label": intervention_protocol_label(bool(pending_match.is_torrent)),
+        "protocol_label": intervention_protocol_label(
+            bool(pending_match.is_torrent),
+            str(details.get("source_kind") or ""),
+        ),
         "outcome_label": intervention_outcome_label(str(pending_match.status)),
         "review_reason_codes": reason_codes,
         "review_reason_labels": reason_labels,

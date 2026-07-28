@@ -63,6 +63,8 @@ from pullbox.services.direct_artifact_quarantine import (
     validate_direct_artifact,
 )
 from pullbox.services.direct_configuration_service import load_host_credential_material
+from pullbox.services.direct_download_history_adapter import sync_direct_download_history
+from pullbox.services.intervention_service import InterventionService
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,10 +130,35 @@ class DirectAcquisitionExecutor:
             acquisition_id=attempt.id,
             artifact_id=artifact.id,
         )
-        progress = _ProgressWriter(session, attempt, artifact)
+        progress = _ProgressWriter(session, attempt, artifact, now=self._now)
 
         try:
+            _raise_if_cancelled(cancel_event)
             final_path = _recover_final_path(workspace, artifact)
+            if (
+                attempt.state is DirectAcquisitionState.INTERVENTION
+                and attempt.failure_class is DirectArtifactFailureClass.POST_PROCESS
+                and final_path is not None
+            ):
+                transition_acquisition(
+                    attempt,
+                    DirectAcquisitionState.POST_PROCESSING,
+                    at=self._now(),
+                )
+                transition_artifact(
+                    artifact,
+                    DirectArtifactState.VALIDATING,
+                    at=self._now(),
+                )
+                await progress.write(stage="post_processing", force=True)
+                return await self._post_process(
+                    session,
+                    attempt,
+                    artifact,
+                    workspace,
+                    final_path,
+                    progress,
+                )
             if attempt.state is DirectAcquisitionState.POST_PROCESSING:
                 if final_path is None:
                     raise _missing_quarantine_error()
@@ -156,7 +183,7 @@ class DirectAcquisitionExecutor:
                 )
 
             await _enter_resolving(session, attempt, artifact, progress)
-            request = await source_factory()
+            request = await _await_with_cancel(source_factory, cancel_event)
             _validate_source_request(request, artifact)
             credentials, host_config_id = await _load_host_credentials(
                 session,
@@ -164,11 +191,14 @@ class DirectAcquisitionExecutor:
             )
 
             async with self._limiter.slot(artifact.host_kind):
-                resolved = await self._resolve_host(
-                    session,
-                    request=request,
-                    credentials=credentials,
-                    host_config_id=host_config_id,
+                resolved = await _await_with_cancel(
+                    lambda: self._resolve_host(
+                        session,
+                        request=request,
+                        credentials=credentials,
+                        host_config_id=host_config_id,
+                    ),
+                    cancel_event,
                 )
                 await _enter_downloading(session, attempt, artifact, workspace, progress)
                 transfer_result = await self._transfer(
@@ -231,6 +261,42 @@ class DirectAcquisitionExecutor:
         except asyncio.CancelledError:
             await session.commit()
             raise
+
+    async def cancel(
+        self,
+        session: AsyncSession,
+        *,
+        acquisition_id: int,
+        artifact_id: int,
+    ) -> bool:
+        """Durably cancel a recoverable attempt that has no active worker."""
+        attempt, artifact = await _load_attempt(session, acquisition_id, artifact_id)
+        if attempt.state in {
+            DirectAcquisitionState.COMPLETED,
+            DirectAcquisitionState.CANCELLED,
+            DirectAcquisitionState.FAILED,
+            DirectAcquisitionState.POST_PROCESSING,
+        }:
+            return False
+
+        workspace = self._quarantine.prepare(
+            acquisition_id=attempt.id,
+            artifact_id=artifact.id,
+        )
+        self._quarantine.cleanup(workspace)
+        artifact.quarantine_path = None
+        artifact.bytes_transferred = 0
+        attempt.failure_class = DirectArtifactFailureClass.USER_ACTION
+        attempt.failure_code = "user_cancelled"
+        attempt.error_message = "Cancelled by user"
+        artifact.failure_class = DirectArtifactFailureClass.USER_ACTION
+        artifact.failure_code = "user_cancelled"
+        artifact.error_message = "Cancelled by user"
+        transition_artifact(artifact, DirectArtifactState.CANCELLED, at=self._now())
+        transition_acquisition(attempt, DirectAcquisitionState.CANCELLED, at=self._now())
+        progress = _ProgressWriter(session, attempt, artifact, now=self._now)
+        await progress.write(stage="cancelled", force=True)
+        return True
 
     async def _resolve_host(
         self,
@@ -395,6 +461,7 @@ class DirectAcquisitionExecutor:
             artifact.error_message = "Direct artifact post-processing failed."
             transition_artifact(artifact, DirectArtifactState.INTERVENTION, at=self._now())
             transition_acquisition(attempt, DirectAcquisitionState.INTERVENTION, at=self._now())
+            await InterventionService().create_direct_attempt_intervention(session, attempt)
             await progress.write(stage="intervention", force=True)
             return _result(attempt, artifact)
 
@@ -409,7 +476,11 @@ class DirectAcquisitionExecutor:
         transition_artifact(artifact, DirectArtifactState.COMPLETED, at=self._now())
         transition_acquisition(attempt, DirectAcquisitionState.COMPLETED, at=self._now())
         self._quarantine.cleanup(workspace)
-        await progress.write(stage="completed", force=True)
+        await progress.write(
+            stage="completed",
+            force=True,
+            final_path=str(processed.final_path),
+        )
         return _result(attempt, artifact)
 
     async def _pause(
@@ -468,6 +539,7 @@ class DirectAcquisitionExecutor:
         elif bool(exc.intervention):
             transition_artifact(artifact, DirectArtifactState.INTERVENTION, at=self._now())
             transition_acquisition(attempt, DirectAcquisitionState.INTERVENTION, at=self._now())
+            await InterventionService().create_direct_attempt_intervention(session, attempt)
             stage = "intervention"
         else:
             transition_artifact(artifact, DirectArtifactState.FAILED, at=self._now())
@@ -477,16 +549,52 @@ class DirectAcquisitionExecutor:
         return _result(attempt, artifact)
 
 
+def _raise_if_cancelled(cancel_event: asyncio.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise ArtifactTransferCancelledError
+
+
+async def _await_with_cancel[T](
+    operation: Callable[[], Awaitable[T]],
+    cancel_event: asyncio.Event | None,
+) -> T:
+    """Await resolver work while making user cancellation immediate."""
+    _raise_if_cancelled(cancel_event)
+    if cancel_event is None:
+        return await operation()
+
+    async def run_operation() -> T:
+        return await operation()
+
+    operation_task = asyncio.create_task(run_operation())
+    cancel_task = asyncio.create_task(cancel_event.wait())
+    waiters: set[asyncio.Task[Any]] = {operation_task, cancel_task}
+    done, _pending = await asyncio.wait(
+        waiters,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if cancel_task in done:
+        operation_task.cancel()
+        await asyncio.gather(operation_task, return_exceptions=True)
+        raise ArtifactTransferCancelledError
+    cancel_task.cancel()
+    await asyncio.gather(cancel_task, return_exceptions=True)
+    return operation_task.result()
+
+
 class _ProgressWriter:
     def __init__(
         self,
         session: AsyncSession,
         attempt: DirectAcquisitionAttempt,
         artifact: DirectArtifactAttempt,
+        *,
+        now: Clock,
     ) -> None:
         self._session = session
         self._attempt = attempt
         self._artifact = artifact
+        self._now = now
         self._last_saved_at = 0.0
         self._last_saved_bytes = -1
 
@@ -496,6 +604,7 @@ class _ProgressWriter:
         stage: str,
         snapshot: TransferProgressSnapshot | None = None,
         force: bool = False,
+        final_path: str | None = None,
     ) -> None:
         now = time.monotonic()
         current_bytes = (
@@ -523,6 +632,13 @@ class _ProgressWriter:
             self._attempt,
             revision=self._attempt.progress_revision + 1,
             snapshot=data,
+        )
+        await sync_direct_download_history(
+            self._session,
+            self._attempt,
+            self._artifact,
+            at=self._now(),
+            final_path=final_path,
         )
         await self._session.commit()
         self._last_saved_at = now

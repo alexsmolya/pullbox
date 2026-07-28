@@ -203,6 +203,29 @@ async def _cancel_on_client(download: DownloadHistory, session: DbSession) -> No
     and calls ``remove_download``. Failures are logged but never raised —
     the user's intent is to remove the download regardless of client state.
     """
+    if download.download_client is DownloadClientType.DIRECT:
+        attempt_id = _direct_attempt_id(download.external_id)
+        if attempt_id is None:
+            logger.warning(
+                "cancel_direct_reference_invalid",
+                download_id=download.id,
+            )
+            return
+        from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
+
+        try:
+            runner = get_direct_acquisition_runner()
+            cancelled = await runner.cancel(attempt_id)
+        except RuntimeError:
+            cancelled = False
+        logger.info(
+            "direct_download_cancel_requested",
+            download_id=download.id,
+            acquisition_id=attempt_id,
+            active=cancelled,
+        )
+        return
+
     if not download.external_id:
         return
 
@@ -234,6 +257,14 @@ async def _cancel_on_client(download: DownloadHistory, session: DbSession) -> No
             )
     except Exception:
         logger.exception("cancel_client_error", download_id=download.id)
+
+
+def _direct_attempt_id(external_id: str | None) -> int | None:
+    prefix = "direct:"
+    if not external_id or not external_id.startswith(prefix):
+        return None
+    raw_id = external_id.removeprefix(prefix)
+    return int(raw_id) if raw_id.isdigit() and int(raw_id) > 0 else None
 
 
 @router.post("/{download_id}/retry-processing", status_code=200)
@@ -361,6 +392,38 @@ async def retry_download(
             status_code=409,
             detail="Use retry-processing for post-processing failures.",
         )
+
+    if download.download_client is DownloadClientType.DIRECT:
+        attempt_id = _direct_attempt_id(download.external_id)
+        if attempt_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The direct download reference is invalid.",
+            )
+        from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
+
+        try:
+            queued = await get_direct_acquisition_runner().retry(attempt_id)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Direct download recovery is not available right now.",
+            ) from exc
+        if not queued:
+            raise HTTPException(
+                status_code=409,
+                detail="This direct download cannot be retried from its current state.",
+            )
+        issue = await session.get(Issue, download.issue_id)
+        if issue and issue.status in (IssueStatus.WANTED, IssueStatus.OWNED):
+            issue.status = IssueStatus.DOWNLOADING
+        await session.flush()
+        logger.info(
+            "direct_download_retry_queued",
+            download_id=download.id,
+            acquisition_id=attempt_id,
+        )
+        return {"status": "sent"}
 
     # Build provider registry and get the right client
     registry = ProviderRegistry()

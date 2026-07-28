@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from pullbox.providers.direct.contract import (
     DIRECT_PROVIDER_PROTOCOL_V1,
     DirectManifestResponse,
+    DirectMirror,
     DirectResolveResponse,
     DirectSearchRequest,
     DirectSearchResponse,
@@ -157,3 +158,13 @@ def test_source_credentials_are_hidden_from_request_repr() -> None:
     )
 
     assert "unique-secret-value" not in repr(request)
+
+
+def test_signed_artifact_locations_are_hidden_from_repr() -> None:
+    mirror = DirectMirror(
+        mirror_id="mirror-1",
+        host_kind="generic_https",
+        final_url="https://files.example/book.cbz?token=unique-signed-value",
+    )
+
+    assert "unique-signed-value" not in repr(mirror)

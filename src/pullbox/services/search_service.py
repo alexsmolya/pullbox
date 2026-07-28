@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import structlog
@@ -19,6 +20,11 @@ from pullbox.services import search_runtime as _search_runtime
 from pullbox.services import search_scoring as _search_scoring
 from pullbox.services import search_targets as _search_targets
 from pullbox.services import search_types as _search_types
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchOutcome,
+    DirectSearchProvider,
+    search_direct_issue_target,
+)
 from pullbox.services.release_validator import (
     ReleaseValidator,
     ValidationResult,
@@ -39,12 +45,16 @@ from pullbox.services.search_targets import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Sequence
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.base import Indexer, ProviderRegistry
     from pullbox.services.search_indexers import IndexerSearchAttempt
     from pullbox.services.search_types import SearchEvalKwargs, ValidatorKwargs
+
+    DirectSearchFunc = Callable[..., Awaitable[DirectSearchOutcome]]
 
 logger = structlog.get_logger(__name__)
 
@@ -286,10 +296,15 @@ class SearchService:
         failure_threshold: int = DEFAULT_INDEXER_FAILURE_THRESHOLD,
         *,
         ignore_indexer_backoff: bool = False,
+        direct_providers: Sequence[DirectSearchProvider] = (),
+        direct_search_func: DirectSearchFunc = search_direct_issue_target,
     ) -> None:
         self._registry = registry
         self._failure_threshold = failure_threshold
         self._ignore_indexer_backoff = ignore_indexer_backoff
+        self._direct_providers = tuple(direct_providers)
+        self._direct_search_func = direct_search_func
+        self._direct_search_tasks: dict[int, asyncio.Task[DirectSearchOutcome]] = {}
         self._indexer_failure_cohort: set[int] = set()
         self._query_cache: dict[tuple[object, ...], tuple[float, list[ReleaseResult]]] = {}
         self._query_inflight: dict[tuple[object, ...], asyncio.Task[list[ReleaseResult]]] = {}
@@ -437,7 +452,18 @@ class SearchService:
 
         from pullbox.services.blocklist_service import BlocklistService
 
-        return await _search_issue_runner.search_issue_target(
+        direct_task = self._direct_search_tasks.get(target.issue_id)
+        if direct_task is None and self._direct_providers:
+            direct_task = asyncio.create_task(
+                self._search_direct_safely(
+                    target,
+                    validator_kwargs=validator_kwargs,
+                ),
+                name=f"direct-search-issue-{target.issue_id}",
+            )
+            self._direct_search_tasks[target.issue_id] = direct_task
+
+        indexer_search = _search_issue_runner.search_issue_target(
             session,
             target,
             mode=mode,
@@ -463,6 +489,33 @@ class SearchService:
             log=logger,
             session_lock=session_lock,
         )
+        if direct_task is None:
+            return await indexer_search
+        indexer_outcome, direct_outcome = await asyncio.gather(indexer_search, direct_task)
+        return replace(indexer_outcome, direct_outcome=direct_outcome)
+
+    async def _search_direct_safely(
+        self,
+        target: IssueSearchTarget,
+        *,
+        validator_kwargs: ValidatorKwargs | None,
+    ) -> DirectSearchOutcome:
+        """Keep a direct coordinator failure from changing legacy results."""
+        try:
+            return await self._direct_search_func(
+                target,
+                self._direct_providers,
+                validator_kwargs=validator_kwargs,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "direct_issue_search_failed",
+                issue_id=target.issue_id,
+                failure_code="direct_search_coordinator_failed",
+            )
+            return DirectSearchOutcome((), (), (), len(self._direct_providers), 0)
 
     async def search_issue_target_quick_first(
         self,
@@ -493,7 +546,8 @@ class SearchService:
             source_priority=source_priority,
             session_lock=session_lock,
         )
-        if fast_outcome.matched or not enable_deep_fallback:
+        direct_matched = bool(fast_outcome.direct_outcome and fast_outcome.direct_outcome.matched)
+        if fast_outcome.matched or direct_matched or not enable_deep_fallback:
             fast_outcome.search_details["search_strategy"] = (
                 "quick_first" if fast_outcome.matched else "quick_first_single_pass"
             )
@@ -858,9 +912,13 @@ async def build_search_runtime(
     session: AsyncSession,
     *,
     include_download_clients: bool = True,
+    allow_empty_registry: bool = False,
+    include_direct_providers: bool = False,
 ) -> SearchRuntime | None:
     """Compatibility facade for shared search runtime construction."""
     return await _search_runtime.build_search_runtime(
         session,
         include_download_clients=include_download_clients,
+        allow_empty_registry=allow_empty_registry,
+        include_direct_providers=include_direct_providers,
     )

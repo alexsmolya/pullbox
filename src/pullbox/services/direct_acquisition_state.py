@@ -92,7 +92,9 @@ ACQUISITION_TRANSITIONS: dict[DirectAcquisitionState, frozenset[DirectAcquisitio
     ),
     DirectAcquisitionState.INTERVENTION: frozenset(
         {
+            DirectAcquisitionState.PLANNED,
             DirectAcquisitionState.RESOLVING,
+            DirectAcquisitionState.POST_PROCESSING,
             DirectAcquisitionState.CANCELLED,
             DirectAcquisitionState.FAILED,
         }
@@ -153,6 +155,7 @@ ARTIFACT_TRANSITIONS: dict[DirectArtifactState, frozenset[DirectArtifactState]] 
     DirectArtifactState.INTERVENTION: frozenset(
         {
             DirectArtifactState.RESOLVING,
+            DirectArtifactState.VALIDATING,
             DirectArtifactState.CANCELLED,
             DirectArtifactState.FAILED,
         }
@@ -248,6 +251,44 @@ def advance_acquisition_progress(
     attempt.progress_revision = revision
     attempt.progress_snapshot = proposed_snapshot
     return True
+
+
+def reopen_terminal_acquisition_for_retry(
+    attempt: DirectAcquisitionAttempt,
+    artifact: DirectArtifactAttempt,
+) -> None:
+    """Reopen one explicitly retried terminal attempt with a fresh auto-retry budget."""
+    acquisition_state = DirectAcquisitionState(attempt.state)
+    artifact_state = DirectArtifactState(artifact.state)
+    if acquisition_state not in {
+        DirectAcquisitionState.FAILED,
+        DirectAcquisitionState.CANCELLED,
+    } or artifact_state not in {
+        DirectArtifactState.FAILED,
+        DirectArtifactState.CANCELLED,
+    }:
+        raise ValidationError("Only a terminal direct attempt can be explicitly retried.")
+
+    # Explicit user retry starts a new bounded automatic retry cycle while
+    # retaining the same durable plan and safe partial-transfer checkpoint.
+    attempt.state = DirectAcquisitionState.RETRY_PENDING
+    artifact.state = DirectArtifactState.RETRY_PENDING
+    attempt.retry_count = 0
+    artifact.retry_count = 0
+    attempt.next_retry_at = None
+    artifact.next_retry_at = None
+    attempt.completed_at = None
+    attempt.cancelled_at = None
+    artifact.completed_at = None
+    advance_acquisition_progress(
+        attempt,
+        revision=attempt.progress_revision + 1,
+        snapshot={
+            "schema_version": 1,
+            "stage": "retry_requested",
+            "artifact_attempt_id": artifact.id,
+        },
+    )
 
 
 def _validate_transition[StateT: enum.StrEnum](

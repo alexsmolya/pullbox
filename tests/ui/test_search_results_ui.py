@@ -19,6 +19,7 @@ import hashlib
 import os
 import re
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -27,11 +28,23 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.direct_acquisition import (
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.models.user import APIKey, User
 from pullbox.providers.base import ReleaseResult
+from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
 from pullbox.services.auth_service import AuthService
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchOutcome,
+    DirectSearchProvider,
+    DirectValidatedCandidate,
+)
+from pullbox.services.release_validator import ReleaseValidator
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -288,6 +301,101 @@ async def test_grab_button_present_for_matched(
 
 
 @pytest.mark.asyncio
+async def test_direct_result_uses_unified_table_and_server_issued_grab_identity(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Direct results share the table without exposing provider download URLs."""
+    issue_id = await _create_issue(_db_factory)
+    async with _db_factory() as session:
+        config = DirectProviderConfig(
+            provider_id="pullbox.getcomics",
+            display_name="GetComics",
+            endpoint="http://getcomics-provider:8780",
+            enabled=True,
+            priority=10,
+            state=DirectProviderState.HEALTHY,
+            trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        )
+        session.add(config)
+        await session.flush()
+        provider_id = config.id
+        await session.commit()
+
+    provider = DirectSearchProvider(
+        provider_config_id=provider_id,
+        provider_identity="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="http://getcomics-provider:8780",
+        bearer_token="provider-token-with-enough-length",
+        allow_private_http=True,
+        source_domains=("getcomics.org",),
+    )
+    candidate = DirectCandidate(
+        provider_candidate_id="getcomics:batman-1",
+        source_reference="https://getcomics.org/batman-1",
+        display_title="Batman 001 (2016)",
+        raw_title="Batman 001 (2016) (Digital).cbz",
+        parsed=DirectParsedCandidate(
+            series_title="Batman",
+            issue_numbers=["1"],
+            year=2016,
+            format="cbz",
+            quality="digital",
+        ),
+        provider_confidence=0.98,
+    )
+    release = _make_release(candidate.raw_title, indexer_name="GetComics")
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )[0][0]
+    direct_outcome = DirectSearchOutcome(
+        matched=(DirectValidatedCandidate(provider, candidate, release, validation),),
+        rejected=(),
+        failures=(),
+        providers_searched=1,
+        elapsed_ms=5,
+    )
+
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "pullbox.services.direct_search_coordinator.load_direct_search_providers",
+            new_callable=AsyncMock,
+            return_value=(provider,),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService._search_direct_safely",
+            new_callable=AsyncMock,
+            return_value=direct_outcome,
+        ),
+    ):
+        response = await client.get(f"/htmx/issues/{issue_id}/search-results")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Source <span" in html
+    assert "GetComics" in html
+    assert "Direct" in html
+    assert "Issue 1" in html
+    assert "CBZ" in html
+    assert "Digital" in html
+    assert re.search(r'data-direct-attempt="\d+"', html)
+    assert "direct://candidate/" not in html
+
+    script = Path("src/pullbox/ui/static/js/pullbox.js").read_text(encoding="utf-8")
+    assert '"/direct-grab"' in script
+    assert "direct_attempt_id" in script
+
+
+@pytest.mark.asyncio
 async def test_empty_results_message(
     client: AsyncClient,
     _db_factory: async_sessionmaker[AsyncSession],
@@ -313,6 +421,8 @@ async def test_empty_results_message(
     assert resp.status_code == 200
     html = resp.text
     assert "No results found" in html
+    assert "configured search sources" in html
+    assert "indexer settings" not in html
     assert 'data-testid="issue-search-results-empty-state"' in html
 
 

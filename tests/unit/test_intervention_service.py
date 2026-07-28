@@ -14,6 +14,7 @@ Run:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,12 +23,26 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectArtifactAttempt,
+    DirectArtifactFailureClass,
+    DirectArtifactHostKind,
+    DirectArtifactRouteKind,
+    DirectArtifactState,
+)
 from pullbox.models.download import DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import MatchConfidence
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.base import ReleaseResult
+from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchProvider,
+    DirectValidatedCandidate,
+)
 from pullbox.services.release_validator import ValidationResult
 
 if TYPE_CHECKING:
@@ -141,6 +156,36 @@ def _make_validation(
     )
 
 
+def _make_direct_candidate() -> DirectValidatedCandidate:
+    release = _make_release(download_url="direct://candidate/opaque")
+    validation = _make_validation(release)
+    return DirectValidatedCandidate(
+        provider=DirectSearchProvider(
+            provider_config_id=7,
+            provider_identity="pullbox.getcomics",
+            display_name="GetComics",
+            endpoint="http://provider:8780",
+            bearer_token="provider-secret-that-must-not-be-stored",
+        ),
+        candidate=DirectCandidate(
+            provider_candidate_id="candidate-7",
+            source_reference="https://getcomics.org/private/post?token=secret",
+            display_title=release.title,
+            raw_title=release.title,
+            parsed=DirectParsedCandidate(
+                series_title="Batman",
+                issue_numbers=["1"],
+                year=2016,
+                format="cbz",
+                quality="digital",
+            ),
+            provider_confidence=0.91,
+        ),
+        release=release,
+        validation=validation,
+    )
+
+
 def _make_pending(
     issue_id: int,
     *,
@@ -162,6 +207,40 @@ def _make_pending(
     if created_at is not None:
         pm.created_at = created_at
     return pm
+
+
+def _make_direct_pending(issue_id: int, attempt_id: int) -> PendingMatch:
+    return PendingMatch(
+        issue_id=issue_id,
+        release_title="Batman 001 (2016) (Digital).cbz",
+        download_url=f"pullbox-direct://attempt/{attempt_id}",
+        is_torrent=False,
+        confidence="medium",
+        match_details={
+            "source_kind": "direct",
+            "direct_attempt_id": attempt_id,
+            "provider_identity": "pullbox.getcomics",
+            "provider_name": "GetComics",
+        },
+    )
+
+
+async def _seed_direct_attempt(session: AsyncSession, issue_id: int) -> DirectAcquisitionAttempt:
+    attempt = DirectAcquisitionAttempt(
+        request_key=f"intervention:{issue_id}",
+        issue_id=issue_id,
+        provider_identity="pullbox.getcomics",
+        provider_candidate_id="candidate-1",
+        state=DirectAcquisitionState.INTERVENTION,
+        requested_coverage={"issue_numbers": ["1"]},
+        candidate_snapshot={"display_title": "Batman 001 (2016) (Digital).cbz"},
+        failure_class=DirectArtifactFailureClass.USER_ACTION,
+        failure_code="semantic_review_required",
+        error_message="Review this direct result before downloading.",
+    )
+    session.add(attempt)
+    await session.flush()
+    return attempt
 
 
 def _mock_download_service() -> AsyncMock:
@@ -251,6 +330,43 @@ class TestCreatePendingMatch:
         assert details["year_match"] is True
         assert details["indexer_name"] == "NZBgeek"
         assert details["age_days"] == 2
+
+    @pytest.mark.asyncio
+    async def test_creates_redacted_direct_pending_match(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Direct intervention stores an opaque attempt reference, never source secrets."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+        result_candidate = _make_direct_candidate()
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            result = await svc.create_direct_pending_match(
+                session,
+                issue.id,
+                42,
+                result_candidate,
+            )
+            duplicate = await svc.create_direct_pending_match(
+                session,
+                issue.id,
+                42,
+                result_candidate,
+            )
+            await session.commit()
+
+        assert result is not None
+        assert duplicate is None
+        assert result.download_url == "pullbox-direct://attempt/42"
+        assert result.match_details["source_kind"] == "direct"
+        assert result.match_details["direct_attempt_id"] == 42
+        assert result.match_details["provider_name"] == "GetComics"
+        assert result.match_details["parsed_issue"] == "1"
+        persisted = f"{result.download_url} {result.match_details}"
+        assert "getcomics.org/private" not in persisted
+        assert "provider-secret" not in persisted
 
 
 # ── TestApproveMatch ──────────────────────────────────────────────────
@@ -372,6 +488,112 @@ class TestApproveMatch:
             with pytest.raises(ValueError, match="not found"):
                 await svc.approve_match(session, 99999)
 
+    @pytest.mark.asyncio
+    async def test_approve_direct_match_plans_and_dispatches_without_download_client(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Approved direct review uses the direct planner and runner adapter."""
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock()
+        runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+        svc = InterventionService(
+            direct_planner=planner,
+            direct_runner_getter=lambda: runner,
+        )
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+            planner.return_value = SimpleNamespace(
+                attempt=attempt,
+                selected_artifact=SimpleNamespace(id=91),
+                initial_source=object(),
+            )
+
+            result = await svc.approve_match(session, pending.id)
+
+        planner.assert_awaited_once_with(session, acquisition_id=attempt.id)
+        runner.dispatch.assert_awaited_once_with(
+            attempt.id,
+            91,
+            initial_source=planner.return_value.initial_source,
+        )
+        assert result is attempt
+        assert pending.status == PendingMatchStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_approve_direct_runtime_intervention_resumes_selected_artifact(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Runtime intervention resumes its durable artifact without replanning."""
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock()
+        runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+        svc = InterventionService(
+            direct_planner=planner,
+            direct_runner_getter=lambda: runner,
+        )
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            attempt.failure_code = "artifact_host_authentication_required"
+            artifact = DirectArtifactAttempt(
+                acquisition_attempt_id=attempt.id,
+                sequence_no=0,
+                artifact_identity="route:runtime-review",
+                route_kind=DirectArtifactRouteKind.DIRECT,
+                host_kind=DirectArtifactHostKind.PIXELDRAIN,
+                state=DirectArtifactState.INTERVENTION,
+                is_selected=True,
+            )
+            session.add(artifact)
+            await session.flush()
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+
+            result = await svc.approve_match(session, pending.id)
+
+        planner.assert_not_awaited()
+        runner.dispatch.assert_awaited_once_with(
+            attempt.id,
+            artifact.id,
+            initial_source=None,
+        )
+        assert result is attempt
+        assert pending.status == PendingMatchStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_approve_direct_rejects_mismatched_opaque_locator(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Tampered direct adapter metadata cannot dispatch another attempt."""
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock()
+        svc = InterventionService(
+            direct_planner=planner,
+            direct_runner_getter=lambda: SimpleNamespace(dispatch=AsyncMock()),
+        )
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            pending = _make_direct_pending(issue.id, attempt.id)
+            pending.download_url = "pullbox-direct://attempt/999"
+            session.add(pending)
+            await session.commit()
+
+            with pytest.raises(ValueError, match="invalid direct attempt reference"):
+                await svc.approve_match(session, pending.id)
+
+        planner.assert_not_awaited()
+
 
 # ── TestRejectMatch ───────────────────────────────────────────────────
 
@@ -448,6 +670,28 @@ class TestRejectMatch:
         async with db_factory() as session:
             with pytest.raises(ValueError, match=r"not.*pending"):
                 await svc.reject_match(session, pm_id)
+
+    @pytest.mark.asyncio
+    async def test_reject_direct_match_cancels_attempt(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Rejecting direct review cancels its durable acquisition attempt."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+
+            await svc.reject_match(session, pending.id, reason="Wrong edition")
+            await session.commit()
+
+        assert pending.status == PendingMatchStatus.REJECTED
+        assert attempt.state is DirectAcquisitionState.CANCELLED
+        assert attempt.failure_code == "user_rejected"
 
 
 # ── TestGetPending ────────────────────────────────────────────────────

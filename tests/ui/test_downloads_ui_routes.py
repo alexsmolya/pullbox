@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 import pullbox.ui.routes as ui_routes
 from pullbox.models.client import DownloadClientConfig
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt, DirectAcquisitionState
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue
 from pullbox.models.series import Series
@@ -903,6 +904,69 @@ class TestDownloadsRouteContracts:
 
         fake_client.get_queue.assert_awaited_once()
         assert progress_map[queue_items[0].id] == fallback
+
+    async def test_download_progress_map_reads_direct_durable_snapshot_without_client_poll(
+        self,
+        sec_db,
+        monkeypatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        import pullbox.composition.providers as registry_module
+
+        await _seed_download_queue_contract_data(sec_db)
+        async with sec_db() as session:
+            issue = (await session.execute(select(Issue).limit(1))).scalar_one()
+            attempt = DirectAcquisitionAttempt(
+                request_key="downloads-ui:direct:1",
+                issue_id=issue.id,
+                provider_identity="pullbox.getcomics",
+                provider_candidate_id="candidate-1",
+                state=DirectAcquisitionState.DOWNLOADING,
+                candidate_snapshot={"display_title": "Direct Issue 001"},
+                progress_revision=3,
+                progress_snapshot={
+                    "stage": "downloading",
+                    "percent": 37,
+                    "bytes_per_second": 2048,
+                    "eta_seconds": 12,
+                    "total_bytes": 1000,
+                },
+            )
+            session.add(attempt)
+            await session.flush()
+            history = DownloadHistory(
+                issue_id=issue.id,
+                title="Direct Issue 001",
+                download_url=f"pullbox-direct://attempt/{attempt.id}",
+                download_client=DownloadClientType.DIRECT,
+                external_id=f"direct:{attempt.id}",
+                state=DownloadState.DOWNLOADING,
+            )
+            session.add(history)
+            await session.commit()
+
+        register = AsyncMock()
+        monkeypatch.setattr(registry_module, "register_download_clients", register)
+        async with sec_db() as session:
+            queue_item = (
+                await session.execute(
+                    select(DownloadHistory).where(
+                        DownloadHistory.download_client == DownloadClientType.DIRECT
+                    )
+                )
+            ).scalar_one()
+            progress_map = await ui_routes._load_download_progress_map(
+                session,
+                [queue_item],
+                fallback_progress={},
+            )
+
+        snapshot = progress_map[queue_item.id]
+        assert snapshot.progress == pytest.approx(0.37)
+        assert snapshot.speed_bytes == 2048
+        assert snapshot.eta_seconds == 12
+        assert snapshot.size_bytes == 1000
+        assert snapshot.client_state == "downloading"
+        register.assert_not_awaited()
 
     async def test_download_queue_context_builds_active_and_waiting_row_views(
         self,

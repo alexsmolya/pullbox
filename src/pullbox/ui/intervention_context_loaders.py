@@ -16,6 +16,7 @@ from pullbox.ui.intervention_filter_helpers import (
     INTERVENTION_REASON_LABELS,
     build_intervention_item_meta,
     get_intervention_history_order_by,
+    intervention_protocol_clause,
     intervention_review_reason_clause,
     intervention_source_expr,
     normalize_intervention_confidence_filter,
@@ -86,7 +87,7 @@ def build_intervention_queue_filters(
     if normalized_confidence:
         filters.append(PendingMatch.confidence == normalized_confidence)
     if normalized_protocol:
-        filters.append(PendingMatch.is_torrent.is_(normalized_protocol == "torrent"))
+        filters.append(intervention_protocol_clause(normalized_protocol))
     if normalized_search:
         search_term = f"%{escape_like(normalized_search)}%"
         filters.append(
@@ -204,6 +205,7 @@ async def load_intervention_queue_context(
             ("", "All Protocols"),
             ("usenet", "Usenet"),
             ("torrent", "Torrent"),
+            ("direct", "Direct"),
         ],
         "high_count": confidence_counts.get("high", 0),
         "medium_count": confidence_counts.get("medium", 0),
@@ -240,7 +242,7 @@ async def load_intervention_history_context(
     if normalized_confidence:
         filters.append(PendingMatch.confidence == normalized_confidence)
     if normalized_protocol:
-        filters.append(PendingMatch.is_torrent.is_(normalized_protocol == "torrent"))
+        filters.append(intervention_protocol_clause(normalized_protocol))
     if normalized_search:
         search_term = f"%{escape_like(normalized_search)}%"
         search_clause = or_(
@@ -255,7 +257,7 @@ async def load_intervention_history_context(
     if normalized_confidence:
         summary_filters.append(PendingMatch.confidence == normalized_confidence)
     if normalized_protocol:
-        summary_filters.append(PendingMatch.is_torrent.is_(normalized_protocol == "torrent"))
+        summary_filters.append(intervention_protocol_clause(normalized_protocol))
 
     summary_result = await session.execute(
         select(PendingMatch.status, func.count(PendingMatch.id))
@@ -334,6 +336,7 @@ async def load_intervention_history_context(
             ("", "All Protocols"),
             ("usenet", "Usenet"),
             ("torrent", "Torrent"),
+            ("direct", "Direct"),
         ],
     }
 

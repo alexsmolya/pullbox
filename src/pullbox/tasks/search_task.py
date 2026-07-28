@@ -41,12 +41,14 @@ from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series
 from pullbox.services import search_runtime as _search_runtime
 from pullbox.services.blocklist_service import BlocklistService
+from pullbox.services.direct_acquisition_planner_service import plan_direct_acquisition
 from pullbox.services.download_service import DownloadService
 from pullbox.services.intervention_service import InterventionService
 from pullbox.services.release_validator import (
     ReleaseValidator,
     ValidationResult,
 )
+from pullbox.services.search_acquisition_router import route_search_acquisition
 from pullbox.services.search_service import (
     _TYPE_QUERY_KEYWORDS,
     DEFAULT_TYPE_THRESHOLDS,
@@ -58,8 +60,9 @@ from pullbox.services.search_service import (
     build_eval_kwargs,
     load_series_wanted_search_targets,
     load_wanted_issue_search_targets,
-    should_auto_grab,
 )
+from pullbox.services.search_source_selection import select_search_source
+from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
 
 logger = structlog.get_logger(__name__)
 _ORIGINAL_SEARCH_SERVICE = SearchService
@@ -259,32 +262,13 @@ async def _persist_wanted_search_outcome(
     issue_grabbed = 0
     issue_queued = 0
     best_confidence: str | None = None
-    action_status = "no_results" if not outcome.raw_results else "no_match"
+    direct_outcome = outcome.direct_outcome
+    direct_results = (
+        len(direct_outcome.matched) + len(direct_outcome.rejected) if direct_outcome else 0
+    )
+    total_results = len(outcome.raw_results) + direct_results
+    action_status = "no_results" if total_results == 0 else "no_match"
     try:
-        if outcome.best_validation is not None and outcome.best_release is not None:
-            validation = outcome.best_validation
-            best = outcome.best_release
-            best_confidence = validation.confidence.value
-            if should_auto_grab(
-                validation.confidence,
-                target.issue_type,
-                runtime.type_thresholds,
-            ):
-                await download_svc.send_to_client(session, best, target.issue_id)
-                issue_grabbed = 1
-                action_status = "downloading"
-            elif not await intervention_svc.has_pending_for_issue(session, target.issue_id):
-                await intervention_svc.create_pending_match(
-                    session,
-                    target.issue_id,
-                    best,
-                    validation,
-                )
-                issue_queued = 1
-                action_status = "queued"
-            else:
-                action_status = "pending_exists"
-
         search_log = await session.get(SearchLog, pending_log_id) if pending_log_id else None
         if search_log is None:
             search_log = SearchLog(
@@ -294,13 +278,34 @@ async def _persist_wanted_search_outcome(
                 search_type=SearchType.AUTOMATED,
             )
             session.add(search_log)
+            await session.flush()
 
-        search_log.results_found = len(outcome.raw_results)
+        routed = await route_search_acquisition(
+            session,
+            outcome=outcome,
+            search_log_id=search_log.id,
+            eval_kwargs=runtime.eval_kwargs,
+            type_thresholds=runtime.type_thresholds,
+            download_service=download_svc,
+            intervention_service=intervention_svc,
+            runner=(get_direct_acquisition_runner() if runtime.direct_providers else None),
+            planner=plan_direct_acquisition,
+        )
+        issue_grabbed = routed.grabbed
+        issue_queued = routed.queued
+        best_confidence = routed.best_confidence
+        action_status = (
+            "no_results"
+            if total_results == 0 and routed.action_status == "no_match"
+            else routed.action_status
+        )
+
+        search_log.results_found = total_results
         search_log.results_grabbed = issue_grabbed
         search_log.results_queued = issue_queued
         search_log.results_rejected = max(
             0,
-            len(outcome.raw_results) - issue_grabbed - issue_queued,
+            total_results - issue_grabbed - issue_queued,
         )
         search_log.details = _merge_search_log_details(
             existing_details=search_log.details or {},
@@ -308,6 +313,8 @@ async def _persist_wanted_search_outcome(
             run_state="completed",
             action_status=action_status,
         )
+        if routed.source_kind is not None:
+            search_log.details["acquisition_method"] = routed.source_kind
         search_log.best_confidence = best_confidence
         await _save_search_wanted_cursor(session, target)
         await session.commit()
@@ -332,10 +339,10 @@ async def _persist_wanted_search_outcome(
                     series_title=target.series_title,
                     issue_number=target.issue_number,
                     search_type=SearchType.AUTOMATED,
-                    results_found=len(outcome.raw_results),
+                    results_found=total_results,
                     results_grabbed=0,
                     results_queued=0,
-                    results_rejected=len(outcome.raw_results),
+                    results_rejected=total_results,
                     details=_merge_search_log_details(
                         existing_details=None,
                         next_details=outcome.search_details,
@@ -385,10 +392,16 @@ async def _persist_series_search_outcome(
 
     selected_outcome = primary_outcome
     selected_pass = 1
+    primary_selection = select_search_source(primary_outcome, runtime.eval_kwargs)
+    fallback_selection = (
+        select_search_source(fallback_outcome, runtime.eval_kwargs)
+        if fallback_outcome is not None
+        else None
+    )
     if (
-        primary_outcome.best_validation is None
+        primary_selection is None
         and fallback_outcome is not None
-        and fallback_outcome.best_validation is not None
+        and fallback_selection is not None
     ):
         selected_outcome = fallback_outcome
         selected_pass = 2
@@ -396,42 +409,61 @@ async def _persist_series_search_outcome(
     issue_grabbed = 0
     issue_queued = 0
     try:
-        if selected_outcome.best_validation is None or selected_outcome.best_release is None:
+        search_log = await session.get(SearchLog, pending_log_id) if pending_log_id else None
+        if search_log is None:
+            search_log = SearchLog(
+                issue_id=target.issue_id,
+                series_title=target.series_title,
+                issue_number=target.issue_number,
+                search_type=SearchType.BULK,
+            )
+            session.add(search_log)
+            await session.flush()
+
+        routed = await route_search_acquisition(
+            session,
+            outcome=selected_outcome,
+            search_log_id=search_log.id,
+            eval_kwargs=runtime.eval_kwargs,
+            type_thresholds=runtime.type_thresholds,
+            download_service=download_svc,
+            intervention_service=intervention_svc,
+            runner=(get_direct_acquisition_runner() if runtime.direct_providers else None),
+            planner=plan_direct_acquisition,
+        )
+        issue_grabbed = routed.grabbed
+        issue_queued = routed.queued
+        if routed.source_kind is None:
             issue_log.info("search_series_issue_no_match", search_pass=selected_pass)
+        elif routed.source_kind == "direct":
+            issue_log.info(
+                "search_series_issue_direct_routed",
+                action_status=routed.action_status,
+                confidence=routed.best_confidence,
+                search_pass=selected_pass,
+            )
         else:
-            validation = selected_outcome.best_validation
-            best = selected_outcome.best_release
-            if should_auto_grab(
-                validation.confidence,
-                target.issue_type,
-                runtime.type_thresholds,
-            ):
-                await download_svc.send_to_client(session, best, target.issue_id)
-                issue_grabbed = 1
+            selected = select_search_source(selected_outcome, runtime.eval_kwargs)
+            if selected is None:
+                raise RuntimeError("Selected indexer result was not found.")
+            if issue_grabbed:
                 issue_log.info(
                     "search_series_issue_auto_grab",
-                    best_title=best.title,
-                    best_indexer=best.indexer_name,
-                    confidence=validation.confidence.value,
+                    best_title=selected.release.title,
+                    best_indexer=selected.release.indexer_name,
+                    confidence=selected.validation.confidence.value,
                 )
-            elif await intervention_svc.has_pending_for_issue(session, target.issue_id):
+            elif routed.action_status == "pending_exists":
                 issue_log.info(
                     "search_series_issue_pending_exists",
-                    best_title=best.title,
+                    best_title=selected.release.title,
                     search_pass=selected_pass,
                 )
-            else:
-                await intervention_svc.create_pending_match(
-                    session,
-                    target.issue_id,
-                    best,
-                    validation,
-                )
-                issue_queued = 1
+            elif issue_queued:
                 issue_log.info(
                     "search_series_issue_queued",
-                    best_title=best.title,
-                    confidence=validation.confidence.value,
+                    best_title=selected.release.title,
+                    confidence=selected.validation.confidence.value,
                     search_pass=selected_pass,
                 )
 
@@ -453,11 +485,14 @@ async def _persist_series_search_outcome(
                 "search_passes",
                 selected_outcome.search_details.get("search_passes", 1),
             )
-        best_confidence = (
-            selected_outcome.best_validation.confidence.value
-            if selected_outcome.best_validation is not None
-            else None
+        direct_outcome = selected_outcome.direct_outcome
+        direct_results = (
+            len(direct_outcome.matched) + len(direct_outcome.rejected) if direct_outcome else 0
         )
+        total_found += direct_results
+        details["direct_results_count"] = direct_results
+        if routed.source_kind is not None:
+            details["acquisition_method"] = routed.source_kind
 
         await _persist_bulk_search_log(
             session,
@@ -468,9 +503,11 @@ async def _persist_series_search_outcome(
             results_queued=issue_queued,
             results_rejected=max(0, total_found - issue_grabbed - issue_queued),
             details=details,
-            best_confidence=best_confidence,
+            best_confidence=routed.best_confidence,
             action_status=(
-                "downloading" if issue_grabbed else "queued" if issue_queued else "no_results"
+                "no_results"
+                if total_found == 0 and routed.action_status == "no_match"
+                else routed.action_status
             ),
         )
         return issue_grabbed, issue_queued, 0
@@ -557,6 +594,7 @@ async def _build_task_search_runtime(
         registry_builder=build_registry,
         default_type_thresholds=DEFAULT_TYPE_THRESHOLDS,
         eval_kwargs_builder=build_eval_kwargs,
+        include_direct_providers=True,
     )
 
 
@@ -941,6 +979,7 @@ async def search_series_issues(
                     search_svc = SearchService(
                         runtime.registry,
                         failure_threshold=runtime.failure_threshold,
+                        direct_providers=runtime.direct_providers,
                     )
                     if _is_mocked_search_service(search_svc):
                         two_pass_enabled = await _load_mocked_two_pass_enabled(session, runtime)
@@ -1111,6 +1150,7 @@ async def search_wanted() -> None:
             runtime.registry,
             failure_threshold=runtime.failure_threshold,
             ignore_indexer_backoff=trigger_type == "manual",
+            direct_providers=runtime.direct_providers,
         )
         download_svc = _build_download_service(runtime.registry)
         intervention_svc = InterventionService(download_svc)

@@ -10615,25 +10615,36 @@ function issueSearchResultActions(config) {
         return;
       }
 
+      var directAttemptId = parseInt(button.dataset.directAttempt, 10) || 0;
+      var endpoint = "/api/v1/issues/" + cfg.issueId + "/grab";
+      var payload = {
+        download_url: button.dataset.url,
+        indexer_name: button.dataset.indexer,
+        title: button.dataset.title,
+        is_torrent: button.dataset.torrent === "true",
+        file_size: parseInt(button.dataset.size, 10) || 0,
+        search_log_id: cfg.searchLogId,
+      };
+      if (directAttemptId) {
+        endpoint = "/api/v1/issues/" + cfg.issueId + "/direct-grab";
+        payload = { direct_attempt_id: directAttemptId };
+      }
+
       self.grabbing = true;
-      fetch("/api/v1/issues/" + cfg.issueId + "/grab", {
+      fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": self.csrfToken(),
         },
-        body: JSON.stringify({
-          download_url: button.dataset.url,
-          indexer_name: button.dataset.indexer,
-          title: button.dataset.title,
-          is_torrent: button.dataset.torrent === "true",
-          file_size: parseInt(button.dataset.size, 10) || 0,
-          search_log_id: cfg.searchLogId,
-        }),
+        body: JSON.stringify(payload),
       })
         .then(function (response) {
           if (response.ok) {
-            self.dispatchToast("Grabbed successfully", "success");
+            self.dispatchToast(
+              directAttemptId ? "Direct download queued" : "Grabbed successfully",
+              "success"
+            );
             self.grabbing = false;
             return;
           }
@@ -10667,12 +10678,15 @@ function issueSearchResultActions(config) {
       }
 
       var reason = button.dataset.rejectionReason || "Pullbox rejected this result.";
+      var isDirect = Boolean(parseInt(button.dataset.directAttempt, 10) || 0);
       pbConfirm({
         title: "Grab Rejected Result",
         message:
           "Pullbox rejected this result: " +
           reason +
-          " If you continue, Pullbox will send it to your download client anyway.",
+          (isDirect
+            ? " If you continue, Pullbox will plan and queue this direct result anyway."
+            : " If you continue, Pullbox will send it to your download client anyway."),
         confirmText: "Grab anyway",
         destructive: false,
       }).then(function (ok) {

@@ -1,0 +1,514 @@
+"""Bounded direct-provider fan-out through Pullbox's semantic matcher."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Protocol
+from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
+
+import structlog
+from sqlalchemy import select
+
+from pullbox.core.log_sanitizer import sanitize_log_mapping, sanitize_log_string
+from pullbox.core.name_matcher import NameMatcher
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectProviderConfig,
+    DirectProviderState,
+)
+from pullbox.models.library import MatchConfidence
+from pullbox.providers.base import ReleaseResult
+from pullbox.providers.direct.client import DirectProviderClient, DirectProviderClientError
+from pullbox.providers.direct.contract import (
+    DirectCandidate,
+    DirectResolverProfile,
+    DirectSearchIntent,
+    DirectSearchRequest,
+    DirectSearchResponse,
+)
+from pullbox.services.release_validator import ReleaseValidator, ValidationResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from pullbox.services.search_targets import IssueSearchTarget
+    from pullbox.services.search_types import ValidatorKwargs
+
+logger = structlog.get_logger(__name__)
+
+_DEFAULT_SEARCH_SECONDS = 30.0
+_DEFAULT_RESULT_LIMIT = 20
+_MAX_FANOUT = 4
+_CONFIDENCE_RANK = {
+    MatchConfidence.HIGH: 0,
+    MatchConfidence.MEDIUM: 1,
+    MatchConfidence.LOW: 2,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class DirectSearchProvider:
+    """One decrypted provider operation detached from its database session."""
+
+    provider_config_id: int
+    provider_identity: str
+    display_name: str
+    endpoint: str
+    bearer_token: str = field(repr=False)
+    allow_private_http: bool = False
+    protocol_version: str = "direct-download-provider/v1"
+    provider_priority: int = 50
+    provider_config: dict[str, object] = field(default_factory=dict, repr=False)
+    source_credentials: dict[str, str] = field(default_factory=dict, repr=False)
+    resolver_profile: DirectResolverProfile | None = field(default=None, repr=False)
+    source_domains: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DirectSearchFailure:
+    """Redacted failure from one independently isolated provider search."""
+
+    provider_identity: str
+    provider_name: str
+    code: str
+    retryable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DirectValidatedCandidate:
+    """A provider candidate bound to Pullbox's unchanged validation result."""
+
+    provider: DirectSearchProvider
+    candidate: DirectCandidate
+    release: ReleaseResult
+    validation: ValidationResult
+
+
+@dataclass(frozen=True, slots=True)
+class DirectSearchOutcome:
+    """Deterministic combined result from all eligible direct providers."""
+
+    matched: tuple[DirectValidatedCandidate, ...]
+    rejected: tuple[DirectValidatedCandidate, ...]
+    failures: tuple[DirectSearchFailure, ...]
+    providers_searched: int
+    elapsed_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class DirectSearchDiscovery:
+    """Server-issued durable identity for one direct search candidate."""
+
+    attempt_id: int
+    result: DirectValidatedCandidate
+
+
+class DirectSearchClient(Protocol):
+    async def search(self, request: DirectSearchRequest) -> DirectSearchResponse: ...
+
+    async def aclose(self) -> None: ...
+
+
+class DirectSearchClientFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        endpoint: str,
+        bearer_token: str,
+        allow_private_http: bool,
+        provider_id: str,
+    ) -> DirectSearchClient: ...
+
+
+def _default_client_factory(
+    *,
+    endpoint: str,
+    bearer_token: str,
+    allow_private_http: bool,
+    provider_id: str,
+) -> DirectProviderClient:
+    return DirectProviderClient(
+        endpoint=endpoint,
+        bearer_token=bearer_token,
+        allow_private_http=allow_private_http,
+        provider_id=provider_id,
+        request_timeout_seconds=_DEFAULT_SEARCH_SECONDS,
+    )
+
+
+async def load_direct_search_providers(
+    session: AsyncSession,
+) -> tuple[DirectSearchProvider, ...]:
+    """Load and decrypt only providers eligible for one immediate search."""
+    from pullbox.services.direct_configuration_service import load_provider_secret_material
+    from pullbox.services.direct_resolver_service import build_provider_resolver_profile
+
+    result = await session.execute(
+        select(DirectProviderConfig)
+        .where(
+            DirectProviderConfig.enabled.is_(True),
+            DirectProviderConfig.state.in_(
+                (DirectProviderState.HEALTHY, DirectProviderState.DEGRADED)
+            ),
+        )
+        .order_by(
+            DirectProviderConfig.priority,
+            DirectProviderConfig.provider_id,
+            DirectProviderConfig.id,
+        )
+    )
+    providers: list[DirectSearchProvider] = []
+    for config in result.scalars().all():
+        material = load_provider_secret_material(config)
+        if not material.bearer_token:
+            logger.warning(
+                "direct_search_provider_skipped",
+                provider_id=config.provider_id,
+                failure_code="provider_authentication_failed",
+            )
+            continue
+        metadata = config.configuration_metadata or {}
+        raw_public = metadata.get("public_values", {})
+        public_config = dict(raw_public) if isinstance(raw_public, dict) else {}
+        manifest = config.manifest_snapshot or {}
+        raw_domains = manifest.get("source_domains", [])
+        source_domains = (
+            tuple(str(domain) for domain in raw_domains if isinstance(domain, str))
+            if isinstance(raw_domains, list)
+            else ()
+        )
+        providers.append(
+            DirectSearchProvider(
+                provider_config_id=config.id,
+                provider_identity=config.provider_id,
+                display_name=config.display_name,
+                endpoint=config.endpoint,
+                bearer_token=material.bearer_token,
+                allow_private_http=metadata.get("allow_private_http") is True,
+                protocol_version=config.negotiated_protocol or "direct-download-provider/v1",
+                provider_priority=config.priority,
+                provider_config=public_config,
+                source_credentials=material.configuration,
+                resolver_profile=await build_provider_resolver_profile(session, config),
+                source_domains=source_domains,
+            )
+        )
+    return tuple(providers)
+
+
+async def persist_direct_search_discoveries(
+    session: AsyncSession,
+    target: IssueSearchTarget,
+    outcome: DirectSearchOutcome,
+    *,
+    search_log_id: int | None = None,
+) -> tuple[DirectSearchDiscovery, ...]:
+    """Persist redacted candidate evidence and return server-issued IDs."""
+    pending: list[tuple[DirectAcquisitionAttempt, DirectValidatedCandidate]] = []
+    issue_number = f"{target.issue_number:g}"
+    for result in (*outcome.matched, *outcome.rejected):
+        attempt = DirectAcquisitionAttempt(
+            request_key=f"direct-search:{uuid4().hex}",
+            issue_id=target.issue_id,
+            search_log_id=search_log_id,
+            provider_config_id=result.provider.provider_config_id,
+            provider_identity=result.provider.provider_identity,
+            provider_candidate_id=result.candidate.provider_candidate_id,
+            state=DirectAcquisitionState.DISCOVERED,
+            requested_coverage={
+                "issue_numbers": [issue_number],
+                "issue_type": target.issue_type.value,
+            },
+            candidate_snapshot=_candidate_snapshot(result),
+            plan_snapshot={},
+            progress_snapshot={
+                "schema_version": 1,
+                "stage": "discovered",
+            },
+        )
+        session.add(attempt)
+        pending.append((attempt, result))
+    if pending:
+        await session.flush()
+    return tuple(
+        DirectSearchDiscovery(attempt_id=attempt.id, result=result) for attempt, result in pending
+    )
+
+
+async def search_direct_issue_target(
+    target: IssueSearchTarget,
+    providers: Sequence[DirectSearchProvider],
+    *,
+    validator_kwargs: ValidatorKwargs | None = None,
+    client_factory: DirectSearchClientFactory = _default_client_factory,
+    result_limit: int = _DEFAULT_RESULT_LIMIT,
+    search_seconds: float = _DEFAULT_SEARCH_SECONDS,
+    max_fanout: int = _MAX_FANOUT,
+    now: Callable[[], datetime] | None = None,
+) -> DirectSearchOutcome:
+    """Search eligible providers concurrently and preserve matcher semantics."""
+    if not 1 <= result_limit <= 100:
+        raise ValueError("Direct provider result limit must be between 1 and 100.")
+    if search_seconds <= 0 or search_seconds > 300:
+        raise ValueError("Direct provider search timeout must be between 0 and 300 seconds.")
+    if not 1 <= max_fanout <= _MAX_FANOUT:
+        raise ValueError("Direct provider fan-out must be between 1 and 4.")
+
+    started_at = time.monotonic()
+    active_providers = tuple(
+        sorted(
+            providers,
+            key=lambda item: (
+                item.provider_priority,
+                item.provider_identity,
+                item.provider_config_id,
+            ),
+        )
+    )
+    if not active_providers:
+        return DirectSearchOutcome((), (), (), 0, 0)
+
+    clock = now or (lambda: datetime.now(UTC))
+    validator = ReleaseValidator(**(validator_kwargs or {}))
+    semaphore = asyncio.Semaphore(min(max_fanout, len(active_providers)))
+
+    async def _search(
+        provider: DirectSearchProvider,
+    ) -> tuple[
+        list[DirectValidatedCandidate],
+        list[DirectValidatedCandidate],
+        DirectSearchFailure | None,
+    ]:
+        async with semaphore:
+            return await _search_provider(
+                target,
+                provider,
+                validator=validator,
+                client_factory=client_factory,
+                result_limit=result_limit,
+                deadline=clock() + timedelta(seconds=search_seconds),
+            )
+
+    provider_results = await asyncio.gather(*(_search(provider) for provider in active_providers))
+    matched: list[DirectValidatedCandidate] = []
+    rejected: list[DirectValidatedCandidate] = []
+    failures: list[DirectSearchFailure] = []
+    for provider_matched, provider_rejected, failure in provider_results:
+        matched.extend(provider_matched)
+        rejected.extend(provider_rejected)
+        if failure is not None:
+            failures.append(failure)
+
+    matched.sort(key=_matched_order_key)
+    rejected.sort(key=_rejected_order_key)
+    failures.sort(key=lambda item: (item.provider_identity, item.code))
+    return DirectSearchOutcome(
+        matched=tuple(matched),
+        rejected=tuple(rejected),
+        failures=tuple(failures),
+        providers_searched=len(active_providers),
+        elapsed_ms=int((time.monotonic() - started_at) * 1000),
+    )
+
+
+async def _search_provider(
+    target: IssueSearchTarget,
+    provider: DirectSearchProvider,
+    *,
+    validator: ReleaseValidator,
+    client_factory: DirectSearchClientFactory,
+    result_limit: int,
+    deadline: datetime,
+) -> tuple[
+    list[DirectValidatedCandidate],
+    list[DirectValidatedCandidate],
+    DirectSearchFailure | None,
+]:
+    client = client_factory(
+        endpoint=provider.endpoint,
+        bearer_token=provider.bearer_token,
+        allow_private_http=provider.allow_private_http,
+        provider_id=provider.provider_identity,
+    )
+    try:
+        response = await client.search(
+            DirectSearchRequest(
+                protocol_version=provider.protocol_version,
+                request_id=uuid4(),
+                deadline=deadline,
+                provider_config=provider.provider_config,
+                source_credentials=provider.source_credentials,
+                resolver_profile=provider.resolver_profile,
+                intent=_build_intent(target),
+                limit=result_limit,
+            )
+        )
+    except asyncio.CancelledError:
+        raise
+    except DirectProviderClientError as exc:
+        logger.warning(
+            "direct_search_provider_failed",
+            provider_id=provider.provider_identity,
+            failure_code=exc.code,
+            retryable=exc.retryable,
+        )
+        return (
+            [],
+            [],
+            DirectSearchFailure(
+                provider_identity=provider.provider_identity,
+                provider_name=provider.display_name,
+                code=exc.code,
+                retryable=exc.retryable,
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "direct_search_provider_failed",
+            provider_id=provider.provider_identity,
+            failure_code="provider_search_failed",
+        )
+        return (
+            [],
+            [],
+            DirectSearchFailure(
+                provider_identity=provider.provider_identity,
+                provider_name=provider.display_name,
+                code="provider_search_failed",
+                retryable=True,
+            ),
+        )
+    finally:
+        await client.aclose()
+
+    matched: list[DirectValidatedCandidate] = []
+    rejected: list[DirectValidatedCandidate] = []
+    for candidate in response.candidates:
+        release = _candidate_release(provider, candidate)
+        accepted, declined = validator.validate_all_results(
+            [release],
+            wanted_series=target.series_title,
+            wanted_issue=target.issue_number,
+            wanted_year=target.series_year,
+            wanted_issue_type=target.issue_type,
+            alternate_names=target.alternate_names,
+        )
+        validation = accepted[0] if accepted else declined[0]
+        result = DirectValidatedCandidate(
+            provider=provider,
+            candidate=candidate,
+            release=release,
+            validation=validation,
+        )
+        (matched if validation.is_match else rejected).append(result)
+    return matched, rejected, None
+
+
+def _build_intent(target: IssueSearchTarget) -> DirectSearchIntent:
+    issue_number = f"{target.issue_number:g}"
+    return DirectSearchIntent(
+        series_title=target.series_title,
+        normalized_title=NameMatcher.normalize(target.series_title),
+        alternate_titles=list(target.alternate_names or []),
+        issue_number=issue_number,
+        issue_type=target.issue_type.value,
+        volume=issue_number if target.issue_type.value == "volume" else None,
+        year=target.series_year,
+        preferred_formats=["cbz", "cbr", "cb7", "pdf"],
+        quality_preferences=["digital", "retail"],
+    )
+
+
+def _candidate_release(
+    provider: DirectSearchProvider,
+    candidate: DirectCandidate,
+) -> ReleaseResult:
+    identity = hashlib.sha256(
+        f"{provider.provider_config_id}:{candidate.provider_candidate_id}".encode()
+    ).hexdigest()[:24]
+    return ReleaseResult(
+        title=candidate.raw_title,
+        indexer_name=provider.display_name,
+        download_url=f"direct://candidate/{identity}",
+        size_bytes=None,
+        age_days=None,
+        seeders=None,
+        leechers=None,
+        grabs=None,
+        is_torrent=False,
+        category="Books/Comics",
+        published_at=None,
+        info_url=_safe_source_reference(candidate.source_reference, provider.source_domains),
+    )
+
+
+def _safe_source_reference(raw_url: str, domains: tuple[str, ...]) -> str | None:
+    try:
+        parsed = urlsplit(raw_url)
+        _ = parsed.port
+    except ValueError:
+        return None
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    safe_domains = tuple(domain.casefold().rstrip(".") for domain in domains)
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or not any(hostname == domain or hostname.endswith(f".{domain}") for domain in safe_domains)
+    ):
+        return None
+    return urlunsplit(("https", parsed.netloc, parsed.path, "", ""))
+
+
+def _candidate_snapshot(result: DirectValidatedCandidate) -> dict[str, object]:
+    """Build durable evidence without source URLs or provider secrets."""
+    candidate = result.candidate
+    validation = result.validation
+    provenance = sanitize_log_mapping(candidate.provenance)
+    return {
+        "schema_version": 1,
+        "display_title": sanitize_log_string(candidate.display_title),
+        "raw_title": sanitize_log_string(candidate.raw_title),
+        "parsed": candidate.parsed.model_dump(mode="json"),
+        "provider_confidence": candidate.provider_confidence,
+        "provenance": provenance,
+        "can_resolve": candidate.can_resolve,
+        "expires_at": candidate.expires_at.isoformat() if candidate.expires_at else None,
+        "semantic_decision": {
+            "is_match": validation.is_match,
+            "confidence": validation.confidence.value,
+            "series_similarity": validation.series_similarity,
+            "match_type": validation.match_type,
+            "rejection_reason": sanitize_log_string(validation.rejection_reason or ""),
+        },
+    }
+
+
+def _matched_order_key(item: DirectValidatedCandidate) -> tuple[object, ...]:
+    return (
+        _CONFIDENCE_RANK.get(item.validation.confidence, 99),
+        -item.validation.series_similarity,
+        -item.candidate.provider_confidence,
+        item.provider.provider_priority,
+        item.provider.provider_identity,
+        item.candidate.provider_candidate_id,
+    )
+
+
+def _rejected_order_key(item: DirectValidatedCandidate) -> tuple[object, ...]:
+    return (
+        -item.validation.series_similarity,
+        -item.candidate.provider_confidence,
+        item.provider.provider_priority,
+        item.provider.provider_identity,
+        item.candidate.provider_candidate_id,
+    )

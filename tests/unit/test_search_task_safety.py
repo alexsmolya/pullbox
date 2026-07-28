@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -13,11 +14,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from pullbox.models import Base
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import MatchConfidence
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.base import ProviderRegistry, ReleaseResult
+from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchOutcome,
+    DirectSearchProvider,
+    DirectValidatedCandidate,
+)
+from pullbox.services.release_validator import ReleaseValidator
 from pullbox.services.search_service import (
     IssueSearchOutcome,
     IssueSearchTarget,
@@ -484,6 +499,142 @@ async def test_search_wanted_routes_matches_with_per_type_thresholds(
     )
     assert complete_log.kwargs["query_count"] == 2
     assert complete_log.kwargs["slow_indexer_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_wanted_plans_and_dispatches_high_confidence_direct_winner(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Automated direct winners use durable planning instead of DownloadService."""
+    from pullbox.tasks import search_task
+
+    target = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=960)
+    async with db_factory() as session:
+        config = DirectProviderConfig(
+            provider_id="pullbox.getcomics",
+            display_name="GetComics",
+            endpoint="http://provider:8780",
+            enabled=True,
+            priority=10,
+            state=DirectProviderState.HEALTHY,
+            trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        )
+        session.add(config)
+        await session.flush()
+        provider_id = config.id
+        await session.commit()
+
+    provider = DirectSearchProvider(
+        provider_config_id=provider_id,
+        provider_identity="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="http://provider:8780",
+        bearer_token="provider-token-with-enough-length",
+        provider_priority=10,
+    )
+    release = replace(
+        _release("Absolute Flash #001 (2025) (Digital).cbz"),
+        indexer_name="GetComics",
+    )
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series=target.series_title,
+        wanted_issue=target.issue_number,
+        wanted_year=target.series_year,
+    )[0][0]
+    direct_result = DirectValidatedCandidate(
+        provider=provider,
+        candidate=DirectCandidate(
+            provider_candidate_id="candidate-1",
+            source_reference="https://getcomics.org/post",
+            display_title=release.title,
+            raw_title=release.title,
+            parsed=DirectParsedCandidate(
+                series_title=target.series_title,
+                issue_numbers=["1"],
+                year=target.series_year,
+                format="cbz",
+                quality="digital",
+            ),
+            provider_confidence=0.99,
+        ),
+        release=release,
+        validation=validation,
+    )
+    outcome = replace(
+        _no_result_outcome(target),
+        direct_outcome=DirectSearchOutcome(
+            matched=(direct_result,),
+            rejected=(),
+            failures=(),
+            providers_searched=1,
+            elapsed_ms=4,
+        ),
+    )
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=None,
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+        direct_providers=(provider,),
+    )
+    source = object()
+
+    async def _plan(session: AsyncSession, *, acquisition_id: int, **_kwargs: object):
+        attempt = await session.get(DirectAcquisitionAttempt, acquisition_id)
+        assert attempt is not None
+        assert attempt.search_log_id is not None
+        attempt.state = DirectAcquisitionState.PLANNED
+        return SimpleNamespace(
+            attempt=attempt,
+            selected_artifact=SimpleNamespace(id=44),
+            initial_source=source,
+        )
+
+    runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+    download_svc = AsyncMock()
+    intervention_svc = AsyncMock()
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_wanted_issue_search_targets",
+        AsyncMock(return_value=[target]),
+    )
+    monkeypatch.setattr(
+        SearchService,
+        "search_targets_quick_first",
+        AsyncMock(return_value=[outcome]),
+    )
+    monkeypatch.setattr(search_task, "_build_download_service", lambda registry: download_svc)
+    monkeypatch.setattr(
+        search_task,
+        "InterventionService",
+        lambda download_service: intervention_svc,
+    )
+    monkeypatch.setattr(search_task, "plan_direct_acquisition", _plan)
+    monkeypatch.setattr(search_task, "get_direct_acquisition_runner", lambda: runner)
+
+    await search_task.search_wanted()
+
+    download_svc.send_to_client.assert_not_awaited()
+    runner.dispatch.assert_awaited_once_with(1, 44, initial_source=source)
+    async with db_factory() as session:
+        attempts = list((await session.execute(select(DirectAcquisitionAttempt))).scalars())
+        logs = list((await session.execute(select(SearchLog))).scalars())
+    assert len(attempts) == 1
+    assert attempts[0].state is DirectAcquisitionState.PLANNED
+    assert len(logs) == 1
+    assert logs[0].results_grabbed == 1
+    assert logs[0].details["acquisition_method"] == "direct"
 
 
 @pytest.mark.asyncio

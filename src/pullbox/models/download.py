@@ -48,7 +48,7 @@ class DownloadClientType(enum.StrEnum):
     QBITTORRENT = "qbittorrent"
     TRANSMISSION = "transmission"
     DELUGE = "deluge"
-    # DDL types added in Sprint 9
+    DIRECT = "direct"
 
     @property
     def is_usenet(self) -> bool:
@@ -61,6 +61,10 @@ class DownloadClientType(enum.StrEnum):
             DownloadClientType.TRANSMISSION,
             DownloadClientType.DELUGE,
         }
+
+    @property
+    def is_direct(self) -> bool:
+        return self is DownloadClientType.DIRECT
 
 
 class DownloadHistory(Base, IdentityMixin, TimestampMixin):

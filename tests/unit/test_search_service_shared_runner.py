@@ -1152,3 +1152,59 @@ async def test_build_search_runtime_parses_config_and_respects_registry_flag(
     assert runtime.eval_kwargs["warn_collection_mb"] == 80
     assert runtime.failure_threshold == 5
     assert build_registry_mock.await_args.kwargs["include_download_clients"] is False
+
+
+async def test_build_search_runtime_can_support_direct_only_search(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_registry_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        __import__("pullbox.composition.providers", fromlist=["build_registry"]),
+        "build_registry",
+        build_registry_mock,
+    )
+
+    async with db_factory() as session:
+        runtime = await build_search_runtime(
+            session,
+            include_download_clients=False,
+            allow_empty_registry=True,
+        )
+
+    assert runtime is not None
+    assert runtime.registry.get_indexer_items() == []
+    assert runtime.indexer_configs == {}
+
+
+async def test_build_search_runtime_loads_direct_providers_when_requested(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = SimpleNamespace(provider_identity="pullbox.getcomics")
+    build_registry_mock = AsyncMock(return_value=None)
+    load_direct_mock = AsyncMock(return_value=(provider,))
+    monkeypatch.setattr(
+        __import__("pullbox.composition.providers", fromlist=["build_registry"]),
+        "build_registry",
+        build_registry_mock,
+    )
+    monkeypatch.setattr(
+        __import__(
+            "pullbox.services.direct_search_coordinator",
+            fromlist=["load_direct_search_providers"],
+        ),
+        "load_direct_search_providers",
+        load_direct_mock,
+    )
+
+    async with db_factory() as session:
+        runtime = await build_search_runtime(
+            session,
+            include_download_clients=False,
+            include_direct_providers=True,
+        )
+
+    assert runtime is not None
+    assert runtime.direct_providers == (provider,)
+    load_direct_mock.assert_awaited_once()

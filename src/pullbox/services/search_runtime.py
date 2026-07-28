@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pullbox.models.issue import IssueType
     from pullbox.models.library import MatchConfidence
     from pullbox.providers.base import ProviderRegistry
+    from pullbox.services.direct_search_coordinator import DirectSearchProvider
     from pullbox.services.search_types import SearchEvalKwargs, ValidatorKwargs
 
     EvalKwargsBuilder = Callable[[dict[str, str]], SearchEvalKwargs]
@@ -49,6 +50,7 @@ class SearchRuntime:
     type_thresholds: dict[str, str]
     failure_threshold: int
     two_pass_enabled: bool = True
+    direct_providers: tuple[DirectSearchProvider, ...] = ()
 
 
 # Per-type auto-grab thresholds. "never" means always route to intervention.
@@ -90,6 +92,8 @@ async def build_search_runtime(
     registry_builder: RegistryBuilder | None = None,
     default_type_thresholds: dict[str, str] | None = None,
     eval_kwargs_builder: EvalKwargsBuilder = build_eval_kwargs,
+    allow_empty_registry: bool = False,
+    include_direct_providers: bool = False,
 ) -> SearchRuntime | None:
     """Build shared search runtime state for one request or task cycle."""
     if registry_builder is None:
@@ -103,10 +107,21 @@ async def build_search_runtime(
         session,
         include_download_clients=include_download_clients,
     )
-    if built is None:
-        return None
+    if include_direct_providers:
+        from pullbox.services.direct_search_coordinator import load_direct_search_providers
 
-    registry, indexer_configs = built
+        direct_providers = await load_direct_search_providers(session)
+    else:
+        direct_providers = ()
+    if built is None:
+        if not allow_empty_registry and not direct_providers:
+            return None
+        from pullbox.providers.base import ProviderRegistry
+
+        registry = ProviderRegistry()
+        indexer_configs: dict[int, IndexerConfig] = {}
+    else:
+        registry, indexer_configs = built
     cfg_rows = await session.execute(
         select(SystemConfig.key, SystemConfig.value).where(
             SystemConfig.key.in_(
@@ -147,4 +162,5 @@ async def build_search_runtime(
         type_thresholds=type_thresholds,
         failure_threshold=failure_threshold,
         two_pass_enabled=two_pass_enabled,
+        direct_providers=direct_providers,
     )

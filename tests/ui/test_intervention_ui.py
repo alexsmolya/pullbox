@@ -782,6 +782,49 @@ class TestHandlersDirect:
         assert "Could Not Approve" in body
 
     @pytest.mark.asyncio
+    async def test_htmx_approve_direct_without_download_clients(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Direct review approval reaches its adapter without legacy clients."""
+        from pullbox.ui.routes import htmx_intervention_approve
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pm_ids[0])
+            assert pending is not None
+            pending.download_url = "pullbox-direct://attempt/17"
+            pending.match_details = {
+                "source_kind": "direct",
+                "direct_attempt_id": 17,
+                "provider_name": "GetComics",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            with (
+                patch(
+                    "pullbox.composition.services.build_domain_download_service",
+                    new_callable=AsyncMock,
+                ) as build_download,
+                patch(
+                    "pullbox.services.intervention_service.InterventionService.approve_match",
+                    new_callable=AsyncMock,
+                ) as approve,
+            ):
+                response = await htmx_intervention_approve(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        assert response.status_code == 200
+        assert "Approved" in response.body.decode()
+        build_download.assert_not_awaited()
+        approve.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_htmx_approve_service_error(
         self,
         _db_factory: async_sessionmaker[AsyncSession],
