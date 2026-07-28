@@ -133,6 +133,7 @@ class RootzAdapter:
                 safe_filename(data.get("fileName")) or safe_filename(short_data.get("name"))
             ),
             range_supported=True,
+            allowed_domains=_ROOTZ_TRANSFER_DOMAINS,
         )
 
 

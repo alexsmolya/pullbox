@@ -114,6 +114,7 @@ class PixelDrainAdapter:
             expires_at=request.expires_at,
             filename_hint=safe_filename(payload.get("name")),
             range_supported=True,
+            allowed_domains=("pixeldrain.com", "pixeldrain.net"),
         )
 
 

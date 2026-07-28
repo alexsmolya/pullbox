@@ -139,6 +139,7 @@ class TeraBoxAdapter:
             expected_size=size,
             filename_hint=safe_filename(item.get("server_filename")),
             range_supported=False,
+            allowed_domains=_TERABOX_TRANSFER_DOMAINS,
         )
 
 

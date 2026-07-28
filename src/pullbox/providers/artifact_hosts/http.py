@@ -132,7 +132,7 @@ async def request_bounded(
             allowed_domains=allowed_domains,
             resolver=resolver,
         )
-        request_url, host_header = _pinned_request_target(target)
+        request_url, host_header = pinned_request_target(target)
         request_headers = {**dict(headers or {}), "Host": host_header}
         request = client.build_request(
             current_method,
@@ -202,7 +202,8 @@ async def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
     return bytes(content)
 
 
-def _pinned_request_target(target: ValidatedArtifactUrl) -> tuple[str, str]:
+def pinned_request_target(target: ValidatedArtifactUrl) -> tuple[str, str]:
+    """Return a DNS-pinned request URL plus the original TLS/HTTP host."""
     parsed = urlsplit(target.url)
     address = target.addresses[0]
     request_host = f"[{address}]" if ":" in address else address

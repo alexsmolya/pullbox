@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from pullbox.models.direct_acquisition import (
     DirectArtifactFailureClass,
@@ -104,4 +105,5 @@ class GenericHttpsAdapter:
                 response.status_code == 206
                 or response.headers.get("accept-ranges", "").lower() == "bytes"
             ),
+            allowed_domains=((urlsplit(response.url).hostname or "").lower().rstrip("."),),
         )

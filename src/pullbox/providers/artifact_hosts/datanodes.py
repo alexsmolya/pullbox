@@ -104,6 +104,7 @@ class DataNodesAdapter:
             expires_at=request.expires_at,
             filename_hint=filename_from_url(transfer_url),
             range_supported=False,
+            allowed_domains=_DATANODES_DOMAINS,
         )
 
 

@@ -24,6 +24,13 @@ class ArtifactHostCredentialMode(enum.StrEnum):
     ACCOUNT = "account"
 
 
+class ArtifactTransferProtocol(enum.StrEnum):
+    """Byte-transfer implementation selected by a resolved host route."""
+
+    HTTPS = "https"
+    MEGA_BRIDGE = "mega_bridge"
+
+
 class ArtifactHostAdapter(Protocol):
     """One native adapter that resolves exactly one registered host family."""
 
@@ -65,6 +72,9 @@ class ResolvedTransfer:
     expires_at: datetime | None = None
     filename_hint: str | None = None
     range_supported: bool = False
+    allowed_domains: tuple[str, ...] = ()
+    transport_protocol: ArtifactTransferProtocol = ArtifactTransferProtocol.HTTPS
+    bridge_session: str | None = field(default=None, repr=False)
 
 
 class ArtifactHostResolutionError(RuntimeError):
