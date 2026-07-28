@@ -14,6 +14,9 @@ from pullbox.core.encryption import encrypt_secret
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
 from pullbox.models.direct_acquisition import (
+    DirectArtifactHostKind,
+    DirectHostAccountState,
+    DirectHostConfig,
     DirectProviderConfig,
     DirectProviderState,
     DirectProviderTrustLevel,
@@ -426,6 +429,40 @@ class TestSettingsRouteContracts:
         assert "Last classified error" in response.text
         assert "Authorization" in response.text
         assert "encrypted-resolver-secret-must-not-render" not in response.text
+
+    async def test_direct_download_settings_render_native_host_registry_without_secrets(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectHostConfig(
+                    host_kind=DirectArtifactHostKind.PIXELDRAIN,
+                    enabled=True,
+                    preference=10,
+                    account_state=DirectHostAccountState.HEALTHY,
+                    encrypted_credentials={
+                        "api_key": encrypt_secret("pixeldrain-secret-must-not-render")
+                    },
+                    account_metadata={"configured_credential_fields": ["api_key"]},
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-hosts-card"' in response.text
+        assert 'data-testid="settings-direct-host-pixeldrain"' in response.text
+        assert 'data-testid="settings-direct-host-configure-pixeldrain"' in response.text
+        assert 'data-testid="settings-direct-host-toggle-pixeldrain"' in response.text
+        assert "Artifact hosts" in response.text
+        assert "PixelDrain" in response.text
+        assert "TeraBox" in response.text
+        assert "API key" in response.text
+        assert "Account required" in response.text
+        assert "pixeldrain-secret-must-not-render" not in response.text
 
     async def test_general_settings_renders_https_controls(
         self,

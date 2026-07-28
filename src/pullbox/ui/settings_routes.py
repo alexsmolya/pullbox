@@ -334,13 +334,16 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         bl_auto = await session.get(SystemConfig, "blocklist.auto_add_on_failure")
         ctx["blocklist_auto_add"] = (bl_auto.value.lower() == "true") if bl_auto else True
     elif tab == "direct":
+        from pullbox.schemas.direct_host import DirectHostResponse
         from pullbox.schemas.direct_provider import DirectProviderResponse
         from pullbox.schemas.direct_resolver import DirectResolverResponse
+        from pullbox.services.direct_host_settings import list_direct_host_settings
         from pullbox.services.direct_provider_registration import list_direct_providers
         from pullbox.services.direct_resolver_service import get_direct_resolver
 
         providers = await list_direct_providers(session)
         resolver = await get_direct_resolver(session)
+        hosts = await list_direct_host_settings(session)
         ctx["direct_providers"] = providers
         ctx["direct_provider_seed"] = [
             DirectProviderResponse.model_validate(provider).model_dump(mode="json")
@@ -350,6 +353,10 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["direct_resolver_seed"] = DirectResolverResponse.model_validate(resolver).model_dump(
             mode="json"
         )
+        ctx["direct_hosts"] = hosts
+        ctx["direct_host_seed"] = [
+            DirectHostResponse.model_validate(host).model_dump(mode="json") for host in hosts
+        ]
     elif tab == "utilities":
         result = await session.execute(
             select(SystemConfig).where(

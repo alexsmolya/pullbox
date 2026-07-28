@@ -7,14 +7,40 @@
   'degraded': 'pill-warning',
   'rate_limited': 'pill-warning',
   'authentication_required': 'pill-error',
+  'quota_limited': 'pill-warning',
   'incompatible': 'pill-error',
   'unavailable': 'pill-error'
+} -%}
+{%- set host_names = {
+  'generic_https': 'Generic HTTPS',
+  'pixeldrain': 'PixelDrain',
+  'mega': 'MEGA',
+  'rootz': 'Rootz',
+  'mediafire': 'MediaFire',
+  'terabox': 'TeraBox',
+  'datanodes': 'DataNodes'
+} -%}
+{%- set host_descriptions = {
+  'generic_https': 'Validated final-file links only. HTML landing pages are rejected.',
+  'pixeldrain': 'Anonymous downloads with an optional account API key.',
+  'mega': 'Public links with an optional revocable account session.',
+  'rootz': 'Anonymous short-link resolution. No account credential is used.',
+  'mediafire': 'Anonymous public shares with an optional browser session.',
+  'terabox': 'Account required. Uses an encrypted user-owned session or cookie.',
+  'datanodes': 'Free public attempts with visible challenge handling and an optional premium session.'
+} -%}
+{%- set credential_labels = {
+  'api_key': 'API key',
+  'session': 'Session',
+  'session_token': 'Session token',
+  'cookie': 'Session cookie',
+  'premium_session': 'Premium session'
 } -%}
 
 <div
   class="space-y-6 pt-6"
-  x-data='directProviderSettings({{ direct_provider_seed|default([], true)|tojson }}, {{ direct_resolver_seed|default({}, true)|tojson }})'
-  @keydown.escape.window="closeModal()"
+  x-data='directProviderSettings({{ direct_provider_seed|default([], true)|tojson }}, {{ direct_resolver_seed|default({}, true)|tojson }}, {{ direct_host_seed|default([], true)|tojson }})'
+  @keydown.escape.window="closeAllModals()"
 >
   <section class="section-card" data-testid="settings-direct-resolver-card">
     {% call section_header(
@@ -131,6 +157,88 @@
           </button>
         </div>
       </form>
+    </div>
+  </section>
+
+  <section class="section-card" data-testid="settings-direct-hosts-card">
+    {% call section_header(
+      title="Artifact hosts",
+      description="Enable the closed set of native file hosts Pullbox may use after a direct-download provider resolves a mirror. Credentials are optional unless the host says otherwise.",
+      eyebrow="Transfer connections",
+      title_style="plain"
+    ) %}
+      <span class="pill pill-info">{{ direct_hosts|length }} supported</span>
+    {% endcall %}
+
+    <div class="section-body">
+      {% call alert_banner(
+        tone="warning",
+        icon="shield",
+        title="Credentials stay host-scoped",
+        description="Account values are encrypted at rest, write-only after save, and supplied only to the selected host. Unknown landing pages and unsupported hosts are sent to intervention instead of being scraped.",
+        class_name="mb-5",
+        attrs='data-testid="settings-direct-host-warning"'
+      ) %}{% endcall %}
+
+      <div class="settings-connection-list" data-testid="settings-direct-host-list">
+        {% for host in direct_hosts %}
+        {%- set host_kind = host.host_kind.value -%}
+        {%- set account_state = host.account_state.value -%}
+        <article
+          class="settings-connection-card {% if not host.enabled %}settings-connection-card-muted{% endif %}"
+          data-testid="settings-direct-host-{{ host_kind }}"
+        >
+          <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <p class="text-sm font-semibold text-pb-text">{{ host_names[host_kind] }}</p>
+                <span class="pill {{ 'pill-success' if host.enabled else 'pill-muted' }}">{{ 'Enabled' if host.enabled else 'Disabled' }}</span>
+                <span class="pill {{ state_pills.get(account_state, 'pill-muted') }}">{{ account_state|replace('_', ' ')|title }}</span>
+                <span class="pill pill-muted">Preference {{ host.preference }}</span>
+              </div>
+              <p class="mt-2 text-xs leading-5 text-pb-text-sec">{{ host_descriptions[host_kind] }}</p>
+
+              <dl class="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-3">
+                <div>
+                  <dt class="text-pb-text-dim">Account access</dt>
+                  <dd class="mt-0.5 text-pb-text-sec">
+                    {% if host.allowed_credential_fields %}
+                      {% for field in host.allowed_credential_fields %}{{ credential_labels[field] }}{% if not loop.last %}, {% endif %}{% endfor %}
+                    {% else %}
+                      Anonymous only
+                    {% endif %}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-pb-text-dim">Credentials</dt>
+                  <dd class="mt-0.5 text-pb-text-sec">{{ 'Configured' if host.credentials_configured else 'Not configured' }}</dd>
+                </div>
+                <div>
+                  <dt class="text-pb-text-dim">Last account check</dt>
+                  <dd class="mt-0.5 text-pb-text-sec">{{ host.last_tested_at|localtime if host.last_tested_at else 'Never' }}</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div class="flex shrink-0 flex-wrap items-center gap-2">
+              <button
+                type="button"
+                class="btn-ghost btn-sm"
+                data-testid="settings-direct-host-configure-{{ host_kind }}"
+                @click="openHostConfigure('{{ host_kind }}')"
+              >Configure</button>
+              <button
+                type="button"
+                class="{{ 'btn-ghost' if host.enabled else 'btn-primary' }} btn-sm"
+                data-testid="settings-direct-host-toggle-{{ host_kind }}"
+                :disabled="hostBusyKind !== null"
+                @click="setHostEnabled('{{ host_kind }}', {{ 'false' if host.enabled else 'true' }})"
+              >{{ 'Disable' if host.enabled else 'Enable' }}</button>
+            </div>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
     </div>
   </section>
 
@@ -298,6 +406,84 @@
   </section>
 
   <div
+    x-show="showHostModal"
+    x-cloak
+    class="modal-shell"
+    data-testid="settings-direct-host-modal"
+  >
+    <div class="modal-backdrop" @click="closeHostModal()"></div>
+    <div class="modal-panel max-h-[90vh] max-w-lg">
+      <div class="modal-header">
+        <div>
+          <p class="section-eyebrow">Artifact host</p>
+          <h3 class="text-sm font-semibold text-pb-text" x-text="`${hostName(activeHost.host_kind)} settings`"></h3>
+        </div>
+        <button type="button" class="icon-btn icon-btn-sm" aria-label="Close artifact host settings" @click="closeHostModal()">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="saveHost()">
+        <div class="modal-body">
+          <div class="space-y-4 px-5 py-4">
+            <div class="inline-alert inline-alert-info">
+              <p class="text-xs">Saved credentials are encrypted and cannot be read back. Leave a value blank to keep it unchanged.</p>
+            </div>
+
+            <label class="flex cursor-pointer items-center gap-3 text-xs text-pb-text-sec">
+              <input type="checkbox" class="checkbox-pb" x-model="hostForm.enabled">
+              <span>Enable this artifact host for eligible direct-download mirrors.</span>
+            </label>
+
+            <div>
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="direct-host-preference">Preference</label>
+              <div class="flex items-center gap-3">
+                <input id="direct-host-preference" type="number" class="input-pb w-24 font-mono" min="0" max="1000" x-model.number="hostForm.preference" required>
+                <span class="text-[11px] text-pb-text-dim">Lower values are preferred when equivalent mirrors remain tied.</span>
+              </div>
+            </div>
+
+            <template x-if="activeHost.allowed_credential_fields.length === 0">
+              <p class="rounded-lg border border-pb-border bg-pb-bg/30 p-3 text-xs text-pb-text-sec">This host supports anonymous access only and stores no account credential.</p>
+            </template>
+
+            <template x-for="field in activeHost.allowed_credential_fields" :key="field">
+              <div class="space-y-2">
+                <label class="block text-xs font-medium text-pb-text-sec" x-text="hostCredentialLabel(field)"></label>
+                <input
+                  type="password"
+                  class="input-pb font-mono"
+                  autocomplete="new-password"
+                  maxlength="16384"
+                  :placeholder="hostCredentialConfigured(field) ? 'Configured - leave blank to keep' : 'Enter account credential'"
+                  x-model="hostForm.credentials[field]"
+                >
+                <label x-show="hostCredentialConfigured(field)" class="flex cursor-pointer items-center gap-2 text-[11px] text-pb-text-dim">
+                  <input type="checkbox" class="checkbox-pb" x-model="hostForm.clearCredentials[field]">
+                  <span>Clear the saved <span x-text="hostCredentialLabel(field).toLowerCase()"></span></span>
+                </label>
+              </div>
+            </template>
+          </div>
+
+          <div x-show="hostError" x-cloak class="border-t border-pb-border px-5 py-3">
+            <div class="inline-alert inline-alert-danger"><p class="text-xs" x-text="hostError"></p></div>
+          </div>
+        </div>
+
+        <div class="modal-footer justify-end">
+          <button type="button" class="btn-ghost btn-sm" @click="closeHostModal()">Cancel</button>
+          <button type="submit" class="btn-primary btn-sm" :disabled="hostSaving">
+            <span x-text="hostSaving ? 'Saving...' : 'Save Host'"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div
     x-show="showModal"
     x-cloak
     class="modal-shell"
@@ -434,10 +620,11 @@
 </div>
 
 <script>
-function directProviderSettings(initialProviders, initialResolver) {
+function directProviderSettings(initialProviders, initialResolver, initialHosts) {
   return {
     providers: initialProviders,
     resolver: initialResolver,
+    hosts: initialHosts,
     resolverBusy: false,
     resolverError: '',
     removedResolverHeaders: [],
@@ -450,8 +637,14 @@ function directProviderSettings(initialProviders, initialResolver) {
       auth_headers: (initialResolver.auth_header_names || []).map((name, index) => ({ key: `saved-${index}-${name}`, name, value: '', configured: true })),
     },
     showModal: false,
+    showHostModal: false,
     modalMode: 'add',
     activeProvider: { configuration_controls: [], configured_secret_fields: [] },
+    activeHost: { host_kind: '', allowed_credential_fields: [], configured_credential_fields: [] },
+    hostForm: { enabled: false, preference: 50, credentials: {}, clearCredentials: {} },
+    hostBusyKind: null,
+    hostSaving: false,
+    hostError: '',
     busyId: null,
     saving: false,
     modalError: '',
@@ -507,6 +700,104 @@ function directProviderSettings(initialProviders, initialResolver) {
       if (this.saving) return;
       this.showModal = false;
       this.modalError = '';
+    },
+
+    closeAllModals() {
+      this.closeHostModal();
+      this.closeModal();
+    },
+
+    hostName(hostKind) {
+      return {
+        generic_https: 'Generic HTTPS',
+        pixeldrain: 'PixelDrain',
+        mega: 'MEGA',
+        rootz: 'Rootz',
+        mediafire: 'MediaFire',
+        terabox: 'TeraBox',
+        datanodes: 'DataNodes',
+      }[hostKind] || 'Artifact host';
+    },
+
+    hostCredentialLabel(field) {
+      return {
+        api_key: 'API key',
+        session: 'Session',
+        session_token: 'Session token',
+        cookie: 'Session cookie',
+        premium_session: 'Premium session',
+      }[field] || field.replaceAll('_', ' ');
+    },
+
+    hostCredentialConfigured(field) {
+      return this.activeHost.configured_credential_fields.includes(field);
+    },
+
+    openHostConfigure(hostKind) {
+      const host = this.hosts.find(item => item.host_kind === hostKind);
+      if (!host) return;
+      this.activeHost = host;
+      this.hostForm = {
+        enabled: Boolean(host.enabled),
+        preference: Number(host.preference),
+        credentials: Object.fromEntries(host.allowed_credential_fields.map(field => [field, ''])),
+        clearCredentials: Object.fromEntries(host.allowed_credential_fields.map(field => [field, false])),
+      };
+      this.hostError = '';
+      this.showHostModal = true;
+    },
+
+    closeHostModal() {
+      if (this.hostSaving) return;
+      this.showHostModal = false;
+      this.hostError = '';
+    },
+
+    hostCredentialUpdates() {
+      const updates = {};
+      this.activeHost.allowed_credential_fields.forEach(field => {
+        if (this.hostForm.clearCredentials[field]) updates[field] = null;
+        else if (this.hostForm.credentials[field]) updates[field] = this.hostForm.credentials[field];
+      });
+      return updates;
+    },
+
+    async saveHost() {
+      if (this.hostSaving || !this.activeHost.host_kind) return;
+      this.hostSaving = true;
+      this.hostError = '';
+      try {
+        await this.api(`/api/v1/direct-hosts/${this.activeHost.host_kind}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            enabled: this.hostForm.enabled,
+            preference: Number(this.hostForm.preference),
+            credential_updates: this.hostCredentialUpdates(),
+          }),
+        });
+        if (typeof showToast === 'function') showToast({ message: `${this.hostName(this.activeHost.host_kind)} settings saved.`, level: 'success' });
+        this.showHostModal = false;
+        this.refresh();
+      } catch (error) {
+        this.hostError = error.message;
+        this.hostSaving = false;
+      }
+    },
+
+    async setHostEnabled(hostKind, enabled) {
+      if (this.hostBusyKind !== null) return;
+      this.hostBusyKind = hostKind;
+      try {
+        await this.api(`/api/v1/direct-hosts/${hostKind}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ enabled }),
+        });
+        if (typeof showToast === 'function') showToast({ message: `${this.hostName(hostKind)} ${enabled ? 'enabled' : 'disabled'}.`, level: 'success' });
+        this.refresh();
+      } catch (error) {
+        if (typeof showToast === 'function') showToast({ message: error.message, level: 'error' });
+        this.hostBusyKind = null;
+      }
     },
 
     secretConfigured(name) {

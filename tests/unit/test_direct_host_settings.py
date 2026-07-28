@@ -56,6 +56,10 @@ async def test_list_exposes_every_closed_host_without_writing_defaults(
     assert all(setting.id is None for setting in settings)
     assert all(setting.enabled is False for setting in settings)
     assert settings[1].allowed_credential_fields == ("api_key",)
+    mediafire = next(
+        setting for setting in settings if setting.host_kind is DirectArtifactHostKind.MEDIAFIRE
+    )
+    assert mediafire.allowed_credential_fields == ("session",)
 
 
 @pytest.mark.asyncio

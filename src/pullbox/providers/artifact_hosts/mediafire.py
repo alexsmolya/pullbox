@@ -5,15 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
-from pullbox.models.direct_acquisition import (
-    DirectArtifactFailureClass,
-    DirectArtifactHostKind,
-)
-from pullbox.providers.artifact_hosts.contract import (
-    ArtifactHostResolutionError,
-    HostResolutionRequest,
-    ResolvedTransfer,
-)
+from pullbox.models.direct_acquisition import DirectArtifactHostKind
+from pullbox.providers.artifact_hosts.contract import HostResolutionRequest, ResolvedTransfer
 from pullbox.providers.artifact_hosts.helpers import (
     contract_changed,
     filename_from_url,
@@ -97,13 +90,5 @@ class MediaFireAdapter:
 
 
 def _session_headers(credentials: Mapping[str, str]) -> dict[str, str]:
-    if credentials.get("oauth_token"):
-        raise ArtifactHostResolutionError(
-            code="artifact_host_account_mode_unavailable",
-            message="MediaFire has not issued a supported application session for this account.",
-            failure_class=DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED,
-            retryable=False,
-            intervention=True,
-        )
     session = credentials.get("session")
     return {"Cookie": f"session={session}"} if session else {}
