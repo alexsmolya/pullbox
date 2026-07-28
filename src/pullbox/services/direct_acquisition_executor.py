@@ -202,7 +202,7 @@ class DirectAcquisitionExecutor:
                 progress,
             )
         except (ArtifactTransferPausedError, MegaBridgePausedError) as exc:
-            return await self._pause(session, attempt, artifact, progress, exc)
+            return await self._pause(session, attempt, artifact, workspace, progress, exc)
         except (ArtifactTransferCancelledError, MegaBridgeCancelledError):
             self._quarantine.cleanup(workspace)
             artifact.quarantine_path = None
@@ -384,6 +384,7 @@ class DirectAcquisitionExecutor:
         session: AsyncSession,
         attempt: DirectAcquisitionAttempt,
         artifact: DirectArtifactAttempt,
+        workspace: DirectQuarantineWorkspace,
         progress: _ProgressWriter,
         exc: ArtifactTransferPausedError | MegaBridgePausedError,
     ) -> DirectExecutionResult:
@@ -393,6 +394,7 @@ class DirectAcquisitionExecutor:
             artifact.etag = exc.checkpoint.etag
             artifact.last_modified_at = _parse_last_modified(exc.checkpoint.last_modified)
         else:
+            remove_quarantine_file(workspace.partial_path)
             artifact.bytes_transferred = 0
             artifact.etag = None
             artifact.last_modified_at = None

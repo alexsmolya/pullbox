@@ -30,6 +30,10 @@ from pullbox.providers.artifact_hosts.contract import (
     HostResolutionRequest,
     ResolvedTransfer,
 )
+from pullbox.providers.artifact_hosts.mega import (
+    MegaBridgePausedError,
+    MegaBridgeTransferResult,
+)
 from pullbox.providers.artifact_hosts.transport_contract import (
     ArtifactTransferCancelledError,
     ArtifactTransferError,
@@ -195,6 +199,30 @@ class _FailingTransport:
         if self.write_partial:
             kwargs["destination"].write_bytes(b"partial")
         raise self.error
+
+
+class _CancelledTaskTransport:
+    async def transfer(self, **kwargs: Any) -> ArtifactTransferResult:
+        destination = kwargs["destination"]
+        destination.write_bytes(b"restartable-partial")
+        await kwargs["progress_callback"](
+            TransferProgressSnapshot(
+                bytes_transferred=destination.stat().st_size,
+                total_bytes=100,
+                percent=19,
+                bytes_per_second=100.0,
+                eta_seconds=1.0,
+            )
+        )
+        raise asyncio.CancelledError
+
+
+class _PausedMegaRunner:
+    async def transfer(self, **kwargs: Any) -> MegaBridgeTransferResult:
+        destination = kwargs["destination"]
+        destination.write_bytes(b"non-resumable-mega-partial")
+        await kwargs["progress_callback"](destination.stat().st_size, 100)
+        raise MegaBridgePausedError
 
 
 def _executor(
@@ -407,6 +435,86 @@ async def test_executor_recovers_inflight_transfer_from_persisted_checkpoint(
     assert transport.checkpoint is not None
     assert transport.checkpoint.bytes_transferred == len(b"partial")
     assert transport.checkpoint.etag == '"stable"'
+
+
+@pytest.mark.asyncio
+async def test_process_task_cancellation_preserves_restartable_inflight_state(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    session.add(attempt)
+    await session.commit()
+    artifact = attempt.artifact_attempts[0]
+
+    with pytest.raises(asyncio.CancelledError):
+        await _executor(
+            tmp_path,
+            transport=_CancelledTaskTransport(),
+            post_processor=_successful_post_processor,
+        ).execute(
+            session,
+            acquisition_id=attempt.id,
+            artifact_id=artifact.id,
+            source_factory=_async_source,
+        )
+
+    await session.refresh(attempt)
+    await session.refresh(artifact)
+    assert attempt.state is DirectAcquisitionState.DOWNLOADING
+    assert artifact.state is DirectArtifactState.TRANSFERRING
+    assert artifact.bytes_transferred == len(b"restartable-partial")
+    assert Path(artifact.quarantine_path or "").read_bytes() == b"restartable-partial"
+
+
+@pytest.mark.asyncio
+async def test_mega_pause_discards_partial_and_restarts_from_zero(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.host_kind = DirectArtifactHostKind.MEGA
+    session.add(attempt)
+    await session.commit()
+
+    async def mega_source() -> HostResolutionRequest:
+        return HostResolutionRequest(
+            artifact_identity="artifact-1",
+            host_kind=DirectArtifactHostKind.MEGA,
+            share_url="https://mega.nz/file/fixture#fixture-key",
+            final_url=None,
+            expected_size=100,
+        )
+
+    resolved = ResolvedTransfer(
+        host_kind=DirectArtifactHostKind.MEGA,
+        url="https://mega.nz/file/fixture#fixture-key",
+        expected_size=100,
+        allowed_domains=("mega.nz",),
+        transport_protocol=ArtifactTransferProtocol.MEGA_BRIDGE,
+    )
+    executor = DirectAcquisitionExecutor(
+        host_resolver=_FakeResolver(resolved),
+        http_transport=object(),
+        mega_runner=_PausedMegaRunner(),
+        quarantine=DirectArtifactQuarantine(tmp_path / "quarantine"),
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    result = await executor.execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=mega_source,
+    )
+
+    assert result.state is DirectAcquisitionState.PAUSED
+    assert artifact.state is DirectArtifactState.PAUSED
+    assert artifact.bytes_transferred == 0
+    assert artifact.etag is None
+    assert not Path(artifact.quarantine_path or "").exists()
 
 
 @pytest.mark.asyncio
