@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit
 
 from pullbox.models.direct_acquisition import (
@@ -22,6 +22,19 @@ class ArtifactHostCredentialMode(enum.StrEnum):
 
     ANONYMOUS = "anonymous"
     ACCOUNT = "account"
+
+
+class ArtifactHostAdapter(Protocol):
+    """One native adapter that resolves exactly one registered host family."""
+
+    host_kind: DirectArtifactHostKind
+
+    async def resolve(
+        self,
+        request: HostResolutionRequest,
+        *,
+        credentials: Mapping[str, str],
+    ) -> ResolvedTransfer: ...
 
 
 @dataclass(frozen=True, slots=True)
