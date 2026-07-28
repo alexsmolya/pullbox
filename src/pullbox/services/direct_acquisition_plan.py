@@ -83,8 +83,9 @@ def build_plan_snapshot(
         artifacts,
         key=lambda artifact: (
             artifact.content_rank,
-            artifact.transport_rank,
+            not artifact.eligible,
             artifact.host_preference,
+            artifact.transport_rank,
             artifact.provider_priority,
             artifact.artifact_identity,
         ),

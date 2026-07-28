@@ -356,6 +356,39 @@ async def test_terabox_follows_the_current_official_share_redirect() -> None:
     assert transfer.expected_size == 32768
 
 
+async def test_terabox_link_share_alias_is_supported() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
+        if request.url.path == "/s/1fixture":
+            return httpx.Response(
+                200,
+                text='<script>window.jsToken = "js-token";</script>',
+                headers={"Content-Type": "text/html"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "errno": 0,
+                "list": [
+                    {
+                        "isdir": 0,
+                        "server_filename": "fixture.cbz",
+                        "size": 32768,
+                        "dlink": "https://d.terabox.com/file/signed?token=secret",
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await TeraBoxAdapter(client, resolver=_resolve_public).resolve(
+            _request(DirectArtifactHostKind.TERABOX, "https://terabox.link/s/1fixture"),
+            credentials={"session_token": TERABOX_SESSION},
+        )
+
+    assert transfer.expected_size == 32768
+
+
 async def test_terabox_extracts_the_current_percent_encoded_js_token() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"

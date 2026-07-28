@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import contains_eager, joinedload
 
 from pullbox.models.blocklist import BlocklistEntry, BlocklistReason, normalize_release_title
@@ -19,6 +19,8 @@ logger = structlog.get_logger(__name__)
 
 # Characters treated as equivalent separators in group name matching
 _GROUP_SEPARATORS = str.maketrans({"-": "", "_": "", ".": "", " ": ""})
+_DIRECT_ARTIFACT_KEY_PREFIX = "direct-artifact:"
+_DIRECT_ARTIFACT_URL_PREFIX = "pullbox-direct://artifact/"
 
 
 def _normalize_group(name: str) -> str:
@@ -88,6 +90,71 @@ class BlocklistService:
             title=release_title,
         )
         return entry
+
+    @staticmethod
+    async def add_direct_artifact_entry(
+        session: AsyncSession,
+        release_title: str,
+        *,
+        route_identity: str,
+        artifact_host: str,
+        issue_id: int,
+        series_id: int | None,
+        error_message: str | None,
+        download_history_id: int | None = None,
+    ) -> BlocklistEntry | None:
+        """Block one opaque direct artifact route without blocking its provider."""
+        normalized = _direct_artifact_block_key(route_identity)
+        existing = await session.execute(
+            select(BlocklistEntry.id).where(BlocklistEntry.release_title_normalized == normalized)
+        )
+        if existing.scalar_one_or_none() is not None:
+            logger.debug(
+                "direct_artifact_blocklist_duplicate_skipped",
+                route_identity=route_identity,
+            )
+            return None
+
+        entry = BlocklistEntry(
+            release_title=release_title,
+            release_title_normalized=normalized,
+            reason=BlocklistReason.FAILED,
+            download_url=f"{_DIRECT_ARTIFACT_URL_PREFIX}{route_identity}",
+            series_id=series_id,
+            issue_id=issue_id,
+            error_message=error_message,
+            release_group=artifact_host,
+            download_history_id=download_history_id,
+        )
+        session.add(entry)
+        await session.flush()
+        await session.refresh(entry, attribute_names=["series", "issue", "indexer"])
+        logger.info(
+            "direct_artifact_blocklist_entry_added",
+            entry_id=entry.id,
+            route_identity=route_identity,
+            artifact_host=artifact_host,
+        )
+        return entry
+
+    @staticmethod
+    async def get_blocked_direct_artifact_routes(
+        session: AsyncSession,
+        route_identities: set[str],
+    ) -> set[str]:
+        """Return blocked route identities from a bounded candidate route set."""
+        if not route_identities:
+            return set()
+        keys = {
+            _direct_artifact_block_key(route_identity): route_identity
+            for route_identity in route_identities
+        }
+        result = await session.execute(
+            select(BlocklistEntry.release_title_normalized).where(
+                BlocklistEntry.release_title_normalized.in_(keys)
+            )
+        )
+        return {keys[key] for key in result.scalars() if key in keys}
 
     @staticmethod
     async def remove_entry(session: AsyncSession, entry_id: int) -> bool:
@@ -179,8 +246,12 @@ class BlocklistService:
         if series_id is not None:
             conditions.append(BlocklistEntry.series_id == series_id)
         if search and search.strip():
+            normalized_search = search.strip().lower()
             conditions.append(
-                BlocklistEntry.release_title_normalized.ilike(f"%{search.strip().lower()}%")
+                or_(
+                    BlocklistEntry.release_title_normalized.ilike(f"%{normalized_search}%"),
+                    BlocklistEntry.release_title.ilike(f"%{normalized_search}%"),
+                )
             )
 
         # Count query
@@ -243,8 +314,12 @@ class BlocklistService:
         if series_id is not None:
             conditions.append(BlocklistEntry.series_id == series_id)
         if search and search.strip():
+            normalized_search = search.strip().lower()
             conditions.append(
-                BlocklistEntry.release_title_normalized.ilike(f"%{search.strip().lower()}%")
+                or_(
+                    BlocklistEntry.release_title_normalized.ilike(f"%{normalized_search}%"),
+                    BlocklistEntry.release_title.ilike(f"%{normalized_search}%"),
+                )
             )
 
         query = select(BlocklistEntry.reason, func.count(BlocklistEntry.id)).group_by(
@@ -364,3 +439,15 @@ class BlocklistService:
             )
 
         return kept
+
+
+def _direct_artifact_block_key(route_identity: str) -> str:
+    if (
+        not route_identity.startswith("route:")
+        or len(route_identity) > 100
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789:" for character in route_identity
+        )
+    ):
+        raise ValueError("Direct artifact route identity is invalid.")
+    return f"{_DIRECT_ARTIFACT_KEY_PREFIX}{route_identity}"

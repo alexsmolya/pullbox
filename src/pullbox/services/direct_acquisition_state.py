@@ -43,6 +43,7 @@ ACQUISITION_TRANSITIONS: dict[DirectAcquisitionState, frozenset[DirectAcquisitio
     ),
     DirectAcquisitionState.RESOLVING: frozenset(
         {
+            DirectAcquisitionState.QUEUED,
             DirectAcquisitionState.DOWNLOADING,
             DirectAcquisitionState.RETRY_PENDING,
             DirectAcquisitionState.INTERVENTION,
@@ -52,6 +53,7 @@ ACQUISITION_TRANSITIONS: dict[DirectAcquisitionState, frozenset[DirectAcquisitio
     ),
     DirectAcquisitionState.DOWNLOADING: frozenset(
         {
+            DirectAcquisitionState.QUEUED,
             DirectAcquisitionState.PAUSED,
             DirectAcquisitionState.VALIDATING,
             DirectAcquisitionState.RETRY_PENDING,
@@ -69,6 +71,7 @@ ACQUISITION_TRANSITIONS: dict[DirectAcquisitionState, frozenset[DirectAcquisitio
     ),
     DirectAcquisitionState.VALIDATING: frozenset(
         {
+            DirectAcquisitionState.QUEUED,
             DirectAcquisitionState.POST_PROCESSING,
             DirectAcquisitionState.RETRY_PENDING,
             DirectAcquisitionState.INTERVENTION,

@@ -110,6 +110,25 @@ async def test_mega_bridge_rejects_destination_outside_quarantine(
 
 
 @pytest.mark.asyncio
+async def test_mega_bridge_missing_executable_maps_stable_failure(tmp_path: Path) -> None:
+    root = tmp_path / "quarantine"
+    root.mkdir()
+
+    with pytest.raises(MegaBridgeTransferError) as caught:
+        await MegaBridgeRunner(command=(tmp_path / "missing-mega-bridge",)).transfer(
+            public_link="https://mega.nz/file/id#secret-link-key",
+            destination=root / "attempt.part",
+            quarantine_root=root,
+        )
+
+    assert caught.value.code == "mega_bridge_unavailable"
+    assert caught.value.failure_class is DirectArtifactFailureClass.UNSUPPORTED_ARTIFACT_HOST
+    assert caught.value.retryable is False
+    assert caught.value.intervention is True
+    assert "missing-mega-bridge" not in str(caught.value)
+
+
+@pytest.mark.asyncio
 async def test_mega_bridge_rejects_symlink_destination(
     tmp_path: Path,
 ) -> None:

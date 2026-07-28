@@ -289,6 +289,7 @@ async def _persist_wanted_search_outcome(
             download_service=download_svc,
             intervention_service=intervention_svc,
             runner=(get_direct_acquisition_runner() if runtime.direct_providers else None),
+            source_priority=runtime.source_priority,
             planner=plan_direct_acquisition,
         )
         issue_grabbed = routed.grabbed
@@ -392,9 +393,17 @@ async def _persist_series_search_outcome(
 
     selected_outcome = primary_outcome
     selected_pass = 1
-    primary_selection = select_search_source(primary_outcome, runtime.eval_kwargs)
+    primary_selection = select_search_source(
+        primary_outcome,
+        runtime.eval_kwargs,
+        source_priority=runtime.source_priority,
+    )
     fallback_selection = (
-        select_search_source(fallback_outcome, runtime.eval_kwargs)
+        select_search_source(
+            fallback_outcome,
+            runtime.eval_kwargs,
+            source_priority=runtime.source_priority,
+        )
         if fallback_outcome is not None
         else None
     )
@@ -429,6 +438,7 @@ async def _persist_series_search_outcome(
             download_service=download_svc,
             intervention_service=intervention_svc,
             runner=(get_direct_acquisition_runner() if runtime.direct_providers else None),
+            source_priority=runtime.source_priority,
             planner=plan_direct_acquisition,
         )
         issue_grabbed = routed.grabbed
@@ -443,7 +453,11 @@ async def _persist_series_search_outcome(
                 search_pass=selected_pass,
             )
         else:
-            selected = select_search_source(selected_outcome, runtime.eval_kwargs)
+            selected = select_search_source(
+                selected_outcome,
+                runtime.eval_kwargs,
+                source_priority=runtime.source_priority,
+            )
             if selected is None:
                 raise RuntimeError("Selected indexer result was not found.")
             if issue_grabbed:

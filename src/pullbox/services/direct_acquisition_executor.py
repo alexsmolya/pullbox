@@ -46,6 +46,13 @@ from pullbox.providers.artifact_hosts.transport_contract import (
     HttpTransferCheckpoint,
     TransferProgressSnapshot,
 )
+from pullbox.services.direct_acquisition_fallback import (
+    queue_next_artifact_route,
+    supports_route_fallback,
+)
+from pullbox.services.direct_acquisition_planner_service import (
+    DirectAcquisitionPlanningError,
+)
 from pullbox.services.direct_acquisition_state import (
     advance_acquisition_progress,
     transition_acquisition,
@@ -76,6 +83,13 @@ Clock = Callable[[], datetime]
 
 _PROGRESS_INTERVAL_SECONDS = 1.0
 _PROGRESS_BYTES = 8 * 1024**2
+_ROUTE_SOURCE_FAILURE_CODES = frozenset(
+    {
+        "provider_artifact_changed",
+        "provider_mirror_changed",
+        "provider_host_kind_mismatch",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +259,18 @@ class DirectAcquisitionExecutor:
             transition_acquisition(attempt, DirectAcquisitionState.CANCELLED, at=self._now())
             await progress.write(stage="cancelled", force=True)
             return _result(attempt, artifact)
+        except DirectAcquisitionPlanningError as exc:
+            failure = _route_source_failure(exc)
+            if failure is None:
+                raise
+            return await self._classified_failure(
+                session,
+                attempt,
+                artifact,
+                workspace,
+                progress,
+                failure,
+            )
         except (
             ArtifactHostResolutionError,
             ArtifactTransferError,
@@ -255,6 +281,7 @@ class DirectAcquisitionExecutor:
                 session,
                 attempt,
                 artifact,
+                workspace,
                 progress,
                 exc,
             )
@@ -512,6 +539,7 @@ class DirectAcquisitionExecutor:
         session: AsyncSession,
         attempt: DirectAcquisitionAttempt,
         artifact: DirectArtifactAttempt,
+        workspace: DirectQuarantineWorkspace,
         progress: _ProgressWriter,
         exc: Any,
     ) -> DirectExecutionResult:
@@ -536,6 +564,26 @@ class DirectAcquisitionExecutor:
             transition_artifact(artifact, DirectArtifactState.RETRY_PENDING, at=self._now())
             transition_acquisition(attempt, DirectAcquisitionState.RETRY_PENDING, at=self._now())
             stage = "retry_pending"
+        elif supports_route_fallback(DirectArtifactFailureClass(exc.failure_class)):
+            self._quarantine.cleanup(workspace)
+            artifact.quarantine_path = None
+            fallback = await queue_next_artifact_route(
+                session,
+                attempt,
+                artifact,
+                at=self._now(),
+            )
+            if fallback is not None:
+                return _result(attempt, artifact)
+            if bool(exc.intervention):
+                transition_artifact(artifact, DirectArtifactState.INTERVENTION, at=self._now())
+                transition_acquisition(attempt, DirectAcquisitionState.INTERVENTION, at=self._now())
+                await InterventionService().create_direct_attempt_intervention(session, attempt)
+                stage = "intervention"
+            else:
+                transition_artifact(artifact, DirectArtifactState.FAILED, at=self._now())
+                transition_acquisition(attempt, DirectAcquisitionState.FAILED, at=self._now())
+                stage = "failed"
         elif bool(exc.intervention):
             transition_artifact(artifact, DirectArtifactState.INTERVENTION, at=self._now())
             transition_acquisition(attempt, DirectAcquisitionState.INTERVENTION, at=self._now())
@@ -794,6 +842,20 @@ def _validate_source_request(
             retryable=False,
             intervention=True,
         )
+
+
+def _route_source_failure(
+    error: DirectAcquisitionPlanningError,
+) -> ArtifactHostResolutionError | None:
+    if error.code not in _ROUTE_SOURCE_FAILURE_CODES:
+        return None
+    return ArtifactHostResolutionError(
+        code=error.code,
+        message="The selected artifact route is no longer offered by the provider.",
+        failure_class=DirectArtifactFailureClass.PERMANENT_MIRROR,
+        retryable=False,
+        intervention=True,
+    )
 
 
 def _recover_http_checkpoint(

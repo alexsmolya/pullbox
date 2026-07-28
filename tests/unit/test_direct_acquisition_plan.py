@@ -109,8 +109,8 @@ def test_plan_snapshot_is_deterministic_under_shuffled_artifacts() -> None:
 
     assert actual == expected
     assert [item["artifact_identity"] for item in actual["artifacts"]] == [
-        "artifact-generic",
         "artifact-pixeldrain",
+        "artifact-generic",
         "artifact-terabox",
     ]
 

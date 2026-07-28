@@ -440,7 +440,7 @@
               <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="direct-host-preference">Preference</label>
               <div class="flex items-center gap-3">
                 <input id="direct-host-preference" type="number" class="input-pb w-24 font-mono" min="0" max="1000" x-model.number="hostForm.preference" required>
-                <span class="text-[11px] text-pb-text-dim">Lower values are preferred when equivalent mirrors remain tied.</span>
+                <span class="text-[11px] text-pb-text-dim">Lower values are preferred across equivalent eligible mirrors; transport safety breaks ties.</span>
               </div>
             </div>
 

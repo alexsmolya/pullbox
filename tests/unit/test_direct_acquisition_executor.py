@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.blocklist import BlocklistEntry
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -38,6 +39,7 @@ from pullbox.providers.artifact_hosts.contract import (
 )
 from pullbox.providers.artifact_hosts.mega import (
     MegaBridgePausedError,
+    MegaBridgeTransferError,
     MegaBridgeTransferResult,
 )
 from pullbox.providers.artifact_hosts.transport_contract import (
@@ -48,7 +50,11 @@ from pullbox.providers.artifact_hosts.transport_contract import (
     HttpTransferCheckpoint,
     TransferProgressSnapshot,
 )
+from pullbox.services.blocklist_service import BlocklistService
 from pullbox.services.direct_acquisition_executor import DirectAcquisitionExecutor
+from pullbox.services.direct_acquisition_planner_service import (
+    DirectAcquisitionPlanningError,
+)
 from pullbox.services.direct_artifact_post_processing import DirectPostProcessingResult
 from pullbox.services.direct_artifact_quarantine import DirectArtifactQuarantine
 from pullbox.services.direct_configuration_service import update_host_credentials
@@ -278,6 +284,31 @@ class _SuccessfulMegaRunner:
             command_summary="pullbox-mega-bridge",
             _destination=destination,
         )
+
+
+class _UnavailableMegaRunner:
+    async def transfer(self, **_kwargs: Any) -> MegaBridgeTransferResult:
+        raise MegaBridgeTransferError(
+            code="mega_link_unavailable",
+            message="The MEGA transfer could not be completed.",
+            failure_class=DirectArtifactFailureClass.PERMANENT_MIRROR,
+            retryable=False,
+            intervention=True,
+        )
+
+
+@dataclass
+class _StaticResolver:
+    resolved: ResolvedTransfer
+
+    async def resolve(
+        self,
+        _request: HostResolutionRequest,
+        *,
+        credentials: Any,
+    ) -> ResolvedTransfer:
+        assert credentials == {}
+        return self.resolved
 
 
 def _executor(
@@ -539,6 +570,179 @@ async def test_executor_schedules_retry_without_losing_safe_partial(
     assert attempt.retry_count == 1
     assert artifact.next_retry_at is not None
     assert Path(artifact.quarantine_path or "").exists()
+
+
+@pytest.mark.asyncio
+async def test_executor_falls_back_to_next_ranked_route_without_blocking_provider(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.artifact_identity = "route:mega"
+    artifact.host_kind = DirectArtifactHostKind.MEGA
+    artifact.expected_size = 55_574_528
+    attempt.plan_snapshot = {
+        "schema_version": 1,
+        "provider_identity": "community.test",
+        "provider_candidate_id": "candidate-1",
+        "provider_state": "healthy",
+        "selected_artifact_identity": "route:mega",
+        "artifacts": [
+            {
+                "artifact_identity": "route:mega",
+                "route_kind": "direct",
+                "host_kind": "mega",
+                "eligible": True,
+                "eligibility_code": "eligible",
+                "expected_size": 55_574_528,
+            },
+            {
+                "artifact_identity": "route:pixeldrain",
+                "route_kind": "direct",
+                "host_kind": "pixeldrain",
+                "eligible": True,
+                "eligibility_code": "eligible",
+                "expected_size": 55_574_528,
+            },
+        ],
+    }
+    session.add(attempt)
+    await session.commit()
+    resolved = ResolvedTransfer(
+        host_kind=DirectArtifactHostKind.MEGA,
+        url="https://mega.nz/file/id#secret-link-key",
+        expected_size=55_574_528,
+        allowed_domains=("mega.nz",),
+        transport_protocol=ArtifactTransferProtocol.MEGA_BRIDGE,
+    )
+    executor = DirectAcquisitionExecutor(
+        host_resolver=_StaticResolver(resolved),
+        http_transport=object(),
+        mega_runner=_UnavailableMegaRunner(),
+        quarantine=DirectArtifactQuarantine(tmp_path / "quarantine"),
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    result = await executor.execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=lambda: _async_value(
+            HostResolutionRequest(
+                artifact_identity="route:mega",
+                host_kind=DirectArtifactHostKind.MEGA,
+                share_url="https://mega.nz/file/id#secret-link-key",
+                final_url=None,
+                expected_size=55_574_528,
+            )
+        ),
+    )
+
+    await session.refresh(attempt, attribute_names=["artifact_attempts"])
+    failed, fallback = sorted(attempt.artifact_attempts, key=lambda item: item.sequence_no)
+    assert result.state is DirectAcquisitionState.QUEUED
+    assert failed.state is DirectArtifactState.FAILED
+    assert failed.is_selected is False
+    assert failed.failure_code == "mega_link_unavailable"
+    assert fallback.host_kind is DirectArtifactHostKind.PIXELDRAIN
+    assert fallback.state is DirectArtifactState.PLANNED
+    assert fallback.is_selected is True
+    assert attempt.plan_revision == 2
+    assert attempt.plan_snapshot["selected_artifact_identity"] == "route:pixeldrain"
+    assert attempt.plan_snapshot["route_failures"] == [
+        {
+            "artifact_identity": "route:mega",
+            "failure_class": "permanent_mirror",
+            "failure_code": "mega_link_unavailable",
+            "host_kind": "mega",
+            "sequence_no": 0,
+        }
+    ]
+    assert attempt.provider_identity == "community.test"
+    blocklist = (await session.execute(select(BlocklistEntry))).scalars().all()
+    assert len(blocklist) == 1
+    assert blocklist[0].release_title == "Direct Executor 001 (2026)"
+    assert blocklist[0].release_group == "MEGA"
+    assert blocklist[0].release_title_normalized.startswith("direct-artifact:")
+    assert blocklist[0].download_url == "pullbox-direct://artifact/route:mega"
+    assert (
+        await BlocklistService.is_release_blocked(
+            session,
+            "Direct Executor 001 (2026)",
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_executor_falls_back_when_selected_provider_mirror_disappears(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.artifact_identity = "route:mega"
+    artifact.host_kind = DirectArtifactHostKind.MEGA
+    attempt.plan_snapshot = {
+        "schema_version": 1,
+        "provider_identity": "community.test",
+        "provider_candidate_id": "candidate-1",
+        "provider_state": "healthy",
+        "selected_artifact_identity": "route:mega",
+        "artifacts": [
+            {
+                "artifact_identity": "route:mega",
+                "route_kind": "direct",
+                "host_kind": "mega",
+                "eligible": True,
+                "eligibility_code": "eligible",
+            },
+            {
+                "artifact_identity": "route:pixeldrain",
+                "route_kind": "direct",
+                "host_kind": "pixeldrain",
+                "eligible": True,
+                "eligibility_code": "eligible",
+            },
+        ],
+    }
+    session.add(attempt)
+    await session.commit()
+
+    async def missing_mirror() -> HostResolutionRequest:
+        raise DirectAcquisitionPlanningError(
+            "provider_mirror_changed",
+            "The provider no longer returns the selected mirror.",
+        )
+
+    result = await _executor(
+        tmp_path,
+        transport=object(),
+        post_processor=_successful_post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=missing_mirror,
+    )
+
+    await session.refresh(attempt, attribute_names=["artifact_attempts"])
+    failed, fallback = sorted(attempt.artifact_attempts, key=lambda item: item.sequence_no)
+    assert result.state is DirectAcquisitionState.QUEUED
+    assert failed.failure_class is DirectArtifactFailureClass.PERMANENT_MIRROR
+    assert failed.failure_code == "provider_mirror_changed"
+    assert fallback.host_kind is DirectArtifactHostKind.PIXELDRAIN
+    assert fallback.is_selected is True
+    assert attempt.provider_identity == "community.test"
+    blocklist = (await session.execute(select(BlocklistEntry))).scalars().all()
+    assert len(blocklist) == 1
+    assert blocklist[0].release_group == "MEGA"
+
+
+async def _async_value[T](value: T) -> T:
+    return value
 
 
 @pytest.mark.asyncio

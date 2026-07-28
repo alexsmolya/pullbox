@@ -29,6 +29,7 @@ from pullbox.providers.direct.contract import (
     DirectMirror,
     DirectResolveResponse,
 )
+from pullbox.services.blocklist_service import BlocklistService
 from pullbox.services.direct_acquisition_planner_service import (
     DirectAcquisitionPlanningError,
     direct_route_identity,
@@ -196,7 +197,7 @@ async def test_planning_selects_best_eligible_route_and_persists_no_urls(
     )
 
     assert result.attempt.state is DirectAcquisitionState.PLANNED
-    assert result.selected_artifact.host_kind is DirectArtifactHostKind.GENERIC_HTTPS
+    assert result.selected_artifact.host_kind is DirectArtifactHostKind.PIXELDRAIN
     assert result.selected_artifact.state is DirectArtifactState.PLANNED
     assert result.selected_artifact.is_selected is True
     assert result.plan.complete is True
@@ -207,6 +208,44 @@ async def test_planning_selects_best_eligible_route_and_persists_no_urls(
     assert "token" not in rendered.casefold()
     assert "pixel-mirror" in rendered
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_planning_skips_only_the_blocklisted_artifact_route(
+    session: AsyncSession,
+) -> None:
+    blocked_route = direct_route_identity(
+        "community.getcomics",
+        "candidate-1",
+        "provider-artifact-1",
+        "pixel-mirror",
+    )
+    await BlocklistService.add_direct_artifact_entry(
+        session,
+        "Planner Series 001 (2026)",
+        route_identity=blocked_route,
+        artifact_host="PixelDrain",
+        issue_id=1,
+        series_id=1,
+        error_message="The PixelDrain artifact is unavailable.",
+    )
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(_response()),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.selected_artifact.host_kind is DirectArtifactHostKind.GENERIC_HTTPS
+    blocked_snapshot = next(
+        route
+        for route in result.attempt.plan_snapshot["artifacts"]
+        if route["artifact_identity"] == blocked_route
+    )
+    assert blocked_snapshot["eligible"] is False
+    assert blocked_snapshot["eligibility_code"] == "route_blocklisted"
 
 
 @pytest.mark.asyncio
@@ -275,7 +314,7 @@ async def test_planning_is_deterministic_and_manual_pin_cannot_select_ineligible
         now=lambda: NOW,
     )
 
-    assert first.selected_artifact.host_kind is DirectArtifactHostKind.GENERIC_HTTPS
+    assert first.selected_artifact.host_kind is DirectArtifactHostKind.PIXELDRAIN
     assert first.plan.explanation_code == "pinned_route_ineligible"
     assert first.plan.pinned_route_applied is False
 
@@ -329,9 +368,9 @@ async def test_source_reresolution_uses_only_stable_snapshot_ids(
         now=lambda: NOW,
     )
 
-    assert request.host_kind is DirectArtifactHostKind.GENERIC_HTTPS
-    assert request.share_url is None
-    assert request.final_url == "https://files.example.test/signed.cbz?token=hidden"
+    assert request.host_kind is DirectArtifactHostKind.PIXELDRAIN
+    assert request.share_url == "https://pixeldrain.com/u/abc123"
+    assert request.final_url is None
     assert "signed.cbz" not in repr(request)
     assert refreshed.closed is True
 

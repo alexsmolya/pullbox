@@ -16,6 +16,7 @@ from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
     DirectArtifactAttempt,
+    DirectArtifactFailureClass,
     DirectArtifactHostKind,
     DirectArtifactRouteKind,
     DirectArtifactState,
@@ -143,6 +144,43 @@ class _InactiveCancelExecutor:
         return True
 
 
+@dataclass
+class _FallbackExecutor:
+    artifact_ids: list[int] = field(default_factory=list)
+
+    async def execute(self, session: AsyncSession, **kwargs: Any) -> None:
+        artifact_id = kwargs["artifact_id"]
+        self.artifact_ids.append(artifact_id)
+        attempt = await session.get(DirectAcquisitionAttempt, kwargs["acquisition_id"])
+        artifact = await session.get(DirectArtifactAttempt, artifact_id)
+        assert attempt is not None and artifact is not None
+        if len(self.artifact_ids) == 1:
+            artifact.state = DirectArtifactState.FAILED
+            artifact.is_selected = False
+            attempt.state = DirectAcquisitionState.QUEUED
+            session.add(
+                DirectArtifactAttempt(
+                    id=2,
+                    acquisition_attempt_id=attempt.id,
+                    sequence_no=1,
+                    artifact_identity="route:two",
+                    route_kind=DirectArtifactRouteKind.DIRECT,
+                    host_kind=DirectArtifactHostKind.PIXELDRAIN,
+                    state=DirectArtifactState.PLANNED,
+                    is_selected=True,
+                )
+            )
+        else:
+            attempt.state = DirectAcquisitionState.COMPLETED
+            artifact.state = DirectArtifactState.COMPLETED
+        await session.commit()
+
+
+class _UnexpectedFailureExecutor:
+    async def execute(self, _session: AsyncSession, **_kwargs: Any) -> None:
+        raise RuntimeError("sensitive internal failure")
+
+
 @pytest.mark.asyncio
 async def test_runner_queues_once_uses_ephemeral_source_then_reresolves(
     session_factory: async_sessionmaker[AsyncSession],
@@ -214,6 +252,64 @@ async def test_runner_recovers_queued_attempt_without_ephemeral_urls(
     )
     executor.release.set()
     await runner.wait_idle()
+    await runner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runner_continues_automatically_with_queued_fallback_route(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    executor = _FallbackExecutor()
+
+    async def resolver(_session: AsyncSession, **kwargs: Any) -> HostResolutionRequest:
+        return HostResolutionRequest(
+            artifact_identity="route:two",
+            host_kind=DirectArtifactHostKind.PIXELDRAIN,
+            share_url="https://pixeldrain.com/u/fallback",
+            final_url=None,
+        )
+
+    runner = DirectAcquisitionRunner(
+        session_factory,
+        executor=executor,
+        source_resolver=resolver,
+    )
+
+    assert await runner.dispatch(1, 1, initial_source=_source("initial")) is True
+    await runner.wait_idle()
+
+    assert executor.artifact_ids == [1, 2]
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        assert attempt is not None
+        assert attempt.state is DirectAcquisitionState.COMPLETED
+    await runner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runner_marks_unexpected_worker_failure_instead_of_leaving_download_stuck(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    runner = DirectAcquisitionRunner(
+        session_factory,
+        executor=_UnexpectedFailureExecutor(),
+        source_resolver=lambda *_args, **_kwargs: _source("unused"),  # type: ignore[arg-type]
+    )
+
+    assert await runner.dispatch(1, 1, initial_source=_source("initial")) is True
+    with pytest.raises(RuntimeError, match="sensitive internal failure"):
+        await runner.wait_idle()
+
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        artifact = await session.get(DirectArtifactAttempt, 1)
+        assert attempt is not None and artifact is not None
+        assert attempt.state is DirectAcquisitionState.FAILED
+        assert artifact.state is DirectArtifactState.FAILED
+        assert attempt.failure_class is DirectArtifactFailureClass.TRANSIENT_SOURCE
+        assert attempt.failure_code == "direct_acquisition_worker_failed"
+        assert attempt.error_message == "Direct acquisition stopped unexpectedly."
+        assert "sensitive" not in repr(attempt.progress_snapshot)
     await runner.aclose()
 
 

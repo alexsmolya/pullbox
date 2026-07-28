@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 DEFAULT_MIN_SIZE_MB = 50
 DEFAULT_MAX_SIZE_MB = 2000
 PREFERRED_FORMATS: dict[str, int] = {"cbz": 100, "cbr": 80, "cb7": 60}
+DEFAULT_SOURCE_PRIORITY: tuple[str, ...] = ("usenet", "torrent", "direct")
 
 _FORMAT_RE = re.compile(r"\.(cbz|cbr|cb7|pdf|epub)\b", re.IGNORECASE)
 _TAG_RE = re.compile(r"\b(cbz|cbr|cb7)\b", re.IGNORECASE)
@@ -21,6 +22,25 @@ _MB = 1024 * 1024
 # 7030 = Comics on most indexers (e.g. NZBgeek), 7020 = EBooks.
 _COMIC_CATEGORY_IDS = frozenset({"7030"})
 _BOOK_CATEGORY_IDS = frozenset({"7000", "7010", "7020", "7040"})
+
+
+def normalize_source_priority(value: object) -> list[str] | None:
+    """Return one complete, de-duplicated protocol order."""
+    if not isinstance(value, list | tuple):
+        return None
+
+    normalized: list[str] = []
+    for raw_item in value:
+        if not isinstance(raw_item, str):
+            continue
+        item = "direct" if raw_item.strip().lower() == "ddl" else raw_item.strip().lower()
+        if item in DEFAULT_SOURCE_PRIORITY and item not in normalized:
+            normalized.append(item)
+
+    if not normalized:
+        return None
+    normalized.extend(item for item in DEFAULT_SOURCE_PRIORITY if item not in normalized)
+    return normalized
 
 
 def score_release(
@@ -328,11 +348,17 @@ def _sort_by_source_priority(
     priority: list[str],
 ) -> list[ReleaseResult]:
     """Stable sort results by source protocol priority."""
-    priority_map = {proto: idx for idx, proto in enumerate(priority)}
-    default_rank = len(priority)
+    normalized = normalize_source_priority(priority)
+    if normalized is None:
+        return list(results)
+    priority_map = {proto: idx for idx, proto in enumerate(normalized)}
+    default_rank = len(normalized)
 
     def _rank(result: ReleaseResult) -> int:
-        proto = "torrent" if result.is_torrent else "usenet"
+        if result.download_url.startswith("direct://"):
+            proto = "direct"
+        else:
+            proto = "torrent" if result.is_torrent else "usenet"
         return priority_map.get(proto, default_rank)
 
     return sorted(results, key=_rank)

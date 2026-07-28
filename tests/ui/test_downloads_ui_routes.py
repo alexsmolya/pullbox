@@ -925,6 +925,7 @@ class TestDownloadsRouteContracts:
                 progress_revision=3,
                 progress_snapshot={
                     "stage": "downloading",
+                    "host_kind": "pixeldrain",
                     "percent": 37,
                     "bytes_per_second": 2048,
                     "eta_seconds": 12,
@@ -965,7 +966,7 @@ class TestDownloadsRouteContracts:
         assert snapshot.speed_bytes == 2048
         assert snapshot.eta_seconds == 12
         assert snapshot.size_bytes == 1000
-        assert snapshot.client_state == "downloading"
+        assert snapshot.client_state == "Downloading from PixelDrain"
         register.assert_not_awaited()
 
     async def test_download_queue_context_builds_active_and_waiting_row_views(
@@ -1102,3 +1103,25 @@ class TestDownloadQueueRowViewHelpers:
         assert row.status_pill == "pill-warning"
         assert row.progress_tone == "is-amber"
         assert row.progress_label == "18%"
+
+    def test_direct_download_row_identifies_the_active_fallback_host(self) -> None:
+        download = DownloadHistory(
+            title="Direct Issue.cbz",
+            state=DownloadState.DOWNLOADING,
+            download_client=DownloadClientType.DIRECT,
+            download_url="pullbox-direct://attempt/7",
+        )
+
+        row = ui_routes._build_download_queue_row_view(
+            download,
+            SimpleNamespace(
+                progress=0.37,
+                speed_bytes=2048,
+                eta_seconds=12,
+                client_state="Downloading from PixelDrain",
+            ),
+            None,
+        )
+
+        assert row.primary_phase == "Downloading from PixelDrain"
+        assert row.progress_label == "37%"

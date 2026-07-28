@@ -35,6 +35,7 @@ from pullbox.providers.artifact_hosts.registry import classify_artifact_host
         ("https://terabox.com/s/example", DirectArtifactHostKind.TERABOX),
         ("https://www.1024terabox.com/s/example", DirectArtifactHostKind.TERABOX),
         ("https://www.1024tera.com/s/example", DirectArtifactHostKind.TERABOX),
+        ("https://terabox.link/s/example", DirectArtifactHostKind.TERABOX),
         ("https://www.terabox.app/s/example", DirectArtifactHostKind.TERABOX),
         ("https://datanodes.to/example", DirectArtifactHostKind.DATANODES),
         ("https://s1.datanodes.to/d/example/fixture.cbz", DirectArtifactHostKind.DATANODES),

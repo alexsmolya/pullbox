@@ -23,6 +23,7 @@ def _route(
     *,
     host: DirectArtifactHostKind = DirectArtifactHostKind.GENERIC_HTTPS,
     transport_rank: int = 0,
+    host_preference: int = 50,
     eligible: bool = True,
     account_state: DirectHostAccountState = DirectHostAccountState.NOT_CONFIGURED,
     resolver_required: bool = False,
@@ -34,7 +35,7 @@ def _route(
         transport_rank=transport_rank,
         eligible=eligible,
         eligibility_code="eligible" if eligible else "authentication_required",
-        host_preference=50,
+        host_preference=host_preference,
         account_state=account_state,
         quota_remaining=None,
         resumable=True,
@@ -144,6 +145,35 @@ def test_route_ranking_is_content_independent_and_keeps_fallbacks() -> None:
         "resolver",
     ]
     assert plan.selected[0].selected_route_identity == "final-https"
+
+
+def test_explicit_host_preference_precedes_default_transport_tier() -> None:
+    artifact = _artifact(
+        "issue-1",
+        {"1"},
+        routes=(
+            _route(
+                "generic",
+                transport_rank=0,
+                host_preference=70,
+            ),
+            _route(
+                "pixel",
+                host=DirectArtifactHostKind.PIXELDRAIN,
+                transport_rank=1,
+                host_preference=10,
+                account_state=DirectHostAccountState.HEALTHY,
+            ),
+        ),
+    )
+
+    plan = plan_direct_coverage(frozenset({"1"}), [artifact])
+
+    assert [route.route_identity for route in plan.selected[0].ordered_routes] == [
+        "pixel",
+        "generic",
+    ]
+    assert plan.selected[0].selected_route_identity == "pixel"
 
 
 def test_manual_mirror_pin_is_scoped_to_this_plan_and_cannot_bypass_safety() -> None:

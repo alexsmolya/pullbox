@@ -193,6 +193,18 @@ class TestSettingsRouteContracts:
         assert "const stored = '" not in response.text
         assert "\\u0027; window.__pullboxXss = true; //" in response.text
 
+    async def test_settings_indexers_source_priority_includes_active_direct_downloads(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert "Direct Downloads" in response.text
+        assert "Coming soon" not in response.text
+        assert "item === 'direct'" in response.text
+        assert "JSON.stringify(this.order)" in response.text
+
     async def test_settings_indexer_bulk_tests_are_serialized_to_avoid_write_storm(
         self,
         authenticated_client,

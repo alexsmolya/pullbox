@@ -16,6 +16,8 @@ from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
     DirectArtifactAttempt,
+    DirectArtifactFailureClass,
+    DirectArtifactState,
 )
 from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
 from pullbox.services.direct_acquisition_planner_service import (
@@ -26,6 +28,7 @@ from pullbox.services.direct_acquisition_state import (
     advance_acquisition_progress,
     reopen_terminal_acquisition_for_retry,
     transition_acquisition,
+    transition_artifact,
 )
 from pullbox.services.direct_download_history_adapter import (
     ensure_direct_download_history,
@@ -270,28 +273,101 @@ class DirectAcquisitionRunner:
         cancel_event: asyncio.Event,
     ) -> None:
         first_source = initial_source
+        current_artifact_id = artifact_id
 
         async with self._session_factory() as session:
+            while True:
+                artifact_id_for_source = current_artifact_id
 
-            async def source_factory() -> HostResolutionRequest:
-                nonlocal first_source
-                if first_source is not None:
-                    source = first_source
-                    first_source = None
-                    return source
-                return await self._source_resolver(
-                    session,
-                    acquisition_id=acquisition_id,
-                    artifact_id=artifact_id,
-                )
+                async def source_factory(
+                    artifact_id: int = artifact_id_for_source,
+                ) -> HostResolutionRequest:
+                    nonlocal first_source
+                    if first_source is not None:
+                        source = first_source
+                        first_source = None
+                        return source
+                    return await self._source_resolver(
+                        session,
+                        acquisition_id=acquisition_id,
+                        artifact_id=artifact_id,
+                    )
 
-            await self._executor.execute(
-                session,
-                acquisition_id=acquisition_id,
-                artifact_id=artifact_id,
-                source_factory=source_factory,
-                cancel_event=cancel_event,
-            )
+                try:
+                    await self._executor.execute(
+                        session,
+                        acquisition_id=acquisition_id,
+                        artifact_id=current_artifact_id,
+                        source_factory=source_factory,
+                        cancel_event=cancel_event,
+                    )
+                except Exception:
+                    await session.rollback()
+                    await self._mark_unexpected_failure(
+                        session,
+                        acquisition_id=acquisition_id,
+                        artifact_id=current_artifact_id,
+                    )
+                    raise
+                attempt = (
+                    await session.execute(
+                        select(DirectAcquisitionAttempt)
+                        .options(selectinload(DirectAcquisitionAttempt.artifact_attempts))
+                        .where(DirectAcquisitionAttempt.id == acquisition_id)
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one()
+                if attempt.state is not DirectAcquisitionState.QUEUED:
+                    return
+                selected = [
+                    artifact for artifact in attempt.artifact_attempts if artifact.is_selected
+                ]
+                if len(selected) != 1 or selected[0].id == current_artifact_id:
+                    raise RuntimeError("Queued direct fallback has no new selected artifact.")
+                current_artifact_id = selected[0].id
+
+    async def _mark_unexpected_failure(
+        self,
+        session: AsyncSession,
+        *,
+        acquisition_id: int,
+        artifact_id: int,
+    ) -> None:
+        attempt = await session.get(DirectAcquisitionAttempt, acquisition_id)
+        artifact = await session.get(DirectArtifactAttempt, artifact_id)
+        if attempt is None or artifact is None:
+            return
+        if attempt.state in {
+            DirectAcquisitionState.COMPLETED,
+            DirectAcquisitionState.CANCELLED,
+            DirectAcquisitionState.FAILED,
+        }:
+            return
+        attempt.failure_class = DirectArtifactFailureClass.TRANSIENT_SOURCE
+        attempt.failure_code = "direct_acquisition_worker_failed"
+        attempt.error_message = "Direct acquisition stopped unexpectedly."
+        artifact.failure_class = DirectArtifactFailureClass.TRANSIENT_SOURCE
+        artifact.failure_code = "direct_acquisition_worker_failed"
+        artifact.error_message = "Direct acquisition stopped unexpectedly."
+        transition_artifact(artifact, DirectArtifactState.FAILED)
+        transition_acquisition(attempt, DirectAcquisitionState.FAILED)
+        advance_acquisition_progress(
+            attempt,
+            revision=attempt.progress_revision + 1,
+            snapshot={
+                "schema_version": 1,
+                "stage": "failed",
+                "artifact_attempt_id": artifact.id,
+                "failure_code": "direct_acquisition_worker_failed",
+            },
+        )
+        await sync_direct_download_history(
+            session,
+            attempt,
+            artifact,
+            at=datetime.now(UTC),
+        )
+        await session.commit()
 
     def _finish(self, key: tuple[int, int], task: asyncio.Task[None]) -> None:
         self._active.pop(key, None)

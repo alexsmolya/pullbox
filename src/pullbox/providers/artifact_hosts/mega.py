@@ -168,14 +168,17 @@ class MegaBridgeRunner:
         if cancel_event is not None and cancel_event.is_set():
             raise MegaBridgeCancelledError
 
-        proc = await asyncio.create_subprocess_exec(
-            *self._command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_bridge_environment(),
-            limit=_MAX_EVENT_LINE_BYTES + 1,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *self._command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_bridge_environment(),
+                limit=_MAX_EVENT_LINE_BYTES + 1,
+            )
+        except OSError as exc:
+            raise _bridge_unavailable_error() from exc
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:
             await _terminate_process(proc)
             raise _protocol_error()
@@ -463,6 +466,16 @@ def _protocol_error() -> MegaBridgeTransferError:
         code="mega_bridge_protocol_error",
         message="The MEGA bridge returned an invalid response.",
         failure_class=DirectArtifactFailureClass.SAFETY,
+        retryable=False,
+        intervention=True,
+    )
+
+
+def _bridge_unavailable_error() -> MegaBridgeTransferError:
+    return MegaBridgeTransferError(
+        code="mega_bridge_unavailable",
+        message="The MEGA transfer helper is unavailable.",
+        failure_class=DirectArtifactFailureClass.UNSUPPORTED_ARTIFACT_HOST,
         retryable=False,
         intervention=True,
     )

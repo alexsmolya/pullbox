@@ -59,6 +59,7 @@ from pullbox.services.issue_service import IssueService
 from pullbox.services.release_validator import (
     ValidationResult,
 )
+from pullbox.services.search_scoring import normalize_source_priority
 from pullbox.services.search_service import (
     DEFAULT_TYPE_THRESHOLDS,
     IssueSearchOutcome,
@@ -309,6 +310,26 @@ def build_direct_interactive_results(
     return matched_items, rejected_items
 
 
+def sort_interactive_results_by_source_priority[
+    InteractiveResultT: (SearchResultItem, RejectedResultItem),
+](
+    items: Sequence[InteractiveResultT],
+    source_priority: list[str] | None,
+) -> list[InteractiveResultT]:
+    """Stable-sort combined indexer and direct rows by protocol preference."""
+    normalized = normalize_source_priority(source_priority)
+    if normalized is None:
+        return list(items)
+    priority_map = {source: index for index, source in enumerate(normalized)}
+
+    def _source(item: SearchResultItem | RejectedResultItem) -> str:
+        if item.source_kind == "direct":
+            return "direct"
+        return "torrent" if item.is_torrent else "usenet"
+
+    return sorted(items, key=lambda item: priority_map[_source(item)])
+
+
 def _build_issue_context(target: IssueSearchTarget) -> InteractiveSearchIssue:
     """Build the public issue context returned by interactive search responses."""
 
@@ -459,6 +480,15 @@ async def _persist_direct_bundle_results(
     )
     bundle.matched_items.extend(direct_matched)
     bundle.rejected_items.extend(direct_rejected)
+    source_priority = bundle.runtime.source_priority if bundle.runtime else None
+    bundle.matched_items[:] = sort_interactive_results_by_source_priority(
+        bundle.matched_items,
+        source_priority,
+    )
+    bundle.rejected_items[:] = sort_interactive_results_by_source_priority(
+        bundle.rejected_items,
+        source_priority,
+    )
 
 
 def _build_issue_search_log(

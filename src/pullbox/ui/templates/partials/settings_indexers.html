@@ -236,18 +236,17 @@
       <div class="space-y-4 p-5">
         <div class="flex max-w-2xl flex-col gap-2">
         <template x-for="(item, index) in order" :key="item">
-          <div class="flex items-center gap-3 rounded-xl border border-pb-border bg-pb-card px-4 py-3"
-               :class="item === 'ddl' ? 'border-dashed opacity-40' : 'hover:border-pb-border-hover hover:bg-pb-card-hover/20'">
+          <div class="flex items-center gap-3 rounded-xl border border-pb-border bg-pb-card px-4 py-3 hover:border-pb-border-hover hover:bg-pb-card-hover/20">
             <span class="w-5 text-center text-sm font-bold text-pb-text-dim" x-text="index + 1"></span>
 
-            <div class="flex flex-col gap-0.5" x-show="item !== 'ddl'">
+            <div class="flex flex-col gap-0.5">
               <button type="button" @click="moveUp(index)" :disabled="index === 0"
                       class="rounded p-0.5 text-pb-text-dim transition-colors hover:text-pb-text disabled:opacity-20">
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5"/>
                 </svg>
               </button>
-              <button type="button" @click="moveDown(index)" :disabled="index >= order.length - 2"
+              <button type="button" @click="moveDown(index)" :disabled="index >= order.length - 1"
                       class="rounded p-0.5 text-pb-text-dim transition-colors hover:text-pb-text disabled:opacity-20">
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
@@ -263,18 +262,14 @@
                 <template x-if="item === 'torrent'">
                   <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-info-dim text-[10px] font-bold text-pb-info">TOR</div>
                 </template>
-                <template x-if="item === 'ddl'">
-                  <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-card-hover text-[10px] font-bold text-pb-text-dim">DDL</div>
+                <template x-if="item === 'direct'">
+                  <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-success-dim text-[10px] font-bold text-pb-success">DDL</div>
                 </template>
                 <div class="min-w-0">
-                  <p class="text-sm font-medium" :class="item === 'ddl' ? 'text-pb-text-dim' : 'text-pb-text'" x-text="labels[item]"></p>
+                  <p class="text-sm font-medium text-pb-text" x-text="labels[item]"></p>
                 </div>
               </div>
             </div>
-
-            <template x-if="item === 'ddl'">
-              <span class="shrink-0 rounded bg-pb-card-hover px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-pb-text-dim">Coming soon</span>
-            </template>
           </div>
         </template>
         </div>
@@ -320,48 +315,51 @@
 
   <script>
   function sourcePriority() {
-    {%- set sp_default = '["usenet", "torrent"]' -%}
+    {%- set sp_default = '["usenet", "torrent", "direct"]' -%}
     const stored = {{ configs.get("source_priority", sp_default) | tojson }};
     let initial;
-    try { initial = JSON.parse(stored); } catch { initial = ['usenet', 'torrent']; }
-    // Ensure DDL is always last
-    const active = initial.filter(p => p !== 'ddl');
-    const full = [...active, 'ddl'];
+    try { initial = JSON.parse(stored); } catch { initial = []; }
+    const supported = ['usenet', 'torrent', 'direct'];
+    const parsed = Array.isArray(initial) ? initial : [];
+    const active = parsed
+      .map(item => item === 'ddl' ? 'direct' : item)
+      .filter((item, index, items) => supported.includes(item) && items.indexOf(item) === index);
+    const full = [...active, ...supported.filter(item => !active.includes(item))];
 
     return {
-      savedOrder: [...active],
+      savedOrder: [...full],
       order: full,
       dirty: false,
       saved: false,
-      labels: { usenet: 'Usenet', torrent: 'Torrents', ddl: 'Direct Downloads' },
+      labels: { usenet: 'Usenet', torrent: 'Torrents', direct: 'Direct Downloads' },
       descriptions: {
         usenet: 'SABnzbd, NZBGet \\u2022 Newznab indexers',
         torrent: 'qBittorrent, Transmission, Deluge \\u2022 Torznab indexers',
-        ddl: 'GetComics, direct file downloads',
+        direct: 'GetComics, Anna\'s Archive, direct file downloads',
       },
 
       moveUp(index) {
         if (index <= 0) return;
         [this.order[index], this.order[index - 1]] = [this.order[index - 1], this.order[index]];
-        this.dirty = JSON.stringify(this.order.filter(p => p !== 'ddl')) !== JSON.stringify(this.savedOrder);
+        this.dirty = JSON.stringify(this.order) !== JSON.stringify(this.savedOrder);
         this.saved = false;
       },
 
       moveDown(index) {
-        if (index >= this.order.length - 2) return; // Can't move past DDL
+        if (index >= this.order.length - 1) return;
         [this.order[index], this.order[index + 1]] = [this.order[index + 1], this.order[index]];
-        this.dirty = JSON.stringify(this.order.filter(p => p !== 'ddl')) !== JSON.stringify(this.savedOrder);
+        this.dirty = JSON.stringify(this.order) !== JSON.stringify(this.savedOrder);
         this.saved = false;
       },
 
       reset() {
-        this.order = [...this.savedOrder, 'ddl'];
+        this.order = [...this.savedOrder];
         this.dirty = false;
         this.saved = false;
       },
 
       save() {
-        const value = JSON.stringify(this.order.filter(p => p !== 'ddl'));
+        const value = JSON.stringify(this.order);
         fetch('/api/v1/config', {
           method: 'PUT',
           headers: {
@@ -372,7 +370,7 @@
         })
           .then(r => { if (!r.ok) throw new Error('Failed to save.'); })
           .then(() => {
-            this.savedOrder = [...this.order.filter(p => p !== 'ddl')];
+            this.savedOrder = [...this.order];
             this.dirty = false;
             this.saved = true;
             if (typeof showToast === 'function') showToast({ message: 'Source priority saved.', level: 'success' });

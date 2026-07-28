@@ -34,6 +34,7 @@ _HOST_FAMILIES: tuple[tuple[DirectArtifactHostKind, frozenset[str]], ...] = (
                 "momerybox.com",
                 "terabox.com",
                 "terabox.app",
+                "terabox.link",
                 "teraboxapp.com",
                 "teraboxlink.com",
                 "terasharefile.com",

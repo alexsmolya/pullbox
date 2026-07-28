@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from pullbox.services.search_evaluation import DEFAULT_MIN_SCORE, _select_best_validation
-from pullbox.services.search_scoring import DEFAULT_MAX_SIZE_MB, DEFAULT_MIN_SIZE_MB
+from pullbox.services.search_scoring import (
+    DEFAULT_MAX_SIZE_MB,
+    DEFAULT_MIN_SIZE_MB,
+    normalize_source_priority,
+)
 
 if TYPE_CHECKING:
     from pullbox.providers.base import ReleaseResult
@@ -29,6 +33,8 @@ class SearchSourceSelection:
 def select_search_source(
     outcome: IssueSearchOutcome,
     eval_kwargs: SearchEvalKwargs,
+    *,
+    source_priority: list[str] | None = None,
 ) -> SearchSourceSelection | None:
     """Rank indexer and direct matches with the existing deterministic scorer."""
     direct_matches = outcome.direct_outcome.matched if outcome.direct_outcome else ()
@@ -41,7 +47,16 @@ def select_search_source(
             validation=outcome.best_validation,
         )
 
-    validations = [*outcome.matched, *(item.validation for item in direct_matches)]
+    candidates: list[tuple[str, ValidationResult, DirectValidatedCandidate | None]] = [
+        ("torrent" if item.release.is_torrent else "usenet", item, None) for item in outcome.matched
+    ]
+    candidates.extend(("direct", item.validation, item) for item in direct_matches)
+    normalized_priority = normalize_source_priority(source_priority)
+    if normalized_priority is not None:
+        priority_map = {source: index for index, source in enumerate(normalized_priority)}
+        candidates.sort(key=lambda item: priority_map[item[0]])
+
+    validations = [item[1] for item in candidates]
     selected = _select_best_validation(
         validations,
         min_score=eval_kwargs.get("min_score", DEFAULT_MIN_SCORE),
@@ -59,10 +74,7 @@ def select_search_source(
     )
     if selected is None:
         return None
-    direct_result = next(
-        (item for item in direct_matches if item.validation is selected),
-        None,
-    )
+    direct_result = next((item[2] for item in candidates if item[1] is selected), None)
     return SearchSourceSelection(
         source_kind="direct" if direct_result is not None else "indexer",
         release=selected.release,

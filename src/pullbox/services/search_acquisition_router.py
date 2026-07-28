@@ -101,6 +101,7 @@ async def route_search_acquisition(
     download_service: DownloadServiceLike,
     intervention_service: InterventionServiceLike,
     runner: DirectRunnerLike | None,
+    source_priority: list[str] | None = None,
     planner: DirectPlanner = plan_direct_acquisition,
 ) -> SearchAcquisitionRoutingResult:
     """Persist all discoveries and route the best result through its own adapter."""
@@ -114,7 +115,11 @@ async def route_search_acquisition(
             search_log_id=search_log_id,
         )
 
-    selected = select_search_source(outcome, eval_kwargs)
+    selected = select_search_source(
+        outcome,
+        eval_kwargs,
+        source_priority=source_priority,
+    )
     if selected is None:
         return SearchAcquisitionRoutingResult(0, 0, "no_match", None, None)
 

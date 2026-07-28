@@ -6,6 +6,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_SOURCE = PROJECT_ROOT / "native" / "mega_bridge" / "main.cpp"
 BRIDGE_CMAKE = PROJECT_ROOT / "native" / "mega_bridge" / "CMakeLists.txt"
 DOCKERFILE = PROJECT_ROOT / "docker" / "Dockerfile"
+DEV_DOCKERFILE = PROJECT_ROOT / "docker" / "Dockerfile.dev"
 
 
 def test_mega_sdk_source_and_digest_are_pinned_in_production_image() -> None:
@@ -25,6 +26,16 @@ def test_mega_builder_installs_archive_decompression_support() -> None:
     )[0]
 
     assert "gzip" in mega_builder_dependencies
+
+
+def test_development_image_includes_the_same_pinned_mega_bridge() -> None:
+    dockerfile = DEV_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "e11a1a4648bdee70dac67ecb2200c1507e4de53c" in dockerfile
+    assert "fd4d37848ed3c3cf799695e3aa47cb69c2f5938e6efe530a718d3f1fbf7c46e8" in dockerfile
+    assert "sha256sum -c -" in dockerfile
+    assert "pullbox-mega-bridge" in dockerfile
+    assert "COPY --from=mega-builder /mega-runtime/ /" in dockerfile
 
 
 def test_mega_bridge_uses_stdin_protocol_and_official_sdk_controls() -> None:

@@ -127,3 +127,18 @@ def test_equal_score_preserves_existing_indexer_precedence() -> None:
     assert selected.source_kind == "indexer"
     assert selected.release is indexer
     assert selected.direct_result is None
+
+
+def test_equal_score_respects_direct_first_source_priority() -> None:
+    indexer = _release("Batman 001 (2016) (Digital).cbz", "Indexer")
+    direct = _direct_result(_release("Batman 001 (2016) (Digital).cbz", "GetComics"))
+
+    selected = select_search_source(
+        _outcome(indexer, direct),
+        {},
+        source_priority=["direct", "torrent", "usenet"],
+    )
+
+    assert selected is not None
+    assert selected.source_kind == "direct"
+    assert selected.direct_result is direct

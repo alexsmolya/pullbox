@@ -34,6 +34,7 @@ _TERABOX_DOMAINS = (
     "momerybox.com",
     "terabox.com",
     "terabox.app",
+    "terabox.link",
     "teraboxapp.com",
     "teraboxlink.com",
     "terasharefile.com",

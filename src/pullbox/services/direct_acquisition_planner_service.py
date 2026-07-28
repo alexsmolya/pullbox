@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
@@ -38,6 +38,7 @@ from pullbox.providers.direct.contract import (
     DirectResolveRequest,
     DirectResolveResponse,
 )
+from pullbox.services.blocklist_service import BlocklistService
 from pullbox.services.direct_acquisition_plan import (
     ArtifactPlanSnapshotInput,
     build_plan_snapshot,
@@ -177,6 +178,11 @@ async def plan_direct_acquisition(
         )
         host_configs = await _load_host_configs(session)
         resolved_routes = _build_route_options(attempt, provider, response.artifacts, host_configs)
+        blocked_routes = await BlocklistService.get_blocked_direct_artifact_routes(
+            session,
+            {route.route.route_identity for route in resolved_routes},
+        )
+        resolved_routes = _exclude_blocked_routes(resolved_routes, blocked_routes)
         plan = plan_direct_coverage(
             _requested_coverage(attempt),
             _planner_options(resolved_routes),
@@ -552,6 +558,25 @@ def _planner_options(routes: Sequence[_ResolvedRoute]) -> list[DirectArtifactOpt
             )
         )
     return options
+
+
+def _exclude_blocked_routes(
+    routes: Sequence[_ResolvedRoute],
+    blocked_route_identities: set[str],
+) -> list[_ResolvedRoute]:
+    return [
+        replace(
+            route,
+            route=replace(
+                route.route,
+                eligible=False,
+                eligibility_code="route_blocklisted",
+            ),
+        )
+        if route.route.route_identity in blocked_route_identities
+        else route
+        for route in routes
+    ]
 
 
 def _requested_coverage(attempt: DirectAcquisitionAttempt) -> frozenset[str]:

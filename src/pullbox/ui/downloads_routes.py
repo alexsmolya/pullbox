@@ -390,7 +390,11 @@ def build_download_queue_row_view(
         if progress_pct > 0:
             progress_label = f"{round(progress_pct):.0f}%"
     elif download.state == DownloadState.QUEUED:
-        primary_phase = "Queued"
+        primary_phase = (
+            client_state
+            if download.download_client is DownloadClientType.DIRECT and client_state
+            else "Queued"
+        )
         status_pill = "pill-info"
     elif download.state in {
         DownloadState.SENT,
@@ -408,7 +412,11 @@ def build_download_queue_row_view(
             speed_bytes = None
             eta_seconds = None
         else:
-            primary_phase = "Downloading"
+            primary_phase = (
+                client_state
+                if download.download_client is DownloadClientType.DIRECT and client_state
+                else "Downloading"
+            )
             status_pill = "pill-info"
             progress_tone = "is-blue"
             progress_label = f"{round(progress_pct):.0f}%"
@@ -540,13 +548,15 @@ async def load_download_progress_map(
             speed = snapshot.get("bytes_per_second")
             eta = snapshot.get("eta_seconds")
             total = snapshot.get("total_bytes")
+            stage = snapshot.get("stage")
+            host_kind = snapshot.get("host_kind")
             progress_map[download_id] = ProgressSnapshot(
                 progress=max(0.0, min(percent / 100, 1.0)),
                 speed_bytes=int(speed) if isinstance(speed, int | float) else None,
                 eta_seconds=int(eta) if isinstance(eta, int | float) else None,
                 size_bytes=int(total) if isinstance(total, int | float) else None,
                 updated_at=time.monotonic(),
-                client_state=str(snapshot.get("stage") or "Direct"),
+                client_state=_direct_progress_label(stage, host_kind),
             )
     pollable_items = [
         item
@@ -648,6 +658,30 @@ async def load_download_progress_map(
     )
 
     return progress_map
+
+
+def _direct_progress_label(stage: object, host_kind: object) -> str:
+    stage_value = str(stage) if isinstance(stage, str) and stage else "direct"
+    host_value = str(host_kind) if isinstance(host_kind, str) and host_kind else ""
+    host_labels = {
+        "mega": "MEGA",
+        "pixeldrain": "PixelDrain",
+        "rootz": "Rootz",
+        "mediafire": "MediaFire",
+        "terabox": "TeraBox",
+        "datanodes": "DataNodes",
+        "generic_https": "HTTPS",
+    }
+    host_label = host_labels.get(host_value, host_value.replace("_", " ").title())
+    if stage_value == "fallback_queued" and host_label:
+        return f"Trying {host_label}"
+    if stage_value == "resolving" and host_label:
+        return f"Resolving {host_label}"
+    if stage_value == "downloading" and host_label:
+        return f"Downloading from {host_label}"
+    if stage_value == "validating" and host_label:
+        return f"Validating {host_label} download"
+    return stage_value.replace("_", " ").capitalize()
 
 
 async def load_download_history_context(

@@ -361,6 +361,36 @@ async def test_build_direct_interactive_results_uses_attempt_identity_not_url() 
     assert "getcomics.org" not in repr(matched[0])
 
 
+def test_interactive_results_respect_direct_source_priority() -> None:
+    from pullbox.api.v1.issues import (
+        build_interactive_results,
+        sort_interactive_results_by_source_priority,
+    )
+
+    release = _make_release("Batman 001 (2016) (Digital).cbz")
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )[0][0]
+    indexer_item = build_interactive_results([validation], [], {})[0][0]
+    direct_item = indexer_item.model_copy(
+        update={
+            "indexer_name": "GetComics",
+            "source_kind": "direct",
+            "method": "Direct",
+        }
+    )
+
+    ordered = sort_interactive_results_by_source_priority(
+        [indexer_item, direct_item],
+        ["direct", "usenet", "torrent"],
+    )
+
+    assert [item.source_kind for item in ordered] == ["direct", "indexer"]
+
+
 @pytest.mark.asyncio
 async def test_build_interactive_results_auto_grabbable_logic() -> None:
     """Interactive auto-grabbable mirrors per-type automated routing thresholds."""

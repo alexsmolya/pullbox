@@ -281,8 +281,8 @@ def _route_order_key(route: DirectRouteOption) -> tuple[object, ...]:
     }
     return (
         not route.eligible,
-        route.transport_rank,
         route.host_preference,
+        route.transport_rank,
         account_rank[route.account_state],
         -(route.quota_remaining or 0),
         not route.resumable,

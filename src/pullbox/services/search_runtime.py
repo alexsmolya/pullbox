@@ -10,7 +10,11 @@ from sqlalchemy import select
 
 from pullbox.models.config import SystemConfig
 from pullbox.services.release_validator import validator_kwargs_from_eval_kwargs
-from pullbox.services.search_scoring import EVAL_CONFIG_KEYS, build_eval_kwargs
+from pullbox.services.search_scoring import (
+    EVAL_CONFIG_KEYS,
+    build_eval_kwargs,
+    normalize_source_priority,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -139,7 +143,7 @@ async def build_search_runtime(
 
     try:
         source_priority_raw = json.loads(cfg.get("source_priority", "[]"))
-        source_priority = list(source_priority_raw) if source_priority_raw else None
+        source_priority = normalize_source_priority(source_priority_raw)
     except (ValueError, TypeError):
         source_priority = None
 
