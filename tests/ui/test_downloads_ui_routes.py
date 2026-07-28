@@ -967,6 +967,7 @@ class TestDownloadsRouteContracts:
         assert snapshot.eta_seconds == 12
         assert snapshot.size_bytes == 1000
         assert snapshot.client_state == "Downloading from PixelDrain"
+        assert snapshot.source_label == "GetComics via PixelDrain"
         register.assert_not_awaited()
 
     async def test_download_queue_context_builds_active_and_waiting_row_views(
@@ -1119,9 +1120,38 @@ class TestDownloadQueueRowViewHelpers:
                 speed_bytes=2048,
                 eta_seconds=12,
                 client_state="Downloading from PixelDrain",
+                source_label="GetComics via PixelDrain",
             ),
             None,
         )
 
         assert row.primary_phase == "Downloading from PixelDrain"
+        assert row.client_label == "GetComics via PixelDrain"
         assert row.progress_label == "37%"
+
+    def test_direct_retry_pending_row_preserves_provider_host_and_failure_detail(self) -> None:
+        download = DownloadHistory(
+            title="Direct Retry.cbz",
+            state=DownloadState.RETRY_PENDING,
+            download_client=DownloadClientType.DIRECT,
+            download_url="pullbox-direct://attempt/8",
+            retry_count=1,
+            max_retries=3,
+            error_message="The artifact transfer stopped making progress.",
+        )
+
+        row = ui_routes._build_download_queue_row_view(
+            download,
+            SimpleNamespace(
+                progress=0.2,
+                speed_bytes=None,
+                eta_seconds=None,
+                client_state="Retry pending",
+                source_label="Anna's Archive via HTTPS",
+            ),
+            None,
+        )
+
+        assert row.primary_phase == "Retry pending"
+        assert row.client_label == "Anna's Archive via HTTPS"
+        assert row.status_detail == ("The artifact transfer stopped making progress. Retry 1 of 3.")

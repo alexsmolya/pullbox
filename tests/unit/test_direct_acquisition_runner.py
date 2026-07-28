@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.blocklist import BlocklistEntry, BlocklistReason
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -25,6 +26,7 @@ from pullbox.models.download import DownloadClientType, DownloadHistory, Downloa
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
+from pullbox.services.direct_download_history_adapter import ensure_direct_download_history
 from pullbox.tasks.direct_acquisition_task import DirectAcquisitionRunner
 
 if TYPE_CHECKING:
@@ -100,6 +102,65 @@ def _source(name: str) -> HostResolutionRequest:
         share_url=None,
         final_url=f"https://files.example/{name}.cbz?secret=hidden",
     )
+
+
+@pytest.mark.asyncio
+async def test_history_adapter_collapses_legacy_duplicate_rows(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        artifact = await session.get(DirectArtifactAttempt, 1)
+        assert attempt is not None and artifact is not None
+        legacy = DownloadHistory(
+            issue_id=1,
+            title="Legacy direct row",
+            download_url="pullbox-direct://attempt/1",
+            download_client=DownloadClientType.DIRECT,
+            external_id=None,
+            state=DownloadState.FAILED,
+            error_message="Legacy client routing failed.",
+        )
+        canonical = DownloadHistory(
+            issue_id=1,
+            title="Canonical direct row",
+            download_url="pullbox-direct://attempt/1",
+            download_client=DownloadClientType.DIRECT,
+            external_id="direct:1",
+            state=DownloadState.QUEUED,
+        )
+        session.add_all([legacy, canonical])
+        await session.flush()
+        blocklist_entry = BlocklistEntry(
+            release_title="Legacy direct row",
+            release_title_normalized="legacy direct row",
+            download_url="pullbox-direct://artifact/route:one",
+            issue_id=1,
+            reason=BlocklistReason.FAILED,
+            download_history_id=legacy.id,
+        )
+        session.add(blocklist_entry)
+        await session.flush()
+        blocklist_entry_id = blocklist_entry.id
+
+        history = await ensure_direct_download_history(
+            session,
+            attempt,
+            artifact,
+            at=datetime(2026, 7, 28, tzinfo=UTC),
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        histories = list((await session.execute(select(DownloadHistory))).scalars())
+        blocklist_entry = await session.get(BlocklistEntry, blocklist_entry_id)
+
+    assert len(histories) == 1
+    assert histories[0].id == history.id
+    assert histories[0].external_id == "direct:1"
+    assert histories[0].download_url == "pullbox-direct://attempt/1"
+    assert blocklist_entry is not None
+    assert blocklist_entry.download_history_id == history.id
 
 
 @dataclass
@@ -185,6 +246,19 @@ class _UnexpectedFailureExecutor:
 async def test_runner_queues_once_uses_ephemeral_source_then_reresolves(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    async with session_factory() as session:
+        session.add(
+            DownloadHistory(
+                issue_id=1,
+                title="Runner Series 001 (2026)",
+                download_url="pullbox-direct://attempt/1",
+                download_client=DownloadClientType.DIRECT,
+                external_id=None,
+                state=DownloadState.RETRY_PENDING,
+            )
+        )
+        await session.commit()
+
     executor = _Executor()
     resolver_calls = 0
 
@@ -249,6 +323,43 @@ async def test_runner_recovers_queued_attempt_without_ephemeral_urls(
     await asyncio.wait_for(executor.started.wait(), timeout=1)
     assert all(
         source.final_url and "recovered.cbz" in source.final_url for source in executor.sources
+    )
+    executor.release.set()
+    await runner.wait_idle()
+    await runner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runner_dispatches_due_retry_without_restarting(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    retry_at = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        artifact = await session.get(DirectArtifactAttempt, 1)
+        assert attempt is not None and artifact is not None
+        attempt.state = DirectAcquisitionState.RETRY_PENDING
+        attempt.next_retry_at = retry_at
+        artifact.state = DirectArtifactState.RETRY_PENDING
+        artifact.next_retry_at = retry_at
+        await session.commit()
+
+    executor = _Executor()
+
+    async def resolver(_session: AsyncSession, **_kwargs: Any) -> HostResolutionRequest:
+        return _source("scheduled-retry")
+
+    runner = DirectAcquisitionRunner(
+        session_factory,
+        executor=executor,
+        source_resolver=resolver,
+    )
+
+    assert await runner.dispatch_due_retries(now=retry_at) == 1
+    await asyncio.wait_for(executor.started.wait(), timeout=1)
+    assert all(
+        source.final_url and "scheduled-retry.cbz" in source.final_url
+        for source in executor.sources
     )
     executor.release.set()
     await runner.wait_idle()

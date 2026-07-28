@@ -68,6 +68,7 @@ class DownloadQueueRowView:
     client_label: str
     primary_phase: str
     status_pill: str
+    status_detail: str | None
     progress_pct: float
     progress_label: str
     progress_tone: str
@@ -360,6 +361,13 @@ def build_download_queue_row_view(
 ) -> DownloadQueueRowView:
     """Convert queue state plus live progress into a stable UI row model."""
     client_label = download_client_type_label(download.download_client.value)
+    raw_source_label = snapshot_value(progress, "source_label")
+    if (
+        download.download_client is DownloadClientType.DIRECT
+        and isinstance(raw_source_label, str)
+        and raw_source_label
+    ):
+        client_label = raw_source_label
     raw_client_state = snapshot_value(progress, "client_state")
     client_state = normalize_download_queue_client_state(
         raw_client_state if isinstance(raw_client_state, str) else None
@@ -372,6 +380,7 @@ def build_download_queue_row_view(
 
     primary_phase = "Queued"
     status_pill = "pill-info"
+    status_detail: str | None = None
     progress_tone = "is-blue"
     progress_label = "—"
     eta_text: str | None = None
@@ -387,6 +396,15 @@ def build_download_queue_row_view(
         primary_phase = "Retry pending"
         status_pill = "pill-warning"
         progress_tone = "is-amber"
+        detail_parts: list[str] = []
+        if download.error_message:
+            detail_parts.append(download.error_message.rstrip("."))
+        max_retries = download.max_retries or 0
+        retry_count = download.retry_count or 0
+        if max_retries > 0:
+            detail_parts.append(f"Retry {retry_count} of {max_retries}")
+        if detail_parts:
+            status_detail = ". ".join(detail_parts) + "."
         if progress_pct > 0:
             progress_label = f"{round(progress_pct):.0f}%"
     elif download.state == DownloadState.QUEUED:
@@ -429,6 +447,7 @@ def build_download_queue_row_view(
         client_label=client_label,
         primary_phase=primary_phase,
         status_pill=status_pill,
+        status_detail=status_detail,
         progress_pct=progress_pct,
         progress_label=progress_label,
         progress_tone=progress_tone,
@@ -557,6 +576,7 @@ async def load_download_progress_map(
                 size_bytes=int(total) if isinstance(total, int | float) else None,
                 updated_at=time.monotonic(),
                 client_state=_direct_progress_label(stage, host_kind),
+                source_label=_direct_source_label(attempt.provider_identity, host_kind),
             )
     pollable_items = [
         item
@@ -662,6 +682,20 @@ async def load_download_progress_map(
 
 def _direct_progress_label(stage: object, host_kind: object) -> str:
     stage_value = str(stage) if isinstance(stage, str) and stage else "direct"
+    host_label = _direct_host_label(host_kind)
+
+    if stage_value == "fallback_queued" and host_label:
+        return f"Trying {host_label}"
+    if stage_value == "resolving" and host_label:
+        return f"Resolving {host_label}"
+    if stage_value == "downloading" and host_label:
+        return f"Downloading from {host_label}"
+    if stage_value == "validating" and host_label:
+        return f"Validating {host_label} download"
+    return stage_value.replace("_", " ").capitalize()
+
+
+def _direct_host_label(host_kind: object) -> str:
     host_value = str(host_kind) if isinstance(host_kind, str) and host_kind else ""
     host_labels = {
         "mega": "MEGA",
@@ -672,16 +706,20 @@ def _direct_progress_label(stage: object, host_kind: object) -> str:
         "datanodes": "DataNodes",
         "generic_https": "HTTPS",
     }
-    host_label = host_labels.get(host_value, host_value.replace("_", " ").title())
-    if stage_value == "fallback_queued" and host_label:
-        return f"Trying {host_label}"
-    if stage_value == "resolving" and host_label:
-        return f"Resolving {host_label}"
-    if stage_value == "downloading" and host_label:
-        return f"Downloading from {host_label}"
-    if stage_value == "validating" and host_label:
-        return f"Validating {host_label} download"
-    return stage_value.replace("_", " ").capitalize()
+    return host_labels.get(host_value, host_value.replace("_", " ").title())
+
+
+def _direct_source_label(provider_identity: str, host_kind: object) -> str:
+    provider_labels = {
+        "pullbox.getcomics": "GetComics",
+        "pullbox.annas_archive": "Anna's Archive",
+    }
+    provider_label = provider_labels.get(
+        provider_identity,
+        provider_identity.removeprefix("pullbox.").replace("_", " ").title(),
+    )
+    host_label = _direct_host_label(host_kind)
+    return f"{provider_label} via {host_label}" if host_label else provider_label
 
 
 async def load_download_history_context(

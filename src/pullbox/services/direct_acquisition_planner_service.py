@@ -717,6 +717,7 @@ def _host_resolution_request(
         final_url=mirror.final_url,
         provider_headers=sanitize_provider_headers(mirror.source_headers),
         expected_size=mirror.size_bytes or artifact.size_bytes,
+        checksum=mirror.checksum,
         etag=mirror.etag,
         last_modified=mirror.last_modified,
         expires_at=mirror.expires_at,

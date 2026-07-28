@@ -94,6 +94,7 @@ class GenericHttpsAdapter:
             url=response.url,
             headers={},
             expected_size=response_size(response, request.expected_size),
+            checksum=request.checksum,
             etag=response.headers.get("etag") or request.etag,
             last_modified=response.headers.get("last-modified") or request.last_modified,
             expires_at=request.expires_at,

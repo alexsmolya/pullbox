@@ -65,6 +65,11 @@ async def test_recover_orphaned_downloads_resets_stale_and_permission_failures(
             issue_number=5,
             status=IssueStatus.DOWNLOADING,
         )
+        direct_issue = Issue(
+            series_id=series.id,
+            issue_number=6,
+            status=IssueStatus.DOWNLOADING,
+        )
         session.add_all(
             [
                 stale_issue,
@@ -72,6 +77,7 @@ async def test_recover_orphaned_downloads_resets_stale_and_permission_failures(
                 orphan_wanted_issue,
                 orphan_owned_issue,
                 active_issue,
+                direct_issue,
             ]
         )
         await session.flush()
@@ -115,11 +121,21 @@ async def test_recover_orphaned_downloads_resets_stale_and_permission_failures(
             state=DownloadState.COMPLETED,
             imported_at=None,
         )
+        direct_download = DownloadHistory(
+            issue_id=direct_issue.id,
+            title="direct",
+            download_url="pullbox-direct://attempt/6",
+            download_client=DownloadClientType.DIRECT,
+            external_id=None,
+            state=DownloadState.SENT,
+            updated_at=stale_time,
+        )
         session.add_all(
             [
                 stale_download,
                 permission_download,
                 active_download,
+                direct_download,
             ]
         )
         await session.commit()
@@ -133,14 +149,19 @@ async def test_recover_orphaned_downloads_resets_stale_and_permission_failures(
         assert orphan_wanted_issue.status == IssueStatus.WANTED
         assert orphan_owned_issue.status == IssueStatus.OWNED
         assert active_issue.status == IssueStatus.DOWNLOADING
+        assert direct_issue.status == IssueStatus.DOWNLOADING
 
         refreshed_stale = await session.get(DownloadHistory, stale_download.id)
         refreshed_permission = await session.get(DownloadHistory, permission_download.id)
+        refreshed_direct = await session.get(DownloadHistory, direct_download.id)
         assert refreshed_stale is not None
         assert refreshed_permission is not None
+        assert refreshed_direct is not None
         assert refreshed_stale.error_message == "Download client never acknowledged this download"
         assert refreshed_permission.state == DownloadState.COMPLETED
         assert refreshed_permission.error_message is None
+        assert refreshed_direct.state == DownloadState.SENT
+        assert refreshed_direct.error_message is None
 
 
 @pytest.mark.asyncio
@@ -198,3 +219,73 @@ async def test_process_retry_pending_continues_after_retry_errors(sec_db) -> Non
 
     assert retried == 1
     assert service.calls == [first_download_id, second_download_id]
+
+
+@pytest.mark.asyncio
+async def test_process_retry_pending_routes_direct_rows_to_direct_runner(
+    sec_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # type: ignore[no-untyped-def]
+    from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
+    from pullbox.models.issue import Issue
+    from pullbox.models.series import Series
+    from pullbox.tasks import download_recovery
+
+    now = datetime.now(UTC)
+    async with sec_db() as session:
+        series = Series(title="Direct Retry Series", sort_title="direct retry series")
+        session.add(series)
+        await session.flush()
+        legacy_issue = Issue(series_id=series.id, issue_number=1)
+        direct_issue = Issue(series_id=series.id, issue_number=2)
+        session.add_all([legacy_issue, direct_issue])
+        await session.flush()
+        legacy_download = DownloadHistory(
+            issue_id=legacy_issue.id,
+            title="legacy",
+            download_url="https://example.test/legacy",
+            download_client=DownloadClientType.QBITTORRENT,
+            state=DownloadState.RETRY_PENDING,
+            next_retry_at=now - timedelta(seconds=1),
+        )
+        direct_download = DownloadHistory(
+            issue_id=direct_issue.id,
+            title="direct",
+            download_url="pullbox-direct://attempt/77",
+            download_client=DownloadClientType.DIRECT,
+            external_id="direct:77",
+            state=DownloadState.RETRY_PENDING,
+            next_retry_at=now - timedelta(seconds=1),
+        )
+        session.add_all([legacy_download, direct_download])
+        await session.flush()
+        legacy_download_id = legacy_download.id
+        await session.commit()
+
+    class RetryService:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        async def retry_download(self, _session: object, download_id: int) -> None:
+            self.calls.append(download_id)
+
+    class DirectRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def dispatch_due_retries(self, *, now: datetime) -> int:
+            del now
+            self.calls += 1
+            return 1
+
+    service = RetryService()
+    runner = DirectRunner()
+    monkeypatch.setattr(download_recovery, "get_direct_acquisition_runner", lambda: runner)
+
+    retried = await download_recovery._process_retry_pending(sec_db, service)  # type: ignore[arg-type]
+    direct_retried = await download_recovery._process_direct_retry_pending(now=now)
+
+    assert retried == 1
+    assert direct_retried == 1
+    assert service.calls == [legacy_download_id]
+    assert runner.calls == 1

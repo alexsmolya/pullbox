@@ -11,6 +11,7 @@ from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -75,6 +76,8 @@ from pullbox.services.intervention_service import InterventionService
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = structlog.get_logger(__name__)
 
 SourceFactory = Callable[[], Awaitable[HostResolutionRequest]]
 PostProcessor = Callable[..., Awaitable[DirectPostProcessingResult]]
@@ -411,7 +414,7 @@ class DirectAcquisitionExecutor:
                 resumed=False,
             )
 
-        checkpoint = _recover_http_checkpoint(workspace, artifact)
+        checkpoint = _recover_http_checkpoint(workspace, artifact, resolved)
 
         async def http_progress(snapshot: TransferProgressSnapshot) -> None:
             artifact.bytes_transferred = snapshot.bytes_transferred
@@ -593,6 +596,20 @@ class DirectAcquisitionExecutor:
             transition_artifact(artifact, DirectArtifactState.FAILED, at=self._now())
             transition_acquisition(attempt, DirectAcquisitionState.FAILED, at=self._now())
             stage = "failed"
+        logger.warning(
+            "direct_artifact_attempt_failed",
+            acquisition_id=attempt.id,
+            artifact_id=artifact.id,
+            provider_identity=attempt.provider_identity,
+            host_kind=artifact.host_kind.value,
+            failure_class=exc.failure_class.value,
+            failure_code=exc.code,
+            retryable=bool(exc.retryable),
+            retry_count=attempt.retry_count,
+            max_retries=attempt.max_retries,
+            next_retry_at=attempt.next_retry_at.isoformat() if attempt.next_retry_at else None,
+            resulting_stage=stage,
+        )
         await progress.write(stage=stage, force=True)
         return _result(attempt, artifact)
 
@@ -861,6 +878,7 @@ def _route_source_failure(
 def _recover_http_checkpoint(
     workspace: DirectQuarantineWorkspace,
     artifact: DirectArtifactAttempt,
+    resolved: ResolvedTransfer,
 ) -> HttpTransferCheckpoint | None:
     partial = workspace.partial_path
     if not partial.exists():
@@ -870,7 +888,17 @@ def _recover_http_checkpoint(
         raise _missing_quarantine_error()
     actual_size = partial.stat().st_size
     artifact.bytes_transferred = actual_size
-    if actual_size <= 0 or not (artifact.etag or artifact.last_modified_at):
+    identity_protected = bool(
+        artifact.etag
+        or artifact.last_modified_at
+        or (
+            resolved.range_supported
+            and resolved.checksum
+            and resolved.expected_size is not None
+            and artifact.expected_size == resolved.expected_size
+        )
+    )
+    if actual_size <= 0 or not identity_protected:
         remove_quarantine_file(partial)
         artifact.bytes_transferred = 0
         return None

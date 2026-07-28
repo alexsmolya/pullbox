@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -11,7 +12,10 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactFailureClass,
     DirectArtifactHostKind,
 )
-from pullbox.providers.artifact_hosts.contract import ResolvedTransfer
+from pullbox.providers.artifact_hosts.contract import (
+    ArtifactHostResolutionError,
+    ResolvedTransfer,
+)
 from pullbox.providers.artifact_hosts.transport import (
     ArtifactTransferCancelledError,
     ArtifactTransferError,
@@ -114,6 +118,680 @@ async def test_http_transport_resumes_only_with_stable_validator(
     assert seen_headers[0]["range"] == "bytes=3-"
     assert seen_headers[0]["if-range"] == '"stable"'
     assert result.resumed is True
+
+
+@pytest.mark.asyncio
+async def test_http_transport_slices_large_range_capable_artifact(
+    tmp_path: Path,
+) -> None:
+    payload = b"%PDF-1.7\nlarge synthetic fixture"
+    seen_ranges: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested = request.headers.get("range")
+        seen_ranges.append(requested)
+        assert requested is not None
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+                "content-type": "application/pdf",
+                "content-disposition": 'inline; filename="issue.pdf"',
+            },
+            content=payload[start : end + 1],
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(range_request_bytes=8),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}",
+            ),
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert seen_ranges == ["bytes=0-7", "bytes=8-15", "bytes=16-23", "bytes=24-31"]
+    assert destination.read_bytes() == payload
+    assert result.filename_hint == "issue.pdf"
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_finishes_range_when_promised_bytes_arrive(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdef"
+    seen_ranges: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested = request.headers.get("range")
+        seen_ranges.append(requested)
+        assert requested is not None
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            stream=_CompleteThenStalledStream(payload[start : end + 1]),
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    checksum = f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                chunk_size_bytes=3,
+                range_request_bytes=3,
+                checksum_range_request_bytes=3,
+                idle_timeout_seconds=0.01,
+                range_stall_retries=0,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=checksum,
+            ),
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert seen_ranges == ["bytes=0-2", "bytes=3-5"]
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_uses_conservative_ranges_for_checksum_only_identity(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdefghijkl"
+    seen_ranges: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested = request.headers.get("range")
+        seen_ranges.append(requested)
+        assert requested is not None
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            content=payload[start : end + 1],
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                range_request_bytes=8,
+                checksum_range_request_bytes=3,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}",
+            ),
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert seen_ranges == ["bytes=0-2", "bytes=3-5", "bytes=6-8", "bytes=9-11"]
+    assert destination.read_bytes() == payload
+
+
+@pytest.mark.asyncio
+async def test_http_transport_uses_checksum_range_stream_policy(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdef"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        start, end = _requested_range(request.headers["range"])
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            stream=_DelayedByteStream(payload[start : end + 1], delay_seconds=0.01),
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    checksum = f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                chunk_size_bytes=3,
+                range_request_bytes=3,
+                checksum_range_request_bytes=3,
+                checksum_range_chunk_size_bytes=1,
+                idle_timeout_seconds=1,
+                checksum_range_idle_timeout_seconds=0.02,
+                range_stall_retries=0,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=checksum,
+            ),
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_retries_stalled_checksum_range_in_place(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdef"
+    seen_ranges: list[str | None] = []
+    stalled = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stalled
+        requested = request.headers.get("range")
+        seen_ranges.append(requested)
+        assert requested is not None
+        start, end = _requested_range(requested)
+        headers = {
+            "content-range": f"bytes {start}-{end}/{len(payload)}",
+            "content-length": str(end - start + 1),
+        }
+        if not stalled:
+            stalled = True
+            return httpx.Response(206, headers=headers, stream=_StalledStream())
+        return httpx.Response(206, headers=headers, content=payload[start : end + 1])
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                range_request_bytes=3,
+                checksum_range_request_bytes=3,
+                idle_timeout_seconds=0.01,
+                range_stall_retries=1,
+                range_retry_backoff_seconds=0,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}",
+            ),
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert seen_ranges == ["bytes=0-2", "bytes=0-2", "bytes=3-5"]
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_refreshes_after_transient_range_open_failure(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdef"
+    seen: list[tuple[str, str | None]] = []
+    failed = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal failed
+        requested = request.headers.get("range")
+        seen.append((request.headers["host"], requested))
+        if not failed:
+            failed = True
+            raise httpx.ConnectError("temporary failure", request=request)
+        assert requested is not None
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            content=payload[start : end + 1],
+        )
+
+    checksum = f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"
+    refresh_calls = 0
+
+    async def refresh() -> ResolvedTransfer:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return _resolved(
+            url="https://fresh.example.com/issue.pdf",
+            expected_size=len(payload),
+            range_supported=True,
+            checksum=checksum,
+            allowed_domains=("example.com",),
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                range_request_bytes=3,
+                checksum_range_request_bytes=3,
+                range_retry_backoff_seconds=0,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=checksum,
+            ),
+            destination=destination,
+            quarantine_root=root,
+            refresh_transfer=refresh,
+        )
+
+    assert seen == [
+        ("files.example.com", "bytes=0-2"),
+        ("fresh.example.com", "bytes=0-2"),
+        ("fresh.example.com", "bytes=3-5"),
+    ]
+    assert refresh_calls == 1
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_retries_timed_out_range_open(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdef"
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(30)
+        start, end = _requested_range(request.headers["range"])
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            content=payload[start : end + 1],
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    checksum = f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                range_request_bytes=3,
+                checksum_range_request_bytes=3,
+                checksum_range_open_timeout_seconds=0.01,
+                range_retry_backoff_seconds=0,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=checksum,
+            ),
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert calls == 3
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_retries_when_range_url_refresh_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdef"
+    seen_hosts: list[str] = []
+    original_failures = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal original_failures
+        host = request.headers["host"]
+        seen_hosts.append(host)
+        if host == "files.example.com":
+            original_failures += 1
+            raise httpx.ConnectError("temporary failure", request=request)
+        requested = request.headers["range"]
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            content=payload[start : end + 1],
+        )
+
+    checksum = f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"
+    refresh_calls = 0
+
+    async def refresh() -> ResolvedTransfer:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if refresh_calls == 1:
+            raise ArtifactHostResolutionError(
+                code="artifact_host_unavailable",
+                message="The provider could not refresh the artifact URL.",
+                failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
+                retryable=True,
+                intervention=False,
+            )
+        return _resolved(
+            url="https://fresh.example.com/issue.pdf",
+            expected_size=len(payload),
+            range_supported=True,
+            checksum=checksum,
+            allowed_domains=("example.com",),
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                range_request_bytes=3,
+                checksum_range_request_bytes=3,
+                range_retry_backoff_seconds=0,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=checksum,
+            ),
+            destination=destination,
+            quarantine_root=root,
+            refresh_transfer=refresh,
+        )
+
+    assert original_failures == 2
+    assert refresh_calls == 2
+    assert seen_hosts == [
+        "files.example.com",
+        "files.example.com",
+        "fresh.example.com",
+        "fresh.example.com",
+    ]
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_refreshes_and_resumes_after_partial_range_stall(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdef"
+    seen: list[tuple[str, str | None]] = []
+    stalled = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stalled
+        requested = request.headers.get("range")
+        seen.append((request.headers["host"], requested))
+        assert requested is not None
+        start, end = _requested_range(requested)
+        headers = {
+            "content-range": f"bytes {start}-{end}/{len(payload)}",
+            "content-length": str(end - start + 1),
+        }
+        if not stalled:
+            stalled = True
+            return httpx.Response(
+                206,
+                headers=headers,
+                stream=_PartialThenStalledStream(payload[start : start + 1]),
+            )
+        return httpx.Response(206, headers=headers, content=payload[start : end + 1])
+
+    checksum = f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"
+    refresh_calls = 0
+
+    async def refresh() -> ResolvedTransfer:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return _resolved(
+            url="https://fresh.example.com/issue.pdf",
+            expected_size=len(payload),
+            range_supported=True,
+            checksum=checksum,
+            allowed_domains=("example.com",),
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(
+                chunk_size_bytes=1,
+                range_request_bytes=3,
+                checksum_range_request_bytes=3,
+                idle_timeout_seconds=0.01,
+                range_retry_backoff_seconds=0,
+            ),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=checksum,
+            ),
+            destination=destination,
+            quarantine_root=root,
+            refresh_transfer=refresh,
+        )
+
+    assert seen == [
+        ("files.example.com", "bytes=0-2"),
+        ("fresh.example.com", "bytes=1-3"),
+        ("fresh.example.com", "bytes=4-5"),
+    ]
+    assert refresh_calls == 1
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_resumes_checksum_protected_partial_without_http_validator(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdefghij"
+    seen_ranges: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested = request.headers.get("range")
+        seen_ranges.append(requested)
+        assert requested is not None
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            content=payload[start : end + 1],
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    destination.write_bytes(payload[:5])
+    checksum = f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(range_request_bytes=3),
+        ).transfer(
+            resolved=_resolved(
+                expected_size=len(payload),
+                range_supported=True,
+                checksum=checksum,
+            ),
+            destination=destination,
+            quarantine_root=root,
+            checkpoint=HttpTransferCheckpoint(
+                bytes_transferred=5,
+                expected_size=len(payload),
+                etag=None,
+                last_modified=None,
+            ),
+        )
+
+    assert seen_ranges == ["bytes=5-7", "bytes=8-9"]
+    assert destination.read_bytes() == payload
+    assert result.resumed is True
+
+
+@pytest.mark.asyncio
+async def test_http_transport_refreshes_expired_url_during_bounded_ranges(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdefghij"
+    seen: list[tuple[str, str | None]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested = request.headers.get("range")
+        seen.append((request.headers["host"], requested))
+        if request.headers["host"] == "files.example.com" and requested == "bytes=5-9":
+            return httpx.Response(403)
+        assert requested is not None
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": f"bytes {start}-{end}/{len(payload)}",
+                "content-length": str(end - start + 1),
+            },
+            content=payload[start : end + 1],
+        )
+
+    refresh_calls = 0
+
+    async def refresh() -> ResolvedTransfer:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return _resolved(
+            url="https://fresh.example.com/issue.pdf",
+            expected_size=len(payload),
+            range_supported=True,
+            allowed_domains=("example.com",),
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await HttpArtifactTransport(
+            client=client,
+            resolver=_public_resolver,
+            policy=ArtifactTransferPolicy(range_request_bytes=5),
+        ).transfer(
+            resolved=_resolved(expected_size=len(payload), range_supported=True),
+            destination=destination,
+            quarantine_root=root,
+            refresh_transfer=refresh,
+        )
+
+    assert seen == [
+        ("files.example.com", "bytes=0-4"),
+        ("files.example.com", "bytes=5-9"),
+        ("fresh.example.com", "bytes=5-9"),
+    ]
+    assert refresh_calls == 1
+    assert destination.read_bytes() == payload
+    assert result.bytes_transferred == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_http_transport_rejects_changed_total_or_checksum(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdefghij"
+
+    async def changed_total(request: httpx.Request) -> httpx.Response:
+        requested = request.headers["range"]
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={"content-range": f"bytes {start}-{end}/{len(payload) + 1}"},
+            content=payload[start : end + 1],
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(changed_total)) as client:
+        with pytest.raises(ArtifactTransferError) as changed:
+            await HttpArtifactTransport(
+                client=client,
+                resolver=_public_resolver,
+                policy=ArtifactTransferPolicy(range_request_bytes=5),
+            ).transfer(
+                resolved=_resolved(expected_size=len(payload), range_supported=True),
+                destination=destination,
+                quarantine_root=root,
+            )
+    assert changed.value.code == "artifact_object_changed"
+
+    async def wrong_checksum(request: httpx.Request) -> httpx.Response:
+        requested = request.headers["range"]
+        start, end = _requested_range(requested)
+        return httpx.Response(
+            206,
+            headers={"content-range": f"bytes {start}-{end}/{len(payload)}"},
+            content=payload[start : end + 1],
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(wrong_checksum)) as client:
+        with pytest.raises(ArtifactTransferError) as checksum:
+            await HttpArtifactTransport(
+                client=client,
+                resolver=_public_resolver,
+                policy=ArtifactTransferPolicy(range_request_bytes=5),
+            ).transfer(
+                resolved=_resolved(
+                    expected_size=len(payload),
+                    range_supported=True,
+                    checksum="md5:00000000000000000000000000000000",
+                ),
+                destination=destination,
+                quarantine_root=root,
+            )
+    assert checksum.value.code == "artifact_checksum_mismatch"
+    assert not destination.exists()
 
 
 @pytest.mark.asyncio
@@ -419,6 +1097,7 @@ def _resolved(
     url: str = "https://files.example.com/issue.cbz",
     expected_size: int | None,
     etag: str | None = None,
+    checksum: str | None = None,
     range_supported: bool = False,
     allowed_domains: tuple[str, ...] = ("example.com",),
 ) -> ResolvedTransfer:
@@ -427,6 +1106,7 @@ def _resolved(
         url=url,
         expected_size=expected_size,
         etag=etag,
+        checksum=checksum,
         range_supported=range_supported,
         allowed_domains=allowed_domains,
     )
@@ -440,6 +1120,11 @@ def _quarantine_paths(tmp_path: Path) -> tuple[Path, Path]:
 
 async def _public_resolver(_host: str, _port: int) -> Sequence[str]:
     return (_PUBLIC_IP,)
+
+
+def _requested_range(value: str) -> tuple[int, int]:
+    start, end = value.removeprefix("bytes=").split("-", 1)
+    return int(start), int(end)
 
 
 class _TwoChunkStream(httpx.AsyncByteStream):
@@ -460,3 +1145,34 @@ class _StalledStream(httpx.AsyncByteStream):
     async def __aiter__(self):  # type: ignore[no-untyped-def]
         await asyncio.sleep(30)
         yield b"never"
+
+
+class _PartialThenStalledStream(httpx.AsyncByteStream):
+    def __init__(self, partial: bytes) -> None:
+        self._partial = partial
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def]
+        yield self._partial
+        await asyncio.sleep(30)
+        yield b"never"
+
+
+class _CompleteThenStalledStream(httpx.AsyncByteStream):
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def]
+        yield self._payload
+        await asyncio.sleep(30)
+        yield b"never"
+
+
+class _DelayedByteStream(httpx.AsyncByteStream):
+    def __init__(self, payload: bytes, *, delay_seconds: float) -> None:
+        self._payload = payload
+        self._delay_seconds = delay_seconds
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def]
+        for byte in self._payload:
+            await asyncio.sleep(self._delay_seconds)
+            yield bytes((byte,))

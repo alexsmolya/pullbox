@@ -18,6 +18,7 @@ class ProgressSnapshot:
     size_bytes: int | None
     updated_at: float
     client_state: str | None = None
+    source_label: str | None = None
 
 
 # Client-reported states that indicate a stall (case-insensitive prefix match).

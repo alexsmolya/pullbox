@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import inspect
 import shutil
 import time
@@ -53,7 +55,6 @@ DiskFreeProvider = Callable[[Path], int]
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _EXPIRED_URL_STATUSES = frozenset({401, 403, 410})
 _SENSITIVE_HEADER_NAMES = frozenset({"authorization", "cookie", "proxy-authorization"})
-
 __all__ = [
     "ArtifactTransferCancelledError",
     "ArtifactTransferError",
@@ -101,6 +102,7 @@ class HttpArtifactTransport:
             allow_existing=checkpoint is not None,
         )
         _validate_expected_size(resolved.expected_size, self._policy)
+        _parse_checksum(resolved.checksum)
         _validate_checkpoint(safe_path, checkpoint)
         _check_disk_budget(
             self._disk_free_provider,
@@ -111,23 +113,37 @@ class HttpArtifactTransport:
         )
 
         active = resolved
-        refreshed = False
         if _is_expired(active):
-            active = await _refresh_or_raise(refresh_transfer)
-            refreshed = True
+            refreshed_transfer = await _refresh_or_raise(refresh_transfer)
+            _validate_refreshed_identity(resolved, refreshed_transfer)
+            active = refreshed_transfer
             _validate_expected_size(active.expected_size, self._policy)
 
         try:
-            return await self._transfer_with_response_recovery(
-                resolved=active,
-                destination=safe_path,
-                quarantine_root=quarantine_root,
-                checkpoint=checkpoint,
-                progress_callback=progress_callback,
-                cancel_event=cancel_event,
-                pause_event=pause_event,
-                refresh_transfer=None if refreshed else refresh_transfer,
-            )
+            if _use_bounded_ranges(active, self._policy):
+                result = await self._transfer_bounded_ranges(
+                    resolved=active,
+                    destination=safe_path,
+                    quarantine_root=quarantine_root,
+                    checkpoint=checkpoint,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                    pause_event=pause_event,
+                    refresh_transfer=refresh_transfer,
+                )
+            else:
+                result = await self._transfer_with_response_recovery(
+                    resolved=active,
+                    destination=safe_path,
+                    quarantine_root=quarantine_root,
+                    checkpoint=checkpoint,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                    pause_event=pause_event,
+                    refresh_transfer=refresh_transfer,
+                )
+            await _verify_checksum(safe_path, active.checksum)
+            return result
         except ArtifactTransferCancelledError:
             remove_quarantine_file(safe_path)
             raise
@@ -166,7 +182,9 @@ class HttpArtifactTransport:
                     if refreshed:
                         raise _http_status_error(response.status_code)
                     await response.aclose()
-                    active = await _refresh_or_raise(refresh_transfer)
+                    refreshed_transfer = await _refresh_or_raise(refresh_transfer)
+                    _validate_refreshed_identity(resolved, refreshed_transfer)
+                    active = refreshed_transfer
                     _validate_expected_size(active.expected_size, self._policy)
                     resume_offset = _eligible_resume_offset(active, checkpoint)
                     refreshed = True
@@ -202,11 +220,184 @@ class HttpArtifactTransport:
             finally:
                 await response.aclose()
 
+    async def _transfer_bounded_ranges(
+        self,
+        *,
+        resolved: ResolvedTransfer,
+        destination: Path,
+        quarantine_root: Path,
+        checkpoint: HttpTransferCheckpoint | None,
+        progress_callback: ProgressCallback | None,
+        cancel_event: asyncio.Event | None,
+        pause_event: asyncio.Event | None,
+        refresh_transfer: RefreshTransfer | None,
+    ) -> ArtifactTransferResult:
+        """Download a known-size artifact through finite sequential ranges."""
+        total = resolved.expected_size
+        if total is None:
+            raise AssertionError("bounded range transfer requires a known size")
+        initial_offset = _eligible_resume_offset(resolved, checkpoint)
+        transferred = initial_offset
+        active = resolved
+        started_at = time.monotonic()
+        deadline = started_at + self._policy.total_timeout_seconds
+        etag = resolved.etag
+        last_modified = resolved.last_modified
+        filename = resolved.filename_hint or filename_from_url(resolved.url)
+        range_request_bytes = _range_request_bytes(resolved, self._policy)
+        range_chunk_size_bytes = _range_chunk_size_bytes(resolved, self._policy)
+        range_open_timeout_seconds = _range_open_timeout_seconds(resolved, self._policy)
+        range_idle_timeout_seconds = _range_idle_timeout_seconds(resolved, self._policy)
+        range_retries = 0
+
+        while transferred < total:
+            range_end = min(total - 1, transferred + range_request_bytes - 1)
+            try:
+                response = await asyncio.wait_for(
+                    self._open_response(
+                        active,
+                        resume_offset=transferred,
+                        range_end=range_end,
+                        force_range=True,
+                    ),
+                    timeout=range_open_timeout_seconds,
+                )
+            except (ArtifactTransferError, TimeoutError) as exc:
+                error = (
+                    exc
+                    if isinstance(exc, ArtifactTransferError)
+                    else _artifact_host_unavailable_error()
+                )
+                if not _can_retry_range_failure(
+                    error,
+                    resolved=resolved,
+                    retries=range_retries,
+                    policy=self._policy,
+                ):
+                    if isinstance(exc, ArtifactTransferError):
+                        raise
+                    raise error from exc
+                range_retries += 1
+                active = await _refresh_range_source(
+                    original=resolved,
+                    active=active,
+                    refresh_transfer=refresh_transfer,
+                    policy=self._policy,
+                )
+                await _wait_for_range_retry(self._policy, range_retries)
+                continue
+            try:
+                if response.status_code in _EXPIRED_URL_STATUSES:
+                    if (
+                        refresh_transfer is None
+                        or range_retries >= self._policy.range_stall_retries
+                    ):
+                        raise _http_status_error(response.status_code)
+                    range_retries += 1
+                    active = await _refresh_range_source(
+                        original=resolved,
+                        active=active,
+                        refresh_transfer=refresh_transfer,
+                        policy=self._policy,
+                    )
+                    await _wait_for_range_retry(self._policy, range_retries)
+                    continue
+
+                if response.status_code == 200:
+                    # A host that stops honoring ranges is still safe to use from
+                    # byte zero; truncate the partial and validate the full object.
+                    return await self._stream_response(
+                        response=response,
+                        resolved=active,
+                        destination=destination,
+                        quarantine_root=quarantine_root,
+                        resume_offset=0,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                        pause_event=pause_event,
+                    )
+                if not _valid_bounded_response(
+                    response,
+                    range_start=transferred,
+                    range_end=range_end,
+                    total=total,
+                    etag=etag,
+                    last_modified=last_modified,
+                ):
+                    raise _object_changed_error()
+
+                etag = response.headers.get("etag") or etag
+                last_modified = response.headers.get("last-modified") or last_modified
+                filename = (
+                    filename_from_content_disposition(response.headers.get("content-disposition"))
+                    or filename
+                )
+                try:
+                    transferred = await self._stream_bounded_response(
+                        response=response,
+                        destination=destination,
+                        range_start=transferred,
+                        range_end=range_end,
+                        total=total,
+                        etag=etag,
+                        last_modified=last_modified,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                        pause_event=pause_event,
+                        started_at=started_at,
+                        deadline=deadline,
+                        chunk_size_bytes=range_chunk_size_bytes,
+                        idle_timeout_seconds=range_idle_timeout_seconds,
+                    )
+                except ArtifactTransferError as exc:
+                    if not _can_retry_range_failure(
+                        exc,
+                        resolved=resolved,
+                        retries=range_retries,
+                        policy=self._policy,
+                    ):
+                        raise
+                    partial_size = destination.stat().st_size if destination.exists() else 0
+                    if partial_size < transferred or partial_size > range_end + 1:
+                        raise _object_changed_error() from exc
+                    transferred = partial_size
+                    range_retries += 1
+                    active = await _refresh_range_source(
+                        original=resolved,
+                        active=active,
+                        refresh_transfer=refresh_transfer,
+                        policy=self._policy,
+                    )
+                    await _wait_for_range_retry(self._policy, range_retries)
+                    continue
+                range_retries = 0
+            finally:
+                await response.aclose()
+
+        await _emit_progress(
+            progress_callback,
+            transferred=transferred,
+            total=total,
+            started_at=started_at,
+            now=time.monotonic(),
+        )
+        return ArtifactTransferResult(
+            path=destination,
+            bytes_transferred=transferred,
+            expected_size=total,
+            etag=etag,
+            last_modified=last_modified,
+            filename_hint=filename,
+            resumed=initial_offset > 0,
+        )
+
     async def _open_response(
         self,
         resolved: ResolvedTransfer,
         *,
         resume_offset: int,
+        range_end: int | None = None,
+        force_range: bool = False,
     ) -> httpx.Response:
         current_url = resolved.url
         credential_origin: tuple[str, int] | None = None
@@ -234,8 +425,9 @@ class HttpArtifactTransport:
                 "Accept-Encoding": "identity",
                 "Host": host_header,
             }
-            if resume_offset > 0:
-                request_headers["Range"] = f"bytes={resume_offset}-"
+            if resume_offset > 0 or force_range:
+                end = "" if range_end is None else str(range_end)
+                request_headers["Range"] = f"bytes={resume_offset}-{end}"
                 validator = resolved.etag or resolved.last_modified
                 if validator:
                     request_headers["If-Range"] = validator
@@ -254,13 +446,7 @@ class HttpArtifactTransport:
             except asyncio.CancelledError:
                 raise
             except (httpx.HTTPError, TimeoutError) as exc:
-                raise ArtifactTransferError(
-                    code="artifact_host_unavailable",
-                    message="The artifact host is temporarily unavailable.",
-                    failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
-                    retryable=True,
-                    intervention=False,
-                ) from exc
+                raise _artifact_host_unavailable_error() from exc
 
             if response.status_code not in _REDIRECT_STATUSES:
                 return response
@@ -286,6 +472,93 @@ class HttpArtifactTransport:
             current_url = urljoin(target.url, location)
 
         raise AssertionError("redirect loop must return or raise")
+
+    async def _stream_bounded_response(
+        self,
+        *,
+        response: httpx.Response,
+        destination: Path,
+        range_start: int,
+        range_end: int,
+        total: int,
+        etag: str | None,
+        last_modified: str | None,
+        progress_callback: ProgressCallback | None,
+        cancel_event: asyncio.Event | None,
+        pause_event: asyncio.Event | None,
+        started_at: float,
+        deadline: float,
+        chunk_size_bytes: int,
+        idle_timeout_seconds: float,
+    ) -> int:
+        transferred = range_start
+        last_progress_at = time.monotonic()
+        last_progress_bytes = transferred
+        handle: BinaryIO | None = None
+        iterator = response.aiter_bytes(chunk_size_bytes).__aiter__()
+        try:
+            handle = open_quarantine_file(destination, append=range_start > 0)
+            while True:
+                checkpoint = HttpTransferCheckpoint(
+                    bytes_transferred=transferred,
+                    expected_size=total,
+                    etag=etag,
+                    last_modified=last_modified,
+                )
+                _raise_for_control(
+                    cancel_event=cancel_event,
+                    pause_event=pause_event,
+                    checkpoint=checkpoint,
+                )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _timeout_error("artifact_transfer_total_timeout")
+                try:
+                    chunk = await asyncio.wait_for(
+                        iterator.__anext__(),
+                        timeout=min(idle_timeout_seconds, remaining),
+                    )
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    raise _timeout_error("artifact_transfer_idle_timeout") from exc
+                if not chunk:
+                    continue
+                if transferred + len(chunk) > range_end + 1:
+                    raise _object_changed_error()
+                await asyncio.to_thread(handle.write, chunk)
+                transferred += len(chunk)
+                if transferred == range_end + 1:
+                    # A finite range is complete once every promised byte is
+                    # present; some artifact hosts keep the response open.
+                    break
+                now = time.monotonic()
+                if (
+                    now - last_progress_at >= self._policy.progress_interval_seconds
+                    or transferred - last_progress_bytes >= self._policy.progress_bytes
+                ):
+                    await _emit_progress(
+                        progress_callback,
+                        transferred=transferred,
+                        total=total,
+                        started_at=started_at,
+                        now=now,
+                    )
+                    last_progress_at = now
+                    last_progress_bytes = transferred
+        finally:
+            if handle is not None:
+                handle.close()
+        if transferred != range_end + 1:
+            raise _object_changed_error()
+        await _emit_progress(
+            progress_callback,
+            transferred=transferred,
+            total=total,
+            started_at=started_at,
+            now=time.monotonic(),
+        )
+        return transferred
 
     async def _stream_response(
         self,
@@ -409,6 +682,106 @@ class HttpArtifactTransport:
         )
 
 
+def _use_bounded_ranges(
+    resolved: ResolvedTransfer,
+    policy: ArtifactTransferPolicy,
+) -> bool:
+    return bool(
+        resolved.range_supported
+        and resolved.expected_size is not None
+        and resolved.expected_size > _range_request_bytes(resolved, policy)
+    )
+
+
+def _range_request_bytes(
+    resolved: ResolvedTransfer,
+    policy: ArtifactTransferPolicy,
+) -> int:
+    if resolved.checksum and not (resolved.etag or resolved.last_modified):
+        return min(policy.range_request_bytes, policy.checksum_range_request_bytes)
+    return policy.range_request_bytes
+
+
+def _range_chunk_size_bytes(
+    resolved: ResolvedTransfer,
+    policy: ArtifactTransferPolicy,
+) -> int:
+    if _uses_checksum_range_policy(resolved):
+        return min(policy.chunk_size_bytes, policy.checksum_range_chunk_size_bytes)
+    return policy.chunk_size_bytes
+
+
+def _range_idle_timeout_seconds(
+    resolved: ResolvedTransfer,
+    policy: ArtifactTransferPolicy,
+) -> float:
+    if _uses_checksum_range_policy(resolved):
+        return min(
+            policy.idle_timeout_seconds,
+            policy.checksum_range_idle_timeout_seconds,
+        )
+    return policy.idle_timeout_seconds
+
+
+def _range_open_timeout_seconds(
+    resolved: ResolvedTransfer,
+    policy: ArtifactTransferPolicy,
+) -> float:
+    if _uses_checksum_range_policy(resolved):
+        return min(
+            policy.idle_timeout_seconds,
+            policy.checksum_range_open_timeout_seconds,
+        )
+    return policy.idle_timeout_seconds
+
+
+def _uses_checksum_range_policy(resolved: ResolvedTransfer) -> bool:
+    return bool(resolved.checksum and not (resolved.etag or resolved.last_modified))
+
+
+def _can_retry_range_failure(
+    error: ArtifactTransferError,
+    *,
+    resolved: ResolvedTransfer,
+    retries: int,
+    policy: ArtifactTransferPolicy,
+) -> bool:
+    return bool(
+        error.code in {"artifact_host_unavailable", "artifact_transfer_idle_timeout"}
+        and error.retryable
+        and resolved.checksum
+        and retries < policy.range_stall_retries
+    )
+
+
+async def _refresh_range_source(
+    *,
+    original: ResolvedTransfer,
+    active: ResolvedTransfer,
+    refresh_transfer: RefreshTransfer | None,
+    policy: ArtifactTransferPolicy,
+) -> ResolvedTransfer:
+    if refresh_transfer is None:
+        return active
+    try:
+        refreshed = await _refresh_or_raise(refresh_transfer)
+    except ArtifactTransferError as exc:
+        if exc.retryable:
+            return active
+        raise
+    _validate_refreshed_identity(original, refreshed)
+    _validate_expected_size(refreshed.expected_size, policy)
+    return refreshed
+
+
+async def _wait_for_range_retry(
+    policy: ArtifactTransferPolicy,
+    retries: int,
+) -> None:
+    if policy.range_retry_backoff_seconds:
+        await asyncio.sleep(policy.range_retry_backoff_seconds * retries)
+
+
 def _eligible_resume_offset(
     resolved: ResolvedTransfer,
     checkpoint: HttpTransferCheckpoint | None,
@@ -419,7 +792,54 @@ def _eligible_resume_offset(
         (checkpoint.etag and checkpoint.etag == resolved.etag)
         or (checkpoint.last_modified and checkpoint.last_modified == resolved.last_modified)
     )
-    return checkpoint.bytes_transferred if resolved.range_supported and validator_matches else 0
+    checksum_protected = bool(
+        resolved.checksum
+        and resolved.expected_size is not None
+        and checkpoint.expected_size == resolved.expected_size
+    )
+    return (
+        checkpoint.bytes_transferred
+        if resolved.range_supported and (validator_matches or checksum_protected)
+        else 0
+    )
+
+
+def _valid_bounded_response(
+    response: httpx.Response,
+    *,
+    range_start: int,
+    range_end: int,
+    total: int,
+    etag: str | None,
+    last_modified: str | None,
+) -> bool:
+    if response.status_code != 206:
+        return False
+    parsed = _parse_content_range(response.headers.get("content-range", ""))
+    if parsed != (range_start, range_end, total):
+        return False
+    content_length = response.headers.get("content-length")
+    if content_length and (
+        not content_length.isdigit() or int(content_length) != range_end - range_start + 1
+    ):
+        return False
+    response_etag = response.headers.get("etag")
+    response_modified = response.headers.get("last-modified")
+    if etag and response_etag and etag != response_etag:
+        return False
+    return not (last_modified and response_modified and last_modified != response_modified)
+
+
+def _parse_content_range(value: str) -> tuple[int, int, int] | None:
+    if not value.lower().startswith("bytes "):
+        return None
+    raw_range, separator, raw_total = value[6:].partition("/")
+    if separator != "/" or not raw_total.isdigit():
+        return None
+    raw_start, dash, raw_end = raw_range.partition("-")
+    if dash != "-" or not raw_start.isdigit() or not raw_end.isdigit():
+        return None
+    return int(raw_start), int(raw_end), int(raw_total)
 
 
 def _valid_partial_response(
@@ -562,6 +982,56 @@ async def _refresh_or_raise(refresh: RefreshTransfer | None) -> ResolvedTransfer
         raise _from_resolution_error(exc) from exc
 
 
+def _validate_refreshed_identity(
+    original: ResolvedTransfer,
+    refreshed: ResolvedTransfer,
+) -> None:
+    _parse_checksum(refreshed.checksum)
+    if original.host_kind is not refreshed.host_kind:
+        raise _object_changed_error()
+    if original.expected_size is not None and refreshed.expected_size != original.expected_size:
+        raise _object_changed_error()
+    if original.checksum and refreshed.checksum != original.checksum:
+        raise _object_changed_error()
+    if original.range_supported and not refreshed.range_supported:
+        raise _object_changed_error()
+
+
+def _parse_checksum(value: str | None) -> tuple[str, str] | None:
+    if value is None:
+        return None
+    algorithm, separator, expected = value.strip().lower().partition(":")
+    expected_lengths = {"md5": 32, "sha256": 64}
+    if (
+        separator != ":"
+        or algorithm not in expected_lengths
+        or len(expected) != expected_lengths[algorithm]
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise _checksum_invalid_error()
+    return algorithm, expected
+
+
+async def _verify_checksum(path: Path, checksum: str | None) -> None:
+    parsed = _parse_checksum(checksum)
+    if parsed is None:
+        return
+    algorithm, expected = parsed
+    actual = await asyncio.to_thread(_file_checksum, path, algorithm)
+    if hmac.compare_digest(actual, expected):
+        return
+    remove_quarantine_file(path)
+    raise _checksum_mismatch_error()
+
+
+def _file_checksum(path: Path, algorithm: str) -> str:
+    digest = hashlib.md5(usedforsecurity=False) if algorithm == "md5" else hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024**2):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _is_expired(resolved: ResolvedTransfer) -> bool:
     expires_at = resolved.expires_at
     if expires_at is None:
@@ -595,10 +1065,40 @@ def _artifact_too_large_error() -> ArtifactTransferError:
     )
 
 
+def _artifact_host_unavailable_error() -> ArtifactTransferError:
+    return ArtifactTransferError(
+        code="artifact_host_unavailable",
+        message="The artifact host is temporarily unavailable.",
+        failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
+        retryable=True,
+        intervention=False,
+    )
+
+
 def _object_changed_error() -> ArtifactTransferError:
     return ArtifactTransferError(
         code="artifact_object_changed",
         message="The remote artifact changed during transfer.",
+        failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
+        retryable=True,
+        intervention=False,
+    )
+
+
+def _checksum_invalid_error() -> ArtifactTransferError:
+    return ArtifactTransferError(
+        code="artifact_checksum_invalid",
+        message="The artifact provider returned an unsupported checksum.",
+        failure_class=DirectArtifactFailureClass.PERMANENT_MIRROR,
+        retryable=False,
+        intervention=True,
+    )
+
+
+def _checksum_mismatch_error() -> ArtifactTransferError:
+    return ArtifactTransferError(
+        code="artifact_checksum_mismatch",
+        message="The downloaded artifact did not match its expected checksum.",
         failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
         retryable=True,
         intervention=False,

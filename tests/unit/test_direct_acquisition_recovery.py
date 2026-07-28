@@ -19,7 +19,10 @@ from pullbox.models.direct_acquisition import (
 )
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
-from pullbox.services.direct_acquisition_recovery import load_recoverable_acquisitions
+from pullbox.services.direct_acquisition_recovery import (
+    load_due_retry_acquisitions,
+    load_recoverable_acquisitions,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -138,6 +141,33 @@ async def test_recovery_treats_retry_without_schedule_as_immediately_due(
     attempts = await load_recoverable_acquisitions(session, now=NOW, limit=100)
 
     assert [attempt.provider_candidate_id for attempt in attempts] == ["retry-unscheduled"]
+
+
+@pytest.mark.asyncio
+async def test_due_retry_loader_excludes_active_and_future_attempts(
+    session: AsyncSession,
+) -> None:
+    session.add_all(
+        [
+            _attempt("downloading", DirectAcquisitionState.DOWNLOADING),
+            _attempt(
+                "retry-due",
+                DirectAcquisitionState.RETRY_PENDING,
+                next_retry_at=NOW - timedelta(seconds=1),
+            ),
+            _attempt(
+                "retry-future",
+                DirectAcquisitionState.RETRY_PENDING,
+                next_retry_at=NOW + timedelta(hours=1),
+            ),
+            _attempt("failed", DirectAcquisitionState.FAILED),
+        ]
+    )
+    await session.commit()
+
+    attempts = await load_due_retry_acquisitions(session, now=NOW, limit=100)
+
+    assert [attempt.provider_candidate_id for attempt in attempts] == ["retry-due"]
 
 
 @pytest.mark.asyncio

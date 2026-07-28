@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pullbox.models.download import DownloadHistory, DownloadState
+from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 
 ACTIVE_DOWNLOAD_STATES = (
     DownloadState.SENT,
@@ -55,7 +55,10 @@ async def load_monitor_poll_items(
         return None
 
     result = await session.execute(
-        select(DownloadHistory).where(DownloadHistory.state.in_(ACTIVE_DOWNLOAD_STATES))
+        select(DownloadHistory).where(
+            DownloadHistory.state.in_(ACTIVE_DOWNLOAD_STATES),
+            DownloadHistory.download_client != DownloadClientType.DIRECT,
+        )
     )
     active: Sequence[DownloadHistory] = list(result.scalars().all())
     return MonitorReadResult(

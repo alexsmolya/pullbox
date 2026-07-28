@@ -57,6 +57,7 @@ class MegaArtifactHostAdapter:
             host_kind=self.host_kind,
             url=url,
             expected_size=request.expected_size,
+            checksum=request.checksum,
             etag=request.etag,
             last_modified=request.last_modified,
             expires_at=request.expires_at,

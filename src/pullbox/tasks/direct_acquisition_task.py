@@ -23,7 +23,10 @@ from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
 from pullbox.services.direct_acquisition_planner_service import (
     resolve_planned_artifact_source,
 )
-from pullbox.services.direct_acquisition_recovery import load_recoverable_acquisitions
+from pullbox.services.direct_acquisition_recovery import (
+    load_due_retry_acquisitions,
+    load_recoverable_acquisitions,
+)
 from pullbox.services.direct_acquisition_state import (
     advance_acquisition_progress,
     reopen_terminal_acquisition_for_retry,
@@ -229,6 +232,31 @@ class DirectAcquisitionRunner:
                 recovered += 1
         return recovered
 
+    async def dispatch_due_retries(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+    ) -> int:
+        """Dispatch retries whose durable backoff deadline has elapsed."""
+        async with self._session_factory() as session:
+            attempts = await load_due_retry_acquisitions(
+                session,
+                now=now or datetime.now(UTC),
+                limit=limit,
+            )
+            due = [
+                (attempt.id, artifact.id)
+                for attempt in attempts
+                for artifact in attempt.artifact_attempts
+                if artifact.is_selected
+            ]
+        dispatched = 0
+        for acquisition_id, artifact_id in due:
+            if await self.dispatch(acquisition_id, artifact_id):
+                dispatched += 1
+        return dispatched
+
     async def wait_idle(self) -> None:
         """Wait until all currently dispatched attempts reach a checkpoint."""
         while True:
@@ -254,15 +282,17 @@ class DirectAcquisitionRunner:
             artifact = await session.get(DirectArtifactAttempt, artifact_id)
             if attempt is None or artifact is None or artifact.acquisition_attempt_id != attempt.id:
                 raise ValueError("Direct acquisition attempt or artifact was not found.")
+            at = datetime.now(UTC)
             await ensure_direct_download_history(
                 session,
                 attempt,
                 artifact,
-                at=datetime.now(UTC),
+                at=at,
             )
             if attempt.state is DirectAcquisitionState.PLANNED:
                 transition_acquisition(attempt, DirectAcquisitionState.QUEUED)
-                await session.commit()
+            await sync_direct_download_history(session, attempt, artifact, at=at)
+            await session.commit()
 
     async def _run(
         self,

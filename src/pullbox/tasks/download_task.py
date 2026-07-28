@@ -123,6 +123,7 @@ _load_monitor_poll_items = _download_monitor_read.load_monitor_poll_items
 _poll_download_clients = _download_monitor_poll.poll_download_clients
 _record_download_progress = _download_progress.record_download_progress
 _STALE_DOWNLOAD_TIMEOUT = _download_recovery._STALE_DOWNLOAD_TIMEOUT
+_process_direct_retry_pending = _download_recovery._process_direct_retry_pending
 _process_retry_pending = _download_recovery._process_retry_pending
 _recover_orphaned_downloads = _download_recovery._recover_orphaned_downloads
 _POST_PROCESSING_SOURCE_RETRY_DELAYS = _download_sources._POST_PROCESSING_SOURCE_RETRY_DELAYS
@@ -275,6 +276,11 @@ async def monitor_downloads() -> None:
 
     start = time.monotonic()
     factory = get_session_factory()
+    recovery_checked_at = time.monotonic()
+    recovery_due = recovery_checked_at - _last_recovery_check >= _RECOVERY_CHECK_INTERVAL
+    direct_retried = 0
+    if recovery_due:
+        direct_retried = await _process_direct_retry_pending()
 
     # ── Phase 1: Read — load active downloads and build registry ──
     async with factory() as session:
@@ -284,6 +290,18 @@ async def monitor_downloads() -> None:
                 build_download_registry=_build_download_registry,
             )
             if read_result is None:
+                if recovery_due:
+                    _last_recovery_check = recovery_checked_at
+                if direct_retried:
+                    logger.info(
+                        "monitor_downloads_complete",
+                        checked=0,
+                        completed=0,
+                        failed=0,
+                        retried=direct_retried,
+                        recovered=0,
+                        duration_ms=round((time.monotonic() - start) * 1000, 1),
+                    )
                 return
             registry = read_result.registry
             poll_items = read_result.poll_items
@@ -298,7 +316,7 @@ async def monitor_downloads() -> None:
     checked = len(poll_items)
     completed = 0
     failed = 0
-    retried = 0
+    retried = direct_retried
     recovered = 0
     updates = []
 
@@ -329,11 +347,10 @@ async def monitor_downloads() -> None:
                 failed = apply_result.failed
 
             # Throttle expensive recovery checks to ~every 30s
-            now_mono = time.monotonic()
-            if now_mono - _last_recovery_check >= _RECOVERY_CHECK_INTERVAL:
-                retried = await _process_retry_pending(factory, download_svc)
+            if recovery_due:
+                retried += await _process_retry_pending(factory, download_svc)
                 recovered = await _recover_orphaned_downloads(session)
-                _last_recovery_check = now_mono
+                _last_recovery_check = recovery_checked_at
 
             await session.commit()
         except Exception:

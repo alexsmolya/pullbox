@@ -59,3 +59,30 @@ async def load_recoverable_acquisitions(
     )
     result = await session.execute(statement)
     return list(result.scalars().unique().all())
+
+
+async def load_due_retry_acquisitions(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    limit: int = 100,
+) -> list[DirectAcquisitionAttempt]:
+    """Load only direct attempts whose durable retry deadline has elapsed."""
+    if not 1 <= limit <= 500:
+        raise ValueError("Direct acquisition recovery limit must be between 1 and 500.")
+
+    statement = (
+        select(DirectAcquisitionAttempt)
+        .where(
+            DirectAcquisitionAttempt.state == DirectAcquisitionState.RETRY_PENDING,
+            or_(
+                DirectAcquisitionAttempt.next_retry_at.is_(None),
+                DirectAcquisitionAttempt.next_retry_at <= now,
+            ),
+        )
+        .options(selectinload(DirectAcquisitionAttempt.artifact_attempts))
+        .order_by(DirectAcquisitionAttempt.id.asc())
+        .limit(limit)
+    )
+    result = await session.execute(statement)
+    return list(result.scalars().unique().all())

@@ -18,6 +18,13 @@ class ArtifactTransferPolicy:
     max_artifact_bytes: int = 10 * 1024**4
     min_free_bytes: int = 256 * 1024**2
     chunk_size_bytes: int = 1024**2
+    range_request_bytes: int = 8 * 1024**2
+    checksum_range_request_bytes: int = 1024**2
+    checksum_range_chunk_size_bytes: int = 256 * 1024
+    checksum_range_open_timeout_seconds: float = 15.0
+    checksum_range_idle_timeout_seconds: float = 15.0
+    range_stall_retries: int = 8
+    range_retry_backoff_seconds: float = 1.0
     idle_timeout_seconds: float = 60.0
     total_timeout_seconds: float = 24 * 60 * 60.0
     max_redirects: int = 5
@@ -31,6 +38,18 @@ class ArtifactTransferPolicy:
             raise ValueError("Minimum free disk space cannot be negative.")
         if self.chunk_size_bytes <= 0:
             raise ValueError("Transfer chunk size must be positive.")
+        if self.range_request_bytes <= 0:
+            raise ValueError("Range request size must be positive.")
+        if self.checksum_range_request_bytes <= 0:
+            raise ValueError("Checksum-only range request size must be positive.")
+        if self.checksum_range_chunk_size_bytes <= 0:
+            raise ValueError("Checksum-only range chunk size must be positive.")
+        if self.checksum_range_open_timeout_seconds <= 0:
+            raise ValueError("Checksum-only range open timeout must be positive.")
+        if self.checksum_range_idle_timeout_seconds <= 0:
+            raise ValueError("Checksum-only range idle timeout must be positive.")
+        if self.range_stall_retries < 0 or self.range_retry_backoff_seconds < 0:
+            raise ValueError("Range retry values cannot be negative.")
         if self.idle_timeout_seconds <= 0 or self.total_timeout_seconds <= 0:
             raise ValueError("Transfer timeouts must be positive.")
         if self.max_redirects < 0:

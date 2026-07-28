@@ -109,6 +109,7 @@ class PixelDrainAdapter:
             url=download_url,
             headers=headers,
             expected_size=size,
+            checksum=request.checksum,
             etag=request.etag,
             last_modified=request.last_modified,
             expires_at=request.expires_at,

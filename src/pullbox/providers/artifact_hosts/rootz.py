@@ -128,6 +128,7 @@ class RootzAdapter:
             url=transfer_url,
             headers={},
             expected_size=size,
+            checksum=request.checksum,
             expires_at=_expiration(data, self._clock()),
             filename_hint=(
                 safe_filename(data.get("fileName")) or safe_filename(short_data.get("name"))

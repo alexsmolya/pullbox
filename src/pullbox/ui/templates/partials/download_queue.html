@@ -121,7 +121,11 @@
                     {% endif %}
                   </td>
                   <td>
-                    <span class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight" data-testid="downloads-queue-item-status">
+                    <span
+                      class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight"
+                      data-testid="downloads-queue-item-status"
+                      {% if row.status_detail %}data-tip="{{ row.status_detail }}" data-tip-pos="top"{% endif %}
+                    >
                       {{ row.primary_phase }}
                     </span>
                   </td>
@@ -218,7 +222,11 @@
                     {% endif %}
                   </td>
                   <td>
-                    <span class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight" data-testid="downloads-queue-item-status">
+                    <span
+                      class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight"
+                      data-testid="downloads-queue-item-status"
+                      {% if row.status_detail %}data-tip="{{ row.status_detail }}" data-tip-pos="top"{% endif %}
+                    >
                       {{ row.primary_phase }}
                     </span>
                   </td>

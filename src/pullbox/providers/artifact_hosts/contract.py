@@ -54,6 +54,7 @@ class HostResolutionRequest:
     final_url: str | None = field(repr=False)
     provider_headers: Mapping[str, str] = field(default_factory=dict, repr=False)
     expected_size: int | None = None
+    checksum: str | None = field(default=None, repr=False)
     etag: str | None = field(default=None, repr=False)
     last_modified: str | None = None
     expires_at: datetime | None = None
@@ -67,6 +68,7 @@ class ResolvedTransfer:
     url: str = field(repr=False)
     headers: Mapping[str, str] = field(default_factory=dict, repr=False)
     expected_size: int | None = None
+    checksum: str | None = field(default=None, repr=False)
     etag: str | None = field(default=None, repr=False)
     last_modified: str | None = None
     expires_at: datetime | None = None

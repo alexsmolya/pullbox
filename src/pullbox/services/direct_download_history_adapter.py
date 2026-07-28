@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 
+from pullbox.models.blocklist import BlocklistEntry
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -28,15 +29,36 @@ async def ensure_direct_download_history(
 ) -> DownloadHistory:
     """Create or return the URL-safe download row for a direct attempt."""
     external_id = f"direct:{attempt.id}"
-    history = (
-        await session.execute(
-            select(DownloadHistory).where(
+    download_url = f"pullbox-direct://attempt/{attempt.id}"
+    result = await session.execute(
+        select(DownloadHistory)
+        .where(
+            DownloadHistory.download_client == DownloadClientType.DIRECT,
+            or_(
                 DownloadHistory.external_id == external_id,
-                DownloadHistory.download_client == DownloadClientType.DIRECT,
-            )
+                DownloadHistory.download_url == download_url,
+            ),
         )
-    ).scalar_one_or_none()
-    if history is not None:
+        .order_by(
+            (DownloadHistory.external_id == external_id).desc(),
+            DownloadHistory.id.desc(),
+        )
+    )
+    histories = list(result.scalars())
+    if histories:
+        history = histories[0]
+        history.external_id = external_id
+        history.download_url = download_url
+        duplicate_ids = [duplicate.id for duplicate in histories[1:]]
+        if duplicate_ids:
+            await session.execute(
+                update(BlocklistEntry)
+                .where(BlocklistEntry.download_history_id.in_(duplicate_ids))
+                .values(download_history_id=history.id)
+            )
+            for duplicate in histories[1:]:
+                await session.delete(duplicate)
+            await session.flush()
         return history
 
     display_title = str(
@@ -45,7 +67,7 @@ async def ensure_direct_download_history(
     history = DownloadHistory(
         issue_id=attempt.issue_id,
         title=display_title,
-        download_url=f"pullbox-direct://attempt/{attempt.id}",
+        download_url=download_url,
         download_client=DownloadClientType.DIRECT,
         external_id=external_id,
         state=DownloadState.QUEUED,

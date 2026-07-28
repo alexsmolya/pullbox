@@ -41,12 +41,14 @@ def _request(
     url: str,
     *,
     final: bool = False,
+    checksum: str | None = None,
 ) -> HostResolutionRequest:
     return HostResolutionRequest(
         artifact_identity="fixture-artifact",
         host_kind=host_kind,
         share_url=None if final else url,
         final_url=url if final else None,
+        checksum=checksum,
     )
 
 
@@ -72,6 +74,7 @@ async def test_generic_https_accepts_a_probed_final_file_with_resume_validators(
                 DirectArtifactHostKind.GENERIC_HTTPS,
                 "https://files.example.test/fixture.cbz",
                 final=True,
+                checksum="md5:11111111111111111111111111111111",
             ),
             credentials={},
         )
@@ -79,6 +82,7 @@ async def test_generic_https_accepts_a_probed_final_file_with_resume_validators(
     assert transfer.expected_size == 4096
     assert transfer.filename_hint == "fixture.cbz"
     assert transfer.etag == '"fixture-etag"'
+    assert transfer.checksum == "md5:11111111111111111111111111111111"
     assert transfer.range_supported is True
 
 

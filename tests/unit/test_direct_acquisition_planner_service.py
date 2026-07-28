@@ -141,6 +141,7 @@ def _response(*, reverse: bool = False) -> DirectResolveResponse:
             host_kind="pixeldrain",
             share_url="https://pixeldrain.com/u/abc123",
             size_bytes=100,
+            checksum="md5:11111111111111111111111111111111",
         ),
         DirectMirror(
             mirror_id="terabox-mirror",
@@ -371,6 +372,7 @@ async def test_source_reresolution_uses_only_stable_snapshot_ids(
     assert request.host_kind is DirectArtifactHostKind.PIXELDRAIN
     assert request.share_url == "https://pixeldrain.com/u/abc123"
     assert request.final_url is None
+    assert request.checksum == "md5:11111111111111111111111111111111"
     assert "signed.cbz" not in repr(request)
     assert refreshed.closed is True
 

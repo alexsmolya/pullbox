@@ -51,7 +51,10 @@ from pullbox.providers.artifact_hosts.transport_contract import (
     TransferProgressSnapshot,
 )
 from pullbox.services.blocklist_service import BlocklistService
-from pullbox.services.direct_acquisition_executor import DirectAcquisitionExecutor
+from pullbox.services.direct_acquisition_executor import (
+    DirectAcquisitionExecutor,
+    _recover_http_checkpoint,
+)
 from pullbox.services.direct_acquisition_planner_service import (
     DirectAcquisitionPlanningError,
 )
@@ -570,6 +573,34 @@ async def test_executor_schedules_retry_without_losing_safe_partial(
     assert attempt.retry_count == 1
     assert artifact.next_retry_at is not None
     assert Path(artifact.quarantine_path or "").exists()
+
+
+def test_executor_recovers_checksum_protected_partial_without_http_validator(
+    tmp_path: Path,
+) -> None:
+    quarantine = DirectArtifactQuarantine(tmp_path / "quarantine")
+    workspace = quarantine.prepare(acquisition_id=1, artifact_id=1)
+    workspace.partial_path.write_bytes(b"partial")
+    artifact = _attempt().artifact_attempts[0]
+    artifact.etag = None
+    artifact.last_modified_at = None
+    artifact.expected_size = 100
+
+    checkpoint = _recover_http_checkpoint(
+        workspace,
+        artifact,
+        ResolvedTransfer(
+            host_kind=DirectArtifactHostKind.GENERIC_HTTPS,
+            url="https://files.example/signed-secret.pdf",
+            expected_size=100,
+            checksum="md5:11111111111111111111111111111111",
+            range_supported=True,
+        ),
+    )
+
+    assert checkpoint is not None
+    assert checkpoint.bytes_transferred == len(b"partial")
+    assert workspace.partial_path.exists()
 
 
 @pytest.mark.asyncio

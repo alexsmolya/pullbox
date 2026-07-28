@@ -147,6 +147,7 @@ class TeraBoxAdapter:
             url=transfer_url,
             headers=headers,
             expected_size=size,
+            checksum=request.checksum,
             filename_hint=safe_filename(item.get("server_filename")),
             range_supported=False,
             allowed_domains=_TERABOX_TRANSFER_DOMAINS,
