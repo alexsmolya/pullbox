@@ -12,6 +12,7 @@ from pullbox.composition.events import build_domain_event_bus, build_scoped_even
 from pullbox.config import get_settings
 from pullbox.core.comicvine_key import get_comicvine_api_key
 from pullbox.models.config import SystemConfig
+from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgress
 from pullbox.providers.artifact_hosts.datanodes import DataNodesAdapter
 from pullbox.providers.artifact_hosts.generic import GenericHttpsAdapter
 from pullbox.providers.artifact_hosts.helpers import challenge_required
@@ -43,9 +44,13 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.indexer import IndexerConfig
-    from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
+    from pullbox.providers.artifact_hosts.contract import (
+        ArtifactResolutionProgressCallback,
+        HostResolutionRequest,
+    )
     from pullbox.providers.base import ProviderRegistry
     from pullbox.providers.direct.resolver import DirectResolverResult
+    from pullbox.services.direct_resolver_service import ResolverAttemptProgress
     from pullbox.services.download_service import DownloadService
 
 
@@ -139,7 +144,10 @@ def build_direct_acquisition_runtime() -> DirectAcquisitionRuntime:
     )
 
 
-async def _solve_datanodes_login(target_url: str) -> DirectResolverResult:
+async def _solve_datanodes_login(
+    target_url: str,
+    progress_callback: ArtifactResolutionProgressCallback | None = None,
+) -> DirectResolverResult:
     """Resolve DataNodes' login challenge without handing credentials to TRAWL."""
     from pullbox.database import get_session_factory
     from pullbox.providers.direct.resolver import DirectResolverError
@@ -151,12 +159,28 @@ async def _solve_datanodes_login(target_url: str) -> DirectResolverResult:
     factory = get_session_factory()
     try:
         async with factory() as session:
+
+            async def publish_attempt(event: ResolverAttemptProgress) -> None:
+                if progress_callback is None:
+                    return
+                await progress_callback(
+                    ArtifactResolutionProgress(
+                        resolver_id=event.resolver_id,
+                        resolver_name=event.resolver_name,
+                        resolver_kind=event.resolver_kind.value,
+                        attempt=event.attempt,
+                        total=event.total,
+                        scope=event.scope,
+                    )
+                )
+
             return await resolve_for_trawl_host_adapter(
                 session,
                 target_url=target_url,
                 adapter_id="datanodes",
                 declared_domains=("datanodes.to",),
                 challenge_category="artifact_host_login",
+                on_attempt=publish_attempt,
             )
     except (DirectResolverError, DirectResolverServiceError) as exc:
         raise challenge_required(

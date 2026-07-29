@@ -31,6 +31,7 @@ from pullbox.providers.artifact_hosts.http import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
+    from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgressCallback
     from pullbox.providers.artifact_hosts.http import ArtifactUrlResolver
     from pullbox.providers.direct.resolver import DirectResolverResult
 
@@ -102,7 +103,11 @@ class DataNodesAdapter:
         *,
         resolver: ArtifactUrlResolver | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        login_solver: Callable[[str], Awaitable[DirectResolverResult]] | None = None,
+        login_solver: Callable[
+            [str, ArtifactResolutionProgressCallback | None],
+            Awaitable[DirectResolverResult],
+        ]
+        | None = None,
     ) -> None:
         self._http_client = http_client
         self._resolver = resolver
@@ -114,6 +119,7 @@ class DataNodesAdapter:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer:
         source_url = validate_resolution_request(
             request,
@@ -130,6 +136,7 @@ class DataNodesAdapter:
             username=username,
             password=password,
             cookies=cookies,
+            progress_callback=progress_callback,
         )
         page = await request_bounded(
             self._http_client,
@@ -184,6 +191,7 @@ class DataNodesAdapter:
         username: str,
         password: str,
         cookies: httpx.Cookies,
+        progress_callback: ArtifactResolutionProgressCallback | None,
     ) -> str | None:
         user_agent: str | None = None
         if self._login_solver is None:
@@ -197,7 +205,7 @@ class DataNodesAdapter:
                 cookies=cookies,
             )
         else:
-            solution = await self._login_solver(_LOGIN_URL)
+            solution = await self._login_solver(_LOGIN_URL, progress_callback)
             login_page, user_agent = _login_page_from_solution(solution, cookies=cookies)
         parsed = _validated_page(login_page)
         form = _login_form(parsed)

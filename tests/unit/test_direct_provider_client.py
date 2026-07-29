@@ -277,6 +277,34 @@ async def test_client_classifies_authentication_and_malformed_responses_without_
             assert TOKEN not in str(exc_info.value)
 
 
+async def test_client_preserves_bounded_browser_challenge_error_codes() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            503,
+            json={
+                "error": {
+                    "code": "browser_challenge_required",
+                    "message": TOKEN,
+                }
+            },
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = DirectProviderClient(
+            endpoint="https://provider.example",
+            bearer_token=TOKEN,
+            resolver=_resolve_public,
+            http_client=http_client,
+        )
+
+        with pytest.raises(DirectProviderClientError) as exc_info:
+            await client.manifest()
+
+    assert exc_info.value.code == "browser_challenge_required"
+    assert exc_info.value.retryable is True
+    assert TOKEN not in str(exc_info.value)
+
+
 async def test_client_preserves_cooperative_cancellation() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(60)

@@ -19,15 +19,18 @@ from pullbox.models.direct_acquisition import (
     DirectHostConfig,
     DirectProviderConfig,
     DirectProviderState,
+    DirectResolverKind,
 )
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.providers.direct.client import DirectProviderClientError
 from pullbox.providers.direct.contract import (
     DirectArtifact,
     DirectArtifactCoverage,
     DirectArtifactRoute,
     DirectMirror,
     DirectResolveResponse,
+    DirectResolverProfile,
 )
 from pullbox.services.blocklist_service import BlocklistService
 from pullbox.services.direct_acquisition_planner_service import (
@@ -36,6 +39,7 @@ from pullbox.services.direct_acquisition_planner_service import (
     plan_direct_acquisition,
     resolve_planned_artifact_source,
 )
+from pullbox.services.direct_resolver_service import ProviderResolverOption
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -183,6 +187,25 @@ class _ResolveClient:
         self.closed = True
 
 
+class _FallbackResolveClient(_ResolveClient):
+    async def resolve(self, request: Any) -> DirectResolveResponse:
+        self.requests.append(request)
+        profile = request.resolver_profile
+        if profile is None:
+            raise DirectProviderClientError(
+                "browser_challenge_required",
+                "Browser challenge required.",
+                retryable=True,
+            )
+        if profile.endpoint == "http://flaresolverr:8191":
+            raise DirectProviderClientError(
+                "resolver_timed_out",
+                "Resolver timed out.",
+                retryable=True,
+            )
+        return self.response.model_copy(update={"request_id": request.request_id})
+
+
 @pytest.mark.asyncio
 async def test_planning_selects_best_eligible_route_and_persists_no_urls(
     session: AsyncSession,
@@ -209,6 +232,62 @@ async def test_planning_selects_best_eligible_route_and_persists_no_urls(
     assert "token" not in rendered.casefold()
     assert "pixel-mirror" in rendered
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_planning_resolve_tries_ordinary_http_then_ranked_resolvers(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pullbox.services import direct_resolver_service
+
+    provider = await session.get(DirectProviderConfig, 1)
+    assert provider is not None
+    provider.resolver_enabled = True
+    options = (
+        ProviderResolverOption(
+            resolver_id=1,
+            resolver_name="FlareSolverr",
+            resolver_kind=DirectResolverKind.FLARESOLVERR,
+            profile=DirectResolverProfile(
+                endpoint="http://flaresolverr:8191",
+                timeout_seconds=60,
+                max_concurrency=1,
+                declared_domains=["getcomics.org"],
+            ),
+        ),
+        ProviderResolverOption(
+            resolver_id=2,
+            resolver_name="Byparr",
+            resolver_kind=DirectResolverKind.BYPARR,
+            profile=DirectResolverProfile(
+                endpoint="http://byparr:8191",
+                timeout_seconds=60,
+                max_concurrency=1,
+                declared_domains=["getcomics.org"],
+            ),
+        ),
+    )
+
+    async def profiles(*_args: object) -> tuple[ProviderResolverOption, ...]:
+        return options
+
+    monkeypatch.setattr(direct_resolver_service, "build_provider_resolver_profiles", profiles)
+    client = _FallbackResolveClient(_response())
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: client,
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.attempt.state is DirectAcquisitionState.PLANNED
+    assert [
+        request.resolver_profile.endpoint if request.resolver_profile else None
+        for request in client.requests
+    ] == [None, "http://flaresolverr:8191", "http://byparr:8191"]
 
 
 @pytest.mark.asyncio

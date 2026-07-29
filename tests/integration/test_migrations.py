@@ -463,10 +463,14 @@ class TestMigrationChain:
             engine.dispose()
 
         assert columns["encrypted_auth_headers"]["nullable"] is False
+        assert columns["resolver_kind"]["nullable"] is False
+        assert columns["priority"]["nullable"] is False
         assert columns["timeout_seconds"]["nullable"] is False
         assert columns["max_concurrency"]["nullable"] is False
         assert "uq_direct_resolver_name" in unique_constraints
+        assert "uq_direct_resolver_kind" in unique_constraints
         assert {
+            "ck_direct_resolver_priority",
             "ck_direct_resolver_timeout",
             "ck_direct_resolver_concurrency",
         }.issubset(check_constraints)

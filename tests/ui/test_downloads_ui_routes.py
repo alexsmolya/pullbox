@@ -1016,6 +1016,36 @@ class TestDownloadsRouteContracts:
         assert snapshot.source_label == "GetComics via PixelDrain"
         register.assert_not_awaited()
 
+    async def test_direct_progress_labels_ranked_and_required_resolver_attempts(self) -> None:
+        from pullbox.ui import downloads_routes
+
+        assert (
+            downloads_routes._direct_progress_label(
+                {
+                    "stage": "resolver",
+                    "resolver_name": "FlareSolverr",
+                    "resolver_kind": "flaresolverr",
+                    "resolver_attempt": 1,
+                    "resolver_total": 3,
+                    "resolver_scope": "provider:pullbox.getcomics:resolve",
+                }
+            )
+            == "Trying FlareSolverr (resolver 1 of 3)"
+        )
+        assert (
+            downloads_routes._direct_progress_label(
+                {
+                    "stage": "resolver",
+                    "resolver_name": "TRAWL",
+                    "resolver_kind": "trawl",
+                    "resolver_attempt": 1,
+                    "resolver_total": 1,
+                    "resolver_scope": "datanodes",
+                }
+            )
+            == "Using TRAWL (required by DataNodes)"
+        )
+
     async def test_download_progress_map_preserves_unknown_total_direct_activity(
         self,
         sec_db,

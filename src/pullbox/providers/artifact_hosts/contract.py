@@ -13,7 +13,7 @@ from pullbox.models.direct_acquisition import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Mapping
     from datetime import datetime
 
 
@@ -41,7 +41,26 @@ class ArtifactHostAdapter(Protocol):
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactResolutionProgress:
+    """Secret-free progress for one browser-resolver attempt."""
+
+    resolver_id: int
+    resolver_name: str
+    resolver_kind: str
+    attempt: int
+    total: int
+    scope: str
+
+
+if TYPE_CHECKING:
+    ArtifactResolutionProgressCallback = Callable[[ArtifactResolutionProgress], Awaitable[None]]
+else:
+    ArtifactResolutionProgressCallback = object
 
 
 @dataclass(frozen=True, slots=True)

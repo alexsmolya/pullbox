@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
     import httpx
 
+    from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgressCallback
     from pullbox.providers.artifact_hosts.http import ArtifactUrlResolver
 
 _MEDIAFIRE_DOMAINS = ("mediafire.com",)
@@ -44,6 +45,7 @@ class MediaFireAdapter:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer:
         source_url = validate_resolution_request(
             request,

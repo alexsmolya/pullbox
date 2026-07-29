@@ -73,7 +73,10 @@ async def test_resolver_api_defaults_to_disabled_and_requires_operator_auth(
 
     assert response.status_code == 200
     assert response.json() == {
+        "id": 1,
         "name": "default",
+        "resolver_kind": "flaresolverr",
+        "priority": 10,
         "endpoint": "",
         "enabled": False,
         "state": "disabled",
@@ -89,6 +92,121 @@ async def test_resolver_api_defaults_to_disabled_and_requires_operator_auth(
     assert (await unauthenticated_client.get("/api/v1/direct-resolver")).status_code == 401
 
 
+async def test_resolver_profiles_api_manages_ranked_resolvers(
+    authenticated_client: AsyncClient,
+) -> None:
+    headers = _csrf_header(authenticated_client)
+    assert (await authenticated_client.get("/api/v1/direct-resolver/profiles")).json() == []
+
+    created = await authenticated_client.post(
+        "/api/v1/direct-resolver/profiles",
+        headers=headers,
+        json={
+            "name": "TRAWL",
+            "resolver_kind": "trawl",
+            "priority": 30,
+            "endpoint": "http://trawl:8191",
+            "enabled": True,
+            "allow_private_http": True,
+            "timeout_seconds": 60,
+            "max_concurrency": 1,
+            "authentication_headers": {},
+        },
+    )
+
+    assert created.status_code == 201
+    resolver_id = created.json()["id"]
+    assert created.json()["resolver_kind"] == "trawl"
+    assert created.json()["state"] == "unknown"
+
+    updated = await authenticated_client.patch(
+        f"/api/v1/direct-resolver/profiles/{resolver_id}",
+        headers=headers,
+        json={
+            "name": "TRAWL primary",
+            "resolver_kind": "trawl",
+            "priority": 10,
+            "endpoint": "http://trawl:8191",
+            "enabled": True,
+            "allow_private_http": True,
+            "timeout_seconds": 55,
+            "max_concurrency": 1,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "TRAWL primary"
+    assert updated.json()["timeout_seconds"] == 55
+
+    tested = await authenticated_client.post(
+        f"/api/v1/direct-resolver/profiles/{resolver_id}/test",
+        headers=headers,
+    )
+    assert tested.status_code == 200
+    assert tested.json()["usable"] is True
+
+    profiles = await authenticated_client.get("/api/v1/direct-resolver/profiles")
+    assert [(item["name"], item["priority"]) for item in profiles.json()] == [("TRAWL primary", 10)]
+
+    deleted = await authenticated_client.delete(
+        f"/api/v1/direct-resolver/profiles/{resolver_id}",
+        headers=headers,
+    )
+    assert deleted.status_code == 204
+    assert (await authenticated_client.get("/api/v1/direct-resolver/profiles")).json() == []
+
+
+async def test_resolver_profiles_api_rejects_duplicate_kind(
+    authenticated_client: AsyncClient,
+) -> None:
+    headers = _csrf_header(authenticated_client)
+    payload = {
+        "name": "FlareSolverr",
+        "resolver_kind": "flaresolverr",
+        "priority": 10,
+        "endpoint": "http://flaresolverr:8191",
+        "enabled": False,
+        "allow_private_http": True,
+        "timeout_seconds": 60,
+        "max_concurrency": 1,
+    }
+    first = await authenticated_client.post(
+        "/api/v1/direct-resolver/profiles",
+        headers=headers,
+        json=payload,
+    )
+    second = await authenticated_client.post(
+        "/api/v1/direct-resolver/profiles",
+        headers=headers,
+        json={**payload, "name": "Duplicate", "priority": 20},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 422
+    assert "already configured" in second.text
+
+
+async def test_resolver_profiles_api_rejects_attempts_longer_than_sixty_seconds(
+    authenticated_client: AsyncClient,
+) -> None:
+    response = await authenticated_client.post(
+        "/api/v1/direct-resolver/profiles",
+        headers=_csrf_header(authenticated_client),
+        json={
+            "name": "TRAWL",
+            "resolver_kind": "trawl",
+            "priority": 30,
+            "endpoint": "http://trawl:8191",
+            "enabled": True,
+            "allow_private_http": True,
+            "timeout_seconds": 61,
+            "max_concurrency": 1,
+            "authentication_headers": {},
+        },
+    )
+
+    assert response.status_code == 422
+
+
 async def test_resolver_api_updates_tests_and_never_returns_auth_values(
     authenticated_client: AsyncClient,
     sec_db: async_sessionmaker[AsyncSession],
@@ -101,7 +219,7 @@ async def test_resolver_api_updates_tests_and_never_returns_auth_values(
             "endpoint": "http://resolver:8191",
             "enabled": True,
             "allow_private_http": True,
-            "timeout_seconds": 75,
+            "timeout_seconds": 60,
             "max_concurrency": 2,
             "authentication_headers": {"Authorization": AUTH_VALUE},
         },

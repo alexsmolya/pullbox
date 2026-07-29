@@ -33,6 +33,7 @@ from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.artifact_hosts.contract import (
     ArtifactHostResolutionError,
+    ArtifactResolutionProgress,
     ArtifactTransferProtocol,
     HostResolutionRequest,
     ResolvedTransfer,
@@ -173,6 +174,7 @@ class _FakeResolver:
         request: HostResolutionRequest,
         *,
         credentials: Any,
+        progress_callback: Any = None,
     ) -> ResolvedTransfer:
         self.calls += 1
         assert request.artifact_identity == "artifact-1"
@@ -190,6 +192,7 @@ class _AccountResolver:
         request: HostResolutionRequest,
         *,
         credentials: Any,
+        progress_callback: Any = None,
     ) -> ResolvedTransfer:
         assert request.host_kind is DirectArtifactHostKind.PIXELDRAIN
         assert credentials == {"api_key": "configured-pixeldrain-key"}
@@ -309,8 +312,38 @@ class _StaticResolver:
         _request: HostResolutionRequest,
         *,
         credentials: Any,
+        progress_callback: Any = None,
     ) -> ResolvedTransfer:
         assert credentials == {}
+        return self.resolved
+
+
+@dataclass
+class _ProgressResolver:
+    resolved: ResolvedTransfer
+    attempt: DirectAcquisitionAttempt
+    observed_snapshot: dict[str, object] | None = None
+
+    async def resolve(
+        self,
+        _request: HostResolutionRequest,
+        *,
+        credentials: Any,
+        progress_callback: Any = None,
+    ) -> ResolvedTransfer:
+        assert credentials == {}
+        assert progress_callback is not None
+        await progress_callback(
+            ArtifactResolutionProgress(
+                resolver_id=3,
+                resolver_name="TRAWL",
+                resolver_kind="trawl",
+                attempt=1,
+                total=1,
+                scope="datanodes",
+            )
+        )
+        self.observed_snapshot = dict(self.attempt.progress_snapshot)
         return self.resolved
 
 
@@ -400,6 +433,56 @@ async def test_executor_completes_with_durable_redacted_progress(
     assert refreshed_history.final_path == "/library/Issue 1.cbz"
     assert refreshed_history.imported_at == NOW
     assert refreshed_history.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_executor_persists_native_resolver_attempt_before_transfer(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    session.add(attempt)
+    await session.commit()
+    artifact = attempt.artifact_attempts[0]
+    resolved = ResolvedTransfer(
+        host_kind=DirectArtifactHostKind.GENERIC_HTTPS,
+        url="https://files.example/signed-secret.cbz",
+        allowed_domains=("files.example",),
+    )
+    resolver = _ProgressResolver(resolved=resolved, attempt=attempt)
+    executor = DirectAcquisitionExecutor(
+        host_resolver=resolver,
+        http_transport=_SuccessfulTransport(),
+        mega_runner=object(),
+        quarantine=DirectArtifactQuarantine(tmp_path / "quarantine"),
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    await executor.execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=lambda: _async_value(_source_request()),
+    )
+
+    assert resolver.observed_snapshot == {
+        "schema_version": 1,
+        "stage": "resolver",
+        "artifact_attempt_id": artifact.id,
+        "host_kind": "generic_https",
+        "bytes_transferred": 0,
+        "total_bytes": None,
+        "percent": None,
+        "bytes_per_second": None,
+        "eta_seconds": None,
+        "resolver_id": 3,
+        "resolver_name": "TRAWL",
+        "resolver_kind": "trawl",
+        "resolver_attempt": 1,
+        "resolver_total": 1,
+        "resolver_scope": "datanodes",
+    }
 
 
 @pytest.mark.asyncio

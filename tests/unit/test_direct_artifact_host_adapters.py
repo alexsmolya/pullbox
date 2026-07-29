@@ -554,6 +554,7 @@ async def test_datanodes_requires_account_credentials_before_network_access() ->
 
 async def test_datanodes_uses_trawl_login_solution_without_sharing_credentials() -> None:
     solver_calls: list[tuple[object, ...]] = []
+    progress_events: list[dict[str, object]] = []
 
     async def solve_login(*args: object) -> DirectResolverResult:
         solver_calls.append(args)
@@ -614,9 +615,12 @@ async def test_datanodes_uses_trawl_login_solution_without_sharing_credentials()
                 "username": DATANODES_USERNAME,
                 "password": DATANODES_PASSWORD,
             },
+            progress_callback=progress_events.append,
         )
 
-    assert solver_calls == [("https://datanodes.to/login.html",)]
+    assert solver_calls == [
+        ("https://datanodes.to/login.html", progress_events.append),
+    ]
     assert transfer.url == "https://s1.datanodes.to/d/fixture/fixture.cbz"
     assert transfer.headers["User-Agent"] == "Trawl Browser"
     assert DATANODES_USERNAME not in repr(solver_calls)

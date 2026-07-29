@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import TypeVar
 from urllib.parse import urlsplit, urlunsplit
@@ -30,6 +31,7 @@ from pullbox.providers.direct.endpoint import (
 _ResponseModel = TypeVar("_ResponseModel", bound=BaseModel)
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _MIN_TOKEN_LENGTH = 32
+_PROVIDER_ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,99}\Z")
 
 logger = structlog.get_logger(__name__)
 
@@ -263,6 +265,13 @@ class DirectProviderClient:
                 "Provider protocol is incompatible.",
             )
         if response.status_code >= 400:
+            remote_code = _safe_retryable_error_code(content)
+            if remote_code is not None:
+                raise DirectProviderClientError(
+                    remote_code,
+                    "Provider source access requires browser challenge handling.",
+                    retryable=True,
+                )
             raise DirectProviderClientError(
                 "provider_request_failed",
                 f"Provider returned HTTP {response.status_code}.",
@@ -285,6 +294,21 @@ def _response_result_count(response: BaseModel) -> int | None:
     artifacts = getattr(response, "artifacts", None)
     if isinstance(artifacts, list):
         return len(artifacts)
+    return None
+
+
+def _safe_retryable_error_code(content: bytes) -> str | None:
+    try:
+        decoded = json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(decoded, dict) or not isinstance(decoded.get("error"), dict):
+        return None
+    code = decoded["error"].get("code")
+    if not isinstance(code, str) or _PROVIDER_ERROR_CODE.fullmatch(code) is None:
+        return None
+    if code == "browser_challenge_required" or code.startswith("resolver_"):
+        return code
     return None
 
 

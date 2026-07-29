@@ -16,20 +16,27 @@ from pullbox.models.direct_acquisition import (
     DirectProviderConfig,
     DirectProviderState,
     DirectProviderTrustLevel,
+    DirectResolverKind,
 )
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import MatchConfidence
 from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.providers.direct.client import DirectProviderClientError
 from pullbox.providers.direct.contract import (
     DIRECT_PROVIDER_PROTOCOL_V1,
     DirectCandidate,
     DirectParsedCandidate,
+    DirectResolverProfile,
     DirectSearchRequest,
     DirectSearchResponse,
 )
 from pullbox.services.direct_configuration_service import (
     update_provider_configuration_secrets,
     write_provider_bearer_token,
+)
+from pullbox.services.direct_resolver_service import (
+    ProviderResolverOption,
+    ResolverAttemptProgress,
 )
 from pullbox.services.direct_search_coordinator import (
     DirectSearchProvider,
@@ -67,7 +74,7 @@ def _provider(identity: str, priority: int) -> DirectSearchProvider:
         provider_priority=priority,
         provider_config={},
         source_credentials={},
-        resolver_profile=None,
+        resolver_options=(),
         source_domains=(f"{identity}.example",),
     )
 
@@ -96,6 +103,8 @@ class _Client:
     active: ClassVar[int] = 0
     max_active: ClassVar[int] = 0
     requests: ClassVar[list[tuple[str, DirectSearchRequest]]] = []
+    challenge_required: ClassVar[set[str]] = set()
+    resolver_failures: ClassVar[dict[str, str]] = {}
 
     def __init__(self, provider_id: str) -> None:
         self.provider_id = provider_id
@@ -106,6 +115,19 @@ class _Client:
         type(self).requests.append((self.provider_id, request))
         try:
             await asyncio.sleep(type(self).delays.get(self.provider_id, 0))
+            profile = request.resolver_profile
+            if self.provider_id in type(self).challenge_required and profile is None:
+                raise DirectProviderClientError(
+                    "browser_challenge_required",
+                    "Browser challenge required.",
+                    retryable=True,
+                )
+            if profile is not None and profile.endpoint in type(self).resolver_failures:
+                raise DirectProviderClientError(
+                    type(self).resolver_failures[profile.endpoint],
+                    "Resolver attempt failed.",
+                    retryable=True,
+                )
             if self.provider_id in type(self).failures:
                 raise RuntimeError("secret upstream failure details")
             return DirectSearchResponse(
@@ -131,6 +153,27 @@ def _reset() -> None:
     _Client.active = 0
     _Client.max_active = 0
     _Client.requests = []
+    _Client.challenge_required = set()
+    _Client.resolver_failures = {}
+
+
+def _resolver_option(
+    resolver_id: int,
+    name: str,
+    kind: DirectResolverKind,
+    endpoint: str,
+) -> ProviderResolverOption:
+    return ProviderResolverOption(
+        resolver_id=resolver_id,
+        resolver_name=name,
+        resolver_kind=kind,
+        profile=DirectResolverProfile(
+            endpoint=endpoint,
+            timeout_seconds=60,
+            max_concurrency=1,
+            declared_domains=["getcomics.org"],
+        ),
+    )
 
 
 async def test_fanout_is_concurrent_and_completion_order_does_not_change_results() -> None:
@@ -180,6 +223,54 @@ async def test_one_provider_failure_is_isolated_and_redacted() -> None:
     assert outcome.failures[0].provider_identity == broken.provider_identity
     assert outcome.failures[0].code == "provider_search_failed"
     assert "secret upstream" not in repr(outcome)
+
+
+async def test_provider_search_tries_ordinary_http_then_ranked_resolvers() -> None:
+    _reset()
+    provider = replace(
+        _provider("pullbox.getcomics", 10),
+        resolver_options=(
+            _resolver_option(
+                1,
+                "FlareSolverr",
+                DirectResolverKind.FLARESOLVERR,
+                "http://flaresolverr:8191",
+            ),
+            _resolver_option(
+                2,
+                "Byparr",
+                DirectResolverKind.BYPARR,
+                "http://byparr:8191",
+            ),
+        ),
+    )
+    _Client.challenge_required = {provider.provider_identity}
+    _Client.resolver_failures = {"http://flaresolverr:8191": "resolver_timed_out"}
+    _Client.responses = {
+        provider.provider_identity: [_candidate(provider, "Absolute Superman 009 (2025)")]
+    }
+    progress: list[ResolverAttemptProgress] = []
+
+    async def record_attempt(value: ResolverAttemptProgress) -> None:
+        progress.append(value)
+
+    outcome = await search_direct_issue_target(
+        _target(),
+        [provider],
+        client_factory=_factory,
+        on_resolver_attempt=record_attempt,
+    )
+
+    assert len(outcome.matched) == 1
+    assert [
+        request.resolver_profile.endpoint if request.resolver_profile else None
+        for _, request in _Client.requests
+    ] == [None, "http://flaresolverr:8191", "http://byparr:8191"]
+    assert [(item.resolver_name, item.attempt, item.total) for item in progress] == [
+        ("FlareSolverr", 1, 2),
+        ("Byparr", 2, 2),
+    ]
+    assert outcome.resolver_attempts == tuple(progress)
 
 
 async def test_rejected_candidate_uses_existing_validator_without_provider_override() -> None:

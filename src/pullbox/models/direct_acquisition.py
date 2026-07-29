@@ -65,17 +65,28 @@ class DirectResolverState(enum.StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class DirectResolverKind(enum.StrEnum):
+    FLARESOLVERR = "flaresolverr"
+    BYPARR = "byparr"
+    TRAWL = "trawl"
+
+
 class DirectProviderTrustLevel(enum.StrEnum):
     VERIFIED_PULLBOX = "verified_pullbox"
     CUSTOM = "custom"
 
 
 class DirectResolverConfig(Base, IdentityMixin, TimestampMixin):
-    """Singleton configuration for an optional browser challenge resolver."""
+    """One ranked optional browser challenge resolver profile."""
 
     __tablename__ = "direct_resolver_configs"
     __table_args__ = (
         UniqueConstraint("name", name="uq_direct_resolver_name"),
+        UniqueConstraint("resolver_kind", name="uq_direct_resolver_kind"),
+        CheckConstraint(
+            "priority > 0 AND priority <= 1000",
+            name="ck_direct_resolver_priority",
+        ),
         CheckConstraint(
             "timeout_seconds > 0 AND timeout_seconds <= 300",
             name="ck_direct_resolver_timeout",
@@ -90,6 +101,18 @@ class DirectResolverConfig(Base, IdentityMixin, TimestampMixin):
         String(100),
         default="default",
         server_default="default",
+        nullable=False,
+    )
+    resolver_kind: Mapped[DirectResolverKind] = mapped_column(
+        _enum_type(DirectResolverKind, "directresolverkind"),
+        default=DirectResolverKind.FLARESOLVERR,
+        server_default=DirectResolverKind.FLARESOLVERR.value,
+        nullable=False,
+    )
+    priority: Mapped[int] = mapped_column(
+        Integer,
+        default=10,
+        server_default="10",
         nullable=False,
     )
     endpoint: Mapped[str] = mapped_column(String(1000), default="", server_default="")

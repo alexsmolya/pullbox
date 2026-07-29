@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     import httpx
 
+    from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgressCallback
     from pullbox.providers.artifact_hosts.http import ArtifactUrlResolver
 
 _HTML_CONTENT_TYPES = frozenset(
@@ -58,6 +59,7 @@ class GenericHttpsAdapter:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer:
         url = validate_resolution_request(
             request,

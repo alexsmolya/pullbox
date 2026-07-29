@@ -30,7 +30,7 @@ from pullbox.providers.artifact_hosts.contract import (
     sanitize_provider_headers,
 )
 from pullbox.providers.artifact_hosts.registry import classify_artifact_host
-from pullbox.providers.direct.client import DirectProviderClient
+from pullbox.providers.direct.client import DirectProviderClient, DirectProviderClientError
 from pullbox.providers.direct.contract import (
     DirectArtifact,
     DirectArtifactRoute,
@@ -372,7 +372,10 @@ async def _resolve_provider_candidate(
     deadline: datetime,
 ) -> DirectResolveResponse:
     from pullbox.services.direct_configuration_service import load_provider_secret_material
-    from pullbox.services.direct_resolver_service import build_provider_resolver_profile
+    from pullbox.services.direct_resolver_service import (
+        ResolverAttemptProgress,
+        build_provider_resolver_profiles,
+    )
 
     load_secret = provider_secret_loader or load_provider_secret_material
     material = load_secret(provider)
@@ -392,16 +395,60 @@ async def _resolve_provider_candidate(
         provider_id=provider.provider_id,
     )
     try:
-        return await client.resolve(
-            DirectResolveRequest(
-                protocol_version=provider.negotiated_protocol or "direct-download-provider/v1",
-                request_id=uuid4(),
-                deadline=deadline,
-                provider_config=public_values,
-                source_credentials=material.configuration,
-                resolver_profile=await build_provider_resolver_profile(session, provider),
-                provider_candidate_id=attempt.provider_candidate_id,
-            )
+        resolver_options = await build_provider_resolver_profiles(session, provider)
+        options = (None, *resolver_options)
+        last_error: DirectProviderClientError | None = None
+        for option_index, option in enumerate(options):
+            if option is not None:
+                progress = ResolverAttemptProgress(
+                    resolver_id=option.resolver_id,
+                    resolver_name=option.resolver_name,
+                    resolver_kind=option.resolver_kind,
+                    attempt=option_index,
+                    total=len(resolver_options),
+                    scope=f"provider:{provider.provider_id}:resolve",
+                )
+                advance_acquisition_progress(
+                    attempt,
+                    revision=(attempt.progress_revision or 0) + 1,
+                    snapshot={
+                        "schema_version": 1,
+                        "stage": "resolver",
+                        "resolver_id": progress.resolver_id,
+                        "resolver_name": progress.resolver_name,
+                        "resolver_kind": progress.resolver_kind.value,
+                        "resolver_attempt": progress.attempt,
+                        "resolver_total": progress.total,
+                        "resolver_scope": progress.scope,
+                    },
+                )
+                await session.commit()
+            try:
+                return await client.resolve(
+                    DirectResolveRequest(
+                        protocol_version=(
+                            provider.negotiated_protocol or "direct-download-provider/v1"
+                        ),
+                        request_id=uuid4(),
+                        deadline=deadline,
+                        provider_config=public_values,
+                        source_credentials=material.configuration,
+                        resolver_profile=option.profile if option is not None else None,
+                        provider_candidate_id=attempt.provider_candidate_id,
+                    )
+                )
+            except DirectProviderClientError as exc:
+                last_error = exc
+                retry_allowed = exc.code == "browser_challenge_required" or exc.code.startswith(
+                    "resolver_"
+                )
+                if not retry_allowed or option_index == len(options) - 1:
+                    raise
+        if last_error is not None:
+            raise last_error
+        raise DirectAcquisitionPlanningError(
+            "provider_resolve_unavailable",
+            "The direct provider had no executable resolution path.",
         )
     finally:
         await client.aclose()

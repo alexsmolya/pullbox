@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from pullbox.models.direct_acquisition import DirectArtifactHostKind
     from pullbox.providers.artifact_hosts.contract import (
         ArtifactHostAdapter,
+        ArtifactResolutionProgressCallback,
         ResolvedTransfer,
     )
 
@@ -35,6 +36,7 @@ class ArtifactHostResolver:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer:
         adapter = self._adapters.get(request.host_kind)
         if adapter is None:
@@ -45,7 +47,11 @@ class ArtifactHostResolver:
                 retryable=False,
                 intervention=True,
             )
-        transfer = await adapter.resolve(request, credentials=credentials)
+        transfer = await adapter.resolve(
+            request,
+            credentials=credentials,
+            progress_callback=progress_callback,
+        )
         if transfer.host_kind is not request.host_kind:
             raise ArtifactHostResolutionError(
                 code="artifact_host_kind_mismatch",

@@ -27,7 +27,6 @@ from pullbox.providers.base import ReleaseResult
 from pullbox.providers.direct.client import DirectProviderClient, DirectProviderClientError
 from pullbox.providers.direct.contract import (
     DirectCandidate,
-    DirectResolverProfile,
     DirectSearchIntent,
     DirectSearchRequest,
     DirectSearchResponse,
@@ -39,6 +38,11 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from pullbox.services.direct_resolver_service import (
+        ProviderResolverOption,
+        ResolverAttemptCallback,
+        ResolverAttemptProgress,
+    )
     from pullbox.services.search_targets import IssueSearchTarget
     from pullbox.services.search_types import ValidatorKwargs
 
@@ -68,7 +72,7 @@ class DirectSearchProvider:
     provider_priority: int = 50
     provider_config: dict[str, object] = field(default_factory=dict, repr=False)
     source_credentials: dict[str, str] = field(default_factory=dict, repr=False)
-    resolver_profile: DirectResolverProfile | None = field(default=None, repr=False)
+    resolver_options: tuple[ProviderResolverOption, ...] = field(default=(), repr=False)
     source_domains: tuple[str, ...] = ()
 
 
@@ -101,6 +105,7 @@ class DirectSearchOutcome:
     failures: tuple[DirectSearchFailure, ...]
     providers_searched: int
     elapsed_ms: int
+    resolver_attempts: tuple[ResolverAttemptProgress, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +154,7 @@ async def load_direct_search_providers(
 ) -> tuple[DirectSearchProvider, ...]:
     """Load and decrypt only providers eligible for one immediate search."""
     from pullbox.services.direct_configuration_service import load_provider_secret_material
-    from pullbox.services.direct_resolver_service import build_provider_resolver_profile
+    from pullbox.services.direct_resolver_service import build_provider_resolver_profiles
 
     result = await session.execute(
         select(DirectProviderConfig)
@@ -197,7 +202,7 @@ async def load_direct_search_providers(
                 provider_priority=config.priority,
                 provider_config=public_config,
                 source_credentials=material.configuration,
-                resolver_profile=await build_provider_resolver_profile(session, config),
+                resolver_options=await build_provider_resolver_profiles(session, config),
                 source_domains=source_domains,
             )
         )
@@ -253,6 +258,7 @@ async def search_direct_issue_target(
     search_seconds: float = _DEFAULT_SEARCH_SECONDS,
     max_fanout: int = _MAX_FANOUT,
     now: Callable[[], datetime] | None = None,
+    on_resolver_attempt: ResolverAttemptCallback | None = None,
 ) -> DirectSearchOutcome:
     """Search eligible providers concurrently and preserve matcher semantics."""
     if not 1 <= result_limit <= 100:
@@ -279,6 +285,12 @@ async def search_direct_issue_target(
     clock = now or (lambda: datetime.now(UTC))
     validator = ReleaseValidator(**(validator_kwargs or {}))
     semaphore = asyncio.Semaphore(min(max_fanout, len(active_providers)))
+    resolver_attempts: list[ResolverAttemptProgress] = []
+
+    async def record_resolver_attempt(event: ResolverAttemptProgress) -> None:
+        resolver_attempts.append(event)
+        if on_resolver_attempt is not None:
+            await on_resolver_attempt(event)
 
     async def _search(
         provider: DirectSearchProvider,
@@ -295,6 +307,7 @@ async def search_direct_issue_target(
                 client_factory=client_factory,
                 result_limit=result_limit,
                 deadline=clock() + timedelta(seconds=search_seconds),
+                on_resolver_attempt=record_resolver_attempt,
             )
 
     provider_results = await asyncio.gather(*(_search(provider) for provider in active_providers))
@@ -316,6 +329,7 @@ async def search_direct_issue_target(
         failures=tuple(failures),
         providers_searched=len(active_providers),
         elapsed_ms=int((time.monotonic() - started_at) * 1000),
+        resolver_attempts=tuple(resolver_attempts),
     )
 
 
@@ -327,6 +341,7 @@ async def _search_provider(
     client_factory: DirectSearchClientFactory,
     result_limit: int,
     deadline: datetime,
+    on_resolver_attempt: ResolverAttemptCallback | None,
 ) -> tuple[
     list[DirectValidatedCandidate],
     list[DirectValidatedCandidate],
@@ -339,17 +354,13 @@ async def _search_provider(
         provider_id=provider.provider_identity,
     )
     try:
-        response = await client.search(
-            DirectSearchRequest(
-                protocol_version=provider.protocol_version,
-                request_id=uuid4(),
-                deadline=deadline,
-                provider_config=provider.provider_config,
-                source_credentials=provider.source_credentials,
-                resolver_profile=provider.resolver_profile,
-                intent=_build_intent(target),
-                limit=result_limit,
-            )
+        response = await _search_with_resolver_fallback(
+            client,
+            provider,
+            target=target,
+            result_limit=result_limit,
+            deadline=deadline,
+            on_resolver_attempt=on_resolver_attempt,
         )
     except asyncio.CancelledError:
         raise
@@ -410,6 +421,57 @@ async def _search_provider(
         )
         (matched if validation.is_match else rejected).append(result)
     return matched, rejected, None
+
+
+async def _search_with_resolver_fallback(
+    client: DirectSearchClient,
+    provider: DirectSearchProvider,
+    *,
+    target: IssueSearchTarget,
+    result_limit: int,
+    deadline: datetime,
+    on_resolver_attempt: ResolverAttemptCallback | None,
+) -> DirectSearchResponse:
+    options = (None, *provider.resolver_options)
+    last_error: DirectProviderClientError | None = None
+    for option_index, option in enumerate(options):
+        if option is not None and on_resolver_attempt is not None:
+            from pullbox.services.direct_resolver_service import ResolverAttemptProgress
+
+            await on_resolver_attempt(
+                ResolverAttemptProgress(
+                    resolver_id=option.resolver_id,
+                    resolver_name=option.resolver_name,
+                    resolver_kind=option.resolver_kind,
+                    attempt=option_index,
+                    total=len(provider.resolver_options),
+                    scope=f"provider:{provider.provider_identity}:search",
+                )
+            )
+        try:
+            return await client.search(
+                DirectSearchRequest(
+                    protocol_version=provider.protocol_version,
+                    request_id=uuid4(),
+                    deadline=deadline,
+                    provider_config=provider.provider_config,
+                    source_credentials=provider.source_credentials,
+                    resolver_profile=option.profile if option is not None else None,
+                    intent=_build_intent(target),
+                    limit=result_limit,
+                )
+            )
+        except DirectProviderClientError as exc:
+            last_error = exc
+            if not _resolver_retry_allowed(exc) or option_index == len(options) - 1:
+                raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Direct provider search had no executable request path.")
+
+
+def _resolver_retry_allowed(exc: DirectProviderClientError) -> bool:
+    return exc.code == "browser_challenge_required" or exc.code.startswith("resolver_")
 
 
 def _build_intent(target: IssueSearchTarget) -> DirectSearchIntent:

@@ -14,6 +14,7 @@ from pullbox.models.direct_acquisition import (
     DirectProviderState,
     DirectProviderTrustLevel,
     DirectResolverConfig,
+    DirectResolverKind,
     DirectResolverState,
 )
 from pullbox.providers.direct.contract import DIRECT_PROVIDER_PROTOCOL_V1
@@ -24,10 +25,15 @@ from pullbox.providers.direct.resolver import (
     ResolverCircuitBreaker,
 )
 from pullbox.services.direct_resolver_service import (
+    DirectResolverCreate,
     DirectResolverServiceError,
     DirectResolverUpdate,
+    ResolverAttemptProgress,
     build_provider_resolver_profile,
+    build_provider_resolver_profiles,
+    create_direct_resolver,
     get_direct_resolver,
+    list_direct_resolvers,
     resolve_for_host_adapter,
     resolve_for_trawl_host_adapter,
     update_direct_resolver,
@@ -94,6 +100,31 @@ def _factory(**kwargs: object) -> _ResolverClient:
     return _ResolverClient(**kwargs)
 
 
+class _ChainResolverClient(_ResolverClient):
+    errors: ClassVar[dict[str, DirectResolverError]] = {}
+    chain_seen: ClassVar[list[tuple[str, str]]] = []
+
+    async def solve(self, *args: object, **kwargs: object) -> DirectResolverResult:
+        endpoint = str(self.kwargs["endpoint"])
+        self.chain_seen.append((endpoint, "standard"))
+        error = self.errors.get(endpoint)
+        if error is not None:
+            raise error
+        return await super().solve(*args, **kwargs)
+
+    async def solve_trawl_native(self, *args: object, **kwargs: object) -> DirectResolverResult:
+        endpoint = str(self.kwargs["endpoint"])
+        self.chain_seen.append((endpoint, "trawl_native"))
+        error = self.errors.get(endpoint)
+        if error is not None:
+            raise error
+        return await _ResolverClient.solve(self, *args, **kwargs)
+
+
+def _chain_factory(**kwargs: object) -> _ChainResolverClient:
+    return _ChainResolverClient(**kwargs)
+
+
 def _manifest(*, browser_challenge: bool, domains: list[str]) -> dict[str, object]:
     return {
         "protocol_version": DIRECT_PROVIDER_PROTOCOL_V1,
@@ -133,6 +164,69 @@ async def test_resolver_defaults_are_disabled_and_secret_free(
     assert value.auth_headers_configured is False
 
 
+async def test_resolver_profiles_are_ranked_and_limited_to_one_per_kind(
+    db_session: AsyncSession,
+) -> None:
+    await create_direct_resolver(
+        db_session,
+        DirectResolverCreate(
+            name="TRAWL",
+            resolver_kind=DirectResolverKind.TRAWL,
+            priority=30,
+            endpoint="http://trawl:8191",
+            enabled=False,
+            allow_private_http=True,
+        ),
+        client_factory=_factory,
+    )
+    await create_direct_resolver(
+        db_session,
+        DirectResolverCreate(
+            name="Byparr",
+            resolver_kind=DirectResolverKind.BYPARR,
+            priority=20,
+            endpoint="http://byparr:8191",
+            enabled=False,
+            allow_private_http=True,
+        ),
+        client_factory=_factory,
+    )
+    await create_direct_resolver(
+        db_session,
+        DirectResolverCreate(
+            name="FlareSolverr",
+            resolver_kind=DirectResolverKind.FLARESOLVERR,
+            priority=10,
+            endpoint="http://flaresolverr:8191",
+            enabled=False,
+            allow_private_http=True,
+        ),
+        client_factory=_factory,
+    )
+
+    values = await list_direct_resolvers(db_session)
+
+    assert [(value.name, value.resolver_kind, value.priority) for value in values] == [
+        ("FlareSolverr", DirectResolverKind.FLARESOLVERR, 10),
+        ("Byparr", DirectResolverKind.BYPARR, 20),
+        ("TRAWL", DirectResolverKind.TRAWL, 30),
+    ]
+    with pytest.raises(DirectResolverServiceError) as duplicate:
+        await create_direct_resolver(
+            db_session,
+            DirectResolverCreate(
+                name="Second TRAWL",
+                resolver_kind=DirectResolverKind.TRAWL,
+                priority=40,
+                endpoint="http://trawl-2:8191",
+                enabled=False,
+                allow_private_http=True,
+            ),
+            client_factory=_factory,
+        )
+    assert duplicate.value.code == "resolver_kind_already_configured"
+
+
 async def test_update_normalizes_endpoint_encrypts_headers_and_requires_test(
     db_session: AsyncSession,
 ) -> None:
@@ -143,7 +237,7 @@ async def test_update_normalizes_endpoint_encrypts_headers_and_requires_test(
             endpoint="http://resolver:8191/",
             enabled=True,
             allow_private_http=True,
-            timeout_seconds=75,
+            timeout_seconds=60,
             max_concurrency=2,
             authentication_headers={"X-API-Key": "resolver-secret"},
         ),
@@ -157,6 +251,26 @@ async def test_update_normalizes_endpoint_encrypts_headers_and_requires_test(
     row = await db_session.get(DirectResolverConfig, 1)
     assert row is not None
     assert "resolver-secret" not in str(row.encrypted_auth_headers)
+
+
+async def test_update_rejects_attempts_longer_than_sixty_seconds(
+    db_session: AsyncSession,
+) -> None:
+    with pytest.raises(DirectResolverServiceError) as exc_info:
+        await update_direct_resolver(
+            db_session,
+            DirectResolverUpdate(
+                endpoint="http://resolver:8191",
+                enabled=True,
+                allow_private_http=True,
+                timeout_seconds=61,
+                max_concurrency=1,
+                authentication_headers={},
+            ),
+            client_factory=_factory,
+        )
+
+    assert exc_info.value.code == "invalid_resolver_timeout"
 
 
 async def test_successful_connection_test_marks_resolver_healthy(
@@ -285,6 +399,68 @@ async def test_provider_profile_requires_every_capability_and_opt_in_gate(
     assert await build_provider_resolver_profile(db_session, provider) is None
 
 
+async def test_provider_profiles_follow_resolver_priority(
+    db_session: AsyncSession,
+) -> None:
+    provider = DirectProviderConfig(
+        provider_id="pullbox.test",
+        display_name="Test Provider",
+        endpoint="http://provider:8780",
+        enabled=True,
+        priority=10,
+        state=DirectProviderState.HEALTHY,
+        negotiated_protocol=DIRECT_PROVIDER_PROTOCOL_V1,
+        trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        encrypted_bearer_token="enc:not-used",
+        resolver_enabled=True,
+        manifest_snapshot=_manifest(browser_challenge=True, domains=["source.example"]),
+    )
+    db_session.add(provider)
+    db_session.add_all(
+        [
+            DirectResolverConfig(
+                name="TRAWL",
+                resolver_kind=DirectResolverKind.TRAWL,
+                priority=30,
+                endpoint="http://trawl:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+            ),
+            DirectResolverConfig(
+                name="FlareSolverr",
+                resolver_kind=DirectResolverKind.FLARESOLVERR,
+                priority=10,
+                endpoint="http://flaresolverr:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+            ),
+            DirectResolverConfig(
+                name="Byparr",
+                resolver_kind=DirectResolverKind.BYPARR,
+                priority=20,
+                endpoint="http://byparr:8191",
+                enabled=True,
+                state=DirectResolverState.DEGRADED,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    profiles = await build_provider_resolver_profiles(db_session, provider)
+
+    assert [option.profile.endpoint for option in profiles] == [
+        "http://flaresolverr:8191",
+        "http://byparr:8191",
+        "http://trawl:8191",
+    ]
+    assert [option.profile.mode for option in profiles] == [
+        "flaresolverr_v1",
+        "flaresolverr_v1",
+        "trawl_scrape",
+    ]
+    assert await build_provider_resolver_profile(db_session, provider) == profiles[0].profile
+
+
 async def test_provider_profile_is_ephemeral_and_never_written_to_provider_row(
     db_session: AsyncSession,
 ) -> None:
@@ -364,6 +540,83 @@ async def test_host_adapter_resolution_uses_static_domain_policy_and_shared_brea
     assert _ResolverClient.seen[1]["circuit_breaker"] is first_breaker
 
 
+async def test_host_adapter_tries_healthy_resolvers_in_priority_order(
+    db_session: AsyncSession,
+) -> None:
+    _ChainResolverClient.chain_seen = []
+    _ChainResolverClient.errors = {
+        "http://flaresolverr:8191": DirectResolverError(
+            "resolver_timed_out",
+            "Timed out.",
+            retryable=True,
+        ),
+        "http://byparr:8191": DirectResolverError(
+            "resolver_challenge_failed",
+            "Challenge was not solved.",
+            retryable=True,
+        ),
+    }
+    db_session.add_all(
+        [
+            DirectResolverConfig(
+                name="TRAWL",
+                resolver_kind=DirectResolverKind.TRAWL,
+                priority=30,
+                endpoint="http://trawl:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+                allow_private_http=True,
+            ),
+            DirectResolverConfig(
+                name="FlareSolverr",
+                resolver_kind=DirectResolverKind.FLARESOLVERR,
+                priority=10,
+                endpoint="http://flaresolverr:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+                allow_private_http=True,
+            ),
+            DirectResolverConfig(
+                name="Byparr",
+                resolver_kind=DirectResolverKind.BYPARR,
+                priority=20,
+                endpoint="http://byparr:8191",
+                enabled=True,
+                state=DirectResolverState.DEGRADED,
+                allow_private_http=True,
+            ),
+        ]
+    )
+    await db_session.commit()
+    progress: list[ResolverAttemptProgress] = []
+
+    async def record_attempt(value: ResolverAttemptProgress) -> None:
+        progress.append(value)
+
+    result = await resolve_for_host_adapter(
+        db_session,
+        target_url="https://download.source.example/file",
+        adapter_id="source-host",
+        declared_domains=("source.example",),
+        challenge_category="artifact_host_challenge",
+        client_factory=_chain_factory,
+        on_attempt=record_attempt,
+    )
+
+    assert result.status_code == 200
+    assert _ChainResolverClient.chain_seen == [
+        ("http://flaresolverr:8191", "standard"),
+        ("http://byparr:8191", "standard"),
+        ("http://trawl:8191", "standard"),
+    ]
+    assert [(item.resolver_name, item.attempt, item.total) for item in progress] == [
+        ("FlareSolverr", 1, 3),
+        ("Byparr", 2, 3),
+        ("TRAWL", 3, 3),
+    ]
+    assert len({id(item["circuit_breaker"]) for item in _ChainResolverClient.seen[-3:]}) == 3
+
+
 async def test_host_adapter_resolution_rejects_missing_policy(
     db_session: AsyncSession,
 ) -> None:
@@ -388,7 +641,8 @@ async def test_trawl_host_adapter_resolution_uses_native_scrape(
     _ResolverClient.trawl_solve_seen = []
     db_session.add(
         DirectResolverConfig(
-            name="default",
+            name="TRAWL",
+            resolver_kind=DirectResolverKind.TRAWL,
             endpoint="http://trawl:8191",
             enabled=True,
             state=DirectResolverState.HEALTHY,
@@ -415,3 +669,52 @@ async def test_trawl_host_adapter_resolution_uses_native_scrape(
             },
         )
     ]
+
+
+async def test_trawl_host_adapter_never_falls_back_to_other_resolver_kinds(
+    db_session: AsyncSession,
+) -> None:
+    _ChainResolverClient.chain_seen = []
+    _ChainResolverClient.errors = {
+        "http://trawl:8191": DirectResolverError(
+            "resolver_timed_out",
+            "Timed out.",
+            retryable=True,
+        )
+    }
+    db_session.add_all(
+        [
+            DirectResolverConfig(
+                name="FlareSolverr",
+                resolver_kind=DirectResolverKind.FLARESOLVERR,
+                priority=10,
+                endpoint="http://flaresolverr:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+                allow_private_http=True,
+            ),
+            DirectResolverConfig(
+                name="TRAWL",
+                resolver_kind=DirectResolverKind.TRAWL,
+                priority=30,
+                endpoint="http://trawl:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+                allow_private_http=True,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    with pytest.raises(DirectResolverServiceError) as error:
+        await resolve_for_trawl_host_adapter(
+            db_session,
+            target_url="https://datanodes.to/login.html",
+            adapter_id="datanodes",
+            declared_domains=("datanodes.to",),
+            challenge_category="artifact_host_login",
+            client_factory=_chain_factory,
+        )
+
+    assert error.value.code == "resolver_chain_exhausted"
+    assert _ChainResolverClient.chain_seen == [("http://trawl:8191", "trawl_native")]

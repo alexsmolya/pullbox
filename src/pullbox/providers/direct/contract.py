@@ -144,7 +144,7 @@ class DirectHealthResponse(DirectContractModel):
 
 class DirectResolverProfile(DirectContractModel):
     endpoint: str = Field(max_length=1_000)
-    mode: str = Field(default="flaresolverr_v1", max_length=100)
+    mode: Literal["flaresolverr_v1", "trawl_scrape"] = "flaresolverr_v1"
     timeout_seconds: float = Field(gt=0, le=300)
     max_concurrency: int = Field(ge=1, le=4)
     declared_domains: list[str] = Field(max_length=100)

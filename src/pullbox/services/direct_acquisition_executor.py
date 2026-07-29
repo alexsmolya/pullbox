@@ -28,6 +28,7 @@ from pullbox.models.direct_acquisition import (
 )
 from pullbox.providers.artifact_hosts.contract import (
     ArtifactHostResolutionError,
+    ArtifactResolutionProgress,
     ArtifactTransferProtocol,
     HostResolutionRequest,
     ResolvedTransfer,
@@ -214,6 +215,7 @@ class DirectAcquisitionExecutor:
                         request=request,
                         credentials=credentials,
                         host_config_id=host_config_id,
+                        progress=progress,
                     ),
                     cancel_event,
                 )
@@ -335,11 +337,19 @@ class DirectAcquisitionExecutor:
         request: HostResolutionRequest,
         credentials: dict[str, str],
         host_config_id: int | None,
+        progress: _ProgressWriter,
     ) -> ResolvedTransfer:
+        async def publish_resolver_attempt(event: ArtifactResolutionProgress) -> None:
+            await progress.write_resolver_attempt(event)
+
         try:
             resolved = cast(
                 "ResolvedTransfer",
-                await self._host_resolver.resolve(request, credentials=credentials),
+                await self._host_resolver.resolve(
+                    request,
+                    credentials=credentials,
+                    progress_callback=publish_resolver_attempt,
+                ),
             )
         except ArtifactHostResolutionError as exc:
             await _record_host_account_result(
@@ -429,6 +439,7 @@ class DirectAcquisitionExecutor:
                 request=refreshed_request,
                 credentials=credentials,
                 host_config_id=host_config_id,
+                progress=progress,
             )
 
         result = await self._http_transport.transfer(
@@ -663,6 +674,20 @@ class _ProgressWriter:
         self._last_saved_at = 0.0
         self._last_saved_bytes = -1
 
+    async def write_resolver_attempt(self, event: ArtifactResolutionProgress) -> None:
+        await self.write(
+            stage="resolver",
+            force=True,
+            details={
+                "resolver_id": event.resolver_id,
+                "resolver_name": event.resolver_name,
+                "resolver_kind": event.resolver_kind,
+                "resolver_attempt": event.attempt,
+                "resolver_total": event.total,
+                "resolver_scope": event.scope,
+            },
+        )
+
     async def write(
         self,
         *,
@@ -670,6 +695,7 @@ class _ProgressWriter:
         snapshot: TransferProgressSnapshot | None = None,
         force: bool = False,
         final_path: str | None = None,
+        details: dict[str, object] | None = None,
     ) -> None:
         now = time.monotonic()
         current_bytes = (
@@ -693,6 +719,8 @@ class _ProgressWriter:
             "bytes_per_second": snapshot.bytes_per_second if snapshot is not None else None,
             "eta_seconds": snapshot.eta_seconds if snapshot is not None else None,
         }
+        if details:
+            data.update(details)
         advance_acquisition_progress(
             self._attempt,
             revision=self._attempt.progress_revision + 1,

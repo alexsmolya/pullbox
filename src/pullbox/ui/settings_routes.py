@@ -260,8 +260,17 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["has_comicvine_key"] = bool(active_key)
         ctx["obfuscated_key"] = obfuscate_api_key(active_key)
     elif tab == "search":
+        from pullbox.schemas.direct_resolver import DirectResolverResponse
+        from pullbox.services.direct_resolver_service import list_direct_resolvers
+
         result = await session.execute(select(SystemConfig).order_by(SystemConfig.key))
         ctx["configs"] = {c.key: c.value for c in result.scalars().all()}
+        resolvers = await list_direct_resolvers(session)
+        ctx["direct_resolvers"] = resolvers
+        ctx["direct_resolver_seed"] = [
+            DirectResolverResponse.model_validate(resolver).model_dump(mode="json")
+            for resolver in resolvers
+        ]
     elif tab == "clients":
         client_result = await session.execute(
             select(DownloadClientConfig).order_by(
@@ -286,6 +295,8 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         )
         ctx["configs"] = {c.key: c.value for c in cfg_result.scalars().all()}
     elif tab == "indexers":
+        from pullbox.services.direct_resolver_service import list_direct_resolvers
+
         indexer_result = await session.execute(
             select(IndexerConfig).order_by(IndexerConfig.priority, IndexerConfig.name)
         )
@@ -333,26 +344,23 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["blocklist_expiry_days"] = bl_expiry.value if bl_expiry else "90"
         bl_auto = await session.get(SystemConfig, "blocklist.auto_add_on_failure")
         ctx["blocklist_auto_add"] = (bl_auto.value.lower() == "true") if bl_auto else True
+        ctx["direct_resolvers"] = await list_direct_resolvers(session)
     elif tab == "direct":
         from pullbox.schemas.direct_host import DirectHostResponse
         from pullbox.schemas.direct_provider import DirectProviderResponse
-        from pullbox.schemas.direct_resolver import DirectResolverResponse
         from pullbox.services.direct_host_settings import list_direct_host_settings
         from pullbox.services.direct_provider_registration import list_direct_providers
-        from pullbox.services.direct_resolver_service import get_direct_resolver
+        from pullbox.services.direct_resolver_service import list_direct_resolvers
 
         providers = await list_direct_providers(session)
-        resolver = await get_direct_resolver(session)
+        resolvers = await list_direct_resolvers(session)
         hosts = await list_direct_host_settings(session)
         ctx["direct_providers"] = providers
         ctx["direct_provider_seed"] = [
             DirectProviderResponse.model_validate(provider).model_dump(mode="json")
             for provider in providers
         ]
-        ctx["direct_resolver"] = resolver
-        ctx["direct_resolver_seed"] = DirectResolverResponse.model_validate(resolver).model_dump(
-            mode="json"
-        )
+        ctx["direct_resolvers"] = resolvers
         ctx["direct_hosts"] = hosts
         ctx["direct_host_seed"] = [
             DirectHostResponse.model_validate(host).model_dump(mode="json") for host in hosts

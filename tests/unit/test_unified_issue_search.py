@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from pullbox.models.direct_acquisition import DirectResolverKind
 from pullbox.models.issue import IssueType
 from pullbox.providers.base import ProviderRegistry
+from pullbox.services.direct_resolver_service import ResolverAttemptProgress
 from pullbox.services.direct_search_coordinator import (
     DirectSearchOutcome,
     DirectSearchProvider,
@@ -99,3 +101,54 @@ async def test_quick_first_deep_fallback_searches_direct_provider_only_once(
     assert indexer_calls == 3
     assert direct_calls == 1
     assert outcome.direct_outcome is not None
+
+
+async def test_unified_search_persists_secret_free_direct_resolver_diagnostics(
+    db_session: AsyncSession,
+) -> None:
+    resolver_attempt = ResolverAttemptProgress(
+        resolver_id=2,
+        resolver_name="Byparr",
+        resolver_kind=DirectResolverKind.BYPARR,
+        attempt=2,
+        total=3,
+        scope="provider:pullbox.getcomics:search",
+    )
+
+    async def run_indexers(*_args: object, **_kwargs: object):
+        return [], {}, []
+
+    async def run_direct(*_args: object, **_kwargs: object) -> DirectSearchOutcome:
+        return DirectSearchOutcome(
+            (),
+            (),
+            (),
+            1,
+            12,
+            resolver_attempts=(resolver_attempt,),
+        )
+
+    service = SearchService(
+        ProviderRegistry(),
+        direct_providers=(_provider(),),
+        direct_search_func=run_direct,
+    )
+    service._run_query_batch_with_provenance = run_indexers  # type: ignore[method-assign]
+
+    outcome = await service.search_issue_target(db_session, _target(), mode="fast")
+
+    assert outcome.search_details["direct_search"] == {
+        "providers_searched": 1,
+        "elapsed_ms": 12,
+        "failures": [],
+        "resolver_attempts": [
+            {
+                "resolver_id": 2,
+                "resolver_name": "Byparr",
+                "resolver_kind": "byparr",
+                "attempt": 2,
+                "total": 3,
+                "scope": "provider:pullbox.getcomics:search",
+            }
+        ],
+    }

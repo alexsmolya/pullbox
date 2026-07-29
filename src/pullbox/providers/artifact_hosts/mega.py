@@ -25,6 +25,8 @@ from pullbox.providers.artifact_hosts.helpers import safe_filename, validate_res
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgressCallback
+
 MegaProgressCallback = Callable[[int, int], Awaitable[None] | None]
 
 _PROTOCOL_HEADER = b"PULLBOX_MEGA_BRIDGE 1\n"
@@ -47,6 +49,7 @@ class MegaArtifactHostAdapter:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer:
         url = validate_resolution_request(
             request,

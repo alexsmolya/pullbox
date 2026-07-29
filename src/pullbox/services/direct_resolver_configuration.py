@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
 from pullbox.core.exceptions import ValidationError
-from pullbox.models.direct_acquisition import DirectResolverConfig, DirectResolverState
+from pullbox.models.direct_acquisition import (
+    DirectResolverConfig,
+    DirectResolverKind,
+    DirectResolverState,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -37,7 +41,10 @@ _FORBIDDEN_HEADERS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class DirectResolverConfigRead:
+    id: int
     name: str
+    resolver_kind: DirectResolverKind
+    priority: int
     endpoint: str
     enabled: bool
     state: DirectResolverState
@@ -106,7 +113,10 @@ def read_resolver_config(config: DirectResolverConfig) -> DirectResolverConfigRe
     """Return a projection that exposes header names but never values."""
     headers = _stored_headers(config.encrypted_auth_headers)
     return DirectResolverConfigRead(
+        id=config.id,
         name=config.name,
+        resolver_kind=config.resolver_kind or DirectResolverKind.FLARESOLVERR,
+        priority=config.priority or 10,
         endpoint=config.endpoint,
         enabled=bool(config.enabled),
         state=config.state or DirectResolverState.DISABLED,

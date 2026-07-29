@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
     import httpx
 
+    from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgressCallback
     from pullbox.providers.artifact_hosts.http import ArtifactUrlResolver
 
 _FILE_ID = re.compile(r"^[A-Za-z0-9_-]{2,128}$")
@@ -70,6 +71,7 @@ class PixelDrainAdapter:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer:
         source_url = validate_resolution_request(
             request,

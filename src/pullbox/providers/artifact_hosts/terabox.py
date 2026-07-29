@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     import httpx
 
+    from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgressCallback
     from pullbox.providers.artifact_hosts.http import ArtifactUrlResolver
 
 _TERABOX_DOMAINS = (
@@ -76,6 +77,7 @@ class TeraBoxAdapter:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: ArtifactResolutionProgressCallback | None = None,
     ) -> ResolvedTransfer:
         source_url = validate_resolution_request(
             request,

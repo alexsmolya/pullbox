@@ -3,6 +3,8 @@
 {% from "components/settings_shell.html" import section_card, settings_footer, settings_row %}
 
 <div class="space-y-6 pt-6">
+  {% include "partials/settings_resolvers.html" %}
+
   {% call section_card(
     title="Search schedule",
     eyebrow="Cadence",

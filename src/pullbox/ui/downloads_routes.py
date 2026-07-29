@@ -589,7 +589,7 @@ async def load_download_progress_map(
                 eta_seconds=int(eta) if isinstance(eta, int | float) else None,
                 size_bytes=int(total) if isinstance(total, int | float) else None,
                 updated_at=time.monotonic(),
-                client_state=_direct_progress_label(stage, host_kind),
+                client_state=_direct_progress_label(snapshot),
                 source_label=_direct_source_label(attempt.provider_identity, host_kind),
                 bytes_transferred=(
                     int(transferred) if isinstance(transferred, int | float) else None
@@ -702,10 +702,28 @@ async def load_download_progress_map(
     return progress_map
 
 
-def _direct_progress_label(stage: object, host_kind: object) -> str:
+def _direct_progress_label(snapshot: Mapping[str, object]) -> str:
+    stage = snapshot.get("stage")
+    host_kind = snapshot.get("host_kind")
     stage_value = str(stage) if isinstance(stage, str) and stage else "direct"
     host_label = _direct_host_label(host_kind)
 
+    if stage_value == "resolver":
+        resolver_name = snapshot.get("resolver_name")
+        resolver_kind = snapshot.get("resolver_kind")
+        resolver_scope = snapshot.get("resolver_scope")
+        attempt = snapshot.get("resolver_attempt")
+        total = snapshot.get("resolver_total")
+        label = (
+            resolver_name.strip()
+            if isinstance(resolver_name, str) and resolver_name.strip()
+            else "browser resolver"
+        )
+        if resolver_kind == "trawl" and resolver_scope == "datanodes":
+            return "Using TRAWL (required by DataNodes)"
+        if isinstance(attempt, int) and isinstance(total, int) and total > 0:
+            return f"Trying {label} (resolver {attempt} of {total})"
+        return f"Trying {label}"
     if stage_value == "fallback_queued" and host_label:
         return f"Trying {host_label}"
     if stage_value == "resolving" and host_label:

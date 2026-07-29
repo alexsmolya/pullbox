@@ -399,43 +399,63 @@ class TestSettingsRouteContracts:
         assert "encrypted-token-must-not-render" not in response.text
         assert "encrypted-account-token-must-not-render" not in response.text
 
-    async def test_direct_download_settings_render_bounded_browser_resolver_controls(
+    async def test_search_settings_render_ranked_browser_resolver_controls(
         self,
         authenticated_client,
         sec_db,
     ) -> None:  # type: ignore[no-untyped-def]
-        from pullbox.models.direct_acquisition import DirectResolverConfig, DirectResolverState
+        from pullbox.models.direct_acquisition import (
+            DirectResolverConfig,
+            DirectResolverKind,
+            DirectResolverState,
+        )
 
         async with sec_db() as session:
-            session.add(
-                DirectResolverConfig(
-                    name="default",
-                    endpoint="http://resolver:8191",
-                    enabled=True,
-                    state=DirectResolverState.HEALTHY,
-                    allow_private_http=True,
-                    timeout_seconds=60,
-                    max_concurrency=1,
-                    encrypted_auth_headers={
-                        "Authorization": "encrypted-resolver-secret-must-not-render"
-                    },
-                    auth_metadata={"configured_header_names": ["Authorization"]},
-                )
+            session.add_all(
+                [
+                    DirectResolverConfig(
+                        name="TRAWL",
+                        resolver_kind=DirectResolverKind.TRAWL,
+                        priority=10,
+                        endpoint="http://trawl:8151",
+                        enabled=True,
+                        state=DirectResolverState.HEALTHY,
+                        allow_private_http=True,
+                        timeout_seconds=60,
+                        max_concurrency=1,
+                        encrypted_auth_headers={
+                            "Authorization": "encrypted-resolver-secret-must-not-render"
+                        },
+                        auth_metadata={"configured_header_names": ["Authorization"]},
+                    ),
+                    DirectResolverConfig(
+                        name="FlareSolverr",
+                        resolver_kind=DirectResolverKind.FLARESOLVERR,
+                        priority=20,
+                        endpoint="http://flaresolverr:8191",
+                        enabled=False,
+                        state=DirectResolverState.DISABLED,
+                        allow_private_http=True,
+                        timeout_seconds=60,
+                        max_concurrency=1,
+                    ),
+                ]
             )
             await session.commit()
 
-        response = await authenticated_client.get("/settings?tab=direct")
+        response = await authenticated_client.get("/settings?tab=search")
 
         assert response.status_code == 200
-        assert 'data-testid="settings-direct-resolver-card"' in response.text
-        assert 'data-testid="settings-direct-resolver-endpoint"' in response.text
-        assert 'data-testid="settings-direct-resolver-enabled"' in response.text
-        assert 'data-testid="settings-direct-resolver-test"' in response.text
-        assert "Browser challenge resolver" in response.text
-        assert "FlareSolverr-compatible" in response.text
+        assert 'data-testid="settings-search-resolvers-card"' in response.text
+        assert 'data-testid="settings-search-resolver-1"' in response.text
+        assert 'data-testid="settings-search-resolver-2"' in response.text
+        assert 'data-testid="settings-search-resolver-add"' in response.text
+        assert 'data-testid="settings-search-resolver-test-1"' in response.text
+        assert "Browser challenge resolvers" in response.text
+        assert "Lower values are tried first" in response.text
         assert "does not guarantee CAPTCHA" in response.text
         assert "DataNodes account login requires TRAWL" in response.text
-        assert "TRAWL native browser mode is used only for DataNodes login" in response.text
+        assert "TRAWL native browser mode is used only for approved resolver flows" in response.text
         assert "credentials are never sent to TRAWL" in response.text
         assert "TRAWL MITM mode is not supported" in response.text
         assert "Prowlarr keeps its own resolver configuration" in response.text
@@ -444,6 +464,22 @@ class TestSettingsRouteContracts:
         assert "Last classified error" in response.text
         assert "Authorization" in response.text
         assert "encrypted-resolver-secret-must-not-render" not in response.text
+
+    async def test_direct_and_indexer_settings_link_to_shared_resolver_management(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        direct = await authenticated_client.get("/settings?tab=direct")
+        indexers = await authenticated_client.get("/settings?tab=indexers")
+
+        assert direct.status_code == 200
+        assert indexers.status_code == 200
+        assert 'data-testid="settings-direct-resolver-summary"' in direct.text
+        assert 'href="/settings?tab=search#browser-resolvers"' in direct.text
+        assert 'data-testid="settings-indexers-resolver-summary"' in indexers.text
+        assert 'href="/settings?tab=search#browser-resolvers"' in indexers.text
+        assert 'data-testid="settings-search-resolver-endpoint"' not in direct.text
+        assert 'data-testid="settings-search-resolver-endpoint"' not in indexers.text
 
     async def test_direct_download_settings_render_native_host_registry_without_secrets(
         self,

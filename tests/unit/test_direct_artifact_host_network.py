@@ -190,6 +190,7 @@ class _StubAdapter:
         request: HostResolutionRequest,
         *,
         credentials: Mapping[str, str],
+        progress_callback: object = None,
     ) -> ResolvedTransfer:
         self.calls += 1
         assert credentials == {"api_key": "secret"}

@@ -25,6 +25,7 @@ from pullbox.models.direct_acquisition import (
     DirectProviderState,
     DirectProviderTrustLevel,
     DirectResolverConfig,
+    DirectResolverKind,
     DirectResolverState,
 )
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
@@ -96,6 +97,7 @@ __all__ = [
     "DirectProviderState",
     "DirectProviderTrustLevel",
     "DirectResolverConfig",
+    "DirectResolverKind",
     "DirectResolverState",
     "DownloadClientConfig",
     "DownloadClientType",

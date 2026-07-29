@@ -158,6 +158,36 @@ IssueSearchMode = _search_types.IssueSearchMode
 
 
 DEFAULT_TYPE_THRESHOLDS = _search_runtime.DEFAULT_TYPE_THRESHOLDS
+
+
+def _direct_search_diagnostics(outcome: DirectSearchOutcome) -> dict[str, object]:
+    """Return the bounded direct-provider detail persisted in search history."""
+    return {
+        "providers_searched": outcome.providers_searched,
+        "elapsed_ms": outcome.elapsed_ms,
+        "failures": [
+            {
+                "provider_identity": failure.provider_identity,
+                "provider_name": failure.provider_name,
+                "code": failure.code,
+                "retryable": failure.retryable,
+            }
+            for failure in outcome.failures
+        ],
+        "resolver_attempts": [
+            {
+                "resolver_id": attempt.resolver_id,
+                "resolver_name": attempt.resolver_name,
+                "resolver_kind": attempt.resolver_kind.value,
+                "attempt": attempt.attempt,
+                "total": attempt.total,
+                "scope": attempt.scope,
+            }
+            for attempt in outcome.resolver_attempts
+        ],
+    }
+
+
 should_auto_grab = _search_runtime.should_auto_grab
 
 
@@ -492,6 +522,7 @@ class SearchService:
         if direct_task is None:
             return await indexer_search
         indexer_outcome, direct_outcome = await asyncio.gather(indexer_search, direct_task)
+        indexer_outcome.search_details["direct_search"] = _direct_search_diagnostics(direct_outcome)
         return replace(indexer_outcome, direct_outcome=direct_outcome)
 
     async def _search_direct_safely(
