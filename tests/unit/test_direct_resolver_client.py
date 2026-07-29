@@ -97,6 +97,95 @@ async def test_resolver_posts_standard_v1_request_and_returns_ephemeral_solution
     assert "x-secret" not in repr(result)
 
 
+async def test_resolver_posts_trawl_native_scrape_request_and_returns_solution() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://172.20.0.9:8191/scrape"
+        assert request.headers["Host"] == "trawl:8191"
+        payload = json.loads(request.content)
+        assert payload == {
+            "url": "https://source.example/login",
+            "maxTimeout": 60000,
+            "skipHttp": True,
+            "maxTier": 3,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "url": "https://source.example/login",
+                "html": '<input name="cf-turnstile-response" value="solved-token">',
+                "cookies": [
+                    {
+                        "name": "cf_clearance",
+                        "value": COOKIE_SECRET,
+                        "domain": ".source.example",
+                        "path": "/",
+                        "secure": True,
+                    }
+                ],
+                "userAgent": "Trawl Browser",
+                "statusCode": 200,
+                "tier": 3,
+                "sessionCached": False,
+                "timings": [],
+                "totalMs": 1250,
+                "proxyUsed": False,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = DirectResolverClient(
+            endpoint="http://trawl:8191",
+            allow_private_http=True,
+            endpoint_resolver=_resolve_private,
+            target_resolver=_resolve_public,
+            http_client=http_client,
+        )
+        result = await client.solve_trawl_native(
+            "https://source.example/login",
+            declared_domains=("source.example",),
+            challenge_category="artifact_host_login",
+        )
+
+    assert result.final_url == "https://source.example/login"
+    assert result.status_code == 200
+    assert "solved-token" in result.html
+    assert result.user_agent == "Trawl Browser"
+    assert result.cookies[0].name == "cf_clearance"
+    assert COOKIE_SECRET not in repr(result)
+
+
+async def test_trawl_native_revalidates_returned_domain() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "url": "https://evil.example/escape",
+                "html": "<html></html>",
+                "cookies": [],
+                "userAgent": "Trawl Browser",
+                "statusCode": 200,
+                "tier": 3,
+            },
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = DirectResolverClient(
+            endpoint="http://trawl:8191",
+            allow_private_http=True,
+            endpoint_resolver=_resolve_private,
+            target_resolver=_resolve_public,
+            http_client=http_client,
+        )
+        with pytest.raises(DirectResolverError) as exc_info:
+            await client.solve_trawl_native(
+                "https://source.example/login",
+                declared_domains=("source.example",),
+                challenge_category="artifact_host_login",
+            )
+
+    assert exc_info.value.code == "resolver_redirect_rejected"
+
+
 @pytest.mark.parametrize(
     ("url", "domains"),
     [

@@ -28,7 +28,15 @@ if TYPE_CHECKING:
 
 _DEFAULT_PREFERENCE = 50
 _MAX_PREFERENCE = 1_000
-_ACCOUNT_REQUIRED_HOSTS = frozenset({DirectArtifactHostKind.TERABOX})
+_ACCOUNT_REQUIRED_HOSTS = frozenset(
+    {
+        DirectArtifactHostKind.TERABOX,
+        DirectArtifactHostKind.DATANODES,
+    }
+)
+_REQUIRED_ACCOUNT_FIELDS: dict[DirectArtifactHostKind, frozenset[str]] = {
+    DirectArtifactHostKind.DATANODES: frozenset({"username", "password"}),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +93,7 @@ async def update_direct_host_setting(
     )
 
     _validate_preference(next_preference)
+    _validate_supported_credential_fields(host_kind, next_fields)
     _validate_required_account(host_kind, next_enabled, next_fields)
 
     if config is None:
@@ -161,5 +170,24 @@ def _validate_required_account(
     enabled: bool,
     credential_fields: set[str],
 ) -> None:
+    required = _REQUIRED_ACCOUNT_FIELDS.get(host_kind)
+    if required and credential_fields and not required.issubset(credential_fields):
+        raise ValidationError(f"{host_kind.value} requires both username and password.")
+    if enabled and required and not required.issubset(credential_fields):
+        raise ValidationError(f"{host_kind.value} requires both username and password.")
     if enabled and host_kind in _ACCOUNT_REQUIRED_HOSTS and not credential_fields:
         raise ValidationError(f"{host_kind.value} requires an account session before enabling.")
+
+
+def _validate_supported_credential_fields(
+    host_kind: DirectArtifactHostKind,
+    credential_fields: set[str],
+) -> None:
+    allowed = set(credential_fields_for_host(host_kind))
+    unsupported = sorted(credential_fields - allowed)
+    if unsupported:
+        if not allowed:
+            raise ValidationError(f"{host_kind.value} does not accept credentials.")
+        raise ValidationError(
+            f"Unsupported credential field for {host_kind.value}: {unsupported[0]}."
+        )

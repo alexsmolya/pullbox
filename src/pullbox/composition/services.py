@@ -14,6 +14,7 @@ from pullbox.core.comicvine_key import get_comicvine_api_key
 from pullbox.models.config import SystemConfig
 from pullbox.providers.artifact_hosts.datanodes import DataNodesAdapter
 from pullbox.providers.artifact_hosts.generic import GenericHttpsAdapter
+from pullbox.providers.artifact_hosts.helpers import challenge_required
 from pullbox.providers.artifact_hosts.mediafire import MediaFireAdapter
 from pullbox.providers.artifact_hosts.mega import MegaArtifactHostAdapter, MegaBridgeRunner
 from pullbox.providers.artifact_hosts.pixeldrain import PixelDrainAdapter
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
     from pullbox.providers.base import ProviderRegistry
+    from pullbox.providers.direct.resolver import DirectResolverResult
     from pullbox.services.download_service import DownloadService
 
 
@@ -120,7 +122,7 @@ def build_direct_acquisition_runtime() -> DirectAcquisitionRuntime:
         RootzAdapter(http_client),
         MediaFireAdapter(http_client),
         TeraBoxAdapter(http_client),
-        DataNodesAdapter(http_client),
+        DataNodesAdapter(http_client, login_solver=_solve_datanodes_login),
     )
     executor = DirectAcquisitionExecutor(
         host_resolver=ArtifactHostResolver(adapters),
@@ -135,6 +137,31 @@ def build_direct_acquisition_runtime() -> DirectAcquisitionRuntime:
         http_client=http_client,
         host_kinds=tuple(adapter.host_kind for adapter in adapters),
     )
+
+
+async def _solve_datanodes_login(target_url: str) -> DirectResolverResult:
+    """Resolve DataNodes' login challenge without handing credentials to TRAWL."""
+    from pullbox.database import get_session_factory
+    from pullbox.providers.direct.resolver import DirectResolverError
+    from pullbox.services.direct_resolver_service import (
+        DirectResolverServiceError,
+        resolve_for_trawl_host_adapter,
+    )
+
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            return await resolve_for_trawl_host_adapter(
+                session,
+                target_url=target_url,
+                adapter_id="datanodes",
+                declared_domains=("datanodes.to",),
+                challenge_category="artifact_host_login",
+            )
+    except (DirectResolverError, DirectResolverServiceError) as exc:
+        raise challenge_required(
+            "DataNodes requires a healthy TRAWL resolver to complete account login."
+        ) from exc
 
 
 async def build_metadata_service(session: AsyncSession) -> MetadataService:

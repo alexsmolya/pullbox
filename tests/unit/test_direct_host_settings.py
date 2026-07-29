@@ -65,7 +65,7 @@ async def test_list_exposes_every_closed_host_without_writing_defaults(
     datanodes = next(
         setting for setting in settings if setting.host_kind is DirectArtifactHostKind.DATANODES
     )
-    assert datanodes.allowed_credential_fields == ()
+    assert datanodes.allowed_credential_fields == ("username", "password")
 
 
 @pytest.mark.asyncio
@@ -154,3 +154,49 @@ async def test_required_account_host_cannot_be_enabled_without_session(
     )
     assert terabox.id is None
     assert terabox.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_datanodes_requires_a_complete_account_before_enabling(
+    session: AsyncSession,
+) -> None:
+    with pytest.raises(ValidationError, match="both username and password"):
+        await update_direct_host_setting(
+            session,
+            DirectArtifactHostKind.DATANODES,
+            enabled=True,
+            preference=50,
+            credential_updates={"username": "reader@example.test"},
+        )
+
+    settings = await list_direct_host_settings(session)
+    datanodes = next(
+        setting for setting in settings if setting.host_kind is DirectArtifactHostKind.DATANODES
+    )
+    assert datanodes.id is None
+    assert datanodes.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_datanodes_stores_a_complete_write_only_account(
+    session: AsyncSession,
+) -> None:
+    setting = await update_direct_host_setting(
+        session,
+        DirectArtifactHostKind.DATANODES,
+        enabled=True,
+        preference=30,
+        credential_updates={
+            "username": "reader@example.test",
+            "password": "private-password",
+        },
+    )
+
+    assert setting.enabled is True
+    assert setting.configured_credential_fields == ("password", "username")
+    assert "reader@example.test" not in repr(setting)
+    assert "private-password" not in repr(setting)
+    stored = await session.get(DirectHostConfig, setting.id)
+    assert stored is not None
+    assert is_encrypted(str(stored.encrypted_credentials["username"]))
+    assert is_encrypted(str(stored.encrypted_credentials["password"]))

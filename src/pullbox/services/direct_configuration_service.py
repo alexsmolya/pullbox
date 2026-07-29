@@ -31,13 +31,22 @@ _HOST_CREDENTIAL_FIELDS: dict[DirectArtifactHostKind, frozenset[str]] = {
     DirectArtifactHostKind.ROOTZ: frozenset(),
     DirectArtifactHostKind.MEDIAFIRE: frozenset(),
     DirectArtifactHostKind.TERABOX: frozenset({"session_token", "cookie"}),
-    DirectArtifactHostKind.DATANODES: frozenset(),
+    DirectArtifactHostKind.DATANODES: frozenset({"username", "password"}),
+}
+_REQUIRED_HOST_CREDENTIAL_FIELDS: dict[DirectArtifactHostKind, frozenset[str]] = {
+    DirectArtifactHostKind.DATANODES: frozenset({"username", "password"}),
+}
+_HOST_CREDENTIAL_FIELD_ORDER: dict[DirectArtifactHostKind, tuple[str, ...]] = {
+    DirectArtifactHostKind.DATANODES: ("username", "password"),
 }
 
 
 def credential_fields_for_host(host_kind: DirectArtifactHostKind) -> tuple[str, ...]:
     """Return the closed write-only credential contract for one host."""
-    return tuple(sorted(_HOST_CREDENTIAL_FIELDS[host_kind]))
+    return _HOST_CREDENTIAL_FIELD_ORDER.get(
+        host_kind,
+        tuple(sorted(_HOST_CREDENTIAL_FIELDS[host_kind])),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +144,7 @@ def update_host_credentials(
     _validate_host_updates(config.host_kind, updates)
     encrypted = _encrypted_mapping(config.encrypted_credentials)
     _apply_secret_updates(encrypted, updates)
+    _validate_complete_host_credentials(config.host_kind, set(encrypted))
     config.encrypted_credentials = _json_secret_mapping(encrypted)
     config.account_metadata = _with_configured_fields(
         config.account_metadata,
@@ -220,6 +230,15 @@ def _validate_host_updates(
         raise ValidationError(
             f"Unsupported credential field for {host_kind.value}: {unsupported[0]}."
         )
+
+
+def _validate_complete_host_credentials(
+    host_kind: DirectArtifactHostKind,
+    configured_fields: set[str],
+) -> None:
+    required = _REQUIRED_HOST_CREDENTIAL_FIELDS.get(host_kind)
+    if required and configured_fields and not required.issubset(configured_fields):
+        raise ValidationError(f"{host_kind.value} requires both username and password.")
 
 
 def _validate_secret_updates(updates: Mapping[str, str | None]) -> None:

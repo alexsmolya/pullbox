@@ -115,9 +115,17 @@ _CREDENTIAL_FIELDS: dict[DirectArtifactHostKind, frozenset[str]] = {
     DirectArtifactHostKind.ROOTZ: frozenset(),
     DirectArtifactHostKind.MEDIAFIRE: frozenset(),
     DirectArtifactHostKind.TERABOX: frozenset({"session_token", "cookie"}),
-    DirectArtifactHostKind.DATANODES: frozenset(),
+    DirectArtifactHostKind.DATANODES: frozenset({"username", "password"}),
 }
-_ACCOUNT_REQUIRED = frozenset({DirectArtifactHostKind.TERABOX})
+_ACCOUNT_REQUIRED = frozenset(
+    {
+        DirectArtifactHostKind.TERABOX,
+        DirectArtifactHostKind.DATANODES,
+    }
+)
+_REQUIRED_CREDENTIAL_FIELDS: dict[DirectArtifactHostKind, frozenset[str]] = {
+    DirectArtifactHostKind.DATANODES: frozenset({"username", "password"}),
+}
 _SENSITIVE_PROVIDER_HEADERS = frozenset(
     {
         "authorization",
@@ -149,6 +157,15 @@ def credential_mode_for_host(
             intervention=True,
         )
     if configured:
+        required = _REQUIRED_CREDENTIAL_FIELDS.get(host_kind, frozenset())
+        if not required.issubset(configured):
+            raise ArtifactHostResolutionError(
+                code="invalid_host_credentials",
+                message="Artifact host credentials are incomplete.",
+                failure_class=DirectArtifactFailureClass.USER_ACTION,
+                retryable=False,
+                intervention=True,
+            )
         return ArtifactHostCredentialMode.ACCOUNT
     if host_kind in _ACCOUNT_REQUIRED:
         raise ArtifactHostResolutionError(

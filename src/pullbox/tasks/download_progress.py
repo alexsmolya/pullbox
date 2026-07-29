@@ -19,6 +19,8 @@ class ProgressSnapshot:
     updated_at: float
     client_state: str | None = None
     source_label: str | None = None
+    bytes_transferred: int | None = None
+    is_indeterminate: bool = False
 
 
 # Client-reported states that indicate a stall (case-insensitive prefix match).

@@ -20,19 +20,24 @@ class HostPageParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.anchors: dict[str, str] = {}
         self.forms: dict[str, ParsedForm] = {}
+        self.class_names: set[str] = set()
+        self.iframe_sources: list[str] = []
         self._active_form: ParsedForm | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name.lower(): value or "" for name, value in attrs}
+        self.class_names.update(values.get("class", "").casefold().split())
+        if tag.lower() == "iframe" and values.get("src"):
+            self.iframe_sources.append(values["src"])
         if tag.lower() == "a" and values.get("id") and values.get("href"):
             self.anchors[values["id"]] = values["href"]
             return
-        if tag.lower() == "form" and values.get("id"):
+        if tag.lower() == "form" and (values.get("id") or values.get("name")):
             form = ParsedForm(
                 action=values.get("action", ""),
                 method=values.get("method", "GET").upper(),
             )
-            self.forms[values["id"]] = form
+            self.forms[values.get("id") or values["name"]] = form
             self._active_form = form
             return
         if tag.lower() == "input" and self._active_form is not None and values.get("name"):

@@ -91,6 +91,70 @@ async def test_metadata_response_limit_stops_unbounded_adapter_reads() -> None:
     assert raised.value.failure_class is DirectArtifactFailureClass.SAFETY
 
 
+async def test_bounded_requests_preserve_logical_domain_cookies_across_pinned_hosts() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.headers["Host"], request.headers.get("Cookie")))
+        if request.headers["Host"] == "files.example.test":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": "https://cdn.files.example.test/final",
+                    "Set-Cookie": "account=session-secret; Domain=files.example.test; Path=/",
+                },
+            )
+        return httpx.Response(200, text="ok")
+
+    cookies = httpx.Cookies()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await request_bounded(
+            client,
+            "GET",
+            "https://files.example.test/start",
+            resolver=_public,
+            allowed_domains=("files.example.test",),
+            cookies=cookies,
+        )
+
+    assert response.status_code == 200
+    assert seen == [
+        ("files.example.test", None),
+        ("cdn.files.example.test", "account=session-secret"),
+    ]
+
+
+async def test_bounded_request_cookies_do_not_leak_to_unrelated_redirects() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.headers["Host"], request.headers.get("Cookie")))
+        if request.headers["Host"] == "files.example.test":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": "https://other.example.test/final",
+                    "Set-Cookie": "account=session-secret; Path=/",
+                },
+            )
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await request_bounded(
+            client,
+            "GET",
+            "https://files.example.test/start",
+            resolver=_public,
+            allowed_domains=None,
+            cookies=httpx.Cookies(),
+        )
+
+    assert seen == [
+        ("files.example.test", None),
+        ("other.example.test", None),
+    ]
+
+
 async def test_mediafire_cannot_redirect_transfer_to_an_unrelated_domain() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(

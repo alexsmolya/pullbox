@@ -27,13 +27,15 @@
   'rootz': 'Anonymous short-link resolution. No account credential is used.',
   'mediafire': 'Anonymous public shares through MediaFire download pages.',
   'terabox': 'Account required. Uses an encrypted user-owned session or cookie.',
-  'datanodes': 'Free public attempts use visible challenge handling. Premium mode is not enabled.'
+  'datanodes': 'Requires a free registered or Premium account plus a healthy TRAWL resolver. Anonymous downloads are not supported.'
 } -%}
 {%- set credential_labels = {
   'api_key': 'API key',
   'session': 'Session',
   'session_token': 'Session token',
   'cookie': 'Session cookie',
+  'username': 'Username',
+  'password': 'Password'
 } -%}
 
 <div
@@ -44,7 +46,7 @@
   <section class="section-card" data-testid="settings-direct-resolver-card">
     {% call section_header(
       title="Browser challenge resolver",
-      description="Configure one optional FlareSolverr-compatible service for direct-download sources that explicitly opt in and encounter a recognized browser challenge.",
+      description="Configure one optional FlareSolverr-compatible service for direct-download sources that explicitly opt in. DataNodes account login requires TRAWL.",
       eyebrow="Challenge handling",
       title_style="plain"
     ) %}
@@ -59,7 +61,7 @@
         tone="warning",
         icon="shield",
         title="Bounded compatibility, not a bypass guarantee",
-        description="A compatible resolver may help with recognized browser challenges, but enabling it does not guarantee CAPTCHA success. Trawl MITM mode is not supported, and Prowlarr keeps its own resolver configuration.",
+        description="A compatible resolver may help with recognized browser challenges, but enabling it does not guarantee CAPTCHA success. TRAWL native browser mode is used only for DataNodes login, credentials are never sent to TRAWL, TRAWL MITM mode is not supported, and Prowlarr keeps its own resolver configuration.",
         class_name="mb-5",
         attrs='data-testid="settings-direct-resolver-warning"'
       ) %}{% endcall %}
@@ -92,7 +94,7 @@
               placeholder="http://flaresolverr:8191"
               x-model.trim="resolverForm.endpoint"
             >
-            <p class="mt-1 text-[11px] text-pb-text-dim">Use the service root only. Pullbox calls the standard <code>/v1</code> endpoint and never enables Trawl's interception mode.</p>
+            <p class="mt-1 text-[11px] text-pb-text-dim">Use the service root only. Pullbox normally calls <code>/v1</code>; DataNodes login calls TRAWL's native <code>/scrape</code> endpoint. Pullbox never enables interception mode.</p>
           </div>
 
           <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-pb-border p-3 text-xs text-pb-text-sec">
@@ -452,9 +454,9 @@
               <div class="space-y-2">
                 <label class="block text-xs font-medium text-pb-text-sec" x-text="hostCredentialLabel(field)"></label>
                 <input
-                  type="password"
+                  :type="field === 'username' ? 'text' : 'password'"
                   class="input-pb font-mono"
-                  autocomplete="new-password"
+                  :autocomplete="field === 'username' ? 'username' : 'new-password'"
                   maxlength="16384"
                   :placeholder="hostCredentialConfigured(field) ? 'Configured - leave blank to keep' : 'Enter account credential'"
                   x-model="hostForm.credentials[field]"
@@ -724,6 +726,8 @@ function directProviderSettings(initialProviders, initialResolver, initialHosts)
         session: 'Session',
         session_token: 'Session token',
         cookie: 'Session cookie',
+        username: 'Username',
+        password: 'Password',
       }[field] || field.replaceAll('_', ' ');
     },
 

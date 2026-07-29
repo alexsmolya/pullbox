@@ -165,6 +165,28 @@ def test_host_credential_writes_encrypt_merge_and_clear_values() -> None:
     assert read_host_config(config).credentials_configured is False
 
 
+def test_datanodes_account_credentials_are_encrypted_and_redacted() -> None:
+    config = _host(DirectArtifactHostKind.DATANODES)
+
+    update_host_credentials(
+        config,
+        {
+            "username": "reader@example.test",
+            "password": "private-password",
+        },
+    )
+
+    assert all(is_encrypted(str(value)) for value in config.encrypted_credentials.values())
+    material = load_host_credential_material(config)
+    assert material.credentials == {
+        "username": "reader@example.test",
+        "password": "private-password",
+    }
+    assert read_host_config(config).credential_fields == ("password", "username")
+    assert "reader@example.test" not in repr(material)
+    assert "private-password" not in repr(material)
+
+
 def test_credentialless_hosts_reject_secret_storage() -> None:
     config = _host(DirectArtifactHostKind.ROOTZ)
     original = config.encrypted_credentials

@@ -107,6 +107,16 @@ class _ResolverResponse(BaseModel):
     solution: _ResolverSolution
 
 
+class _TrawlNativeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    url: str = Field(min_length=1, max_length=4_000)
+    html: str = Field(max_length=_MAX_HTML_CHARS)
+    cookies: list[_ResolverCookieModel] = Field(default_factory=list, max_length=200)
+    user_agent: str | None = Field(default=None, alias="userAgent", max_length=2_000)
+    status_code: int = Field(alias="statusCode", ge=100, le=599)
+
+
 class ResolverCircuitBreaker:
     """Fail-fast process-local breaker with a bounded active request count."""
 
@@ -235,6 +245,36 @@ class DirectResolverClient:
         declared_domains: Sequence[str],
         challenge_category: str,
     ) -> DirectResolverResult:
+        return await self._solve(
+            target_url,
+            declared_domains=declared_domains,
+            challenge_category=challenge_category,
+            trawl_native=False,
+        )
+
+    async def solve_trawl_native(
+        self,
+        target_url: str,
+        *,
+        declared_domains: Sequence[str],
+        challenge_category: str,
+    ) -> DirectResolverResult:
+        """Solve an application challenge through TRAWL's bounded native API."""
+        return await self._solve(
+            target_url,
+            declared_domains=declared_domains,
+            challenge_category=challenge_category,
+            trawl_native=True,
+        )
+
+    async def _solve(
+        self,
+        target_url: str,
+        *,
+        declared_domains: Sequence[str],
+        challenge_category: str,
+        trawl_native: bool,
+    ) -> DirectResolverResult:
         target = await validate_resolver_target(
             target_url,
             declared_domains=declared_domains,
@@ -243,7 +283,13 @@ class DirectResolverClient:
         started_at = time.monotonic()
         try:
             async with self._breaker.slot():
-                result = await self._perform(target, tuple(declared_domains))
+                if trawl_native:
+                    result = await self._perform_trawl_native(
+                        target,
+                        tuple(declared_domains),
+                    )
+                else:
+                    result = await self._perform(target, tuple(declared_domains))
                 await self._breaker.record_success()
         except asyncio.CancelledError:
             logger.info(
@@ -290,7 +336,66 @@ class DirectResolverClient:
         declared_domains: tuple[str, ...],
     ) -> DirectResolverResult:
         endpoint = await self._validate_endpoint()
-        request_url, host_header = _pinned_request_target(endpoint, "/v1")
+        payload = {
+            "cmd": "request.get",
+            "url": target.url,
+            "maxTimeout": round(self._timeout_seconds * 1000),
+        }
+        content = await self._post_json(endpoint, path="/v1", payload=payload)
+        try:
+            decoded = _ResolverResponse.model_validate(json.loads(content))
+        except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
+            raise DirectResolverError(
+                "resolver_malformed_response", "Resolver returned an invalid response."
+            ) from exc
+
+        return await self._validated_result(
+            url=decoded.solution.url,
+            status_code=decoded.solution.status,
+            html=decoded.solution.response,
+            cookies=decoded.solution.cookies,
+            user_agent=decoded.solution.user_agent,
+            declared_domains=declared_domains,
+        )
+
+    async def _perform_trawl_native(
+        self,
+        target: ValidatedResolverTarget,
+        declared_domains: tuple[str, ...],
+    ) -> DirectResolverResult:
+        endpoint = await self._validate_endpoint()
+        payload = {
+            "url": target.url,
+            "maxTimeout": round(self._timeout_seconds * 1000),
+            "skipHttp": True,
+            "maxTier": 3,
+        }
+        content = await self._post_json(endpoint, path="/scrape", payload=payload)
+        try:
+            decoded = _TrawlNativeResponse.model_validate(json.loads(content))
+        except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
+            raise DirectResolverError(
+                "resolver_malformed_response",
+                "Resolver did not return a compatible TRAWL response.",
+            ) from exc
+
+        return await self._validated_result(
+            url=decoded.url,
+            status_code=decoded.status_code,
+            html=decoded.html,
+            cookies=decoded.cookies,
+            user_agent=decoded.user_agent,
+            declared_domains=declared_domains,
+        )
+
+    async def _post_json(
+        self,
+        endpoint: ValidatedProviderEndpoint,
+        *,
+        path: str,
+        payload: dict[str, object],
+    ) -> bytes:
+        request_url, host_header = _pinned_request_target(endpoint, path)
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -298,11 +403,6 @@ class DirectResolverClient:
             **self._authentication_headers,
         }
         extensions = {"sni_hostname": endpoint.host} if not endpoint.insecure_transport else None
-        payload = {
-            "cmd": "request.get",
-            "url": target.url,
-            "maxTimeout": round(self._timeout_seconds * 1000),
-        }
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 async with self._http_client.stream(
@@ -347,16 +447,21 @@ class DirectResolverClient:
                 f"Resolver returned HTTP {response.status_code}.",
                 retryable=response.status_code >= 500,
             )
-        try:
-            decoded = _ResolverResponse.model_validate(json.loads(content))
-        except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
-            raise DirectResolverError(
-                "resolver_malformed_response", "Resolver returned an invalid response."
-            ) from exc
+        return content
 
+    async def _validated_result(
+        self,
+        *,
+        url: str,
+        status_code: int,
+        html: str,
+        cookies: Sequence[_ResolverCookieModel],
+        user_agent: str | None,
+        declared_domains: tuple[str, ...],
+    ) -> DirectResolverResult:
         try:
             returned_target = await validate_resolver_target(
-                decoded.solution.url,
+                url,
                 declared_domains=declared_domains,
                 resolver=self._target_resolver,
             )
@@ -367,8 +472,8 @@ class DirectResolverClient:
             ) from exc
         return DirectResolverResult(
             final_url=returned_target.url,
-            status_code=decoded.solution.status,
-            html=decoded.solution.response,
+            status_code=status_code,
+            html=html,
             cookies=tuple(
                 DirectResolverCookie(
                     name=cookie.name,
@@ -376,9 +481,9 @@ class DirectResolverClient:
                     domain=cookie.domain,
                     path=cookie.path,
                 )
-                for cookie in decoded.solution.cookies
+                for cookie in cookies
             ),
-            user_agent=decoded.solution.user_agent,
+            user_agent=user_agent,
         )
 
     async def _validate_endpoint(self) -> ValidatedProviderEndpoint:

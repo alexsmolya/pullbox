@@ -408,6 +408,52 @@ class TestDownloadsRouteContracts:
         assert "67%" in response.text
         assert response.headers["cache-control"].startswith("no-store")
 
+    async def test_download_queue_partial_animates_unknown_total_direct_transfer(
+        self,
+        authenticated_client,
+        sec_db,
+        monkeypatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        await _seed_download_queue_contract_data(sec_db)
+
+        async def _fake_progress_map(session, queue_items, *, fallback_progress):  # type: ignore[no-untyped-def]
+            del session
+            del fallback_progress
+            active_item = next(
+                item for item in queue_items if item.state == DownloadState.DOWNLOADING
+            )
+            active_item.download_client = DownloadClientType.DIRECT
+            return {
+                active_item.id: SimpleNamespace(
+                    progress=0.0,
+                    speed_bytes=1_048_576,
+                    eta_seconds=None,
+                    size_bytes=None,
+                    bytes_transferred=43_492_898,
+                    is_indeterminate=True,
+                    updated_at=123.0,
+                    client_state="Downloading from TeraBox",
+                    source_label="GetComics via TeraBox",
+                )
+            }
+
+        monkeypatch.setattr(ui_routes, "_load_download_progress_map", _fake_progress_map)
+
+        response = await authenticated_client.get(
+            "/htmx/downloads/queue",
+            headers={"HX-Request": "true"},
+        )
+
+        assert response.status_code == 200
+        assert "downloads-progress-fill is-blue is-indeterminate" in response.text
+        assert 'style="width: 45%"' in response.text
+        assert "41.5 MB received" in response.text
+        assert "Downloading from TeraBox" in response.text
+        assert (
+            'data-testid="downloads-queue-item-progress-label">41.5 MB received</span>'
+            in response.text
+        )
+
     async def test_download_queue_partial_surfaces_client_finalization_phase(
         self,
         authenticated_client,
@@ -970,6 +1016,71 @@ class TestDownloadsRouteContracts:
         assert snapshot.source_label == "GetComics via PixelDrain"
         register.assert_not_awaited()
 
+    async def test_download_progress_map_preserves_unknown_total_direct_activity(
+        self,
+        sec_db,
+        monkeypatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        import pullbox.composition.providers as registry_module
+
+        await _seed_download_queue_contract_data(sec_db)
+        async with sec_db() as session:
+            issue = (await session.execute(select(Issue).limit(1))).scalar_one()
+            attempt = DirectAcquisitionAttempt(
+                request_key="downloads-ui:direct:unknown-total",
+                issue_id=issue.id,
+                provider_identity="pullbox.getcomics",
+                provider_candidate_id="candidate-terabox",
+                state=DirectAcquisitionState.DOWNLOADING,
+                candidate_snapshot={"display_title": "Unknown Total Issue"},
+                progress_revision=8,
+                progress_snapshot={
+                    "stage": "downloading",
+                    "host_kind": "terabox",
+                    "percent": None,
+                    "bytes_transferred": 43_492_898,
+                    "bytes_per_second": 1_048_576,
+                    "eta_seconds": None,
+                    "total_bytes": None,
+                },
+            )
+            session.add(attempt)
+            await session.flush()
+            history = DownloadHistory(
+                issue_id=issue.id,
+                title="Unknown Total Issue",
+                download_url=f"pullbox-direct://attempt/{attempt.id}",
+                download_client=DownloadClientType.DIRECT,
+                external_id=f"direct:{attempt.id}",
+                state=DownloadState.DOWNLOADING,
+            )
+            session.add(history)
+            await session.commit()
+
+        register = AsyncMock()
+        monkeypatch.setattr(registry_module, "register_download_clients", register)
+        async with sec_db() as session:
+            queue_item = (
+                await session.execute(
+                    select(DownloadHistory).where(DownloadHistory.title == "Unknown Total Issue")
+                )
+            ).scalar_one()
+            progress_map = await ui_routes._load_download_progress_map(
+                session,
+                [queue_item],
+                fallback_progress={},
+            )
+
+        snapshot = progress_map[queue_item.id]
+        assert snapshot.progress == 0.0
+        assert snapshot.bytes_transferred == 43_492_898
+        assert snapshot.is_indeterminate is True
+        assert snapshot.speed_bytes == 1_048_576
+        assert snapshot.eta_seconds is None
+        assert snapshot.size_bytes is None
+        assert snapshot.client_state == "Downloading from TeraBox"
+        register.assert_not_awaited()
+
     async def test_download_queue_context_builds_active_and_waiting_row_views(
         self,
         sec_db,
@@ -1128,6 +1239,36 @@ class TestDownloadQueueRowViewHelpers:
         assert row.primary_phase == "Downloading from PixelDrain"
         assert row.client_label == "GetComics via PixelDrain"
         assert row.progress_label == "37%"
+
+    def test_direct_download_row_describes_unknown_total_without_fake_percent(self) -> None:
+        download = DownloadHistory(
+            title="Unknown Total Issue.cbz",
+            state=DownloadState.DOWNLOADING,
+            download_client=DownloadClientType.DIRECT,
+            download_url="pullbox-direct://attempt/9",
+        )
+
+        row = ui_routes._build_download_queue_row_view(
+            download,
+            SimpleNamespace(
+                progress=0.0,
+                speed_bytes=1_048_576,
+                eta_seconds=None,
+                size_bytes=None,
+                bytes_transferred=43_492_898,
+                is_indeterminate=True,
+                client_state="Downloading from TeraBox",
+                source_label="GetComics via TeraBox",
+            ),
+            None,
+        )
+
+        assert row.primary_phase == "Downloading from TeraBox"
+        assert row.progress_indeterminate is True
+        assert row.progress_pct == 0.0
+        assert row.progress_label == "41.5 MB received"
+        assert row.speed_bytes == 1_048_576
+        assert row.eta_text is None
 
     def test_direct_retry_pending_row_preserves_provider_host_and_failure_detail(self) -> None:
         download = DownloadHistory(

@@ -434,7 +434,10 @@ class TestSettingsRouteContracts:
         assert "Browser challenge resolver" in response.text
         assert "FlareSolverr-compatible" in response.text
         assert "does not guarantee CAPTCHA" in response.text
-        assert "Trawl MITM mode is not supported" in response.text
+        assert "DataNodes account login requires TRAWL" in response.text
+        assert "TRAWL native browser mode is used only for DataNodes login" in response.text
+        assert "credentials are never sent to TRAWL" in response.text
+        assert "TRAWL MITM mode is not supported" in response.text
         assert "Prowlarr keeps its own resolver configuration" in response.text
         assert "Last connection test" in response.text
         assert "Last healthy response" in response.text
@@ -480,10 +483,11 @@ class TestSettingsRouteContracts:
         )
         assert "developer application key" not in response.text
         assert (
-            "Free public attempts use visible challenge handling. Premium mode is not enabled."
-            in response.text
+            "Requires a free registered or Premium account plus a healthy TRAWL resolver. "
+            "Anonymous downloads are not supported." in response.text
         )
-        assert "Premium session" not in response.text
+        assert "Username" in response.text
+        assert "Password" in response.text
         assert "Account required" in response.text
         assert "pixeldrain-secret-must-not-render" not in response.text
 

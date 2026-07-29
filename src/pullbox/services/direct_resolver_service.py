@@ -82,6 +82,14 @@ class DirectResolverClientProtocol(Protocol):
         challenge_category: str,
     ) -> DirectResolverResult: ...
 
+    async def solve_trawl_native(
+        self,
+        target_url: str,
+        *,
+        declared_domains: Sequence[str],
+        challenge_category: str,
+    ) -> DirectResolverResult: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -307,6 +315,44 @@ async def resolve_for_host_adapter(
     client = _client_for_config(config, client_factory)
     try:
         return await client.solve(
+            target_url,
+            declared_domains=declared_domains,
+            challenge_category=challenge_category,
+        )
+    finally:
+        await client.aclose()
+
+
+async def resolve_for_trawl_host_adapter(
+    session: AsyncSession,
+    *,
+    target_url: str,
+    adapter_id: str,
+    declared_domains: Sequence[str],
+    challenge_category: str,
+    client_factory: DirectResolverClientFactory = _default_client_factory,
+) -> DirectResolverResult:
+    """Use TRAWL's native solver for one code-owned host adapter policy."""
+    if not adapter_id or not declared_domains:
+        raise DirectResolverServiceError(
+            "resolver_adapter_policy_required",
+            "Host adapter resolver use requires a static domain policy.",
+        )
+    config = await session.scalar(
+        select(DirectResolverConfig).where(DirectResolverConfig.name == _RESOLVER_NAME)
+    )
+    if (
+        config is None
+        or not config.enabled
+        or config.state not in {DirectResolverState.HEALTHY, DirectResolverState.DEGRADED}
+    ):
+        raise DirectResolverServiceError(
+            "resolver_unavailable",
+            "A healthy TRAWL browser resolver is not configured.",
+        )
+    client = _client_for_config(config, client_factory)
+    try:
+        return await client.solve_trawl_native(
             target_url,
             declared_domains=declared_domains,
             challenge_category=challenge_category,

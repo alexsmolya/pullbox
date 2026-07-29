@@ -26,10 +26,13 @@ from pullbox.providers.artifact_hosts.mediafire import MediaFireAdapter
 from pullbox.providers.artifact_hosts.pixeldrain import PixelDrainAdapter
 from pullbox.providers.artifact_hosts.rootz import RootzAdapter
 from pullbox.providers.artifact_hosts.terabox import TeraBoxAdapter
+from pullbox.providers.direct.resolver import DirectResolverCookie, DirectResolverResult
 
 NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
 PIXELDRAIN_KEY = "pixeldrain-secret"
 TERABOX_SESSION = "terabox-secret"
+DATANODES_USERNAME = "reader@example.test"
+DATANODES_PASSWORD = "datanodes-password"
 
 
 async def _resolve_public(_host: str, _port: int) -> Sequence[str]:
@@ -42,12 +45,14 @@ def _request(
     *,
     final: bool = False,
     checksum: str | None = None,
+    expected_size: int | None = None,
 ) -> HostResolutionRequest:
     return HostResolutionRequest(
         artifact_identity="fixture-artifact",
         host_kind=host_kind,
         share_url=None if final else url,
         final_url=url if final else None,
+        expected_size=expected_size,
         checksum=checksum,
     )
 
@@ -525,56 +530,15 @@ async def test_terabox_missing_direct_link_requires_reauthentication() -> None:
     assert TERABOX_SESSION not in repr(raised.value)
 
 
-async def test_datanodes_free_flow_posts_once_and_returns_the_final_file() -> None:
-    seen_methods: list[str] = []
+async def test_datanodes_requires_account_credentials_before_network_access() -> None:
+    calls = 0
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        seen_methods.append(request.method)
-        if request.method == "GET":
-            return httpx.Response(
-                200,
-                text=(
-                    '<form id="downloadForm" method="POST" action="/download">'
-                    '<input type="hidden" name="op" value="download1">'
-                    '<input type="hidden" name="id" value="fixture">'
-                    '<input type="hidden" name="rand" value="fixture-rand">'
-                    '<button id="method_free">Continue</button></form>'
-                ),
-                headers={"Content-Type": "text/html"},
-            )
-        assert request.url.path == "/download"
-        assert b"op=download1" in request.content
-        return httpx.Response(
-            200,
-            text=(
-                '<html><a id="downloadbtn" '
-                'href="https://s1.datanodes.to/d/fixture/fixture.cbz">Download</a></html>'
-            ),
-            headers={"Content-Type": "text/html"},
-        )
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        transfer = await DataNodesAdapter(client, resolver=_resolve_public).resolve(
-            _request(
-                DirectArtifactHostKind.DATANODES,
-                "https://datanodes.to/fixture/fixture.cbz",
-            ),
-            credentials={},
-        )
-
-    assert seen_methods == ["GET", "POST"]
-    assert transfer.filename_hint == "fixture.cbz"
-
-
-async def test_datanodes_challenge_enters_visible_intervention() -> None:
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(
-            200,
-            text='<div class="cf-turnstile" data-sitekey="fixture"></div>',
-            headers={"Content-Type": "text/html"},
-        )
-    )
-    async with httpx.AsyncClient(transport=transport) as client:
         with pytest.raises(ArtifactHostResolutionError) as raised:
             await DataNodesAdapter(client, resolver=_resolve_public).resolve(
                 _request(
@@ -582,6 +546,513 @@ async def test_datanodes_challenge_enters_visible_intervention() -> None:
                     "https://datanodes.to/fixture/fixture.cbz",
                 ),
                 credentials={},
+            )
+
+    assert raised.value.code == "artifact_host_auth_required"
+    assert calls == 0
+
+
+async def test_datanodes_uses_trawl_login_solution_without_sharing_credentials() -> None:
+    solver_calls: list[tuple[object, ...]] = []
+
+    async def solve_login(*args: object) -> DirectResolverResult:
+        solver_calls.append(args)
+        return DirectResolverResult(
+            final_url="https://datanodes.to/login.html",
+            status_code=200,
+            html=(
+                '<form name="FL" method="POST" action="/">'
+                '<input type="hidden" name="op" value="login">'
+                '<input type="hidden" name="token" value="login-token">'
+                '<input type="hidden" name="cf-turnstile-response" value="solved-token">'
+                "</form>"
+            ),
+            cookies=(
+                DirectResolverCookie(
+                    name="cf_clearance",
+                    value="trawl-clearance",
+                    domain=".datanodes.to",
+                    path="/",
+                ),
+            ),
+            user_agent="Trawl Browser",
+        )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["User-Agent"] == "Trawl Browser"
+        assert "cf_clearance=trawl-clearance" in request.headers["Cookie"]
+        if request.method == "POST":
+            assert b"login=reader%40example.test" in request.content
+            assert b"password=datanodes-password" in request.content
+            assert b"cf-turnstile-response=solved-token" in request.content
+            return httpx.Response(
+                200,
+                text='<a href="/logout">Logout</a>',
+                headers={"Set-Cookie": "account=premium; Domain=datanodes.to; Path=/"},
+            )
+        assert request.url.path == "/fixture/fixture.cbz"
+        assert "account=premium" in request.headers["Cookie"]
+        return httpx.Response(
+            200,
+            text=(
+                '<a id="downloadbtn" '
+                'href="https://s1.datanodes.to/d/fixture/fixture.cbz">Download</a>'
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await DataNodesAdapter(
+            client,
+            resolver=_resolve_public,
+            login_solver=solve_login,
+        ).resolve(
+            _request(
+                DirectArtifactHostKind.DATANODES,
+                "https://datanodes.to/fixture/fixture.cbz",
+            ),
+            credentials={
+                "username": DATANODES_USERNAME,
+                "password": DATANODES_PASSWORD,
+            },
+        )
+
+    assert solver_calls == [("https://datanodes.to/login.html",)]
+    assert transfer.url == "https://s1.datanodes.to/d/fixture/fixture.cbz"
+    assert transfer.headers["User-Agent"] == "Trawl Browser"
+    assert DATANODES_USERNAME not in repr(solver_calls)
+    assert DATANODES_PASSWORD not in repr(solver_calls)
+
+
+async def test_datanodes_registered_account_honors_wait_and_resolves_free_form() -> None:
+    seen: list[tuple[str, str, str | None]] = []
+    sleep_calls: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.headers.get("Cookie")))
+        if request.method == "GET" and request.url.path == "/login.html":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form name="FL" method="POST" action="/">'
+                    '<input type="hidden" name="op" value="login">'
+                    '<input type="hidden" name="token" value="login-token">'
+                    '<input type="hidden" name="redirect" value="/">'
+                    "</form>"
+                ),
+                headers={"Set-Cookie": "bootstrap=one; Domain=datanodes.to; Path=/"},
+            )
+        if request.method == "POST" and request.url.path == "/":
+            assert "bootstrap=one" in request.headers["Cookie"]
+            assert b"login=reader%40example.test" in request.content
+            assert b"password=datanodes-password" in request.content
+            return httpx.Response(
+                200,
+                text='<a href="/logout">Logout</a>',
+                headers={"Set-Cookie": "account=registered; Domain=datanodes.to; Path=/"},
+            )
+        if request.method == "GET" and request.url.path == "/fixture/fixture.cbz":
+            assert "account=registered" in request.headers["Cookie"]
+            return httpx.Response(
+                200,
+                text=(
+                    "<script>var countdown = 2;</script>"
+                    '<form id="downloadForm" method="POST" action="/download">'
+                    '<input type="hidden" name="op" value="download1">'
+                    '<input type="hidden" name="id" value="fixture">'
+                    '<input type="hidden" name="rand" value="fixture-rand">'
+                    "</form>"
+                ),
+            )
+        assert request.method == "POST"
+        assert request.url.path == "/download"
+        assert "account=registered" in request.headers["Cookie"]
+        assert b"method_free=Free+Download" in request.content
+        return httpx.Response(
+            200,
+            text=(
+                '<a id="downloadbtn" '
+                'href="https://s1.datanodes.to/d/fixture/fixture.cbz">Download</a>'
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await DataNodesAdapter(
+            client,
+            resolver=_resolve_public,
+            sleep=sleep,
+        ).resolve(
+            _request(
+                DirectArtifactHostKind.DATANODES,
+                "https://datanodes.to/fixture/fixture.cbz",
+            ),
+            credentials={
+                "username": DATANODES_USERNAME,
+                "password": DATANODES_PASSWORD,
+            },
+        )
+
+    assert [item[:2] for item in seen] == [
+        ("GET", "/login.html"),
+        ("POST", "/"),
+        ("GET", "/fixture/fixture.cbz"),
+        ("POST", "/download"),
+    ]
+    assert sleep_calls == [2.0]
+    assert transfer.url == "https://s1.datanodes.to/d/fixture/fixture.cbz"
+    assert "account=registered" in transfer.headers["Cookie"]
+    assert transfer.filename_hint == "fixture.cbz"
+    assert DATANODES_USERNAME not in repr(transfer)
+    assert DATANODES_PASSWORD not in repr(transfer)
+
+
+async def test_datanodes_registered_account_reconstructs_dynamic_download_form() -> None:
+    seen_download_posts: list[bytes] = []
+    sleep_calls: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("Referer") == "https://datanodes.to/users"
+        if request.method == "GET" and request.url.path == "/login.html":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form name="FL" method="POST" action="/">'
+                    '<input type="hidden" name="op" value="login">'
+                    "</form>"
+                ),
+            )
+        if request.method == "POST" and request.url.path == "/":
+            return httpx.Response(
+                200,
+                text='<a href="/logout">Logout</a>',
+                headers={"Set-Cookie": "account=registered; Domain=datanodes.to; Path=/"},
+            )
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form id="downloadForm" method="POST" action="/download">'
+                    '<input type="hidden" name="op" value="download1">'
+                    '<input type="hidden" name="id" value="fixture">'
+                    "</form>"
+                ),
+            )
+        seen_download_posts.append(request.content)
+        if len(seen_download_posts) == 1:
+            return httpx.Response(
+                200,
+                text=('<div countdown="2"></div><script>const rand="fixture-rand";</script>'),
+            )
+        return httpx.Response(
+            200,
+            json={"url": "/d/fixture/fixture.cbz"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await DataNodesAdapter(
+            client,
+            resolver=_resolve_public,
+            sleep=sleep,
+        ).resolve(
+            _request(
+                DirectArtifactHostKind.DATANODES,
+                "https://datanodes.to/fixture/fixture.cbz",
+            ),
+            credentials={
+                "username": DATANODES_USERNAME,
+                "password": DATANODES_PASSWORD,
+            },
+        )
+
+    assert sleep_calls == [2.0]
+    assert len(seen_download_posts) == 2
+    assert b"op=download1" in seen_download_posts[0]
+    assert b"method_free=Free+Download" in seen_download_posts[0]
+    assert b"op=download2" in seen_download_posts[1]
+    assert b"id=fixture" in seen_download_posts[1]
+    assert b"rand=fixture-rand" in seen_download_posts[1]
+    assert b"method_free=Free+Download+%3E%3E" in seen_download_posts[1]
+    assert transfer.url == "https://datanodes.to/d/fixture/fixture.cbz"
+    assert transfer.headers["Referer"] == "https://datanodes.to/fixture/fixture.cbz"
+
+
+async def test_datanodes_premium_account_uses_immediate_download_link() -> None:
+    seen_paths: list[str] = []
+    sleep_calls: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/login.html":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form name="FL" method="POST" action="/">'
+                    '<input type="hidden" name="op" value="login">'
+                    "</form>"
+                ),
+            )
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                text='<a href="/logout">Logout</a>',
+                headers={"Set-Cookie": "account=premium; Domain=datanodes.to; Path=/"},
+            )
+        assert request.url.path == "/fixture/fixture.cbz"
+        return httpx.Response(
+            200,
+            text=(
+                '<a id="downloadbtn" '
+                'href="https://s1.datanodes.to/d/fixture/fixture.cbz">Download</a>'
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await DataNodesAdapter(
+            client,
+            resolver=_resolve_public,
+            sleep=sleep,
+        ).resolve(
+            _request(
+                DirectArtifactHostKind.DATANODES,
+                "https://datanodes.to/fixture/fixture.cbz",
+            ),
+            credentials={
+                "username": DATANODES_USERNAME,
+                "password": DATANODES_PASSWORD,
+            },
+        )
+
+    assert seen_paths == ["/login.html", "/", "/fixture/fixture.cbz"]
+    assert sleep_calls == []
+    assert transfer.url == "https://s1.datanodes.to/d/fixture/fixture.cbz"
+    assert "account=premium" in transfer.headers["Cookie"]
+
+
+async def test_datanodes_premium_account_resolves_vue_download_contract() -> None:
+    seen_requests: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append((request.method, request.url.path))
+        if request.url.path == "/login.html":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form name="FL" method="POST" action="/">'
+                    '<input type="hidden" name="op" value="login">'
+                    "</form>"
+                ),
+            )
+        if request.method == "POST" and request.url.path == "/":
+            return httpx.Response(
+                200,
+                text='<a href="/logout">Logout</a>',
+                headers={"Set-Cookie": "account=premium; Domain=datanodes.to; Path=/"},
+            )
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                text=(
+                    '<download-countdown :countdown="0" code="fixture" '
+                    'referer="https://getcomics.org/fixture" rand="" free-method="" '
+                    'premium-method="1" :has-password="false" :has-captcha="false" '
+                    ':is-premium="true" :size-gated="false" '
+                    'dl-token="ephemeral-download-token"></download-countdown>'
+                ),
+            )
+
+        assert request.headers["X-Dn-Dl"] == "1"
+        assert request.headers["Referer"] == "https://datanodes.to/fixture/fixture.cbz"
+        assert request.headers["Content-Type"].startswith("multipart/form-data; boundary=")
+        assert b'name="op"' in request.content
+        assert b"download2" in request.content
+        assert b'name="id"' in request.content
+        assert b"fixture" in request.content
+        assert b'name="method_premium"' in request.content
+        assert b'name="dl_token"' in request.content
+        assert b"ephemeral-download-token" in request.content
+        return httpx.Response(
+            200,
+            json={"url": ("https%3A%2F%2Ftunnel5.dlproxy.uk%2Fsigned%2Fopaque-download")},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await DataNodesAdapter(client, resolver=_resolve_public).resolve(
+            _request(
+                DirectArtifactHostKind.DATANODES,
+                "https://datanodes.to/fixture/fixture.cbz",
+                expected_size=67,
+            ),
+            credentials={
+                "username": DATANODES_USERNAME,
+                "password": DATANODES_PASSWORD,
+            },
+        )
+
+    assert seen_requests == [
+        ("GET", "/login.html"),
+        ("POST", "/"),
+        ("GET", "/fixture/fixture.cbz"),
+        ("POST", "/fixture/fixture.cbz"),
+    ]
+    assert transfer.url == "https://tunnel5.dlproxy.uk/signed/opaque-download"
+    assert transfer.expected_size is None
+    assert transfer.filename_hint == "fixture.cbz"
+    assert transfer.headers["Referer"] == "https://datanodes.to/fixture/fixture.cbz"
+    assert "Cookie" not in transfer.headers
+    assert transfer.allowed_domains == ("datanodes.to", "dlproxy.uk")
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "expected_code"),
+    [
+        ("code", "different-file", "artifact_host_contract_changed"),
+        (":has-captcha", "true", "artifact_host_challenge"),
+        (":is-premium", "false", "artifact_host_auth_required"),
+    ],
+)
+async def test_datanodes_vue_contract_rejects_unsafe_or_unsupported_states(
+    attribute: str,
+    value: str,
+    expected_code: str,
+) -> None:
+    component_posts = 0
+    attributes = {
+        "code": "fixture",
+        "referer": "https://getcomics.org/fixture",
+        "rand": "",
+        "free-method": "",
+        "premium-method": "1",
+        ":has-password": "false",
+        ":has-captcha": "false",
+        ":is-premium": "true",
+        ":size-gated": "false",
+        "dl-token": "ephemeral-download-token",
+    }
+    attributes[attribute] = value
+    component_attributes = " ".join(
+        f'{name}="{attribute_value}"' for name, attribute_value in attributes.items()
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal component_posts
+        if request.url.path == "/login.html":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form name="FL" method="POST" action="/">'
+                    '<input type="hidden" name="op" value="login">'
+                    "</form>"
+                ),
+            )
+        if request.method == "POST" and request.url.path == "/":
+            return httpx.Response(
+                200,
+                text='<a href="/logout">Logout</a>',
+                headers={"Set-Cookie": "account=premium; Domain=datanodes.to; Path=/"},
+            )
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                text=f"<download-countdown {component_attributes}></download-countdown>",
+            )
+        component_posts += 1
+        return httpx.Response(500)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ArtifactHostResolutionError) as raised:
+            await DataNodesAdapter(client, resolver=_resolve_public).resolve(
+                _request(
+                    DirectArtifactHostKind.DATANODES,
+                    "https://datanodes.to/fixture/fixture.cbz",
+                ),
+                credentials={
+                    "username": DATANODES_USERNAME,
+                    "password": DATANODES_PASSWORD,
+                },
+            )
+
+    assert raised.value.code == expected_code
+    assert component_posts == 0
+
+
+async def test_datanodes_invalid_login_requires_visible_reauthentication() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form name="FL" method="POST" action="/">'
+                    '<input type="hidden" name="op" value="login">'
+                    "</form>"
+                ),
+            )
+        return httpx.Response(
+            200,
+            text=(
+                "<p>Incorrect Login or Password</p>"
+                '<form name="FL" method="POST" action="/">'
+                '<input type="hidden" name="op" value="login">'
+                "</form>"
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ArtifactHostResolutionError) as raised:
+            await DataNodesAdapter(client, resolver=_resolve_public).resolve(
+                _request(
+                    DirectArtifactHostKind.DATANODES,
+                    "https://datanodes.to/fixture/fixture.cbz",
+                ),
+                credentials={
+                    "username": DATANODES_USERNAME,
+                    "password": DATANODES_PASSWORD,
+                },
+            )
+
+    assert raised.value.code == "artifact_host_auth_required"
+    assert raised.value.failure_class is DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED
+    assert raised.value.message == "DataNodes rejected the configured username or password."
+    assert DATANODES_USERNAME not in repr(raised.value)
+    assert DATANODES_PASSWORD not in repr(raised.value)
+
+
+async def test_datanodes_unexpected_challenge_fails_without_browser_bypass() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login.html":
+            return httpx.Response(
+                200,
+                text=(
+                    '<form name="FL" method="POST" action="/">'
+                    '<input type="hidden" name="op" value="login">'
+                    "</form>"
+                ),
+            )
+        if request.method == "POST":
+            return httpx.Response(200, text='<a href="/logout">Logout</a>')
+        return httpx.Response(
+            200,
+            text='<div class="cf-turnstile" data-sitekey="fixture"></div>',
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ArtifactHostResolutionError) as raised:
+            await DataNodesAdapter(client, resolver=_resolve_public).resolve(
+                _request(
+                    DirectArtifactHostKind.DATANODES,
+                    "https://datanodes.to/fixture/fixture.cbz",
+                ),
+                credentials={
+                    "username": DATANODES_USERNAME,
+                    "password": DATANODES_PASSWORD,
+                },
             )
 
     assert raised.value.code == "artifact_host_challenge"

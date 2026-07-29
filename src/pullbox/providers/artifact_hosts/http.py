@@ -15,6 +15,7 @@ from pullbox.models.direct_acquisition import DirectArtifactFailureClass
 from pullbox.providers.artifact_hosts.contract import ArtifactHostResolutionError
 
 ArtifactUrlResolver = Callable[[str, int], Awaitable[Sequence[str]]]
+ArtifactMultipartFiles = Mapping[str, tuple[None, str]]
 
 _MAX_URL_LENGTH = 4_000
 _MAX_REDIRECTS = 3
@@ -119,6 +120,8 @@ async def request_bounded(
     allowed_domains: Sequence[str] | None,
     headers: Mapping[str, str] | None = None,
     data: Mapping[str, str] | None = None,
+    files: ArtifactMultipartFiles | None = None,
+    cookies: httpx.Cookies | None = None,
     max_response_bytes: int = _MAX_ADAPTER_RESPONSE_BYTES,
     max_redirects: int = _MAX_REDIRECTS,
 ) -> BoundedArtifactResponse:
@@ -126,6 +129,7 @@ async def request_bounded(
     current_url = raw_url
     current_method = method.upper()
     current_data = data
+    current_files = files
     for redirect_count in range(max_redirects + 1):
         target = await validate_artifact_url(
             current_url,
@@ -134,13 +138,24 @@ async def request_bounded(
         )
         request_url, host_header = pinned_request_target(target)
         request_headers = {**dict(headers or {}), "Host": host_header}
+        logical_request = httpx.Request(current_method, target.url)
+        managed_cookie_header = _header_value(request_headers, "cookie")
+        if cookies is not None and managed_cookie_header is None:
+            cookies.set_cookie_header(logical_request)
+            managed_cookie_header = logical_request.headers.get("Cookie")
         request = client.build_request(
             current_method,
             request_url,
             headers=request_headers,
             data=current_data,
+            files=current_files,
             extensions={"sni_hostname": target.host},
         )
+        if cookies is not None:
+            if "Cookie" in request.headers:
+                del request.headers["Cookie"]
+            if managed_cookie_header:
+                request.headers["Cookie"] = managed_cookie_header
         response: httpx.Response | None = None
         try:
             response = await client.send(request, stream=True, follow_redirects=False)
@@ -158,6 +173,14 @@ async def request_bounded(
         finally:
             if response is not None:
                 await response.aclose()
+
+        if cookies is not None:
+            logical_response = httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                request=logical_request,
+            )
+            cookies.extract_cookies(logical_response)
 
         if response.status_code not in {301, 302, 303, 307, 308}:
             return BoundedArtifactResponse(
@@ -183,8 +206,17 @@ async def request_bounded(
         ):
             current_method = "GET"
             current_data = None
+            current_files = None
 
     raise AssertionError("redirect loop must return or raise")
+
+
+def cookie_header_for_url(cookies: httpx.Cookies, url: str) -> str | None:
+    """Render only cookies whose domain and path apply to the logical URL."""
+    request = httpx.Request("GET", url)
+    cookies.set_cookie_header(request)
+    value = request.headers.get("Cookie")
+    return value if isinstance(value, str) else None
 
 
 async def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
@@ -235,6 +267,14 @@ def _encoding_from_content_type(content_type: str | None) -> str:
 def _is_domain_or_subdomain(hostname: str, domain: str) -> bool:
     normalized = domain.lower().rstrip(".")
     return hostname == normalized or hostname.endswith(f".{normalized}")
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    normalized = name.casefold()
+    return next(
+        (value for header_name, value in headers.items() if header_name.casefold() == normalized),
+        None,
+    )
 
 
 def _unsafe_url() -> ArtifactHostResolutionError:

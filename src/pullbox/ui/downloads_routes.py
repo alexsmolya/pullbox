@@ -26,6 +26,7 @@ from pullbox.services.download_history_classification import (
     post_processing_failure_clause,
     post_processing_history_clause,
 )
+from pullbox.ui.formatters import format_filesize
 
 logger = structlog.get_logger(__name__)
 
@@ -72,6 +73,7 @@ class DownloadQueueRowView:
     progress_pct: float
     progress_label: str
     progress_tone: str
+    progress_indeterminate: bool
     speed_bytes: int | None
     eta_text: str | None
     is_active: bool
@@ -377,6 +379,8 @@ def build_download_queue_row_view(
     progress_pct = round(progress_fraction * 100, 1)
     speed_bytes = snapshot_value(progress, "speed_bytes")
     eta_seconds = snapshot_value(progress, "eta_seconds")
+    bytes_transferred = snapshot_value(progress, "bytes_transferred")
+    progress_indeterminate = bool(snapshot_value(progress, "is_indeterminate"))
 
     primary_phase = "Queued"
     status_pill = "pill-info"
@@ -437,8 +441,16 @@ def build_download_queue_row_view(
             )
             status_pill = "pill-info"
             progress_tone = "is-blue"
-            progress_label = f"{round(progress_pct):.0f}%"
-            if isinstance(eta_seconds, int) and eta_seconds > 0:
+            if progress_indeterminate:
+                progress_label = (
+                    f"{format_filesize(bytes_transferred)} received"
+                    if isinstance(bytes_transferred, int) and bytes_transferred > 0
+                    else "Receiving..."
+                )
+                eta_seconds = None
+            else:
+                progress_label = f"{round(progress_pct):.0f}%"
+            if not progress_indeterminate and isinstance(eta_seconds, int) and eta_seconds > 0:
                 eta_text = _eta(eta_seconds)
 
     return DownloadQueueRowView(
@@ -451,6 +463,7 @@ def build_download_queue_row_view(
         progress_pct=progress_pct,
         progress_label=progress_label,
         progress_tone=progress_tone,
+        progress_indeterminate=progress_indeterminate,
         speed_bytes=speed_bytes if isinstance(speed_bytes, int) else None,
         eta_text=eta_text,
         is_active=is_active,
@@ -567,6 +580,7 @@ async def load_download_progress_map(
             speed = snapshot.get("bytes_per_second")
             eta = snapshot.get("eta_seconds")
             total = snapshot.get("total_bytes")
+            transferred = snapshot.get("bytes_transferred")
             stage = snapshot.get("stage")
             host_kind = snapshot.get("host_kind")
             progress_map[download_id] = ProgressSnapshot(
@@ -577,6 +591,14 @@ async def load_download_progress_map(
                 updated_at=time.monotonic(),
                 client_state=_direct_progress_label(stage, host_kind),
                 source_label=_direct_source_label(attempt.provider_identity, host_kind),
+                bytes_transferred=(
+                    int(transferred) if isinstance(transferred, int | float) else None
+                ),
+                is_indeterminate=(
+                    stage == "downloading"
+                    and not isinstance(raw_percent, int | float)
+                    and not isinstance(total, int | float)
+                ),
             )
     pollable_items = [
         item

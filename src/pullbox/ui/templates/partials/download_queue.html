@@ -134,8 +134,8 @@
                     <div class="downloads-progress-cell">
                       <span class="downloads-progress-track">
                         <span
-                          class="downloads-progress-fill {{ row.progress_tone }}"
-                          style="width: {{ row.progress_pct }}%"
+                          class="downloads-progress-fill {{ row.progress_tone }}{% if row.progress_indeterminate %} is-indeterminate{% endif %}"
+                          style="width: {% if row.progress_indeterminate %}45{% else %}{{ row.progress_pct }}{% endif %}%"
                         ></span>
                       </span>
                       <span class="downloads-progress-pct{% if row.progress_tone == 'is-amber' %} downloads-progress-pct-warning{% endif %}" data-testid="downloads-queue-item-progress-label">{{ row.progress_label }}</span>

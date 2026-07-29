@@ -29,6 +29,7 @@ from pullbox.services.direct_resolver_service import (
     build_provider_resolver_profile,
     get_direct_resolver,
     resolve_for_host_adapter,
+    resolve_for_trawl_host_adapter,
     update_direct_resolver,
 )
 from pullbox.services.direct_resolver_service import (
@@ -53,6 +54,7 @@ class _ResolverClient:
     error: ClassVar[DirectResolverError | None] = None
     seen: ClassVar[list[dict[str, object]]] = []
     solve_seen: ClassVar[list[tuple[tuple[object, ...], dict[str, object]]]] = []
+    trawl_solve_seen: ClassVar[list[tuple[tuple[object, ...], dict[str, object]]]] = []
 
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
@@ -79,6 +81,10 @@ class _ResolverClient:
             cookies=(),
             user_agent="Resolver Browser",
         )
+
+    async def solve_trawl_native(self, *args: object, **kwargs: object) -> DirectResolverResult:
+        self.trawl_solve_seen.append((args, kwargs))
+        return await self.solve(*args, **kwargs)
 
     async def aclose(self) -> None:
         return None
@@ -373,3 +379,39 @@ async def test_host_adapter_resolution_rejects_missing_policy(
             challenge_category="artifact_host_challenge",
             client_factory=_factory,
         )
+
+
+async def test_trawl_host_adapter_resolution_uses_native_scrape(
+    db_session: AsyncSession,
+) -> None:
+    _ResolverClient.solve_seen = []
+    _ResolverClient.trawl_solve_seen = []
+    db_session.add(
+        DirectResolverConfig(
+            name="default",
+            endpoint="http://trawl:8191",
+            enabled=True,
+            state=DirectResolverState.HEALTHY,
+            allow_private_http=True,
+        )
+    )
+    await db_session.commit()
+
+    await resolve_for_trawl_host_adapter(
+        db_session,
+        target_url="https://datanodes.to/login.html",
+        adapter_id="datanodes",
+        declared_domains=("datanodes.to",),
+        challenge_category="artifact_host_login",
+        client_factory=_factory,
+    )
+
+    assert _ResolverClient.trawl_solve_seen == [
+        (
+            ("https://datanodes.to/login.html",),
+            {
+                "declared_domains": ("datanodes.to",),
+                "challenge_category": "artifact_host_login",
+            },
+        )
+    ]

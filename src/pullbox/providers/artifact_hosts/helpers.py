@@ -134,20 +134,24 @@ def transient_host(code: str = "artifact_host_unavailable") -> ArtifactHostResol
     )
 
 
-def auth_required() -> ArtifactHostResolutionError:
+def auth_required(
+    message: str = "The artifact-host account session must be refreshed.",
+) -> ArtifactHostResolutionError:
     return ArtifactHostResolutionError(
         code="artifact_host_auth_required",
-        message="The artifact-host account session must be refreshed.",
+        message=message,
         failure_class=DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED,
         retryable=False,
         intervention=True,
     )
 
 
-def challenge_required() -> ArtifactHostResolutionError:
+def challenge_required(
+    message: str = "The artifact host requires interactive verification.",
+) -> ArtifactHostResolutionError:
     return ArtifactHostResolutionError(
         code="artifact_host_challenge",
-        message="The artifact host requires interactive verification.",
+        message=message,
         failure_class=DirectArtifactFailureClass.ARTIFACT_HOST_CHALLENGE,
         retryable=False,
         intervention=True,

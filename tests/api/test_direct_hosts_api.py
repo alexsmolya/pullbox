@@ -43,7 +43,7 @@ async def test_host_settings_list_exposes_closed_registry_without_secrets(
     mediafire = next(item for item in payload if item["host_kind"] == "mediafire")
     assert mediafire["allowed_credential_fields"] == []
     datanodes = next(item for item in payload if item["host_kind"] == "datanodes")
-    assert datanodes["allowed_credential_fields"] == []
+    assert datanodes["allowed_credential_fields"] == ["username", "password"]
     assert "credential_updates" not in response.text
 
 
@@ -149,7 +149,52 @@ async def test_datanodes_setting_rejects_unverified_premium_session(
     )
 
     assert response.status_code == 422
-    assert "does not accept credentials" in response.text
+    assert "Unsupported credential field" in response.text
+
+
+async def test_datanodes_setting_requires_and_encrypts_complete_credentials(
+    authenticated_client: AsyncClient,
+    sec_db: async_sessionmaker[AsyncSession],
+) -> None:
+    incomplete = await authenticated_client.patch(
+        "/api/v1/direct-hosts/datanodes",
+        headers=_csrf_header(authenticated_client),
+        json={
+            "enabled": True,
+            "credential_updates": {"username": "reader@example.test"},
+        },
+    )
+
+    assert incomplete.status_code == 422
+    assert "both username and password" in incomplete.text
+
+    password = "private-datanodes-password"
+    response = await authenticated_client.patch(
+        "/api/v1/direct-hosts/datanodes",
+        headers=_csrf_header(authenticated_client),
+        json={
+            "enabled": True,
+            "credential_updates": {
+                "username": "reader@example.test",
+                "password": password,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["configured_credential_fields"] == ["password", "username"]
+    assert "reader@example.test" not in response.text
+    assert password not in response.text
+    async with sec_db() as session:
+        stored = (
+            await session.execute(
+                select(DirectHostConfig).where(
+                    DirectHostConfig.host_kind == DirectArtifactHostKind.DATANODES
+                )
+            )
+        ).scalar_one()
+        assert is_encrypted(str(stored.encrypted_credentials["username"]))
+        assert is_encrypted(str(stored.encrypted_credentials["password"]))
 
 
 async def test_host_setting_routes_require_interactive_authentication(

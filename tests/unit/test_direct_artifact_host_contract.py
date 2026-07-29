@@ -96,7 +96,11 @@ def test_unknown_https_is_only_a_generic_transport_candidate() -> None:
             {"cookie": "secret"},
             ArtifactHostCredentialMode.ACCOUNT,
         ),
-        (DirectArtifactHostKind.DATANODES, {}, ArtifactHostCredentialMode.ANONYMOUS),
+        (
+            DirectArtifactHostKind.DATANODES,
+            {"username": "reader@example.test", "password": "secret"},
+            ArtifactHostCredentialMode.ACCOUNT,
+        ),
     ],
 )
 def test_host_credential_modes_are_explicit(
@@ -128,7 +132,32 @@ def test_mega_rejects_obsolete_application_key_credentials() -> None:
     assert raised.value.intervention is True
 
 
-def test_datanodes_rejects_unverified_premium_session_credentials() -> None:
+def test_datanodes_requires_visible_account_authentication() -> None:
+    with pytest.raises(ArtifactHostResolutionError) as raised:
+        credential_mode_for_host(DirectArtifactHostKind.DATANODES, {})
+
+    assert raised.value.code == "artifact_host_auth_required"
+    assert raised.value.failure_class is DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [
+        {"username": "reader@example.test"},
+        {"password": "secret"},
+    ],
+)
+def test_datanodes_rejects_incomplete_account_credentials(
+    credentials: dict[str, str],
+) -> None:
+    with pytest.raises(ArtifactHostResolutionError) as raised:
+        credential_mode_for_host(DirectArtifactHostKind.DATANODES, credentials)
+
+    assert raised.value.code == "invalid_host_credentials"
+    assert raised.value.intervention is True
+
+
+def test_datanodes_rejects_unverified_session_credentials() -> None:
     with pytest.raises(ArtifactHostResolutionError) as raised:
         credential_mode_for_host(
             DirectArtifactHostKind.DATANODES,

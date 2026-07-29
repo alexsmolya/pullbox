@@ -62,6 +62,8 @@ async def test_composition_registers_every_closed_host_and_closes_http_client(
     runtime = services.build_direct_acquisition_runtime()
 
     assert set(runtime.host_kinds) == set(DirectArtifactHostKind)
+    datanodes = runtime._executor._host_resolver._adapters[DirectArtifactHostKind.DATANODES]
+    assert datanodes._login_solver is services._solve_datanodes_login
     runner = DirectAcquisitionRunner(
         SimpleNamespace(),  # type: ignore[arg-type]
         executor=runtime,

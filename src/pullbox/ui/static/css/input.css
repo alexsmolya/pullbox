@@ -8218,6 +8218,21 @@ input[type="range"].range-pb::-moz-range-thumb {
     rgba(255, 255, 255, 0.12) 4px
   );
 }
+@keyframes downloads-progress-indeterminate {
+  from { transform: translateX(-130%); }
+  to { transform: translateX(280%); }
+}
+.downloads-progress-fill.is-indeterminate {
+  animation: downloads-progress-indeterminate 1.25s ease-in-out infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .downloads-progress-fill.is-indeterminate {
+    animation: none;
+    opacity: 0.7;
+    transform: translateX(60%);
+  }
+}
 .downloads-progress-pct {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.68rem;
