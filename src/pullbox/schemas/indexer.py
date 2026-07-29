@@ -23,6 +23,10 @@ class IndexerCreate(BaseModel):
     enable_rss: bool = Field(True, description="Enable RSS sync")
     enable_automatic_search: bool = Field(True, description="Enable automatic search")
     enable_interactive_search: bool = Field(True, description="Enable interactive (manual) search")
+    resolver_enabled: bool = Field(
+        False,
+        description="Allow a manual Torznab indexer to use the ranked browser resolver chain",
+    )
 
     @field_validator("url")
     @classmethod
@@ -44,6 +48,10 @@ class IndexerUpdate(BaseModel):
     enable_automatic_search: bool | None = Field(None, description="Enable automatic search")
     enable_interactive_search: bool | None = Field(
         None, description="Enable interactive (manual) search"
+    )
+    resolver_enabled: bool | None = Field(
+        None,
+        description="Allow a manual Torznab indexer to use the ranked browser resolver chain",
     )
 
     @field_validator("url")
@@ -73,6 +81,7 @@ class IndexerResponse(BaseModel):
     enable_rss: bool = True
     enable_automatic_search: bool = True
     enable_interactive_search: bool = True
+    resolver_enabled: bool = False
     last_success_at: datetime | None = None
     last_failure_at: datetime | None = None
     last_error: str | None = None

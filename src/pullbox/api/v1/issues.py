@@ -12,7 +12,7 @@ from sqlalchemy import inspect, select
 from sqlalchemy.orm import joinedload
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
-from pullbox.core.exceptions import ConfigurationError, NotFoundError
+from pullbox.core.exceptions import ConfigurationError, NotFoundError, ValidationError
 from pullbox.core.file_ops import register_library_file
 from pullbox.core.file_safety import classify_resource_safety_exception
 from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
@@ -205,6 +205,7 @@ def build_interactive_results(
             SearchResultItem(
                 title=vr.release.title,
                 indexer_name=vr.release.indexer_name,
+                indexer_id=vr.release.indexer_id,
                 download_url=vr.release.download_url,
                 info_url=vr.release.info_url,
                 size_bytes=vr.release.size_bytes,
@@ -238,6 +239,7 @@ def build_interactive_results(
             RejectedResultItem(
                 title=vr.release.title,
                 indexer_name=vr.release.indexer_name,
+                indexer_id=vr.release.indexer_id,
                 download_url=vr.release.download_url,
                 info_url=vr.release.info_url,
                 size_bytes=vr.release.size_bytes,
@@ -715,7 +717,11 @@ async def grab_release(
 
         raise ProviderError("download", "No download clients configured")
 
-    download_svc, _indexer_configs = built
+    download_svc, indexer_configs = built
+    if body.indexer_id is not None and body.indexer_id not in indexer_configs:
+        raise ValidationError(
+            "The originating indexer is no longer available. Run the search again."
+        )
 
     download = await download_svc.grab_release(
         session,
@@ -723,6 +729,7 @@ async def grab_release(
         download_url=body.download_url,
         title=body.title,
         indexer_name=body.indexer_name,
+        indexer_id=body.indexer_id,
         is_torrent=body.is_torrent,
         file_size=body.file_size,
         replace_existing_file=replace_existing_file,

@@ -42,6 +42,11 @@ class IndexerConfig(Base, IdentityMixin, TimestampMixin):
     enable_rss: Mapped[bool] = mapped_column(default=True)
     enable_automatic_search: Mapped[bool] = mapped_column(default=True)
     enable_interactive_search: Mapped[bool] = mapped_column(default=True)
+    resolver_enabled: Mapped[bool] = mapped_column(
+        default=False,
+        server_default="0",
+        nullable=False,
+    )
 
     # Health tracking
     last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

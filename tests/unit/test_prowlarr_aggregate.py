@@ -206,6 +206,50 @@ class TestRegisterIndexersAggregation:
         assert not isinstance(items[0][1], ProwlarrIndexer)
 
     @pytest.mark.asyncio
+    async def test_manual_torznab_receives_only_its_opted_in_resolver_chain(self) -> None:
+        """Composition wires ranked resolvers only into a manual Torznab instance."""
+        from pullbox.composition.providers import register_indexers
+        from pullbox.providers.base import ProviderRegistry
+
+        cfg = MagicMock()
+        cfg.id = 43
+        cfg.name = "Manual 1337x proxy"
+        cfg.source = "manual"
+        cfg.prowlarr_indexer_id = None
+        cfg.indexer_type = "torznab"
+        cfg.url = "https://torznab.example"
+        cfg.api_key = "encrypted_key"
+        cfg.enabled = True
+        cfg.resolver_enabled = True
+        options = (MagicMock(name="resolver-option"),)
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [cfg]
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        registry = ProviderRegistry()
+
+        with (
+            patch("pullbox.composition.providers.decrypt_secret", return_value="decrypted_key"),
+            patch(
+                "pullbox.composition.providers.build_manual_torznab_resolver_options",
+                AsyncMock(return_value=options),
+            ) as build_options,
+            patch("pullbox.composition.providers.TorznabIndexer") as torznab_cls,
+        ):
+            await register_indexers(mock_session, registry)
+
+        build_options.assert_awaited_once_with(mock_session, cfg)
+        torznab_cls.assert_called_once_with(
+            name="Manual 1337x proxy",
+            url="https://torznab.example",
+            api_key="decrypted_key",
+            resolver_enabled=True,
+            resolver_options=options,
+            cache_namespace="manual-torznab:43",
+        )
+
+    @pytest.mark.asyncio
     async def test_mixed_newznab_and_torznab_prowlarr(self) -> None:
         """Prowlarr Newznab stays individual, Prowlarr Torznab aggregates."""
         from pullbox.composition.providers import _PROWLARR_AGGREGATE_CONFIG_ID, register_indexers

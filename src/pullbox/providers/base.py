@@ -150,6 +150,7 @@ class ReleaseResult:
     category: str | None
     published_at: datetime | None
     info_url: str | None = None
+    indexer_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +228,15 @@ class DownloadClient(Protocol):
 
     async def add_torrent(self, url: str, title: str, category: str | None = None) -> str | None:
         """Add a torrent/magnet download. Returns external download ID or None."""
+        ...
+
+    async def add_torrent_data(
+        self,
+        content: bytes,
+        title: str,
+        category: str | None = None,
+    ) -> str | None:
+        """Add trusted torrent descriptor bytes fetched by Pullbox."""
         ...
 
     async def get_download_status(self, external_id: str) -> DownloadStatus:
@@ -327,6 +337,10 @@ class ProviderRegistry:
     def get_indexers(self) -> list[Indexer]:
         """Get all registered indexers."""
         return list(self._indexers.values())
+
+    def get_indexer(self, config_id: int) -> Indexer | None:
+        """Get one registered indexer by its persisted config ID."""
+        return self._indexers.get(config_id)
 
     def get_indexer_items(self) -> list[tuple[int, Indexer]]:
         """Get (config_id, indexer) pairs for all registered indexers."""

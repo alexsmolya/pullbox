@@ -71,6 +71,7 @@ class SearchResultItem(BaseModel):
 
     title: str = Field(description="Release title from the indexer")
     indexer_name: str = Field(description="Display name of the indexer")
+    indexer_id: int | None = Field(default=None, description="Originating indexer config ID")
     download_url: str | None = Field(description="NZB/torrent URL for legacy results only")
     info_url: str | None = Field(None, description="Link to release page on indexer website")
     size_bytes: int | None = Field(None, description="File size in bytes")
@@ -103,6 +104,7 @@ class RejectedResultItem(BaseModel):
 
     title: str = Field(description="Release title from the indexer")
     indexer_name: str = Field(description="Display name of the indexer")
+    indexer_id: int | None = Field(default=None, description="Originating indexer config ID")
     download_url: str | None = Field(description="NZB/torrent URL for legacy results only")
     info_url: str | None = Field(None, description="Link to release page on indexer website")
     size_bytes: int | None = Field(None, description="File size in bytes")
@@ -160,6 +162,7 @@ class GrabReleaseRequest(BaseModel):
     download_url: str = Field(description="NZB/torrent download URL")
     title: str = Field(description="Release title")
     indexer_name: str = Field(description="Display name of the indexer")
+    indexer_id: int | None = Field(default=None, description="Originating indexer config ID")
     is_torrent: bool = Field(False, description="Whether this is a torrent release")
     file_size: int | None = Field(None, description="File size in bytes")
     search_log_id: int | None = Field(

@@ -218,6 +218,29 @@ class TransmissionClient:
             except Exception as exc:
                 raise TransmissionError(f"Failed to download torrent file: {exc}") from None
 
+        return await self._submit_torrent(arguments, log)
+
+    async def add_torrent_data(
+        self,
+        content: bytes,
+        title: str,
+        category: str | None = None,
+    ) -> str:
+        """Submit descriptor bytes fetched and validated by Pullbox."""
+        import base64
+
+        log = logger.bind(title=title)
+        log.info("transmission_add_torrent_data")
+        return await self._submit_torrent(
+            {"metainfo": base64.standard_b64encode(content).decode("ascii")},
+            log,
+        )
+
+    async def _submit_torrent(
+        self,
+        arguments: dict[str, Any],
+        log: Any,
+    ) -> str:
         if self._download_dir:
             arguments["download-dir"] = self._download_dir
         if self._bandwidth_priority is not None:

@@ -11,6 +11,7 @@ from pullbox.models.blocklist import BlocklistReason
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.providers.download.qbittorrent import QBittorrentError
+from pullbox.providers.indexer.newznab import NewznabError
 from pullbox.schemas.blocklist import BlocklistEntryResponse
 from pullbox.schemas.download import DownloadHistoryItem, DownloadQueueItem
 from pullbox.schemas.pagination import PaginatedResponse
@@ -376,7 +377,8 @@ async def retry_download(
     """
     from datetime import UTC, datetime
 
-    from pullbox.composition.providers import register_download_clients
+    from pullbox.composition.providers import register_download_clients, register_indexers
+    from pullbox.composition.services import build_download_service
     from pullbox.providers.base import ProviderRegistry
 
     download = await session.get(DownloadHistory, download_id)
@@ -428,6 +430,7 @@ async def retry_download(
     # Build provider registry and get the right client
     registry = ProviderRegistry()
     await register_download_clients(session, registry)
+    await register_indexers(session, registry)
 
     client = registry.get_client_for_type(str(download.download_client))
     if not client:
@@ -440,10 +443,16 @@ async def retry_download(
     dl_type = DownloadClientType(str(download.download_client))
     try:
         if dl_type.is_torrent:
-            external_id = await client.add_torrent(download.download_url, download.title)
+            external_id = await build_download_service(registry).add_torrent_to_client(
+                client,
+                url=download.download_url,
+                title=download.title,
+                indexer_id=download.indexer_id,
+                download_id=download.id,
+            )
         else:
             external_id = await client.add_nzb(download.download_url, download.title)
-    except QBittorrentError as exc:
+    except (NewznabError, QBittorrentError) as exc:
         logger.warning(
             "download_retry_client_rejected",
             download_id=download.id,

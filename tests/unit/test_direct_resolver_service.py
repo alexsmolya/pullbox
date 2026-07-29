@@ -17,6 +17,7 @@ from pullbox.models.direct_acquisition import (
     DirectResolverKind,
     DirectResolverState,
 )
+from pullbox.models.indexer import IndexerConfig, IndexerSource, IndexerType
 from pullbox.providers.direct.contract import DIRECT_PROVIDER_PROTOCOL_V1
 from pullbox.providers.direct.endpoint import ValidatedProviderEndpoint
 from pullbox.providers.direct.resolver import (
@@ -29,6 +30,7 @@ from pullbox.services.direct_resolver_service import (
     DirectResolverServiceError,
     DirectResolverUpdate,
     ResolverAttemptProgress,
+    build_manual_torznab_resolver_options,
     build_provider_resolver_profile,
     build_provider_resolver_profiles,
     create_direct_resolver,
@@ -459,6 +461,82 @@ async def test_provider_profiles_follow_resolver_priority(
         "trawl_scrape",
     ]
     assert await build_provider_resolver_profile(db_session, provider) == profiles[0].profile
+
+
+async def test_manual_torznab_options_are_ranked_gated_and_protocol_aware(
+    db_session: AsyncSession,
+) -> None:
+    _ChainResolverClient.chain_seen = []
+    indexer = IndexerConfig(
+        name="Manual Torznab",
+        indexer_type=IndexerType.TORZNAB,
+        url="https://torznab.example/api-root",
+        api_key="enc:not-used",
+        source=IndexerSource.MANUAL,
+        resolver_enabled=True,
+    )
+    db_session.add(indexer)
+    db_session.add_all(
+        [
+            DirectResolverConfig(
+                name="TRAWL",
+                resolver_kind=DirectResolverKind.TRAWL,
+                priority=30,
+                endpoint="http://trawl:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+            ),
+            DirectResolverConfig(
+                name="FlareSolverr",
+                resolver_kind=DirectResolverKind.FLARESOLVERR,
+                priority=10,
+                endpoint="http://flaresolverr:8191",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+            ),
+            DirectResolverConfig(
+                name="Byparr",
+                resolver_kind=DirectResolverKind.BYPARR,
+                priority=20,
+                endpoint="http://byparr:8191",
+                enabled=True,
+                state=DirectResolverState.DEGRADED,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    options = await build_manual_torznab_resolver_options(
+        db_session,
+        indexer,
+        client_factory=_chain_factory,
+    )
+
+    assert [option.resolver_name for option in options] == [
+        "FlareSolverr",
+        "Byparr",
+        "TRAWL",
+    ]
+    for option in options:
+        await option.solve(
+            "https://torznab.example/",
+            declared_domains=("torznab.example",),
+            challenge_category="torznab_search",
+        )
+    assert _ChainResolverClient.chain_seen == [
+        ("http://flaresolverr:8191", "standard"),
+        ("http://byparr:8191", "standard"),
+        ("http://trawl:8191", "trawl_native"),
+    ]
+
+    indexer.resolver_enabled = False
+    assert await build_manual_torznab_resolver_options(db_session, indexer) == ()
+    indexer.resolver_enabled = True
+    indexer.indexer_type = IndexerType.NEWZNAB
+    assert await build_manual_torznab_resolver_options(db_session, indexer) == ()
+    indexer.indexer_type = IndexerType.TORZNAB
+    indexer.source = IndexerSource.PROWLARR
+    assert await build_manual_torznab_resolver_options(db_session, indexer) == ()
 
 
 async def test_provider_profile_is_ephemeral_and_never_written_to_provider_row(

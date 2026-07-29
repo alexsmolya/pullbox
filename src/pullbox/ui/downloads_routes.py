@@ -412,11 +412,7 @@ def build_download_queue_row_view(
         if progress_pct > 0:
             progress_label = f"{round(progress_pct):.0f}%"
     elif download.state == DownloadState.QUEUED:
-        primary_phase = (
-            client_state
-            if download.download_client is DownloadClientType.DIRECT and client_state
-            else "Queued"
-        )
+        primary_phase = client_state or "Queued"
         status_pill = "pill-info"
     elif download.state in {
         DownloadState.SENT,
@@ -434,11 +430,7 @@ def build_download_queue_row_view(
             speed_bytes = None
             eta_seconds = None
         else:
-            primary_phase = (
-                client_state
-                if download.download_client is DownloadClientType.DIRECT and client_state
-                else "Downloading"
-            )
+            primary_phase = client_state or "Downloading"
             status_pill = "pill-info"
             progress_tone = "is-blue"
             if progress_indeterminate:

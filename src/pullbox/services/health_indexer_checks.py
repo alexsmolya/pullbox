@@ -21,11 +21,12 @@ from pullbox.services.health_helpers import (
 from pullbox.services.health_types import CheckOutcome, SubCheckOutcome
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.indexer import IndexerConfig
+    from pullbox.services.direct_resolver_service import NativeResolverOption
 
 _INDEXER_LATENCY_DEGRADED_MS = 1000.0
 _INDEXER_LATENCY_UNHEALTHY_MS = 5000.0
@@ -39,7 +40,10 @@ async def check_indexers(
         Awaitable[tuple[str | None, str | None]],
     ],
     check_prowlarr_subject: Callable[..., Awaitable[CheckOutcome]],
-    check_indexer_subject: Callable[[IndexerConfig], Awaitable[CheckOutcome]],
+    check_indexer_subject: Callable[
+        [IndexerConfig, Sequence[NativeResolverOption]],
+        Awaitable[CheckOutcome],
+    ],
 ) -> list[CheckOutcome]:
     """Test Prowlarr and enabled indexers as a grouped multi-entity component."""
     from pullbox.models.indexer import IndexerConfig
@@ -95,8 +99,13 @@ async def check_indexers(
             subject_outcomes.append(outcome)
             summary_checks.append(_serialize_indexer_summary(outcome))
     else:
+        from pullbox.services.direct_resolver_service import (
+            build_manual_torznab_resolver_options,
+        )
+
         for config in indexer_configs:
-            outcome = await check_indexer_subject(config)
+            resolver_options = await build_manual_torznab_resolver_options(session, config)
+            outcome = await check_indexer_subject(config, resolver_options)
             subject_outcomes.append(outcome)
             summary_checks.append(_serialize_indexer_summary(outcome))
             total_ms += outcome.response_time_ms
@@ -450,6 +459,7 @@ async def check_prowlarr_subject(
 
 async def check_indexer_subject(
     config: IndexerConfig,
+    resolver_options: Sequence[NativeResolverOption] = (),
 ) -> CheckOutcome:
     """Build a persisted health summary for one configured indexer."""
     from pullbox.core.encryption import decrypt_secret
@@ -464,6 +474,8 @@ async def check_indexer_subject(
             name=config.name,
             url=config.url,
             api_key=api_key,
+            resolver_enabled=bool(config.resolver_enabled),
+            resolver_options=resolver_options,
         )
     else:
         indexer = NewznabIndexer(

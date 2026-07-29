@@ -147,6 +147,30 @@ class TestAddTorrent:
         with pytest.raises(QBittorrentError, match="Torrent was not added"):
             await client.add_torrent("https://example.com/download.torrent", "Batman 001")
 
+    async def test_add_torrent_data_uploads_descriptor_bytes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _make_client(category="comics")
+        client._request = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                _make_response(json_data=[]),
+                _make_response(text="Ok."),
+                _make_response(json_data=[{"hash": "new-hash", "name": "Batman 001"}]),
+            ]
+        )
+        monkeypatch.setattr("asyncio.sleep", AsyncMock())
+
+        result = await client.add_torrent_data(b"torrent-bytes", "Batman 001")
+
+        assert result == "new-hash"
+        add_call = client._request.await_args_list[1]  # type: ignore[attr-defined]
+        assert add_call.args == ("POST", "/torrents/add")
+        assert add_call.kwargs["data"] == {"rename": "Batman 001", "category": "comics"}
+        assert add_call.kwargs["files"] == {
+            "torrents": ("Batman 001.torrent", b"torrent-bytes", "application/x-bittorrent")
+        }
+
 
 @pytest.mark.asyncio
 class TestDownloadStatus:

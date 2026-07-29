@@ -199,6 +199,7 @@
                     {% if item.download_url %}data-url="{{ item.download_url }}"{% endif %}
                     {% if item.direct_attempt_id %}data-direct-attempt="{{ item.direct_attempt_id }}"{% endif %}
                     data-indexer="{{ item.indexer_name }}"
+                    {% if item.indexer_id %}data-indexer-id="{{ item.indexer_id }}"{% endif %}
                     data-title="{{ item.title }}"
                     data-torrent="{{ item.is_torrent|lower }}"
                     data-size="{{ item.size_bytes or 0 }}"
@@ -272,6 +273,7 @@
                     {% if item.download_url %}data-url="{{ item.download_url }}"{% endif %}
                     {% if item.direct_attempt_id %}data-direct-attempt="{{ item.direct_attempt_id }}"{% endif %}
                     data-indexer="{{ item.indexer_name }}"
+                    {% if item.indexer_id %}data-indexer-id="{{ item.indexer_id }}"{% endif %}
                     data-title="{{ item.title }}"
                     data-torrent="{{ item.is_torrent|lower }}"
                     data-size="{{ item.size_bytes or 0 }}"

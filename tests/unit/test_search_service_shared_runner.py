@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import MethodType, SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -851,7 +852,7 @@ async def test_manual_search_bypasses_backoff_and_automated_empty_cache() -> Non
     manual = SearchService(registry, ignore_indexer_backoff=True)
     results = await manual.search(query, indexer_configs=indexer_configs)
 
-    assert results == [release]
+    assert results == [replace(release, indexer_id=1)]
     indexer.search.assert_awaited_once()
     assert config.failure_count == 0
     assert config.disabled_until is None

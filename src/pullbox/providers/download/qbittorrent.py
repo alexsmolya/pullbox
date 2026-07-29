@@ -110,6 +110,7 @@ class QBittorrentClient:
         endpoint: str,
         data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> httpx.Response:
         """Make an authenticated request to the qBittorrent API.
 
@@ -123,7 +124,13 @@ class QBittorrentClient:
 
         for attempt in range(2):
             try:
-                response = await self._client.request(method, url, data=data, params=params)
+                response = await self._client.request(
+                    method,
+                    url,
+                    data=data,
+                    params=params,
+                    files=files,
+                )
             except httpx.TimeoutException:
                 log.error("qbittorrent_timeout")
                 raise QBittorrentError(f"Request timed out: {endpoint}") from None
@@ -365,6 +372,65 @@ class QBittorrentClient:
             hint="Torrent added but hash not yet identifiable. "
             "monitor_downloads will match it by title.",
         )
+        return None
+
+    async def add_torrent_data(
+        self,
+        content: bytes,
+        title: str,
+        category: str | None = None,
+    ) -> str | None:
+        """Upload descriptor bytes that Pullbox already fetched and validated."""
+        import asyncio
+
+        log = logger.bind(title=title, category=category)
+        log.info("qbittorrent_add_torrent_data")
+        before_resp = await self._request(
+            "GET",
+            "/torrents/info",
+            params={"sort": "added_on", "reverse": "true", "limit": "50"},
+        )
+        existing_hashes = {torrent.get("hash") for torrent in before_resp.json()}
+        form_data: dict[str, Any] = {"rename": title}
+        cat = category or self._default_category
+        if cat:
+            form_data["category"] = cat
+        if self._content_layout:
+            form_data["contentLayout"] = self._content_layout
+        if self._ratio_limit is not None and self._ratio_limit > 0:
+            form_data["ratioLimit"] = str(self._ratio_limit)
+        if self._seeding_time_limit is not None and self._seeding_time_limit > 0:
+            form_data["seedingTimeLimit"] = str(self._seeding_time_limit)
+
+        filename = f"{title}.torrent" if not title.endswith(".torrent") else title
+        await self._request(
+            "POST",
+            "/torrents/add",
+            data=form_data,
+            files={"torrents": (filename, content, "application/x-bittorrent")},
+        )
+
+        torrents: list[dict[str, Any]] = []
+        for attempt in range(6):
+            await asyncio.sleep(0.3 if attempt < 2 else 1.0)
+            response = await self._request(
+                "GET",
+                "/torrents/info",
+                params={"sort": "added_on", "reverse": "true", "limit": "50"},
+            )
+            torrents = response.json()
+            for torrent in torrents:
+                torrent_hash = torrent.get("hash", "")
+                if torrent_hash and torrent_hash not in existing_hashes:
+                    return str(torrent_hash)
+
+        for torrent in torrents:
+            if torrent.get("name") == title and torrent.get("hash"):
+                return str(torrent["hash"])
+        if {torrent.get("hash") for torrent in torrents} == existing_hashes:
+            raise QBittorrentError(
+                "Torrent was not added to qBittorrent. The descriptor may already exist."
+            )
         return None
 
     async def find_torrent_by_title(self, title: str) -> str | None:

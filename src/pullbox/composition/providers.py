@@ -21,6 +21,7 @@ from pullbox.providers.download.transmission import TransmissionClient
 from pullbox.providers.indexer.newznab import NewznabIndexer
 from pullbox.providers.indexer.prowlarr import ProwlarrIndexer
 from pullbox.providers.indexer.torznab import TorznabIndexer
+from pullbox.services.direct_resolver_service import build_manual_torznab_resolver_options
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,10 +77,14 @@ async def register_indexers(
         decrypted_api_key = decrypt_secret(idx_cfg.api_key)
 
         if idx_cfg.indexer_type == IndexerType.TORZNAB:
+            resolver_options = await build_manual_torznab_resolver_options(session, idx_cfg)
             indexer: NewznabIndexer = TorznabIndexer(
                 name=idx_cfg.name,
                 url=idx_cfg.url,
                 api_key=decrypted_api_key,
+                resolver_enabled=bool(idx_cfg.resolver_enabled),
+                resolver_options=resolver_options,
+                cache_namespace=f"manual-torznab:{idx_cfg.id}",
             )
         else:
             indexer = NewznabIndexer(

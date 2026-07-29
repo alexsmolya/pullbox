@@ -64,6 +64,7 @@ def _make_release(
     size_bytes: int | None = 100_000_000,
     age_days: int | None = 5,
     is_torrent: bool = False,
+    indexer_id: int | None = None,
 ) -> ReleaseResult:
     return ReleaseResult(
         title=title,
@@ -77,6 +78,7 @@ def _make_release(
         is_torrent=is_torrent,
         category="comics",
         published_at=None,
+        indexer_id=indexer_id,
     )
 
 
@@ -268,7 +270,7 @@ async def test_grab_button_present_for_matched(
     issue_id = await _create_issue(_db_factory)
 
     mock_results = [
-        _make_release("Batman 001 (2016).cbz"),  # match
+        _make_release("Batman 001 (2016).cbz", indexer_id=42),  # match
         _make_release("Superman 005 (2020).cbr"),  # reject
     ]
 
@@ -294,6 +296,7 @@ async def test_grab_button_present_for_matched(
     assert "window.issueSearchResultActions" in html
     assert '@click="grabRelease($el)"' in html
     assert '@click="blockRelease($el)"' in html
+    assert 'data-indexer-id="42"' in html
     # Rejected results should show rejection info and an explicit manual override
     assert "Rejected" in html
     assert "Grab anyway" in html

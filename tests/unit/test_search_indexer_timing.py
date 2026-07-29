@@ -73,6 +73,7 @@ async def test_search_indexers_records_per_indexer_timing_diagnostics() -> None:
     )
 
     assert [result.title for result in results] == ["Absolute Flash 001 (2025).cbz"]
+    assert results[0].indexer_id == 1
     assert timings == [
         {
             "query": "Absolute Flash #001",

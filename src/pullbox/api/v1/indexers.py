@@ -10,7 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from pullbox.api.deps import DbSession, InteractiveOperatorUser
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
-from pullbox.core.exceptions import NotFoundError
+from pullbox.core.exceptions import NotFoundError, ValidationError
 from pullbox.core.sqlite_lock import (
     SQLITE_LOCK_RETRY_ATTEMPTS,
     is_sqlite_locked_error,
@@ -49,6 +49,7 @@ def _redact_indexer(indexer: IndexerConfig) -> dict[str, object]:
         "enable_rss": indexer.enable_rss,
         "enable_automatic_search": indexer.enable_automatic_search,
         "enable_interactive_search": indexer.enable_interactive_search,
+        "resolver_enabled": indexer.resolver_enabled,
         "last_success_at": indexer.last_success_at,
         "last_failure_at": indexer.last_failure_at,
         "last_error": indexer.last_error,
@@ -126,6 +127,11 @@ async def add_indexer(
     session: DbSession,
 ) -> IndexerResponse:
     """Add a new indexer configuration."""
+    _validate_resolver_scope(
+        indexer_type=body.indexer_type,
+        source="manual",
+        resolver_enabled=body.resolver_enabled,
+    )
     indexer = IndexerConfig(
         name=body.name,
         indexer_type=body.indexer_type,
@@ -138,6 +144,7 @@ async def add_indexer(
         enable_rss=body.enable_rss,
         enable_automatic_search=body.enable_automatic_search,
         enable_interactive_search=body.enable_interactive_search,
+        resolver_enabled=body.resolver_enabled,
     )
     session.add(indexer)
     await session.flush()
@@ -279,6 +286,7 @@ async def sync_prowlarr_indexers(
             idx.priority = remote_priority
             idx.enabled = remote_enabled
             idx.categories = categories_str
+            idx.resolver_enabled = False
             updated += 1
         else:
             # Create new
@@ -292,6 +300,7 @@ async def sync_prowlarr_indexers(
                 categories=categories_str,
                 source="prowlarr",
                 prowlarr_indexer_id=remote_id,
+                resolver_enabled=False,
             )
             session.add(idx)
             added += 1
@@ -417,6 +426,12 @@ async def update_indexer(
         raise NotFoundError("Indexer", indexer_id)
 
     update_data = body.model_dump(exclude_unset=True)
+    if update_data.get("resolver_enabled"):
+        _validate_resolver_scope(
+            indexer_type=indexer.indexer_type,
+            source=str(indexer.source),
+            resolver_enabled=True,
+        )
 
     # Encrypt api_key if provided; omitted → keep existing encrypted value
     if update_data.get("api_key"):
@@ -431,6 +446,20 @@ async def update_indexer(
     await session.flush()
     await session.refresh(indexer)
     return IndexerResponse.model_validate(_redact_indexer(indexer))
+
+
+def _validate_resolver_scope(
+    *,
+    indexer_type: object,
+    source: str,
+    resolver_enabled: bool,
+) -> None:
+    if not resolver_enabled:
+        return
+    if indexer_type != "torznab" or source != "manual":
+        raise ValidationError(
+            "Browser resolver support is available only for a manual Torznab indexer."
+        )
 
 
 # ── Delete ───────────────────────────────────────────────────────────
@@ -466,6 +495,9 @@ async def test_indexer(
     from pullbox.providers.indexer.newznab import NewznabIndexer
     from pullbox.providers.indexer.prowlarr import ProwlarrIndexer
     from pullbox.providers.indexer.torznab import TorznabIndexer
+    from pullbox.services.direct_resolver_service import (
+        build_manual_torznab_resolver_options,
+    )
 
     provider: NewznabIndexer | TorznabIndexer | ProwlarrIndexer
     name = str(indexer.name)
@@ -475,7 +507,14 @@ async def test_indexer(
     if indexer.indexer_type == "prowlarr":
         provider = ProwlarrIndexer(url=url, api_key=api_key)
     elif indexer.indexer_type == "torznab":
-        provider = TorznabIndexer(name=name, url=url, api_key=api_key)
+        resolver_options = await build_manual_torznab_resolver_options(session, indexer)
+        provider = TorznabIndexer(
+            name=name,
+            url=url,
+            api_key=api_key,
+            resolver_enabled=bool(indexer.resolver_enabled),
+            resolver_options=resolver_options,
+        )
     else:
         provider = NewznabIndexer(name=name, url=url, api_key=api_key)
 

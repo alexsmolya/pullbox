@@ -25,10 +25,12 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactState,
 )
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
+from pullbox.models.indexer import IndexerConfig, IndexerSource, IndexerType
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series
 from pullbox.models.user import APIKey, User
 from pullbox.providers.download.qbittorrent import QBittorrentError
+from pullbox.providers.indexer.newznab import NewznabError
 from pullbox.services.auth_service import AuthService
 
 if TYPE_CHECKING:
@@ -127,6 +129,7 @@ async def _seed_download(
     downloaded_path: str | None = None,
     error_message: str | None = "Download failed",
     completed_at: datetime | None = None,
+    indexer_id: int | None = None,
 ) -> int:
     async with factory() as session:
         download = DownloadHistory(
@@ -139,6 +142,7 @@ async def _seed_download(
             downloaded_path=downloaded_path,
             error_message=error_message,
             completed_at=completed_at,
+            indexer_id=indexer_id,
         )
         session.add(download)
         await session.flush()
@@ -705,6 +709,71 @@ class TestDownloadRouteFunctions:
             "https://example.com/batman-004.torrent",
             "Batman 004 (2025)",
         )
+
+    @pytest.mark.asyncio
+    async def test_retry_download_reports_torznab_descriptor_failure(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory)
+        async with db_factory() as session:
+            config = IndexerConfig(
+                name="Challenged Torznab",
+                indexer_type=IndexerType.TORZNAB,
+                source=IndexerSource.MANUAL,
+                url="https://indexer.example",
+                api_key="encrypted",
+                enabled=True,
+                resolver_enabled=True,
+            )
+            session.add(config)
+            await session.flush()
+            indexer_id = config.id
+            await session.commit()
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            client_type=DownloadClientType.QBITTORRENT,
+            download_url="https://indexer.example/api?t=get&id=7&apikey=secret",
+            downloaded_path=None,
+            error_message="Descriptor failed",
+            indexer_id=indexer_id,
+        )
+        mock_client = AsyncMock()
+        mock_client.client_type = "qbittorrent"
+        mock_indexer = AsyncMock()
+        mock_indexer.browser_resolver_enabled = True
+        mock_indexer.fetch_torrent_descriptor = AsyncMock(
+            side_effect=NewznabError("The Torznab descriptor is unavailable."),
+        )
+
+        with (
+            patch(
+                "pullbox.composition.providers.register_download_clients",
+                new_callable=AsyncMock,
+            ) as mock_register_clients,
+            patch(
+                "pullbox.composition.providers.register_indexers",
+                new_callable=AsyncMock,
+            ) as mock_register_indexers,
+        ):
+
+            async def _register_clients(_session: object, registry: object) -> None:
+                registry.register_download_client(1, mock_client)  # type: ignore[union-attr]
+
+            async def _register_indexers(_session: object, registry: object) -> None:
+                registry.register_indexer(indexer_id, mock_indexer)  # type: ignore[union-attr]
+
+            mock_register_clients.side_effect = _register_clients
+            mock_register_indexers.side_effect = _register_indexers
+            response = await client.post(f"/api/v1/downloads/{download_id}/retry")
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == "The Torznab descriptor is unavailable."
+        download = await _get_download(db_factory, download_id)
+        assert download.state == DownloadState.FAILED
+        assert download.error_message == "Descriptor failed"
 
     @pytest.mark.asyncio
     async def test_cancel_download_route_cancels_active_and_deletes_terminal_rows(

@@ -180,6 +180,19 @@ class TestAddTorrent:
         call_args = mock_rpc.call_args_list[0]
         assert call_args[0][0] == "core.add_torrent_file"
 
+    async def test_add_torrent_data_sends_base64_file(self) -> None:
+        client = _make_client()
+        client._authenticated = True
+        client._rpc = AsyncMock(return_value="descriptor-hash")  # type: ignore[assignment]
+
+        result = await client.add_torrent_data(b"torrent-bytes", "Test Torrent")
+
+        assert result == "descriptor-hash"
+        method, params = client._rpc.await_args.args
+        assert method == "core.add_torrent_file"
+        assert params[0] == "Test Torrent.torrent"
+        assert params[1] == "dG9ycmVudC1ieXRlcw=="
+
     async def test_add_torrent_with_label(self) -> None:
         """Label is set via label.set_torrent after add."""
         client = _make_client(label="comics")

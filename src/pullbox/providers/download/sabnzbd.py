@@ -211,6 +211,15 @@ class SABnzbdClient:
         """Not supported — SABnzbd is Usenet-only."""
         raise NotImplementedError("SABnzbd does not support torrent downloads")
 
+    async def add_torrent_data(
+        self,
+        content: bytes,
+        title: str,
+        category: str | None = None,
+    ) -> str | None:
+        """Not supported - SABnzbd is Usenet-only."""
+        raise NotImplementedError("SABnzbd does not support torrent downloads")
+
     async def get_download_status(self, external_id: str) -> DownloadStatus:
         """Get status of a specific download by nzo_id.
 

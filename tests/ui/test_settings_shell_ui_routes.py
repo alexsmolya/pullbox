@@ -447,10 +447,10 @@ class TestSettingsRouteContracts:
 
         assert response.status_code == 200
         assert 'data-testid="settings-search-resolvers-card"' in response.text
-        assert 'data-testid="settings-search-resolver-1"' in response.text
-        assert 'data-testid="settings-search-resolver-2"' in response.text
+        assert "settings-search-resolver-${profile.id}" in response.text
         assert 'data-testid="settings-search-resolver-add"' in response.text
-        assert 'data-testid="settings-search-resolver-test-1"' in response.text
+        assert "settings-search-resolver-test-${profile.id}" in response.text
+        assert '<template x-for="profile in profiles"' in response.text
         assert "Browser challenge resolvers" in response.text
         assert "Lower values are tried first" in response.text
         assert "does not guarantee CAPTCHA" in response.text
@@ -464,6 +464,8 @@ class TestSettingsRouteContracts:
         assert "Last classified error" in response.text
         assert "Authorization" in response.text
         assert "encrypted-resolver-secret-must-not-render" not in response.text
+        assert "form: {}," not in response.text
+        assert "form: { auth_headers: [] }," in response.text
 
     async def test_direct_and_indexer_settings_link_to_shared_resolver_management(
         self,
@@ -478,6 +480,9 @@ class TestSettingsRouteContracts:
         assert 'href="/settings?tab=search#browser-resolvers"' in direct.text
         assert 'data-testid="settings-indexers-resolver-summary"' in indexers.text
         assert 'href="/settings?tab=search#browser-resolvers"' in indexers.text
+        assert 'data-testid="settings-indexers-manual-torznab-resolver"' in indexers.text
+        assert "Try the ranked browser resolver chain" in indexers.text
+        assert "Manual Torznab only" in indexers.text
         assert 'data-testid="settings-search-resolver-endpoint"' not in direct.text
         assert 'data-testid="settings-search-resolver-endpoint"' not in indexers.text
 

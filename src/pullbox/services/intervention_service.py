@@ -122,7 +122,7 @@ class InterventionService:
             issue_id=issue_id,
             release_title=release.title,
             download_url=release.download_url,
-            indexer_id=indexer_id,
+            indexer_id=indexer_id if indexer_id is not None else release.indexer_id,
             is_torrent=release.is_torrent,
             file_size=release.size_bytes,
             confidence=validation.confidence.value,
@@ -303,6 +303,7 @@ class InterventionService:
             is_torrent=pm.is_torrent,
             category=None,
             published_at=None,
+            indexer_id=pm.indexer_id,
         )
 
         download = await self._download_service.send_to_client(

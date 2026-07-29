@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
@@ -34,10 +34,11 @@ from pullbox.services.direct_resolver_configuration import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.direct.endpoint import ValidatedProviderEndpoint
 
 _RESOLVER_NAME = "default"
@@ -109,6 +110,31 @@ class ProviderResolverOption:
     resolver_name: str
     resolver_kind: DirectResolverKind
     profile: DirectResolverProfile = field(repr=False)
+
+
+NativeResolverSolve = Callable[
+    [str, Sequence[str], str],
+    Awaitable[DirectResolverResult],
+]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeResolverOption:
+    """One ranked native resolver with all secrets hidden behind its solve boundary."""
+
+    resolver_id: int
+    resolver_name: str
+    resolver_kind: DirectResolverKind
+    _solve: NativeResolverSolve = field(repr=False)
+
+    async def solve(
+        self,
+        target_url: str,
+        *,
+        declared_domains: Sequence[str],
+        challenge_category: str,
+    ) -> DirectResolverResult:
+        return await self._solve(target_url, declared_domains, challenge_category)
 
 
 class DirectResolverClientProtocol(Protocol):
@@ -483,6 +509,74 @@ async def build_provider_resolver_profiles(
             ),
         )
         for resolver in resolvers
+    )
+
+
+async def build_manual_torznab_resolver_options(
+    session: AsyncSession,
+    indexer: IndexerConfig,
+    *,
+    client_factory: DirectResolverClientFactory = _default_client_factory,
+) -> tuple[NativeResolverOption, ...]:
+    """Build an ephemeral ranked chain for an opted-in manual Torznab indexer."""
+    if (
+        str(indexer.indexer_type) != "torznab"
+        or str(indexer.source) != "manual"
+        or indexer.resolver_enabled is not True
+    ):
+        return ()
+    return tuple(
+        _native_resolver_option(config, client_factory=client_factory)
+        for config in await _eligible_resolvers(session)
+    )
+
+
+def _native_resolver_option(
+    config: DirectResolverConfig,
+    *,
+    client_factory: DirectResolverClientFactory,
+) -> NativeResolverOption:
+    endpoint = config.endpoint
+    allow_private_http = bool(config.allow_private_http)
+    authentication_headers = load_resolver_auth_headers(config).headers
+    timeout_seconds = float(config.timeout_seconds)
+    max_concurrency = config.max_concurrency
+    circuit_breaker = _get_resolver_runtime(config)
+    resolver_kind = config.resolver_kind
+
+    async def solve(
+        target_url: str,
+        declared_domains: Sequence[str],
+        challenge_category: str,
+    ) -> DirectResolverResult:
+        client = client_factory(
+            endpoint=endpoint,
+            allow_private_http=allow_private_http,
+            authentication_headers=authentication_headers,
+            timeout_seconds=timeout_seconds,
+            max_concurrency=max_concurrency,
+            circuit_breaker=circuit_breaker,
+        )
+        try:
+            if resolver_kind is DirectResolverKind.TRAWL:
+                return await client.solve_trawl_native(
+                    target_url,
+                    declared_domains=declared_domains,
+                    challenge_category=challenge_category,
+                )
+            return await client.solve(
+                target_url,
+                declared_domains=declared_domains,
+                challenge_category=challenge_category,
+            )
+        finally:
+            await client.aclose()
+
+    return NativeResolverOption(
+        resolver_id=config.id,
+        resolver_name=config.name,
+        resolver_kind=config.resolver_kind,
+        _solve=solve,
     )
 
 

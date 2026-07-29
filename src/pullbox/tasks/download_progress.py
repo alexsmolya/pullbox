@@ -47,6 +47,30 @@ def _clear_progress(download_id: int) -> None:
     _first_active_observed_at.pop(download_id, None)
 
 
+def clear_download_progress(download_id: int) -> None:
+    """Clear transient UI progress after a handoff finishes or fails."""
+    _clear_progress(download_id)
+
+
+def record_transient_download_stage(
+    download_id: int,
+    client_state: str,
+    *,
+    source_label: str | None = None,
+) -> None:
+    """Publish an indeterminate pre-client handoff stage for the queue UI."""
+    _progress_cache[download_id] = ProgressSnapshot(
+        progress=0.0,
+        speed_bytes=None,
+        eta_seconds=None,
+        size_bytes=None,
+        updated_at=_time.monotonic(),
+        client_state=client_state,
+        source_label=source_label,
+        is_indeterminate=True,
+    )
+
+
 def record_download_progress(
     download_id: int,
     status: Any,

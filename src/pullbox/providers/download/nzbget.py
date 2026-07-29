@@ -220,6 +220,15 @@ class NZBGetClient:
         """Not supported — NZBGet is Usenet-only."""
         raise NotImplementedError("NZBGet does not support torrent downloads")
 
+    async def add_torrent_data(
+        self,
+        content: bytes,
+        title: str,
+        category: str | None = None,
+    ) -> str | None:
+        """Not supported - NZBGet is Usenet-only."""
+        raise NotImplementedError("NZBGet does not support torrent downloads")
+
     async def get_download_status(self, external_id: str) -> DownloadStatus:
         """Get status of a specific download by NZBID.
 

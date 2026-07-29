@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -81,7 +81,7 @@ async def search_indexers(
         return []
 
     now = datetime.now(UTC)
-    search_tasks: list[tuple[Indexer, SearchQuery, IndexerConfig | None]] = []
+    search_tasks: list[tuple[int, Indexer, SearchQuery, IndexerConfig | None]] = []
     for config_id, indexer in indexer_items:
         cfg = indexer_configs.get(config_id) if indexer_configs else None
 
@@ -116,30 +116,31 @@ async def search_indexers(
                 categories=DEFAULT_COMIC_CATEGORIES,
             )
 
-        search_tasks.append((indexer, indexer_query, cfg))
+        search_tasks.append((config_id, indexer, indexer_query, cfg))
 
     if not search_tasks:
         return []
 
     async def _timed_search(
+        config_id: int,
         indexer: Indexer,
         indexer_query: SearchQuery,
         cfg: IndexerConfig | None,
-    ) -> tuple[Indexer, SearchQuery, IndexerSearchAttempt, int]:
+    ) -> tuple[int, Indexer, SearchQuery, IndexerSearchAttempt, int]:
         started_at = time.monotonic()
         attempt = await search_single(indexer, indexer_query, cfg, failure_threshold)
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        return indexer, indexer_query, attempt, elapsed_ms
+        return config_id, indexer, indexer_query, attempt, elapsed_ms
 
     raw_results = await asyncio.gather(
         *[
-            _timed_search(indexer, indexer_query, cfg)
-            for indexer, indexer_query, cfg in search_tasks
+            _timed_search(config_id, indexer, indexer_query, cfg)
+            for config_id, indexer, indexer_query, cfg in search_tasks
         ],
     )
 
     all_results: list[ReleaseResult] = []
-    for indexer, indexer_query, attempt, elapsed_ms in raw_results:
+    for config_id, indexer, indexer_query, attempt, elapsed_ms in raw_results:
         results = attempt.results
         if results:
             active_logger.debug(
@@ -153,7 +154,12 @@ async def search_indexers(
             )
 
         before = len(results)
-        filtered_results = [result for result in results if _is_comic_category(result.category)]
+        result_indexer_id = config_id if config_id >= 0 else None
+        filtered_results = [
+            replace(result, indexer_id=result_indexer_id)
+            for result in results
+            if _is_comic_category(result.category)
+        ]
         filtered = before - len(filtered_results)
         if timing_collector is not None:
             timing: dict[str, object] = {

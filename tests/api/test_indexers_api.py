@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from pullbox.api.v1 import indexers as indexers_api
 from pullbox.core.encryption import decrypt_secret, encrypt_secret, is_encrypted
-from pullbox.core.exceptions import NotFoundError
+from pullbox.core.exceptions import NotFoundError, ValidationError
 from pullbox.models.config import SystemConfig
 from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.providers.base import ProviderHealthResult
@@ -62,6 +62,7 @@ async def _seed_indexer(
     source: str = "manual",
     prowlarr_indexer_id: int | None = None,
     priority: int = 25,
+    resolver_enabled: bool = False,
 ) -> IndexerConfig:
     indexer = IndexerConfig(
         name=name,
@@ -73,6 +74,7 @@ async def _seed_indexer(
         categories="7030",
         source=source,
         prowlarr_indexer_id=prowlarr_indexer_id,
+        resolver_enabled=resolver_enabled,
     )
     session.add(indexer)
     await session.flush()
@@ -181,6 +183,42 @@ class TestIndexerCrudRoutes:
                 )
             with pytest.raises(NotFoundError):
                 await indexers_api.delete_indexer(999_003, object(), session)  # type: ignore[arg-type]
+
+    async def test_browser_resolver_is_opt_in_for_manual_torznab_only(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+    ) -> None:
+        async with sec_db() as session:
+            created = await indexers_api.add_indexer(
+                _indexer_create(
+                    name="Manual Torznab",
+                    indexer_type="torznab",
+                    resolver_enabled=True,
+                ),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+            stored = await session.get(IndexerConfig, created.id)
+
+            assert created.resolver_enabled is True
+            assert stored is not None
+            assert stored.resolver_enabled is True
+
+            with pytest.raises(ValidationError, match="manual Torznab"):
+                await indexers_api.add_indexer(
+                    _indexer_create(resolver_enabled=True),
+                    object(),  # type: ignore[arg-type]
+                    session,
+                )
+
+            newznab = await _seed_indexer(session)
+            with pytest.raises(ValidationError, match="manual Torznab"):
+                await indexers_api.update_indexer(
+                    newznab.id,
+                    IndexerUpdate(resolver_enabled=True),
+                    object(),  # type: ignore[arg-type]
+                    session,
+                )
 
 
 @pytest.mark.asyncio
@@ -297,6 +335,7 @@ class TestProwlarrRoutes:
             "NZBgeek (Prowlarr)",
         ]
         assert result.indexers[0].indexer_type == IndexerType.TORZNAB
+        assert result.indexers[0].resolver_enabled is False
         assert result.indexers[0].categories == "7030,7040"
         assert result.indexers[1].indexer_type == IndexerType.NEWZNAB
         assert result.indexers[1].enabled is False
@@ -396,6 +435,49 @@ class TestIndexerConnectionRoutes:
         assert indexer.last_error is None
         assert indexer.failure_count == 0
         assert indexer.disabled_until is None
+
+    async def test_manual_torznab_test_route_uses_ranked_resolver_chain(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        options = (object(),)
+        constructor_kwargs: dict[str, object] = {}
+        built_for: list[int] = []
+
+        class _FakeProvider:
+            def __init__(self, **kwargs: object) -> None:
+                constructor_kwargs.update(kwargs)
+
+            async def test_connection(self) -> ProviderHealthResult:
+                return _health("challenged Torznab reachable")
+
+        async def _build_options(_session: object, indexer: IndexerConfig) -> tuple[object, ...]:
+            built_for.append(indexer.id)
+            return options
+
+        monkeypatch.setattr(
+            "pullbox.providers.indexer.torznab.TorznabIndexer",
+            _FakeProvider,
+        )
+        monkeypatch.setattr(
+            "pullbox.services.direct_resolver_service.build_manual_torznab_resolver_options",
+            _build_options,
+        )
+
+        async with sec_db() as session:
+            indexer = await _seed_indexer(
+                session,
+                name="Challenged Torznab",
+                indexer_type=IndexerType.TORZNAB,
+                resolver_enabled=True,
+            )
+            result = await indexers_api.test_indexer(indexer.id, object(), session)  # type: ignore[arg-type]
+
+        assert result["healthy"] is True
+        assert built_for == [indexer.id]
+        assert constructor_kwargs["resolver_enabled"] is True
+        assert constructor_kwargs["resolver_options"] is options
 
     async def test_indexer_test_route_persists_failure_and_requires_existing_indexer(
         self,

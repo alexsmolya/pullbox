@@ -10620,6 +10620,7 @@ function issueSearchResultActions(config) {
       var payload = {
         download_url: button.dataset.url,
         indexer_name: button.dataset.indexer,
+        indexer_id: parseInt(button.dataset.indexerId, 10) || null,
         title: button.dataset.title,
         is_torrent: button.dataset.torrent === "true",
         file_size: parseInt(button.dataset.size, 10) || 0,

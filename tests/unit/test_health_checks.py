@@ -959,6 +959,7 @@ class TestIndexersCheck:
         enabled: bool = True,
         source: str | None = None,
         prowlarr_indexer_id: int | None = None,
+        resolver_enabled: bool = False,
     ) -> None:
         from pullbox.models.indexer import IndexerConfig
 
@@ -971,6 +972,7 @@ class TestIndexersCheck:
                 enabled=enabled,
                 source=source,
                 prowlarr_indexer_id=prowlarr_indexer_id,
+                resolver_enabled=resolver_enabled,
             )
         )
         await db_session.flush()
@@ -1056,6 +1058,51 @@ class TestIndexersCheck:
         assert outcomes[0].message == "All indexer services unreachable"
         assert outcomes[0].details["checks"][0]["name"] == "NZBGeek"
         assert outcomes[1].message == "Authentication failed"
+
+    @pytest.mark.asyncio
+    async def test_manual_torznab_health_check_uses_ranked_resolver_chain(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        from pullbox.models.indexer import IndexerType
+
+        await self._seed_indexer_config(
+            db_session,
+            name="Challenged Torznab",
+            indexer_type=IndexerType.TORZNAB,
+            url="https://torznab.example",
+            source="manual",
+            resolver_enabled=True,
+        )
+        options = (MagicMock(name="resolver-option"),)
+        healthy = ProviderHealthResult(
+            healthy=True,
+            message="OK",
+            response_time_ms=50.0,
+            details={"categories": "8"},
+        )
+
+        with (
+            patch(
+                "pullbox.services.direct_resolver_service.build_manual_torznab_resolver_options",
+                AsyncMock(return_value=options),
+            ) as build_options,
+            patch("pullbox.providers.indexer.torznab.TorznabIndexer") as mock_torznab,
+        ):
+            mock_torznab.return_value.test_connection = AsyncMock(return_value=healthy)
+            mock_torznab.return_value.close = AsyncMock()
+            outcomes = await _make_service(settings).run_check(db_session, "indexers")
+
+        assert outcomes[0].status == HealthStatus.HEALTHY
+        build_options.assert_awaited_once()
+        mock_torznab.assert_called_once_with(
+            name="Challenged Torznab",
+            url="https://torznab.example",
+            api_key="key",
+            resolver_enabled=True,
+            resolver_options=options,
+        )
 
     @pytest.mark.asyncio
     async def test_degraded_mixed(self, db_session: AsyncSession, settings: MagicMock) -> None:
