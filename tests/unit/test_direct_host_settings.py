@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,8 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactHostKind,
     DirectHostAccountState,
     DirectHostConfig,
+    DirectHostOperationalResult,
+    DirectHostReachabilityState,
 )
 from pullbox.services.direct_host_settings import (
     list_direct_host_settings,
@@ -156,6 +159,45 @@ async def test_update_preserves_secret_when_only_preference_changes(
     stored = await session.get(DirectHostConfig, updated.id)
     assert stored is not None
     assert is_encrypted(str(stored.encrypted_credentials["session"]))
+
+
+@pytest.mark.asyncio
+async def test_empty_credential_update_preserves_host_status_history(
+    session: AsyncSession,
+) -> None:
+    checked_at = datetime(2026, 7, 30, 20, 0, tzinfo=UTC)
+    created = await update_direct_host_setting(
+        session,
+        DirectArtifactHostKind.PIXELDRAIN,
+        enabled=True,
+        preference=50,
+        credential_updates={"api_key": "private-pixeldrain-key"},
+    )
+    stored = await session.get(DirectHostConfig, created.id)
+    assert stored is not None
+    stored.account_state = DirectHostAccountState.HEALTHY
+    stored.reachability_state = DirectHostReachabilityState.REACHABLE
+    stored.last_tested_at = checked_at
+    stored.last_reachable_at = checked_at
+    stored.last_operational_result = DirectHostOperationalResult.SUCCESSFUL
+    stored.last_operational_at = checked_at
+    await session.commit()
+
+    updated = await update_direct_host_setting(
+        session,
+        DirectArtifactHostKind.PIXELDRAIN,
+        enabled=True,
+        preference=10,
+        credential_updates={},
+    )
+
+    assert updated.preference == 10
+    assert updated.account_state is DirectHostAccountState.HEALTHY
+    assert updated.reachability_state is DirectHostReachabilityState.REACHABLE
+    assert updated.last_checked_at == checked_at
+    assert updated.last_reachable_at == checked_at
+    assert updated.last_operational_result is DirectHostOperationalResult.SUCCESSFUL
+    assert updated.last_operational_at == checked_at
 
 
 @pytest.mark.asyncio

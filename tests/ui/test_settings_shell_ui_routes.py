@@ -678,6 +678,16 @@ class TestSettingsRouteContracts:
         assert 'data-testid="settings-direct-host-toggle-pixeldrain"' not in response.text
         assert 'data-testid="settings-direct-host-modal-enabled"' in response.text
         assert 'data-testid="settings-direct-host-modal-actions"' in response.text
+        assert 'data-testid="settings-direct-host-modal-test"' in response.text
+        assert "Last reachable" in response.text
+        assert "Last operational use" in response.text
+        assert "Not Checked" in response.text
+        assert "Last account check" not in response.text
+        assert "testHost()" in response.text
+        assert "const shouldRefreshHostStatus = Boolean(this.hostTestState);" in response.text
+        assert "if (shouldRefreshHostStatus) this.refresh();" in response.text
+        assert "refresh() {" in response.text
+        assert "window.location.reload();" in response.text
         assert 'x-model="hostForm.enabled"' in response.text
         assert "hostForm.clearCredentials" not in response.text
         assert "clearCredentials:" not in response.text

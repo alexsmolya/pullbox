@@ -182,6 +182,24 @@ class DirectHostAccountState(enum.StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class DirectHostReachabilityState(enum.StrEnum):
+    """What Pullbox most recently proved without downloading an artifact."""
+
+    NOT_CHECKED = "not_checked"
+    REACHABLE = "reachable"
+    NOT_REACHABLE = "not_reachable"
+    AUTHENTICATION_REQUIRED = "authentication_required"
+    QUOTA_LIMITED = "quota_limited"
+    UNAVAILABLE = "unavailable"
+
+
+class DirectHostOperationalResult(enum.StrEnum):
+    """Outcome of the most recent user-requested artifact-host operation."""
+
+    SUCCESSFUL = "successful"
+    FAILED = "failed"
+
+
 class DirectAcquisitionState(enum.StrEnum):
     DISCOVERED = "discovered"
     RESOLVING = "resolving"
@@ -354,7 +372,18 @@ class DirectHostConfig(Base, IdentityMixin, TimestampMixin):
     )
     quota_remaining: Mapped[int | None] = mapped_column(BigInteger)
     quota_reset_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    reachability_state: Mapped[DirectHostReachabilityState] = mapped_column(
+        _enum_type(DirectHostReachabilityState, "directhostreachabilitystate"),
+        default=DirectHostReachabilityState.NOT_CHECKED,
+        server_default=DirectHostReachabilityState.NOT_CHECKED.value,
+        nullable=False,
+    )
     last_tested_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_reachable_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_operational_result: Mapped[DirectHostOperationalResult | None] = mapped_column(
+        _enum_type(DirectHostOperationalResult, "directhostoperationalresult")
+    )
+    last_operational_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_error_code: Mapped[str | None] = mapped_column(String(100))
 
 

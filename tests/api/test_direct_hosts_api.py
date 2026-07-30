@@ -9,8 +9,13 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from pullbox.core.encryption import is_encrypted
-from pullbox.models.direct_acquisition import DirectArtifactHostKind, DirectHostConfig
+from pullbox.models.direct_acquisition import (
+    DirectArtifactHostKind,
+    DirectHostConfig,
+    DirectHostReachabilityState,
+)
 from pullbox.services.auth_service import SESSION_COOKIE_NAME, AuthService
+from pullbox.services.direct_host_reachability import DirectHostProbeObservation
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -201,3 +206,44 @@ async def test_host_setting_routes_require_interactive_authentication(
     unauthenticated_client: AsyncClient,
 ) -> None:
     assert (await unauthenticated_client.get("/api/v1/direct-hosts")).status_code == 401
+
+
+async def test_host_reachability_test_persists_and_returns_secret_free_result(
+    authenticated_client: AsyncClient,
+    sec_db: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    async def probe(_host_kind: DirectArtifactHostKind) -> DirectHostProbeObservation:
+        return DirectHostProbeObservation(contacted=True, status_code=204)
+
+    monkeypatch.setattr("pullbox.api.v1.direct_hosts.direct_host_probe", probe)
+
+    response = await authenticated_client.post(
+        "/api/v1/direct-hosts/pixeldrain/test",
+        headers=_csrf_header(authenticated_client),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reachable"] is True
+    assert payload["state"] == "reachable"
+    assert "does not download" in payload["message"].lower()
+    async with sec_db() as session:
+        stored = (
+            await session.execute(
+                select(DirectHostConfig).where(
+                    DirectHostConfig.host_kind == DirectArtifactHostKind.PIXELDRAIN
+                )
+            )
+        ).scalar_one()
+        assert stored.reachability_state is DirectHostReachabilityState.REACHABLE
+        assert stored.last_tested_at is not None
+        assert stored.last_reachable_at == stored.last_tested_at
+
+
+async def test_host_reachability_test_requires_interactive_authentication(
+    unauthenticated_client: AsyncClient,
+) -> None:
+    response = await unauthenticated_client.post("/api/v1/direct-hosts/pixeldrain/test")
+
+    assert response.status_code == 401

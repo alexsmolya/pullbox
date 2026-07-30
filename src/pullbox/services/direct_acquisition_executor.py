@@ -23,7 +23,6 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactHostKind,
     DirectArtifactRouteKind,
     DirectArtifactState,
-    DirectHostAccountState,
     DirectHostConfig,
 )
 from pullbox.providers.artifact_hosts.contract import (
@@ -73,6 +72,7 @@ from pullbox.services.direct_artifact_quarantine import (
 )
 from pullbox.services.direct_configuration_service import load_host_credential_material
 from pullbox.services.direct_download_history_adapter import sync_direct_download_history
+from pullbox.services.direct_host_reachability import record_direct_host_operational_result
 from pullbox.services.intervention_service import InterventionService
 
 if TYPE_CHECKING:
@@ -149,6 +149,7 @@ class DirectAcquisitionExecutor:
             artifact_id=artifact.id,
         )
         progress = _ProgressWriter(session, attempt, artifact, now=self._now)
+        host_config_id: int | None = None
 
         try:
             _raise_if_cancelled(cancel_event)
@@ -233,6 +234,13 @@ class DirectAcquisitionExecutor:
                     cancel_event=cancel_event,
                     pause_event=pause_event,
                 )
+                await record_direct_host_operational_result(
+                    session,
+                    host_config_id=host_config_id,
+                    occurred_at=self._now(),
+                    succeeded=True,
+                    error=None,
+                )
 
             final_path = self._quarantine.finalize(
                 workspace,
@@ -282,6 +290,13 @@ class DirectAcquisitionExecutor:
             MegaBridgeTransferError,
             DirectArtifactValidationError,
         ) as exc:
+            await record_direct_host_operational_result(
+                session,
+                host_config_id=host_config_id,
+                occurred_at=self._now(),
+                succeeded=False,
+                error=exc,
+            )
             return await self._classified_failure(
                 session,
                 attempt,
@@ -342,30 +357,14 @@ class DirectAcquisitionExecutor:
         async def publish_resolver_attempt(event: ArtifactResolutionProgress) -> None:
             await progress.write_resolver_attempt(event)
 
-        try:
-            resolved = cast(
-                "ResolvedTransfer",
-                await self._host_resolver.resolve(
-                    request,
-                    credentials=credentials,
-                    progress_callback=publish_resolver_attempt,
-                ),
-            )
-        except ArtifactHostResolutionError as exc:
-            await _record_host_account_result(
-                session,
-                host_config_id=host_config_id,
-                checked_at=self._now(),
-                error=exc,
-            )
-            raise
-        await _record_host_account_result(
-            session,
-            host_config_id=host_config_id,
-            checked_at=self._now(),
-            error=None,
+        return cast(
+            "ResolvedTransfer",
+            await self._host_resolver.resolve(
+                request,
+                credentials=credentials,
+                progress_callback=publish_resolver_attempt,
+            ),
         )
-        return resolved
 
     async def _transfer(
         self,
@@ -838,38 +837,9 @@ async def _load_host_credentials(
             intervention=True,
         )
     credentials = load_host_credential_material(config).credentials
-    config_id = config.id if credentials else None
+    config_id = config.id
     await session.commit()
     return credentials, config_id
-
-
-async def _record_host_account_result(
-    session: AsyncSession,
-    *,
-    host_config_id: int | None,
-    checked_at: datetime,
-    error: ArtifactHostResolutionError | None,
-) -> None:
-    if host_config_id is None:
-        return
-    config = await session.get(DirectHostConfig, host_config_id)
-    if config is None:
-        return
-    config.last_tested_at = checked_at
-    config.last_error_code = error.code if error is not None else None
-    config.quota_remaining = None
-    config.quota_reset_at = None
-    if error is None:
-        config.account_state = DirectHostAccountState.HEALTHY
-    elif error.failure_class is DirectArtifactFailureClass.ARTIFACT_HOST_AUTH_REQUIRED:
-        config.account_state = DirectHostAccountState.AUTHENTICATION_REQUIRED
-    elif error.failure_class is DirectArtifactFailureClass.HOST_QUOTA:
-        config.account_state = DirectHostAccountState.QUOTA_LIMITED
-        config.quota_remaining = 0
-    elif error.failure_class is DirectArtifactFailureClass.TRANSIENT_HOST:
-        config.account_state = DirectHostAccountState.UNAVAILABLE
-    else:
-        config.account_state = DirectHostAccountState.UNKNOWN
 
 
 def _validate_source_request(

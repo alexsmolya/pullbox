@@ -9,7 +9,16 @@ from pullbox.api.deps import (  # noqa: TC001 - FastAPI resolves route annotatio
     InteractiveOperatorUser,
 )
 from pullbox.models.direct_acquisition import DirectArtifactHostKind  # noqa: TC001
-from pullbox.schemas.direct_host import DirectHostResponse, DirectHostUpdateRequest
+from pullbox.schemas.direct_host import (
+    DirectHostResponse,
+    DirectHostTestResponse,
+    DirectHostUpdateRequest,
+)
+from pullbox.services.direct_host_reachability import (
+    DirectHostProbe,
+    check_direct_host_reachability,
+    probe_direct_host_endpoint,
+)
 from pullbox.services.direct_host_settings import (
     list_direct_host_settings,
     update_direct_host_setting,
@@ -20,6 +29,8 @@ router = APIRouter(
     tags=["direct-hosts"],
     include_in_schema=False,
 )
+
+direct_host_probe: DirectHostProbe = probe_direct_host_endpoint
 
 
 @router.get("", response_model=list[DirectHostResponse])
@@ -48,3 +59,17 @@ async def update_host_setting(
         credential_updates=body.credential_updates,
     )
     return DirectHostResponse.model_validate(value)
+
+
+@router.post("/{host_kind}/test", response_model=DirectHostTestResponse)
+async def test_host_reachability(
+    host_kind: DirectArtifactHostKind,
+    _user: InteractiveOperatorUser,
+    session: DbSession,
+) -> DirectHostTestResponse:
+    value = await check_direct_host_reachability(
+        session,
+        host_kind,
+        probe=direct_host_probe,
+    )
+    return DirectHostTestResponse.model_validate(value)

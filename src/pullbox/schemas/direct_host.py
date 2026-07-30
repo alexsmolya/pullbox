@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from pullbox.models.direct_acquisition import (  # noqa: TC001 - Pydantic resolves enums
     DirectArtifactHostKind,
     DirectHostAccountState,
+    DirectHostOperationalResult,
+    DirectHostReachabilityState,
 )
 
 
@@ -34,5 +36,19 @@ class DirectHostResponse(BaseModel):
     redacted_identity: str | None
     quota_remaining: int | None
     quota_reset_at: datetime | None
-    last_tested_at: datetime | None
+    reachability_state: DirectHostReachabilityState
+    last_checked_at: datetime | None
+    last_reachable_at: datetime | None
+    last_operational_result: DirectHostOperationalResult | None
+    last_operational_at: datetime | None
     last_error_code: str | None
+
+
+class DirectHostTestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    reachable: bool
+    state: DirectHostReachabilityState
+    message: str
+    checked_at: datetime
+    last_reachable_at: datetime | None

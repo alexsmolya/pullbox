@@ -12,6 +12,8 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactHostKind,
     DirectHostAccountState,
     DirectHostConfig,
+    DirectHostOperationalResult,
+    DirectHostReachabilityState,
 )
 from pullbox.services.direct_configuration_service import (
     credential_fields_for_host,
@@ -54,7 +56,11 @@ class DirectHostSettingRead:
     redacted_identity: str | None
     quota_remaining: int | None
     quota_reset_at: datetime | None
-    last_tested_at: datetime | None
+    reachability_state: DirectHostReachabilityState
+    last_checked_at: datetime | None
+    last_reachable_at: datetime | None
+    last_operational_result: DirectHostOperationalResult | None
+    last_operational_at: datetime | None
     last_error_code: str | None
 
 
@@ -100,7 +106,7 @@ async def update_direct_host_setting(
     if config is None:
         config = DirectHostConfig(host_kind=host_kind)
         session.add(config)
-    if credential_updates is not None:
+    if credential_updates:
         update_host_credentials(config, credential_updates)
     config.enabled = next_enabled
     config.preference = next_preference
@@ -126,7 +132,11 @@ def _read_setting(
             redacted_identity=None,
             quota_remaining=None,
             quota_reset_at=None,
-            last_tested_at=None,
+            reachability_state=DirectHostReachabilityState.NOT_CHECKED,
+            last_checked_at=None,
+            last_reachable_at=None,
+            last_operational_result=None,
+            last_operational_at=None,
             last_error_code=None,
         )
 
@@ -143,7 +153,11 @@ def _read_setting(
         redacted_identity=view.redacted_identity,
         quota_remaining=view.quota_remaining,
         quota_reset_at=view.quota_reset_at,
-        last_tested_at=view.last_tested_at,
+        reachability_state=view.reachability_state,
+        last_checked_at=view.last_tested_at,
+        last_reachable_at=view.last_reachable_at,
+        last_operational_result=view.last_operational_result,
+        last_operational_at=view.last_operational_at,
         last_error_code=view.last_error_code,
     )
 

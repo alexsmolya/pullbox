@@ -12,6 +12,8 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactHostKind,
     DirectHostAccountState,
     DirectHostConfig,
+    DirectHostOperationalResult,
+    DirectHostReachabilityState,
     DirectProviderConfig,
     DirectProviderState,
     DirectProviderTrustLevel,
@@ -82,7 +84,11 @@ class DirectHostConfigRead:
     redacted_identity: str | None
     quota_remaining: int | None
     quota_reset_at: datetime | None
+    reachability_state: DirectHostReachabilityState
     last_tested_at: datetime | None
+    last_reachable_at: datetime | None
+    last_operational_result: DirectHostOperationalResult | None
+    last_operational_at: datetime | None
     last_error_code: str | None
 
 
@@ -156,6 +162,7 @@ def update_host_credentials(
     )
     config.quota_remaining = None
     config.quota_reset_at = None
+    config.reachability_state = DirectHostReachabilityState.NOT_CHECKED
     config.last_tested_at = None
     config.last_error_code = None
 
@@ -196,7 +203,11 @@ def read_host_config(config: DirectHostConfig) -> DirectHostConfigRead:
         redacted_identity=identity if isinstance(identity, str) else None,
         quota_remaining=config.quota_remaining,
         quota_reset_at=config.quota_reset_at,
+        reachability_state=(config.reachability_state or DirectHostReachabilityState.NOT_CHECKED),
         last_tested_at=config.last_tested_at,
+        last_reachable_at=config.last_reachable_at,
+        last_operational_result=config.last_operational_result,
+        last_operational_at=config.last_operational_at,
         last_error_code=config.last_error_code,
     )
 

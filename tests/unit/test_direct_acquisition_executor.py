@@ -25,6 +25,8 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactState,
     DirectHostAccountState,
     DirectHostConfig,
+    DirectHostOperationalResult,
+    DirectHostReachabilityState,
 )
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
@@ -958,7 +960,7 @@ async def test_executor_recovers_inflight_transfer_from_persisted_checkpoint(
 
 
 @pytest.mark.asyncio
-async def test_credentialed_resolution_records_healthy_account_state(
+async def test_credentialed_transfer_records_reachable_successful_host_state(
     session: AsyncSession,
     tmp_path: Path,
 ) -> None:
@@ -1006,7 +1008,11 @@ async def test_credentialed_resolution_records_healthy_account_state(
     await session.refresh(config)
     assert result.state is DirectAcquisitionState.COMPLETED
     assert config.account_state is DirectHostAccountState.HEALTHY
-    assert config.last_tested_at == NOW
+    assert config.reachability_state is DirectHostReachabilityState.REACHABLE
+    assert config.last_reachable_at == NOW
+    assert config.last_operational_result is DirectHostOperationalResult.SUCCESSFUL
+    assert config.last_operational_at == NOW
+    assert config.last_tested_at is None
     assert config.last_error_code is None
 
 
@@ -1060,8 +1066,64 @@ async def test_credentialed_auth_failure_records_reauthentication_state(
     await session.refresh(config)
     assert result.state is DirectAcquisitionState.INTERVENTION
     assert config.account_state is DirectHostAccountState.AUTHENTICATION_REQUIRED
-    assert config.last_tested_at == NOW
+    assert config.reachability_state is DirectHostReachabilityState.AUTHENTICATION_REQUIRED
+    assert config.last_reachable_at == NOW
+    assert config.last_operational_result is DirectHostOperationalResult.FAILED
+    assert config.last_operational_at == NOW
+    assert config.last_tested_at is None
     assert config.last_error_code == "artifact_host_auth_required"
+
+
+@pytest.mark.asyncio
+async def test_anonymous_transfer_records_operational_result(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.host_kind = DirectArtifactHostKind.MEDIAFIRE
+    config = DirectHostConfig(
+        host_kind=DirectArtifactHostKind.MEDIAFIRE,
+        enabled=True,
+    )
+    session.add_all([attempt, config])
+    await session.commit()
+    resolved = ResolvedTransfer(
+        host_kind=DirectArtifactHostKind.MEDIAFIRE,
+        url="https://download.mediafire.com/fixture.cbz",
+        allowed_domains=("mediafire.com",),
+    )
+
+    async def source() -> HostResolutionRequest:
+        return HostResolutionRequest(
+            artifact_identity="artifact-1",
+            host_kind=DirectArtifactHostKind.MEDIAFIRE,
+            share_url="https://www.mediafire.com/file/fixture",
+            final_url=None,
+        )
+
+    executor = DirectAcquisitionExecutor(
+        host_resolver=_FakeResolver(resolved),
+        http_transport=_SuccessfulTransport(),
+        mega_runner=object(),
+        quarantine=DirectArtifactQuarantine(tmp_path / "quarantine"),
+        post_processor=_successful_post_processor,
+        now=lambda: NOW,
+    )
+
+    result = await executor.execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=source,
+    )
+
+    await session.refresh(config)
+    assert result.state is DirectAcquisitionState.COMPLETED
+    assert config.account_state is DirectHostAccountState.NOT_CONFIGURED
+    assert config.reachability_state is DirectHostReachabilityState.REACHABLE
+    assert config.last_operational_result is DirectHostOperationalResult.SUCCESSFUL
+    assert config.last_operational_at == NOW
 
 
 @pytest.mark.asyncio

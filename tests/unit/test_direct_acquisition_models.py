@@ -19,6 +19,8 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactState,
     DirectHostAccountState,
     DirectHostConfig,
+    DirectHostOperationalResult,
+    DirectHostReachabilityState,
     DirectProviderConfig,
     DirectProviderState,
     DirectProviderTrustLevel,
@@ -101,6 +103,18 @@ def test_direct_domain_enum_values_are_stable() -> None:
         "quota_limited",
         "unavailable",
     }
+    assert {value.value for value in DirectHostReachabilityState} == {
+        "not_checked",
+        "reachable",
+        "not_reachable",
+        "authentication_required",
+        "quota_limited",
+        "unavailable",
+    }
+    assert {value.value for value in DirectHostOperationalResult} == {
+        "successful",
+        "failed",
+    }
     assert {value.value for value in DirectArtifactRouteKind} == {
         "direct",
         "torrent_file",
@@ -120,6 +134,7 @@ def test_direct_models_expose_required_defaults_and_indexes() -> None:
     assert provider_columns["priority"].default.arg == 50
     assert provider_columns["state"].default.arg is DirectProviderState.DISABLED
     assert host_columns["account_state"].default.arg is DirectHostAccountState.NOT_CONFIGURED
+    assert host_columns["reachability_state"].default.arg is DirectHostReachabilityState.NOT_CHECKED
     assert acquisition_columns["state"].default.arg is DirectAcquisitionState.DISCOVERED
     assert acquisition_columns["progress_revision"].default.arg == 0
     assert artifact_columns["state"].default.arg is DirectArtifactState.PLANNED

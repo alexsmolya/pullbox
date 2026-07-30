@@ -450,6 +450,66 @@ class TestMigrationChain:
         finally:
             engine.dispose()
 
+    def test_direct_host_reachability_migration_backfills_existing_status(
+        self,
+        alembic_cfg,
+    ) -> None:
+        """Existing account checks become conservative reachability history."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "j5f6g7h81930")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO direct_host_configs "
+                        "(host_kind, account_state, last_tested_at) VALUES "
+                        "('pixeldrain', 'healthy', '2026-07-30 12:00:00'), "
+                        "('terabox', 'authentication_required', '2026-07-30 13:00:00')"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        columns = _get_columns(sync_url, "direct_host_configs")
+        assert {
+            "reachability_state",
+            "last_reachable_at",
+            "last_operational_result",
+            "last_operational_at",
+        }.issubset(columns)
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT host_kind, reachability_state, last_reachable_at, "
+                        "last_operational_result, last_operational_at "
+                        "FROM direct_host_configs ORDER BY host_kind"
+                    )
+                ).fetchall()
+        finally:
+            engine.dispose()
+
+        assert tuple(rows[0]) == (
+            "pixeldrain",
+            "reachable",
+            "2026-07-30 12:00:00",
+            None,
+            None,
+        )
+        assert tuple(rows[1]) == (
+            "terabox",
+            "authentication_required",
+            None,
+            None,
+            None,
+        )
+
     def test_direct_acquisition_migration_downgrades_and_reapplies(self, alembic_cfg) -> None:
         """The dormant direct-download schema can be removed and recreated safely."""
         cfg, sync_url = alembic_cfg
