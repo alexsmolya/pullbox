@@ -47,6 +47,11 @@ SETTINGS_TABS: tuple[dict[str, str], ...] = (
         "icon": "M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z",
     },
     {
+        "key": "resolvers",
+        "label": "Challenge Resolvers",
+        "icon": "M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.249-8.25-3.285z",  # noqa: E501
+    },
+    {
         "key": "direct",
         "label": "Direct Downloads",
         "icon": "M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4.5 18.75h15",
@@ -78,6 +83,7 @@ _SETTINGS_TABS = (
     "media",
     "clients",
     "indexers",
+    "resolvers",
     "direct",
     "metadata",
     "search",
@@ -260,11 +266,12 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["has_comicvine_key"] = bool(active_key)
         ctx["obfuscated_key"] = obfuscate_api_key(active_key)
     elif tab == "search":
+        result = await session.execute(select(SystemConfig).order_by(SystemConfig.key))
+        ctx["configs"] = {c.key: c.value for c in result.scalars().all()}
+    elif tab == "resolvers":
         from pullbox.schemas.direct_resolver import DirectResolverResponse
         from pullbox.services.direct_resolver_service import list_direct_resolvers
 
-        result = await session.execute(select(SystemConfig).order_by(SystemConfig.key))
-        ctx["configs"] = {c.key: c.value for c in result.scalars().all()}
         resolvers = await list_direct_resolvers(session)
         ctx["direct_resolvers"] = resolvers
         ctx["direct_resolver_seed"] = [
@@ -295,8 +302,6 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         )
         ctx["configs"] = {c.key: c.value for c in cfg_result.scalars().all()}
     elif tab == "indexers":
-        from pullbox.services.direct_resolver_service import list_direct_resolvers
-
         indexer_result = await session.execute(
             select(IndexerConfig).order_by(IndexerConfig.priority, IndexerConfig.name)
         )
@@ -377,7 +382,6 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["blocklist_expiry_days"] = bl_expiry.value if bl_expiry else "90"
         bl_auto = await session.get(SystemConfig, "blocklist.auto_add_on_failure")
         ctx["blocklist_auto_add"] = (bl_auto.value.lower() == "true") if bl_auto else True
-        ctx["direct_resolvers"] = await list_direct_resolvers(session)
     elif tab == "direct":
         from pullbox.schemas.direct_host import DirectHostResponse
         from pullbox.schemas.direct_provider import DirectProviderResponse

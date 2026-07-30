@@ -414,6 +414,8 @@ class TestSettingsRouteContracts:
         assert 'data-testid="settings-footer-dock"' in response.text
         assert 'data-testid="page-dock-inner"' in response.text
         assert 'data-testid="settings-tab-general"' in response.text
+        assert 'data-testid="settings-tab-resolvers"' in response.text
+        assert "Challenge Resolvers" in response.text
         assert 'data-testid="settings-panel-general"' in response.text
 
     async def test_general_settings_exposes_usage_stats_toggle(
@@ -672,7 +674,7 @@ class TestSettingsRouteContracts:
         assert response.status_code == 200
         assert 'data-testid="settings-direct-hosts-card"' not in response.text
 
-    async def test_search_settings_render_ranked_browser_resolver_controls(
+    async def test_challenge_resolver_settings_render_ranked_browser_resolver_controls(
         self,
         authenticated_client,
         sec_db,
@@ -716,15 +718,18 @@ class TestSettingsRouteContracts:
             )
             await session.commit()
 
-        response = await authenticated_client.get("/settings?tab=search")
+        response = await authenticated_client.get("/settings?tab=resolvers")
 
         assert response.status_code == 200
-        assert 'data-testid="settings-search-resolvers-card"' in response.text
-        assert "settings-search-resolver-${profile.id}" in response.text
-        assert 'data-testid="settings-search-resolver-add"' in response.text
-        assert "settings-search-resolver-test-${profile.id}" in response.text
+        assert 'data-testid="settings-tab-resolvers"' in response.text
+        assert 'data-testid="settings-panel-resolvers"' in response.text
+        assert 'data-testid="settings-resolvers-card"' in response.text
+        assert "settings-resolver-${profile.id}" in response.text
+        assert 'data-testid="settings-resolver-add"' in response.text
+        assert "settings-resolver-test-${profile.id}" in response.text
         assert '<template x-for="profile in profiles"' in response.text
-        assert "Browser challenge resolvers" in response.text
+        assert "Challenge resolvers" in response.text
+        assert "Shared acquisition infrastructure" in response.text
         assert "Lower values are tried first" in response.text
         assert "does not guarantee CAPTCHA" in response.text
         assert "DataNodes account login requires TRAWL" in response.text
@@ -740,24 +745,30 @@ class TestSettingsRouteContracts:
         assert "form: {}," not in response.text
         assert "form: { auth_headers: [] }," in response.text
 
-    async def test_indexer_settings_link_to_shared_resolver_management(
+    async def test_search_and_indexer_settings_do_not_duplicate_resolver_management(
         self,
         authenticated_client,
     ) -> None:  # type: ignore[no-untyped-def]
         direct = await authenticated_client.get("/settings?tab=direct")
         indexers = await authenticated_client.get("/settings?tab=indexers")
+        search = await authenticated_client.get("/settings?tab=search")
 
         assert direct.status_code == 200
         assert indexers.status_code == 200
+        assert search.status_code == 200
         assert 'data-testid="settings-direct-resolver-summary"' not in direct.text
-        assert 'href="/settings?tab=search#browser-resolvers"' not in direct.text
-        assert 'data-testid="settings-indexers-resolver-summary"' in indexers.text
-        assert 'href="/settings?tab=search#browser-resolvers"' in indexers.text
+        assert 'data-testid="settings-indexers-resolver-summary"' not in indexers.text
+        assert 'data-testid="settings-resolvers-card"' not in indexers.text
+        assert 'data-testid="settings-resolvers-card"' not in search.text
+        assert indexers.text.count('href="/settings?tab=resolvers"') == 1
+        assert 'href="/settings?tab=search#browser-resolvers"' not in indexers.text
+        assert "Manage in Search" not in indexers.text
         assert 'data-testid="settings-indexers-manual-torznab-resolver"' in indexers.text
         assert "Try the ranked browser resolver chain" in indexers.text
         assert "Manual Torznab only" in indexers.text
-        assert 'data-testid="settings-search-resolver-endpoint"' not in direct.text
-        assert 'data-testid="settings-search-resolver-endpoint"' not in indexers.text
+        assert 'data-testid="settings-resolver-endpoint"' not in direct.text
+        assert 'data-testid="settings-resolver-endpoint"' not in indexers.text
+        assert 'data-testid="settings-resolver-endpoint"' not in search.text
 
     async def test_direct_download_settings_render_native_host_registry_without_secrets(
         self,

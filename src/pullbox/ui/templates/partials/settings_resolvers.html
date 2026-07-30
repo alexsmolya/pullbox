@@ -1,22 +1,23 @@
-{#- Shared browser-resolver management, owned by Settings > Search. -#}
+{#- Shared browser-resolver management. -#}
 {% from "components/settings_shell.html" import alert_banner, section_header %}
+<div class="space-y-6 pt-6">
 <section
-  id="browser-resolvers"
-  class="section-card scroll-mt-6"
-  data-testid="settings-search-resolvers-card"
+  id="challenge-resolvers"
+  class="section-card"
+  data-testid="settings-resolvers-card"
   x-data='browserResolverSettings({{ direct_resolver_seed|default([], true)|tojson }}, {{ csrf_token|tojson }})'
   @keydown.escape.window="closeModal()"
 >
   {% call section_header(
-    title="Browser challenge resolvers",
+    title="Challenge resolvers",
     description="Configure up to three resolver services in deterministic priority order. Lower values are tried first.",
-    eyebrow="Shared search infrastructure",
+    eyebrow="Shared acquisition infrastructure",
     title_style="plain"
   ) %}
     <button
       type="button"
       class="btn-primary btn-sm gap-2"
-      data-testid="settings-search-resolver-add"
+      data-testid="settings-resolver-add"
       :disabled="profiles.length >= 3"
       @click="openAdd()"
     >
@@ -33,15 +34,15 @@
       icon="shield",
       title="Bounded compatibility, not a bypass guarantee",
       description="A compatible resolver may help with recognized browser challenges, but enabling it does not guarantee CAPTCHA success. DataNodes account login requires TRAWL. TRAWL native browser mode is used only for approved resolver flows, credentials are never sent to TRAWL, TRAWL MITM mode is not supported, and Prowlarr keeps its own resolver configuration.",
-      attrs='data-testid="settings-search-resolver-warning"'
+      attrs='data-testid="settings-resolver-warning"'
     ) %}{% endcall %}
 
-    <div class="settings-connection-list" data-testid="settings-search-resolver-list">
+    <div class="settings-connection-list" data-testid="settings-resolver-list">
       <template x-for="profile in profiles" :key="profile.id">
         <article
           class="settings-connection-card"
           :class="{ 'settings-connection-card-muted': !profile.enabled }"
-          :data-testid="`settings-search-resolver-${profile.id}`"
+          :data-testid="`settings-resolver-${profile.id}`"
         >
           <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="min-w-0 flex-1">
@@ -80,7 +81,7 @@
               <button
                 type="button"
                 class="btn-ghost btn-sm"
-                :data-testid="`settings-search-resolver-test-${profile.id}`"
+                :data-testid="`settings-resolver-test-${profile.id}`"
                 :disabled="busyId !== null"
                 @click="testProfile(profile.id)"
                 x-text="busyId === profile.id ? 'Testing...' : 'Test'"
@@ -136,7 +137,7 @@
             </div>
             <div class="sm:col-span-2">
               <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="resolver-profile-endpoint">Resolver endpoint</label>
-              <input id="resolver-profile-endpoint" data-testid="settings-search-resolver-endpoint" class="input-pb font-mono" type="url" maxlength="1000" placeholder="http://flaresolverr:8191" x-model.trim="form.endpoint" required>
+              <input id="resolver-profile-endpoint" data-testid="settings-resolver-endpoint" class="input-pb font-mono" type="url" maxlength="1000" placeholder="http://flaresolverr:8191" x-model.trim="form.endpoint" required>
             </div>
             <div>
               <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="resolver-profile-priority">Priority</label>
@@ -187,6 +188,7 @@
     </div>
   </div>
 </section>
+</div>
 
 <script>
 function browserResolverSettings(initialProfiles, csrfToken) {

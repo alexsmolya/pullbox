@@ -523,6 +523,7 @@ class TestSettingsPage:
             "media",
             "clients",
             "indexers",
+            "resolvers",
             "direct",
             "metadata",
             "search",
@@ -665,6 +666,7 @@ class TestSettingsPage:
         settings.switch_tab("clients")
         settings.switch_tab("utilities")
         settings.switch_tab("indexers")
+        settings.switch_tab("resolvers")
         settings.switch_tab("metadata")
         settings.switch_tab("general")
 

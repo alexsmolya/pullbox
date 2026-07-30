@@ -16,6 +16,9 @@ from pullbox.models.direct_acquisition import (
     DirectProviderConfig,
     DirectProviderState,
     DirectProviderTrustLevel,
+    DirectResolverConfig,
+    DirectResolverKind,
+    DirectResolverState,
 )
 from pullbox.models.download import DownloadClientType
 from pullbox.models.indexer import IndexerConfig, IndexerType
@@ -84,6 +87,7 @@ async def test_settings_runtime_seams_require_configuration(
     assert settings_routes._normalize_settings_tab("nope") == "general"
     assert settings_routes._normalize_settings_tab("search") == "search"
     assert settings_routes._normalize_settings_tab("direct") == "direct"
+    assert settings_routes._normalize_settings_tab("resolvers") == "resolvers"
 
 
 def test_status_seed_helpers_prefer_live_state_then_cookie_cache() -> None:
@@ -247,6 +251,17 @@ async def test_load_settings_tab_covers_all_data_tabs(
                     },
                 },
             ),
+            DirectResolverConfig(
+                name="TRAWL",
+                resolver_kind=DirectResolverKind.TRAWL,
+                priority=10,
+                endpoint="http://trawl:8151",
+                enabled=True,
+                state=DirectResolverState.HEALTHY,
+                allow_private_http=True,
+                timeout_seconds=60,
+                max_concurrency=1,
+            ),
         ]
     )
     await db_session.flush()
@@ -271,6 +286,11 @@ async def test_load_settings_tab_covers_all_data_tabs(
 
     search = await settings_routes.load_settings_tab(_request(), db_session, "search")
     assert search["configs"]["base_url"] == "http://localhost:8585"  # type: ignore[index]
+    assert "direct_resolvers" not in search
+
+    resolvers = await settings_routes.load_settings_tab(_request(), db_session, "resolvers")
+    assert resolvers["direct_resolvers"][0].name == "TRAWL"  # type: ignore[index]
+    assert resolvers["direct_resolver_seed"][0]["resolver_kind"] == "trawl"  # type: ignore[index]
 
     clients = await settings_routes.load_settings_tab(_request(), db_session, "clients")
     assert clients["clients"][0].name == "SAB"  # type: ignore[index]
@@ -284,6 +304,7 @@ async def test_load_settings_tab_covers_all_data_tabs(
     assert indexers["blocked_groups"] == ["bad", "worse"]
     assert indexers["blocklist_expiry_days"] == "30"
     assert indexers["blocklist_auto_add"] is False
+    assert "direct_resolvers" not in indexers
 
     direct = await settings_routes.load_settings_tab(_request(), db_session, "direct")
     assert direct["direct_providers"][0].display_name == "Example Direct Provider"  # type: ignore[index]
@@ -322,10 +343,11 @@ async def test_settings_page_and_htmx_routes_render_expected_templates(
 
     htmx = await settings_routes.htmx_settings_tab(
         _request(),
-        "search",
+        "resolvers",
         _user(),
         db_session,
     )
     assert htmx.template_name == "partials/settings_content_bundle.html"
-    assert htmx.context["tab"] == "search"
+    assert htmx.context["tab"] == "resolvers"
+    assert "direct_resolver_seed" in htmx.context
     assert configured_settings_routes.calls[-1][0] == "partials/settings_content_bundle.html"

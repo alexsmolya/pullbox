@@ -202,22 +202,6 @@
     </form>
   </section>
 
-  <section class="section-card" data-testid="settings-indexers-resolver-summary">
-    {% call section_header(
-      title="Browser challenge resolvers",
-      description="Manual Torznab indexers may opt into the shared ranked resolver chain. Prowlarr and Jackett continue to own resolver behavior for their synchronized indexers.",
-      eyebrow="Manual indexers",
-      title_style="plain"
-    ) %}
-      <a class="btn-ghost btn-sm" href="/settings?tab=search#browser-resolvers">Manage in Search</a>
-    {% endcall %}
-    <div class="section-body flex flex-wrap items-center gap-2">
-      <span class="pill pill-info">{{ direct_resolvers|length }} configured</span>
-      <span class="pill pill-success">{{ direct_resolvers|selectattr('enabled')|list|length }} enabled</span>
-      <p class="text-xs text-pb-text-dim">Resolver access is disabled by default per manual Torznab indexer and never receives an indexer API key.</p>
-    </div>
-  </section>
-
   <section class="section-card" data-testid="settings-indexers-registry-card">
     {% call section_header(
       title="Indexer registry",
