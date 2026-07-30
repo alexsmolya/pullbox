@@ -63,6 +63,7 @@ class DirectProviderResponse(BaseModel):
     resolver_enabled: bool
     provider_version: str | None
     publisher: str | None
+    artifact_host_patterns: tuple[str, ...]
     configuration_controls: tuple[DirectConfigurationControlResponse, ...]
     public_configuration: dict[str, str | int | float | bool]
     configured_secret_fields: tuple[str, ...]

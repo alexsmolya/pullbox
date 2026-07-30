@@ -55,6 +55,7 @@ from pullbox.services.direct_coverage_planner import (
     DirectRouteOption,
     plan_direct_coverage,
 )
+from pullbox.services.direct_provider_capabilities import manifest_artifact_host_kinds
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -479,6 +480,8 @@ def _build_route_options(
     routes: list[_ResolvedRoute] = []
     requested = _requested_coverage(attempt)
     provider_confidence = _candidate_confidence(attempt.candidate_snapshot)
+    declared_host_kinds = manifest_artifact_host_kinds(provider.manifest_snapshot)
+    internal_generic_https = declared_host_kinds == {DirectArtifactHostKind.GENERIC_HTTPS}
     for artifact in artifacts:
         _validate_stable_identity("provider artifact", artifact.artifact_id)
         if artifact.route is not DirectArtifactRoute.DIRECT_ARTIFACT:
@@ -488,7 +491,14 @@ def _build_route_options(
             _validate_stable_identity("provider mirror", mirror.mirror_id)
             host_kind = _validated_host_kind(mirror)
             config = host_configs.get(host_kind)
-            eligible, code = _route_eligibility(host_kind, config)
+            if declared_host_kinds and host_kind not in declared_host_kinds:
+                eligible, code = False, "provider_host_not_declared"
+            else:
+                eligible, code = _route_eligibility(
+                    host_kind,
+                    config,
+                    internal_generic_https=internal_generic_https,
+                )
             route_identity = direct_route_identity(
                 attempt.provider_identity,
                 attempt.provider_candidate_id,
@@ -669,7 +679,11 @@ def _content_quality_rank(artifact: DirectArtifact) -> int:
 def _route_eligibility(
     host_kind: DirectArtifactHostKind,
     config: DirectHostConfig | None,
+    *,
+    internal_generic_https: bool = False,
 ) -> tuple[bool, str]:
+    if internal_generic_https and host_kind is DirectArtifactHostKind.GENERIC_HTTPS:
+        return True, "eligible"
     if config is None or not config.enabled:
         return False, "host_disabled"
     state = config.account_state

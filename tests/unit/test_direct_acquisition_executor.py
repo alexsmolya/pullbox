@@ -27,6 +27,9 @@ from pullbox.models.direct_acquisition import (
     DirectHostConfig,
     DirectHostOperationalResult,
     DirectHostReachabilityState,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
 )
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
@@ -435,6 +438,69 @@ async def test_executor_completes_with_durable_redacted_progress(
     assert refreshed_history.final_path == "/library/Issue 1.cbz"
     assert refreshed_history.imported_at == NOW
     assert refreshed_history.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_executor_allows_internal_https_for_generic_only_provider(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    provider = DirectProviderConfig(
+        provider_id="pullbox.annas_archive",
+        display_name="Anna's Archive",
+        endpoint="http://annas-archive:8780",
+        enabled=True,
+        priority=10,
+        state=DirectProviderState.HEALTHY,
+        negotiated_protocol="direct-download-provider/v1",
+        trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        encrypted_bearer_token="unused-in-test",
+        manifest_snapshot={
+            "protocol_version": "direct-download-provider/v1",
+            "provider_id": "pullbox.annas_archive",
+            "display_name": "Anna's Archive",
+            "description": "A direct provider fixture.",
+            "provider_version": "1.0.0",
+            "supported_protocol_versions": ["direct-download-provider/v1"],
+            "publisher": "Pullbox",
+            "license": "GPL-3.0-or-later",
+            "source_domains": ["annas-archive.gd"],
+            "artifact_host_patterns": ["generic_https"],
+            "capabilities": {"search": True, "resolve": True},
+            "configuration_schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    )
+    session.add(provider)
+    await session.flush()
+    session.add(
+        DirectHostConfig(
+            host_kind=DirectArtifactHostKind.GENERIC_HTTPS,
+            enabled=False,
+            preference=50,
+        )
+    )
+    attempt = _attempt()
+    attempt.provider_config_id = provider.id
+    session.add(attempt)
+    await session.commit()
+    artifact = attempt.artifact_attempts[0]
+
+    result = await _executor(
+        tmp_path,
+        transport=_SuccessfulTransport(),
+        post_processor=_successful_post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=lambda: _async_value(_source_request()),
+    )
+
+    assert result.state is DirectAcquisitionState.COMPLETED
 
 
 @pytest.mark.asyncio

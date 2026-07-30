@@ -382,10 +382,22 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         from pullbox.schemas.direct_host import DirectHostResponse
         from pullbox.schemas.direct_provider import DirectProviderResponse
         from pullbox.services.direct_host_settings import list_direct_host_settings
+        from pullbox.services.direct_provider_capabilities import visible_artifact_host_kinds
         from pullbox.services.direct_provider_registration import list_direct_providers
 
         providers = await list_direct_providers(session)
-        hosts = await list_direct_host_settings(session) if providers else []
+        visible_host_kinds = visible_artifact_host_kinds(
+            provider.artifact_host_patterns for provider in providers if provider.enabled
+        )
+        hosts = (
+            [
+                host
+                for host in await list_direct_host_settings(session)
+                if host.host_kind in visible_host_kinds
+            ]
+            if visible_host_kinds
+            else []
+        )
         ctx["direct_providers"] = providers
         ctx["direct_provider_seed"] = [
             DirectProviderResponse.model_validate(provider).model_dump(mode="json")

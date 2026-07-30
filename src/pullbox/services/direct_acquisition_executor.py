@@ -73,6 +73,7 @@ from pullbox.services.direct_artifact_quarantine import (
 from pullbox.services.direct_configuration_service import load_host_credential_material
 from pullbox.services.direct_download_history_adapter import sync_direct_download_history
 from pullbox.services.direct_host_reachability import record_direct_host_operational_result
+from pullbox.services.direct_provider_capabilities import uses_internal_generic_https
 from pullbox.services.intervention_service import InterventionService
 
 if TYPE_CHECKING:
@@ -207,6 +208,10 @@ class DirectAcquisitionExecutor:
             credentials, host_config_id = await _load_host_credentials(
                 session,
                 artifact.host_kind,
+                internal_generic_https=(
+                    attempt.provider_config is not None
+                    and uses_internal_generic_https(attempt.provider_config.manifest_snapshot)
+                ),
             )
 
             async with self._limiter.slot(artifact.host_kind):
@@ -744,7 +749,10 @@ async def _load_attempt(
 ) -> tuple[DirectAcquisitionAttempt, DirectArtifactAttempt]:
     result = await session.execute(
         select(DirectAcquisitionAttempt)
-        .options(selectinload(DirectAcquisitionAttempt.artifact_attempts))
+        .options(
+            selectinload(DirectAcquisitionAttempt.artifact_attempts),
+            selectinload(DirectAcquisitionAttempt.provider_config),
+        )
         .where(DirectAcquisitionAttempt.id == acquisition_id)
     )
     attempt = result.scalar_one_or_none()
@@ -820,6 +828,8 @@ async def _enter_downloading(
 async def _load_host_credentials(
     session: AsyncSession,
     host_kind: DirectArtifactHostKind,
+    *,
+    internal_generic_https: bool = False,
 ) -> tuple[dict[str, str], int | None]:
     result = await session.execute(
         select(DirectHostConfig).where(DirectHostConfig.host_kind == host_kind)
@@ -828,7 +838,9 @@ async def _load_host_credentials(
     if config is None:
         await session.commit()
         return {}, None
-    if not config.enabled:
+    if not config.enabled and not (
+        internal_generic_https and host_kind is DirectArtifactHostKind.GENERIC_HTTPS
+    ):
         raise ArtifactHostResolutionError(
             code="artifact_host_disabled",
             message="The selected artifact host is disabled.",

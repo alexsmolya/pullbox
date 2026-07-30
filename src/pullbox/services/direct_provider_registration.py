@@ -81,6 +81,7 @@ class DirectProviderRecord:
     resolver_enabled: bool
     provider_version: str | None
     publisher: str | None
+    artifact_host_patterns: tuple[str, ...]
     configuration_controls: tuple[DirectConfigurationControl, ...]
     public_configuration: dict[str, str | int | float | bool]
     configured_secret_fields: tuple[str, ...]
@@ -521,6 +522,7 @@ def _record(config: DirectProviderConfig) -> DirectProviderRecord:
         resolver_enabled=bool(config.resolver_enabled),
         provider_version=manifest.provider_version if manifest else None,
         publisher=manifest.publisher if manifest else None,
+        artifact_host_patterns=tuple(manifest.artifact_host_patterns) if manifest else (),
         configuration_controls=manifest.configuration_controls if manifest else (),
         public_configuration=public_values,
         configured_secret_fields=secret_fields,

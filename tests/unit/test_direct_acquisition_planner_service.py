@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
@@ -173,6 +174,31 @@ def _response(*, reverse: bool = False) -> DirectResolveResponse:
     )
 
 
+def _generic_response() -> DirectResolveResponse:
+    return DirectResolveResponse(
+        protocol_version="direct-download-provider/v1",
+        request_id="00000000-0000-0000-0000-000000000001",
+        artifacts=[
+            DirectArtifact(
+                artifact_id="provider-artifact-1",
+                coverage=DirectArtifactCoverage(issue_numbers=["1"]),
+                route=DirectArtifactRoute.DIRECT_ARTIFACT,
+                format="cbz",
+                quality="digital",
+                size_bytes=100,
+                mirrors=[
+                    DirectMirror(
+                        mirror_id="generic-mirror",
+                        host_kind="generic_https",
+                        final_url="https://files.example.test/signed.cbz?token=hidden",
+                        size_bytes=100,
+                    )
+                ],
+            )
+        ],
+    )
+
+
 class _ResolveClient:
     def __init__(self, response: DirectResolveResponse) -> None:
         self.response = response
@@ -232,6 +258,53 @@ async def test_planning_selects_best_eligible_route_and_persists_no_urls(
     assert "token" not in rendered.casefold()
     assert "pixel-mirror" in rendered
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_generic_only_provider_does_not_require_visible_host_setting(
+    session: AsyncSession,
+) -> None:
+    provider = await session.get(DirectProviderConfig, 1)
+    assert provider is not None
+    provider.provider_id = "pullbox.annas_archive"
+    provider.manifest_snapshot = {
+        "protocol_version": "direct-download-provider/v1",
+        "provider_id": "pullbox.annas_archive",
+        "display_name": "Anna's Archive",
+        "description": "A direct provider fixture.",
+        "provider_version": "1.0.0",
+        "supported_protocol_versions": ["direct-download-provider/v1"],
+        "publisher": "Pullbox",
+        "license": "GPL-3.0-or-later",
+        "source_domains": ["annas-archive.gd"],
+        "artifact_host_patterns": ["generic_https"],
+        "capabilities": {"search": True, "resolve": True},
+        "configuration_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
+    generic = (
+        await session.execute(
+            select(DirectHostConfig).where(
+                DirectHostConfig.host_kind == DirectArtifactHostKind.GENERIC_HTTPS
+            )
+        )
+    ).scalar_one()
+    generic.enabled = False
+    await session.flush()
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(_generic_response()),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.selected_artifact.host_kind is DirectArtifactHostKind.GENERIC_HTTPS
+    assert result.plan.complete is True
 
 
 @pytest.mark.asyncio

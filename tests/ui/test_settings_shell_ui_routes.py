@@ -38,6 +38,36 @@ def _script_block(html: str, start_marker: str, end_marker: str) -> str:
     return html[start:end]
 
 
+def _direct_manifest(
+    provider_id: str,
+    *,
+    artifact_hosts: list[str],
+) -> dict[str, object]:
+    return {
+        "protocol_version": "direct-download-provider/v1",
+        "provider_id": provider_id,
+        "display_name": "Direct Provider",
+        "description": "A direct provider fixture.",
+        "provider_version": "1.0.0",
+        "supported_protocol_versions": ["direct-download-provider/v1"],
+        "publisher": "Pullbox",
+        "license": "GPL-3.0-or-later",
+        "source_domains": ["provider.example"],
+        "artifact_host_patterns": artifact_hosts,
+        "capabilities": {
+            "search": True,
+            "resolve": True,
+            "health": True,
+            "configuration_schema": True,
+        },
+        "configuration_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
+
+
 @pytest.mark.asyncio
 class TestSettingsRouteContracts:
     """Verify the settings area renders a stable mounted shell."""
@@ -409,6 +439,7 @@ class TestSettingsRouteContracts:
                     provider_id="community.example",
                     display_name="Example Direct Provider",
                     endpoint="http://direct-provider:8780",
+                    enabled=True,
                     priority=25,
                     state=DirectProviderState.HEALTHY,
                     trust_level=DirectProviderTrustLevel.CUSTOM,
@@ -435,6 +466,7 @@ class TestSettingsRouteContracts:
                         "publisher": "Example Publisher",
                         "license": "MIT",
                         "source_domains": ["example.test"],
+                        "artifact_host_patterns": ["generic_https", "pixeldrain"],
                         "capabilities": {
                             "search": True,
                             "resolve": True,
@@ -548,6 +580,98 @@ class TestSettingsRouteContracts:
         assert 'data-testid="settings-direct-hosts-card"' not in response.text
         assert 'data-testid="settings-direct-host-modal"' not in response.text
 
+    async def test_direct_download_settings_hide_hosts_for_generic_only_provider(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="pullbox.annas_archive",
+                    display_name="Anna's Archive",
+                    endpoint="http://annas-archive:8780",
+                    enabled=True,
+                    state=DirectProviderState.HEALTHY,
+                    trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-provider-token",
+                    manifest_snapshot=_direct_manifest(
+                        "pullbox.annas_archive",
+                        artifact_hosts=["generic_https"],
+                    ),
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-provider-1"' in response.text
+        assert 'data-testid="settings-direct-hosts-card"' not in response.text
+        assert 'data-testid="settings-direct-host-modal"' not in response.text
+
+    async def test_direct_download_settings_show_declared_hosts_for_degraded_provider(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="pullbox.getcomics",
+                    display_name="GetComics",
+                    endpoint="http://getcomics:8780",
+                    enabled=True,
+                    state=DirectProviderState.DEGRADED,
+                    trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-provider-token",
+                    manifest_snapshot=_direct_manifest(
+                        "pullbox.getcomics",
+                        artifact_hosts=["generic_https", "pixeldrain"],
+                    ),
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-hosts-card"' in response.text
+        assert 'data-testid="settings-direct-host-generic_https"' in response.text
+        assert 'data-testid="settings-direct-host-pixeldrain"' in response.text
+        assert 'data-testid="settings-direct-host-mega"' not in response.text
+
+    async def test_direct_download_settings_hide_hosts_for_disabled_named_host_provider(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="pullbox.getcomics",
+                    display_name="GetComics",
+                    endpoint="http://getcomics:8780",
+                    enabled=False,
+                    state=DirectProviderState.DISABLED,
+                    trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-provider-token",
+                    manifest_snapshot=_direct_manifest(
+                        "pullbox.getcomics",
+                        artifact_hosts=["generic_https", "pixeldrain"],
+                    ),
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-hosts-card"' not in response.text
+
     async def test_search_settings_render_ranked_browser_resolver_controls(
         self,
         authenticated_client,
@@ -647,10 +771,23 @@ class TestSettingsRouteContracts:
                         provider_id="community.host-test",
                         display_name="Host Test Provider",
                         endpoint="http://host-test-provider:8780",
+                        enabled=True,
                         state=DirectProviderState.HEALTHY,
                         trust_level=DirectProviderTrustLevel.CUSTOM,
                         negotiated_protocol="direct-download-provider/v1",
                         encrypted_bearer_token="encrypted-provider-token",
+                        manifest_snapshot=_direct_manifest(
+                            "community.host-test",
+                            artifact_hosts=[
+                                "generic_https",
+                                "pixeldrain",
+                                "mega",
+                                "rootz",
+                                "mediafire",
+                                "terabox",
+                                "datanodes",
+                            ],
+                        ),
                     ),
                     DirectHostConfig(
                         host_kind=DirectArtifactHostKind.PIXELDRAIN,
