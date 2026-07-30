@@ -52,10 +52,16 @@ async def test_list_exposes_every_closed_host_without_writing_defaults(
 ) -> None:
     settings = await list_direct_host_settings(session)
 
-    assert [setting.host_kind for setting in settings] == list(DirectArtifactHostKind)
+    assert [setting.host_kind for setting in settings] == sorted(
+        DirectArtifactHostKind,
+        key=lambda host_kind: host_kind.value,
+    )
     assert all(setting.id is None for setting in settings)
     assert all(setting.enabled is False for setting in settings)
-    assert settings[1].allowed_credential_fields == ("api_key",)
+    pixeldrain = next(
+        setting for setting in settings if setting.host_kind is DirectArtifactHostKind.PIXELDRAIN
+    )
+    assert pixeldrain.allowed_credential_fields == ("api_key",)
     mediafire = next(
         setting for setting in settings if setting.host_kind is DirectArtifactHostKind.MEDIAFIRE
     )
@@ -66,6 +72,37 @@ async def test_list_exposes_every_closed_host_without_writing_defaults(
         setting for setting in settings if setting.host_kind is DirectArtifactHostKind.DATANODES
     )
     assert datanodes.allowed_credential_fields == ("username", "password")
+
+
+@pytest.mark.asyncio
+async def test_list_orders_hosts_by_ascending_preference_then_name(
+    session: AsyncSession,
+) -> None:
+    for host_kind, preference in (
+        (DirectArtifactHostKind.GENERIC_HTTPS, 30),
+        (DirectArtifactHostKind.ROOTZ, 10),
+        (DirectArtifactHostKind.MEDIAFIRE, 10),
+        (DirectArtifactHostKind.PIXELDRAIN, 20),
+    ):
+        await update_direct_host_setting(
+            session,
+            host_kind,
+            enabled=False,
+            preference=preference,
+            credential_updates=None,
+        )
+
+    settings = await list_direct_host_settings(session)
+
+    assert [setting.host_kind for setting in settings] == [
+        DirectArtifactHostKind.MEDIAFIRE,
+        DirectArtifactHostKind.ROOTZ,
+        DirectArtifactHostKind.PIXELDRAIN,
+        DirectArtifactHostKind.GENERIC_HTTPS,
+        DirectArtifactHostKind.DATANODES,
+        DirectArtifactHostKind.MEGA,
+        DirectArtifactHostKind.TERABOX,
+    ]
 
 
 @pytest.mark.asyncio

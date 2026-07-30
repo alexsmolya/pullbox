@@ -64,7 +64,8 @@ async def list_direct_host_settings(session: AsyncSession) -> list[DirectHostSet
         await session.execute(select(DirectHostConfig).order_by(DirectHostConfig.id.asc()))
     ).scalars()
     configured = {row.host_kind: row for row in rows}
-    return [_read_setting(kind, configured.get(kind)) for kind in DirectArtifactHostKind]
+    settings = [_read_setting(kind, configured.get(kind)) for kind in DirectArtifactHostKind]
+    return sorted(settings, key=lambda setting: (setting.preference, setting.host_kind.value))
 
 
 async def update_direct_host_setting(

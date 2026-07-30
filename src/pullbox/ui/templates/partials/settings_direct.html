@@ -183,7 +183,9 @@
             <div class="flex flex-wrap items-center gap-2">
               <p class="text-sm font-semibold text-pb-text">{{ host_names[host_kind] }}</p>
               <span class="pill {{ 'pill-success' if host.enabled else 'pill-muted' }}">{{ 'Enabled' if host.enabled else 'Disabled' }}</span>
-              <span class="pill {{ state_pills.get(account_state, 'pill-muted') }}">{{ account_state|replace('_', ' ')|title }}</span>
+              {% if host.allowed_credential_fields %}
+                <span class="pill {{ state_pills.get(account_state, 'pill-muted') }}">{{ account_state|replace('_', ' ')|title }}</span>
+              {% endif %}
               <span class="pill pill-muted">Preference {{ host.preference }}</span>
             </div>
             <p class="mt-2 text-xs leading-5 text-pb-text-sec">{{ host_descriptions[host_kind] }}</p>

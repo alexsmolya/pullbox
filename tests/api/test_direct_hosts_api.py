@@ -33,7 +33,7 @@ async def test_host_settings_list_exposes_closed_registry_without_secrets(
     assert response.status_code == 200
     payload = response.json()
     assert [item["host_kind"] for item in payload] == [
-        host_kind.value for host_kind in DirectArtifactHostKind
+        host_kind.value for host_kind in sorted(DirectArtifactHostKind, key=lambda kind: kind.value)
     ]
     assert all(item["id"] is None for item in payload)
     pixeldrain = next(item for item in payload if item["host_kind"] == "pixeldrain")

@@ -706,8 +706,23 @@ class TestSettingsRouteContracts:
         pixeldrain_host_position = response.text.index(
             'data-testid="settings-direct-host-pixeldrain"'
         )
-        generic_host_markup = response.text[generic_host_position:pixeldrain_host_position]
+        generic_host_end = response.text.index("</article>", generic_host_position)
+        generic_host_markup = response.text[generic_host_position:generic_host_end]
         assert "None required" in generic_host_markup
+        assert "Not Configured" not in generic_host_markup
+        assert pixeldrain_host_position < generic_host_position
+        tied_default_host_positions = [
+            response.text.index(f'data-testid="settings-direct-host-{host_kind}"')
+            for host_kind in (
+                "datanodes",
+                "generic_https",
+                "mediafire",
+                "mega",
+                "rootz",
+                "terabox",
+            )
+        ]
+        assert tied_default_host_positions == sorted(tied_default_host_positions)
         assert 'x-if="activeHost.allowed_credential_fields.length > 0"' in response.text
         assert "Artifact hosts" in response.text
         assert "PixelDrain" in response.text
