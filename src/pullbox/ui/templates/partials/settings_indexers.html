@@ -163,9 +163,6 @@
             {% call field_note(tone="info", icon="check", attrs='x-show="jackett.hasApiKey && !jackett.apiKey" x-cloak') %}
               Current stored key: <code class="font-mono text-[11px]" x-text="jackett.obfuscatedApiKey"></code>
             {% endcall %}
-            {% call field_note(tone="neutral", icon="info") %}
-              Jackett owns tracker challenge resolution. Configure FlareSolverr in Jackett when a tracker requires it.
-            {% endcall %}
           </div>
         {% endcall %}
       </div>

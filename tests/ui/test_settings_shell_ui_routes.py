@@ -189,6 +189,10 @@ class TestSettingsRouteContracts:
         assert 'name="jackett_username"' in response.text
         assert 'data-testid="settings-indexers-jackett-api-key"' in response.text
         assert r"\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u202212345" in response.text
+        assert (
+            "Jackett owns tracker challenge resolution. Configure FlareSolverr in Jackett "
+            "when a tracker requires it."
+        ) not in response.text
         assert "pbFormatDurationMs(data.response_time_ms)" in response.text
 
     async def test_settings_indexers_show_jackett_source_and_retired_state(
