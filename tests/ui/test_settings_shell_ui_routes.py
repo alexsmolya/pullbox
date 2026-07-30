@@ -671,8 +671,44 @@ class TestSettingsRouteContracts:
         assert response.status_code == 200
         assert 'data-testid="settings-direct-hosts-card"' in response.text
         assert 'data-testid="settings-direct-host-pixeldrain"' in response.text
-        assert 'data-testid="settings-direct-host-configure-pixeldrain"' in response.text
-        assert 'data-testid="settings-direct-host-toggle-pixeldrain"' in response.text
+        assert "@click=\"openHostConfigure('pixeldrain')\"" in response.text
+        assert "@keydown.enter.prevent=\"openHostConfigure('pixeldrain')\"" in response.text
+        assert "@keydown.space.prevent=\"openHostConfigure('pixeldrain')\"" in response.text
+        assert 'data-testid="settings-direct-host-configure-pixeldrain"' not in response.text
+        assert 'data-testid="settings-direct-host-toggle-pixeldrain"' not in response.text
+        assert 'data-testid="settings-direct-host-modal-enabled"' in response.text
+        assert 'data-testid="settings-direct-host-modal-actions"' in response.text
+        assert 'x-model="hostForm.enabled"' in response.text
+        assert "hostForm.clearCredentials" not in response.text
+        assert "clearCredentials:" not in response.text
+        assert "Clear the saved" not in response.text
+        assert "setHostEnabled(" not in response.text
+        host_card_position = response.text.index('data-testid="settings-direct-host-pixeldrain"')
+        host_card_markup = response.text[host_card_position - 500 : host_card_position + 300]
+        assert 'role="button"' in host_card_markup
+        assert 'tabindex="0"' in host_card_markup
+        host_toggle_position = response.text.index(
+            'data-testid="settings-direct-host-modal-enabled"'
+        )
+        host_toggle_markup = response.text[host_toggle_position - 300 : host_toggle_position + 500]
+        assert 'class="peer toggle-input"' in host_toggle_markup
+        assert 'class="toggle-switch"' in host_toggle_markup
+        host_actions_position = response.text.index(
+            'data-testid="settings-direct-host-modal-actions"'
+        )
+        host_actions_markup = response.text[
+            host_actions_position - 100 : host_actions_position + 500
+        ]
+        assert 'class="flex items-center gap-2"' in host_actions_markup
+        generic_host_position = response.text.index(
+            'data-testid="settings-direct-host-generic_https"'
+        )
+        pixeldrain_host_position = response.text.index(
+            'data-testid="settings-direct-host-pixeldrain"'
+        )
+        generic_host_markup = response.text[generic_host_position:pixeldrain_host_position]
+        assert "None required" in generic_host_markup
+        assert 'x-if="activeHost.allowed_credential_fields.length > 0"' in response.text
         assert "Artifact hosts" in response.text
         assert "PixelDrain" in response.text
         assert "MEGA" in response.text

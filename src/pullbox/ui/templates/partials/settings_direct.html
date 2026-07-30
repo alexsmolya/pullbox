@@ -171,56 +171,49 @@
         {%- set host_kind = host.host_kind.value -%}
         {%- set account_state = host.account_state.value -%}
         <article
+          @click="openHostConfigure('{{ host_kind }}')"
+          @keydown.enter.prevent="openHostConfigure('{{ host_kind }}')"
+          @keydown.space.prevent="openHostConfigure('{{ host_kind }}')"
+          role="button"
+          tabindex="0"
           class="settings-connection-card {% if not host.enabled %}settings-connection-card-muted{% endif %}"
           data-testid="settings-direct-host-{{ host_kind }}"
         >
-          <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <p class="text-sm font-semibold text-pb-text">{{ host_names[host_kind] }}</p>
-                <span class="pill {{ 'pill-success' if host.enabled else 'pill-muted' }}">{{ 'Enabled' if host.enabled else 'Disabled' }}</span>
-                <span class="pill {{ state_pills.get(account_state, 'pill-muted') }}">{{ account_state|replace('_', ' ')|title }}</span>
-                <span class="pill pill-muted">Preference {{ host.preference }}</span>
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <p class="text-sm font-semibold text-pb-text">{{ host_names[host_kind] }}</p>
+              <span class="pill {{ 'pill-success' if host.enabled else 'pill-muted' }}">{{ 'Enabled' if host.enabled else 'Disabled' }}</span>
+              <span class="pill {{ state_pills.get(account_state, 'pill-muted') }}">{{ account_state|replace('_', ' ')|title }}</span>
+              <span class="pill pill-muted">Preference {{ host.preference }}</span>
+            </div>
+            <p class="mt-2 text-xs leading-5 text-pb-text-sec">{{ host_descriptions[host_kind] }}</p>
+
+            <dl class="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-3">
+              <div>
+                <dt class="text-pb-text-dim">Account access</dt>
+                <dd class="mt-0.5 text-pb-text-sec">
+                  {% if host.allowed_credential_fields %}
+                    {% for field in host.allowed_credential_fields %}{{ credential_labels[field] }}{% if not loop.last %}, {% endif %}{% endfor %}
+                  {% else %}
+                    Anonymous only
+                  {% endif %}
+                </dd>
               </div>
-              <p class="mt-2 text-xs leading-5 text-pb-text-sec">{{ host_descriptions[host_kind] }}</p>
-
-              <dl class="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-3">
-                <div>
-                  <dt class="text-pb-text-dim">Account access</dt>
-                  <dd class="mt-0.5 text-pb-text-sec">
-                    {% if host.allowed_credential_fields %}
-                      {% for field in host.allowed_credential_fields %}{{ credential_labels[field] }}{% if not loop.last %}, {% endif %}{% endfor %}
-                    {% else %}
-                      Anonymous only
-                    {% endif %}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="text-pb-text-dim">Credentials</dt>
-                  <dd class="mt-0.5 text-pb-text-sec">{{ 'Configured' if host.credentials_configured else 'Not configured' }}</dd>
-                </div>
-                <div>
-                  <dt class="text-pb-text-dim">Last account check</dt>
-                  <dd class="mt-0.5 text-pb-text-sec">{{ host.last_tested_at|localtime if host.last_tested_at else 'Never' }}</dd>
-                </div>
-              </dl>
-            </div>
-
-            <div class="flex shrink-0 flex-wrap items-center gap-2">
-              <button
-                type="button"
-                class="btn-ghost btn-sm"
-                data-testid="settings-direct-host-configure-{{ host_kind }}"
-                @click="openHostConfigure('{{ host_kind }}')"
-              >Configure</button>
-              <button
-                type="button"
-                class="{{ 'btn-ghost' if host.enabled else 'btn-primary' }} btn-sm"
-                data-testid="settings-direct-host-toggle-{{ host_kind }}"
-                :disabled="hostBusyKind !== null"
-                @click="setHostEnabled('{{ host_kind }}', {{ 'false' if host.enabled else 'true' }})"
-              >{{ 'Disable' if host.enabled else 'Enable' }}</button>
-            </div>
+              <div>
+                <dt class="text-pb-text-dim">Credentials</dt>
+                <dd class="mt-0.5 text-pb-text-sec">
+                  {% if host.allowed_credential_fields %}
+                    {{ 'Configured' if host.credentials_configured else 'Not configured' }}
+                  {% else %}
+                    None required
+                  {% endif %}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-pb-text-dim">Last account check</dt>
+                <dd class="mt-0.5 text-pb-text-sec">{{ host.last_tested_at|localtime if host.last_tested_at else 'Never' }}</dd>
+              </div>
+            </dl>
           </div>
         </article>
         {% endfor %}
@@ -251,14 +244,28 @@
       <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="saveHost()">
         <div class="modal-body">
           <div class="space-y-4 px-5 py-4">
-            <div class="inline-alert inline-alert-info">
-              <p class="text-xs">Saved credentials are encrypted and cannot be read back. Leave a value blank to keep it unchanged.</p>
-            </div>
+            <template x-if="activeHost.allowed_credential_fields.length > 0">
+              <div class="inline-alert inline-alert-info">
+                <p class="text-xs">Saved credentials are encrypted and cannot be read back. Leave a value blank to keep it unchanged.</p>
+              </div>
+            </template>
 
-            <label class="flex cursor-pointer items-center gap-3 text-xs text-pb-text-sec">
-              <input type="checkbox" class="checkbox-pb" x-model="hostForm.enabled">
-              <span>Enable this artifact host for eligible direct-download mirrors.</span>
-            </label>
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-pb-border bg-pb-surface/40 px-3 py-2.5">
+              <div>
+                <p class="text-xs font-medium text-pb-text">Artifact host status</p>
+                <p class="mt-0.5 text-[11px] text-pb-text-dim">Enable this artifact host for eligible direct-download mirrors.</p>
+              </div>
+              <label class="relative inline-flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="peer toggle-input"
+                  data-testid="settings-direct-host-modal-enabled"
+                  x-model="hostForm.enabled"
+                >
+                <span class="toggle-switch"></span>
+                <span class="text-xs text-pb-text-sec" x-text="hostForm.enabled ? 'Enabled' : 'Disabled'"></span>
+              </label>
+            </div>
 
             <div>
               <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="direct-host-preference">Preference</label>
@@ -283,10 +290,6 @@
                   :placeholder="hostCredentialConfigured(field) ? 'Configured - leave blank to keep' : 'Enter account credential'"
                   x-model="hostForm.credentials[field]"
                 >
-                <label x-show="hostCredentialConfigured(field)" class="flex cursor-pointer items-center gap-2 text-[11px] text-pb-text-dim">
-                  <input type="checkbox" class="checkbox-pb" x-model="hostForm.clearCredentials[field]">
-                  <span>Clear the saved <span x-text="hostCredentialLabel(field).toLowerCase()"></span></span>
-                </label>
               </div>
             </template>
           </div>
@@ -297,10 +300,12 @@
         </div>
 
         <div class="modal-footer justify-end">
-          <button type="button" class="btn-ghost btn-sm" @click="closeHostModal()">Cancel</button>
-          <button type="submit" class="btn-primary btn-sm" :disabled="hostSaving">
-            <span x-text="hostSaving ? 'Saving...' : 'Save Host'"></span>
-          </button>
+          <div class="flex items-center gap-2" data-testid="settings-direct-host-modal-actions">
+            <button type="button" class="btn-ghost btn-sm" @click="closeHostModal()">Cancel</button>
+            <button type="submit" class="btn-primary btn-sm" :disabled="hostSaving">
+              <span x-text="hostSaving ? 'Saving...' : 'Save Host'"></span>
+            </button>
+          </div>
         </div>
       </form>
     </div>
@@ -606,8 +611,7 @@ function directProviderSettings(initialProviders, initialHosts) {
     modalMode: 'add',
     activeProvider: { configuration_controls: [], configured_secret_fields: [] },
     activeHost: { host_kind: '', allowed_credential_fields: [], configured_credential_fields: [] },
-    hostForm: { enabled: false, preference: 50, credentials: {}, clearCredentials: {} },
-    hostBusyKind: null,
+    hostForm: { enabled: false, preference: 50, credentials: {} },
     hostSaving: false,
     hostError: '',
     saving: false,
@@ -721,7 +725,6 @@ function directProviderSettings(initialProviders, initialHosts) {
         enabled: Boolean(host.enabled),
         preference: Number(host.preference),
         credentials: Object.fromEntries(host.allowed_credential_fields.map(field => [field, ''])),
-        clearCredentials: Object.fromEntries(host.allowed_credential_fields.map(field => [field, false])),
       };
       this.hostError = '';
       this.showHostModal = true;
@@ -736,8 +739,7 @@ function directProviderSettings(initialProviders, initialHosts) {
     hostCredentialUpdates() {
       const updates = {};
       this.activeHost.allowed_credential_fields.forEach(field => {
-        if (this.hostForm.clearCredentials[field]) updates[field] = null;
-        else if (this.hostForm.credentials[field]) updates[field] = this.hostForm.credentials[field];
+        if (this.hostForm.credentials[field]) updates[field] = this.hostForm.credentials[field];
       });
       return updates;
     },
@@ -761,22 +763,6 @@ function directProviderSettings(initialProviders, initialHosts) {
       } catch (error) {
         this.hostError = error.message;
         this.hostSaving = false;
-      }
-    },
-
-    async setHostEnabled(hostKind, enabled) {
-      if (this.hostBusyKind !== null) return;
-      this.hostBusyKind = hostKind;
-      try {
-        await this.api(`/api/v1/direct-hosts/${hostKind}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ enabled }),
-        });
-        if (typeof showToast === 'function') showToast({ message: `${this.hostName(hostKind)} ${enabled ? 'enabled' : 'disabled'}.`, level: 'success' });
-        this.refresh();
-      } catch (error) {
-        if (typeof showToast === 'function') showToast({ message: error.message, level: 'error' });
-        this.hostBusyKind = null;
       }
     },
 
