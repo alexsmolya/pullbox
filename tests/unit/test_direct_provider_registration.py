@@ -352,6 +352,17 @@ async def test_configuration_updates_validate_controls_and_disable_until_reteste
                     "minimum": 1,
                     "maximum": 100,
                 },
+                "source_url": {
+                    "type": "string",
+                    "title": "Official URL",
+                    "format": "uri",
+                    "enum": [
+                        "https://annas-archive.gl",
+                        "https://annas-archive.pk",
+                        "https://annas-archive.gd",
+                    ],
+                    "default": "https://annas-archive.gd",
+                },
             },
             "additionalProperties": False,
         }
@@ -372,7 +383,10 @@ async def test_configuration_updates_validate_controls_and_disable_until_reteste
         db_session,
         registered.id,
         priority=10,
-        public_configuration={"result_limit": 25},
+        public_configuration={
+            "result_limit": 25,
+            "source_url": "https://annas-archive.gl",
+        },
         secret_configuration={"member_token": "member-secret-value"},
     )
 
@@ -380,7 +394,10 @@ async def test_configuration_updates_validate_controls_and_disable_until_reteste
     assert updated.enabled is False
     stored = await db_session.get(DirectProviderConfig, registered.id)
     assert stored is not None
-    assert stored.configuration_metadata["public_values"] == {"result_limit": 25}
+    assert stored.configuration_metadata["public_values"] == {
+        "result_limit": 25,
+        "source_url": "https://annas-archive.gl",
+    }
     assert "member-secret-value" not in str(stored.encrypted_configuration)
 
     with pytest.raises(DirectProviderRegistrationError, match="unknown_field"):
@@ -388,6 +405,13 @@ async def test_configuration_updates_validate_controls_and_disable_until_reteste
             db_session,
             registered.id,
             public_configuration={"unknown_field": True},
+        )
+
+    with pytest.raises(DirectProviderRegistrationError, match="choice is invalid"):
+        await update_direct_provider(
+            db_session,
+            registered.id,
+            public_configuration={"source_url": "https://annas-archive.gd.evil.example"},
         )
 
 

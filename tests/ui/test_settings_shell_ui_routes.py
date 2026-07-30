@@ -419,7 +419,10 @@ class TestSettingsRouteContracts:
                     },
                     configuration_metadata={
                         "allow_private_http": True,
-                        "public_values": {"result_limit": 20},
+                        "public_values": {
+                            "result_limit": 20,
+                            "source_url": "https://annas-archive.gl",
+                        },
                         "configured_secret_fields": ["account_token"],
                     },
                     manifest_snapshot={
@@ -453,6 +456,17 @@ class TestSettingsRouteContracts:
                                     "title": "Account token",
                                     "x-pullbox-secret": True,
                                 },
+                                "source_url": {
+                                    "type": "string",
+                                    "title": "Official URL",
+                                    "format": "uri",
+                                    "enum": [
+                                        "https://annas-archive.gl",
+                                        "https://annas-archive.pk",
+                                        "https://annas-archive.gd",
+                                    ],
+                                    "default": "https://annas-archive.gd",
+                                },
                             },
                         },
                     },
@@ -471,11 +485,49 @@ class TestSettingsRouteContracts:
         assert "http://direct-provider:8780" in response.text
         assert "Result limit" in response.text
         assert "Account token" in response.text
+        assert "Official URL" in response.text
+        assert "https://annas-archive.gl" in response.text
+        assert "control.input_format === 'uri'" in response.text
+        assert "toggleConfigurationChoices(control.name)" in response.text
+        assert "selectConfigurationChoice(control.name, choice)" in response.text
+        assert "settings-direct-provider-control-${control.name}-toggle" in response.text
+        assert "settings-direct-provider-control-${control.name}-options" in response.text
+        assert 'role="listbox"' in response.text
+        assert "<datalist" not in response.text
         assert "Configured" in response.text
         assert "identity does not verify the running image" in response.text
-        assert 'data-testid="settings-direct-provider-test-1"' in response.text
-        assert 'data-testid="settings-direct-provider-enable-1"' in response.text
-        assert 'data-testid="settings-direct-provider-remove-1"' in response.text
+        assert '@click="openConfigure(1)"' in response.text
+        assert '@keydown.enter.prevent="openConfigure(1)"' in response.text
+        assert 'role="button"' in response.text
+        assert 'tabindex="0"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-enabled"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-resolver-enabled"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-test"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-remove"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-actions"' in response.text
+        assert 'x-ref="providerModalBody"' in response.text
+        assert 'x-model="form.enabled"' in response.text
+        assert 'class="flex items-center gap-2"' in response.text
+        assert "scrollProviderModalToResults()" in response.text
+        assert "modalBody.scrollTo({" in response.text
+        assert "top: modalBody.scrollHeight" in response.text
+        assert response.text.count("requestAnimationFrame(() => {") >= 2
+        resolver_toggle_position = response.text.index(
+            'data-testid="settings-direct-provider-modal-resolver-enabled"'
+        )
+        bearer_token_position = response.text.index("Replace bearer token")
+        resolver_toggle_markup = response.text[
+            resolver_toggle_position - 300 : resolver_toggle_position + 500
+        ]
+        assert resolver_toggle_position < bearer_token_position
+        assert 'class="peer toggle-input"' in resolver_toggle_markup
+        assert 'class="toggle-switch"' in resolver_toggle_markup
+        assert 'data-testid="settings-direct-provider-test-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-configure-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-enable-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-disable-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-remove-1"' not in response.text
+        assert ">Provider configuration</summary>" not in response.text
         assert "encrypted-token-must-not-render" not in response.text
         assert "encrypted-account-token-must-not-render" not in response.text
 

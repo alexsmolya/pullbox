@@ -37,6 +37,7 @@ class DirectConfigurationControlResponse(BaseModel):
     description: str | None
     required: bool
     secret: bool
+    input_format: str | None
     default: str | int | float | bool | None
     choices: tuple[str | int | float | bool, ...]
     minimum: float | None

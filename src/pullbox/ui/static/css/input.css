@@ -6998,6 +6998,30 @@
     height: var(--pb-control-icon-size);
   }
 
+  .direct-provider-uri-control {
+    @apply relative;
+  }
+  .direct-provider-uri-input {
+    @apply pr-10 font-mono;
+  }
+  .direct-provider-uri-toggle {
+    @apply absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-lg
+           text-pb-text-sec transition-colors hover:text-pb-text
+           focus:outline-hidden focus:ring-2 focus:ring-inset focus:ring-pb-interactive;
+  }
+  .direct-provider-uri-options {
+    @apply absolute left-0 right-0 top-full z-[90] mt-1 overflow-hidden rounded-lg
+           border border-pb-border-hover bg-pb-card py-1 shadow-2xl shadow-black/20;
+  }
+  .direct-provider-uri-option {
+    @apply flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm
+           text-pb-text-sec transition-colors hover:bg-pb-info-dim hover:text-pb-text
+           focus:bg-pb-info-dim focus:text-pb-text focus:outline-hidden;
+  }
+  .direct-provider-uri-option-selected {
+    @apply bg-pb-info-dim text-pb-text;
+  }
+
   /* Search fields */
   .search-field {
     @apply relative min-w-0;

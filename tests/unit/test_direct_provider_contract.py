@@ -64,6 +64,38 @@ def test_manifest_accepts_additive_fields_and_normalizes_native_controls() -> No
     assert manifest.configuration_controls[0].secret is True
 
 
+def test_manifest_normalizes_allowlisted_uri_controls() -> None:
+    manifest = DirectManifestResponse.model_validate(
+        _manifest(
+            configuration_schema={
+                "type": "object",
+                "properties": {
+                    "source_url": {
+                        "type": "string",
+                        "title": "Official URL",
+                        "format": "uri",
+                        "enum": [
+                            "https://annas-archive.gl",
+                            "https://annas-archive.pk",
+                            "https://annas-archive.gd",
+                        ],
+                        "default": "https://annas-archive.gd",
+                    }
+                },
+                "additionalProperties": False,
+            }
+        )
+    )
+
+    control = manifest.configuration_controls[0]
+    assert control.input_format == "uri"
+    assert control.choices == (
+        "https://annas-archive.gl",
+        "https://annas-archive.pk",
+        "https://annas-archive.gd",
+    )
+
+
 def test_manifest_rejects_executable_or_nested_configuration_controls() -> None:
     with pytest.raises(ValidationError, match="configuration control is unsupported"):
         DirectManifestResponse.model_validate(
@@ -86,6 +118,9 @@ def test_manifest_rejects_executable_or_nested_configuration_controls() -> None:
         {"type": "string", "minLength": 10, "maxLength": 1},
         {"type": "integer", "minLength": 1},
         {"type": "string", "minimum": 1},
+        {"type": "string", "format": "html"},
+        {"type": "boolean", "format": "uri"},
+        {"type": "string", "format": "uri", "x-pullbox-secret": True},
     ],
 )
 def test_manifest_rejects_internally_inconsistent_configuration_controls(

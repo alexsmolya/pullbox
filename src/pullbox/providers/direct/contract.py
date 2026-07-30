@@ -36,6 +36,7 @@ _ALLOWED_FIELD_KEYS = {
     "description",
     "default",
     "enum",
+    "format",
     "minimum",
     "maximum",
     "minLength",
@@ -44,6 +45,7 @@ _ALLOWED_FIELD_KEYS = {
     "x-pullbox-placeholder",
 }
 _ALLOWED_FIELD_TYPES = frozenset({"string", "boolean", "integer", "number"})
+_ALLOWED_INPUT_FORMATS = frozenset({"uri"})
 
 
 class ProviderConfigurationSchemaError(ValueError):
@@ -79,6 +81,7 @@ class DirectConfigurationControl(DirectContractModel):
     description: str | None = None
     required: bool = False
     secret: bool = False
+    input_format: str | None = None
     default: str | int | float | bool | None = None
     choices: tuple[str | int | float | bool, ...] = ()
     minimum: float | None = None
@@ -325,6 +328,13 @@ def validate_provider_configuration_schema(
         secret = raw_field.get("x-pullbox-secret", False)
         if not isinstance(secret, bool) or (secret and value_type != "string"):
             raise ProviderConfigurationSchemaError("Provider secret control is invalid.")
+        input_format = raw_field.get("format")
+        if input_format is not None and (
+            input_format not in _ALLOWED_INPUT_FORMATS or value_type != "string" or secret
+        ):
+            raise ProviderConfigurationSchemaError(
+                "Provider configuration control format is unsupported."
+            )
         choices_raw = raw_field.get("enum", [])
         if (
             not isinstance(choices_raw, list)
@@ -364,6 +374,7 @@ def validate_provider_configuration_schema(
                 description=_bounded_control_text(raw_field.get("description")),
                 required=name in required,
                 secret=secret,
+                input_format=input_format if isinstance(input_format, str) else None,
                 default=default,
                 choices=choices,
                 minimum=minimum,
