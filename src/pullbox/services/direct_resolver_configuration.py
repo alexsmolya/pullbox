@@ -67,7 +67,7 @@ def update_resolver_auth_headers(
     config: DirectResolverConfig,
     updates: Mapping[str, str | None],
 ) -> None:
-    """Merge write-only resolver auth headers and reset stale health state."""
+    """Merge write-only resolver auth headers without changing health history."""
     current = _stored_headers(config.encrypted_auth_headers)
     normalized_updates = {_validate_header_name(name): value for name, value in updates.items()}
     resulting_names = set(current)
@@ -93,10 +93,6 @@ def update_resolver_auth_headers(
 
     config.encrypted_auth_headers = dict(current)
     config.auth_metadata = {"configured_header_names": sorted(current)}
-    config.state = DirectResolverState.UNKNOWN if config.enabled else DirectResolverState.DISABLED
-    config.last_health_at = None
-    config.last_tested_at = None
-    config.last_error_code = None
 
 
 def load_resolver_auth_headers(config: DirectResolverConfig) -> ResolverAuthMaterial:

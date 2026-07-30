@@ -278,6 +278,7 @@ async def update_direct_resolver_profile(
     client_factory: DirectResolverClientFactory = _default_client_factory,
 ) -> DirectResolverConfigRead:
     config = await _resolver_by_id(session, resolver_id)
+    current_auth_headers = load_resolver_auth_headers(config).headers
     name = update.name.strip()
     if not name:
         raise DirectResolverServiceError(
@@ -316,17 +317,27 @@ async def update_direct_resolver_profile(
         encrypted_auth_headers=dict(config.encrypted_auth_headers or {}),
         auth_metadata=dict(config.auth_metadata or {}),
     )
-    if update.authentication_headers is not None:
+    if update.authentication_headers:
         update_resolver_auth_headers(preview, update.authentication_headers)
+    preview_auth_headers = load_resolver_auth_headers(preview).headers
     endpoint = await _validate_endpoint(
         endpoint=update.endpoint,
         enabled=update.enabled,
         allow_private_http=update.allow_private_http,
         timeout_seconds=update.timeout_seconds,
         max_concurrency=update.max_concurrency,
-        authentication_headers=load_resolver_auth_headers(preview).headers,
+        authentication_headers=preview_auth_headers,
         client_factory=client_factory,
     )
+    connection_changed = (
+        config.resolver_kind != update.resolver_kind
+        or config.endpoint != endpoint
+        or bool(config.allow_private_http) != update.allow_private_http
+        or config.timeout_seconds != update.timeout_seconds
+        or config.max_concurrency != update.max_concurrency
+        or current_auth_headers != preview_auth_headers
+    )
+    enabled_changed = bool(config.enabled) != update.enabled
     config.name = name
     config.resolver_kind = update.resolver_kind
     config.priority = update.priority
@@ -335,12 +346,14 @@ async def update_direct_resolver_profile(
     config.allow_private_http = update.allow_private_http
     config.timeout_seconds = update.timeout_seconds
     config.max_concurrency = update.max_concurrency
-    if update.authentication_headers is not None:
+    if update.authentication_headers:
         update_resolver_auth_headers(config, update.authentication_headers)
-    config.state = DirectResolverState.UNKNOWN if update.enabled else DirectResolverState.DISABLED
-    config.last_health_at = None
-    config.last_tested_at = None
-    config.last_error_code = None
+    if not update.enabled:
+        config.state = DirectResolverState.DISABLED
+    elif connection_changed or enabled_changed:
+        config.state = DirectResolverState.UNKNOWN
+    if connection_changed or enabled_changed:
+        config.last_error_code = None
     await session.commit()
     _clear_resolver_runtime()
     await session.refresh(config)
@@ -367,6 +380,7 @@ async def update_direct_resolver(
     )
 
     config = await _get_or_create(session)
+    current_auth_headers = load_resolver_auth_headers(config).headers
     preview = DirectResolverConfig(
         name=_RESOLVER_NAME,
         resolver_kind=config.resolver_kind,
@@ -380,7 +394,7 @@ async def update_direct_resolver(
         encrypted_auth_headers=dict(config.encrypted_auth_headers or {}),
         auth_metadata=dict(config.auth_metadata or {}),
     )
-    if update.authentication_headers is not None:
+    if update.authentication_headers:
         update_resolver_auth_headers(preview, update.authentication_headers)
     auth_headers = load_resolver_auth_headers(preview).headers
     endpoint = await _validate_endpoint(
@@ -392,18 +406,28 @@ async def update_direct_resolver(
         authentication_headers=auth_headers,
         client_factory=client_factory,
     )
+    connection_changed = (
+        config.endpoint != endpoint
+        or bool(config.allow_private_http) != update.allow_private_http
+        or config.timeout_seconds != update.timeout_seconds
+        or config.max_concurrency != update.max_concurrency
+        or current_auth_headers != auth_headers
+    )
+    enabled_changed = bool(config.enabled) != update.enabled
 
     config.endpoint = endpoint
     config.enabled = update.enabled
     config.allow_private_http = update.allow_private_http
     config.timeout_seconds = update.timeout_seconds
     config.max_concurrency = update.max_concurrency
-    if update.authentication_headers is not None:
+    if update.authentication_headers:
         update_resolver_auth_headers(config, update.authentication_headers)
-    config.state = DirectResolverState.UNKNOWN if update.enabled else DirectResolverState.DISABLED
-    config.last_health_at = None
-    config.last_tested_at = None
-    config.last_error_code = None
+    if not update.enabled:
+        config.state = DirectResolverState.DISABLED
+    elif connection_changed or enabled_changed:
+        config.state = DirectResolverState.UNKNOWN
+    if connection_changed or enabled_changed:
+        config.last_error_code = None
     await session.commit()
     _clear_resolver_runtime()
     await session.refresh(config)
@@ -438,7 +462,6 @@ async def test_direct_resolver(
         state = _state_for_error(exc.code)
         config.state = state
         config.last_tested_at = checked_at
-        config.last_health_at = None
         config.last_error_code = exc.code
         await session.commit()
         return DirectResolverTestResult(

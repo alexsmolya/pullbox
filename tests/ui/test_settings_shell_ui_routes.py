@@ -726,7 +726,23 @@ class TestSettingsRouteContracts:
         assert 'data-testid="settings-resolvers-card"' in response.text
         assert "settings-resolver-${profile.id}" in response.text
         assert 'data-testid="settings-resolver-add"' in response.text
-        assert "settings-resolver-test-${profile.id}" in response.text
+        assert '@click="openEdit(profile.id)"' in response.text
+        assert '@keydown.enter.prevent="openEdit(profile.id)"' in response.text
+        assert '@keydown.space.prevent="openEdit(profile.id)"' in response.text
+        assert 'data-testid="settings-resolver-modal"' in response.text
+        assert 'data-testid="settings-resolver-modal-backdrop"' in response.text
+        assert 'data-testid="settings-resolver-modal-enabled"' in response.text
+        assert 'data-testid="settings-resolver-modal-private-http"' in response.text
+        assert 'data-testid="settings-resolver-type-select"' in response.text
+        assert 'data-testid="settings-resolver-type-panel"' in response.text
+        assert 'data-dropdown-select-contract="v1"' in response.text
+        assert 'data-dropdown-select-mode="local"' in response.text
+        assert 'local_model="form.resolver_kind"' not in response.text
+        assert '<select id="resolver-profile-kind"' not in response.text
+        assert 'data-testid="settings-resolver-modal-test"' in response.text
+        assert 'data-testid="settings-resolver-modal-remove"' in response.text
+        assert 'data-testid="settings-resolver-modal-actions"' in response.text
+        assert "settings-resolver-test-${profile.id}" not in response.text
         assert '<template x-for="profile in profiles"' in response.text
         assert "Challenge resolvers" in response.text
         assert "Shared acquisition infrastructure" in response.text
@@ -742,6 +758,11 @@ class TestSettingsRouteContracts:
         assert "Last classified error" in response.text
         assert "Authorization" in response.text
         assert "encrypted-resolver-secret-must-not-render" not in response.text
+        assert "const authenticationHeaders = this.headerUpdates();" in response.text
+        assert (
+            "if (Object.keys(authenticationHeaders).length) "
+            "payload.authentication_headers = authenticationHeaders;"
+        ) in response.text
         assert "form: {}," not in response.text
         assert "form: { auth_headers: [] }," in response.text
 

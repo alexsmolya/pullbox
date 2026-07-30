@@ -569,6 +569,45 @@ class TestSettingsPage:
         modal.get_by_role("button", name="Cancel").click()
         modal.wait_for(state="hidden")
 
+    def test_challenge_resolver_modal_uses_connection_contract_and_fits_viewport(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.set_viewport_size({"width": 900, "height": 720})
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("resolvers")
+
+        authed_page.locator("[data-testid='settings-resolver-add']").click()
+
+        modal = authed_page.locator("[data-testid='settings-resolver-modal']")
+        panel = modal.locator(".modal-panel")
+        modal.wait_for(state="visible", timeout=5000)
+        panel_box = panel.bounding_box()
+
+        assert panel_box is not None
+        assert panel_box["x"] > 0
+        assert panel_box["y"] > 0
+        assert panel_box["x"] + panel_box["width"] <= 900
+        assert panel_box["y"] + panel_box["height"] <= 720
+        assert abs((panel_box["x"] + (panel_box["width"] / 2)) - 450) <= 2
+        assert modal.get_by_test_id("settings-resolver-modal-enabled").is_visible()
+        assert modal.get_by_test_id("settings-resolver-modal-private-http").is_visible()
+        type_dropdown = modal.get_by_test_id("settings-resolver-type-select")
+        type_dropdown.locator("[data-dropdown-select-trigger]").click()
+        type_panel = authed_page.get_by_test_id("settings-resolver-type-panel")
+        type_panel.wait_for(state="visible", timeout=5000)
+        type_panel.locator("[data-dropdown-option][data-value='trawl']").click()
+        assert type_dropdown.locator("[data-dropdown-select-input]").input_value() == "trawl"
+        assert (
+            type_dropdown.locator("[data-dropdown-select-trigger-label]").text_content() == "TRAWL"
+        )
+        assert modal.get_by_role("button", name="Cancel").is_visible()
+        assert modal.get_by_role("button", name="Save Resolver").is_visible()
+
+        modal.get_by_role("button", name="Cancel").click()
+        modal.wait_for(state="hidden")
+
     def test_settings_tab_switch_resets_scroll_to_top(
         self,
         authed_page,

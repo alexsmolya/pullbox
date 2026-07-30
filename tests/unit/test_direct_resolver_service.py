@@ -39,6 +39,7 @@ from pullbox.services.direct_resolver_service import (
     resolve_for_host_adapter,
     resolve_for_trawl_host_adapter,
     update_direct_resolver,
+    update_direct_resolver_profile,
 )
 from pullbox.services.direct_resolver_service import (
     test_direct_resolver as run_direct_resolver_test,
@@ -303,6 +304,141 @@ async def test_successful_connection_test_marks_resolver_healthy(
     assert _ResolverClient.seen[-1]["authentication_headers"] == {
         "Authorization": "Bearer resolver-secret"
     }
+
+
+async def test_profile_save_preserves_health_history_when_connection_is_unchanged(
+    db_session: AsyncSession,
+) -> None:
+    created = await create_direct_resolver(
+        db_session,
+        DirectResolverCreate(
+            name="TRAWL",
+            resolver_kind=DirectResolverKind.TRAWL,
+            priority=10,
+            endpoint="http://resolver:8191",
+            enabled=True,
+            allow_private_http=True,
+        ),
+        client_factory=_factory,
+    )
+    await run_direct_resolver_test(
+        db_session,
+        resolver_id=created.id,
+        client_factory=_factory,
+    )
+    tested = await db_session.get(DirectResolverConfig, created.id)
+    assert tested is not None
+    tested_at = tested.last_tested_at
+    healthy_at = tested.last_health_at
+
+    updated = await update_direct_resolver_profile(
+        db_session,
+        created.id,
+        DirectResolverCreate(
+            name="TRAWL primary",
+            resolver_kind=DirectResolverKind.TRAWL,
+            priority=20,
+            endpoint="http://resolver:8191",
+            enabled=True,
+            allow_private_http=True,
+            authentication_headers={},
+        ),
+        client_factory=_factory,
+    )
+
+    assert updated.state is DirectResolverState.HEALTHY
+    assert updated.last_tested_at == tested_at
+    assert updated.last_health_at == healthy_at
+
+
+async def test_profile_connection_change_requires_retest_without_erasing_history(
+    db_session: AsyncSession,
+) -> None:
+    created = await create_direct_resolver(
+        db_session,
+        DirectResolverCreate(
+            name="TRAWL",
+            resolver_kind=DirectResolverKind.TRAWL,
+            priority=10,
+            endpoint="http://resolver:8191",
+            enabled=True,
+            allow_private_http=True,
+        ),
+        client_factory=_factory,
+    )
+    await run_direct_resolver_test(
+        db_session,
+        resolver_id=created.id,
+        client_factory=_factory,
+    )
+    tested = await db_session.get(DirectResolverConfig, created.id)
+    assert tested is not None
+    tested_at = tested.last_tested_at
+    healthy_at = tested.last_health_at
+
+    updated = await update_direct_resolver_profile(
+        db_session,
+        created.id,
+        DirectResolverCreate(
+            name="TRAWL",
+            resolver_kind=DirectResolverKind.TRAWL,
+            priority=10,
+            endpoint="http://resolver:8191",
+            enabled=True,
+            allow_private_http=True,
+            timeout_seconds=45,
+        ),
+        client_factory=_factory,
+    )
+
+    assert updated.state is DirectResolverState.UNKNOWN
+    assert updated.last_tested_at == tested_at
+    assert updated.last_health_at == healthy_at
+
+
+async def test_failed_connection_test_preserves_last_healthy_response(
+    db_session: AsyncSession,
+) -> None:
+    created = await create_direct_resolver(
+        db_session,
+        DirectResolverCreate(
+            name="TRAWL",
+            resolver_kind=DirectResolverKind.TRAWL,
+            priority=10,
+            endpoint="http://resolver:8191",
+            enabled=True,
+            allow_private_http=True,
+        ),
+        client_factory=_factory,
+    )
+    await run_direct_resolver_test(
+        db_session,
+        resolver_id=created.id,
+        client_factory=_factory,
+    )
+    tested = await db_session.get(DirectResolverConfig, created.id)
+    assert tested is not None
+    healthy_at = tested.last_health_at
+    _ResolverClient.error = DirectResolverError(
+        "resolver_timed_out",
+        "Timed out.",
+        retryable=True,
+    )
+
+    try:
+        result = await run_direct_resolver_test(
+            db_session,
+            resolver_id=created.id,
+            client_factory=_factory,
+        )
+    finally:
+        _ResolverClient.error = None
+
+    assert result.usable is False
+    failed = await db_session.get(DirectResolverConfig, created.id)
+    assert failed is not None
+    assert failed.last_health_at == healthy_at
+    assert failed.last_tested_at is not None
 
 
 @pytest.mark.parametrize(

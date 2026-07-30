@@ -146,6 +146,30 @@ async def test_resolver_profiles_api_manages_ranked_resolvers(
 
     profiles = await authenticated_client.get("/api/v1/direct-resolver/profiles")
     assert [(item["name"], item["priority"]) for item in profiles.json()] == [("TRAWL primary", 10)]
+    tested_profile = profiles.json()[0]
+    assert tested_profile["state"] == "healthy"
+    assert tested_profile["last_tested_at"] is not None
+    assert tested_profile["last_health_at"] is not None
+
+    saved = await authenticated_client.patch(
+        f"/api/v1/direct-resolver/profiles/{resolver_id}",
+        headers=headers,
+        json={
+            "name": "TRAWL ranked",
+            "resolver_kind": "trawl",
+            "priority": 20,
+            "endpoint": "http://trawl:8191",
+            "enabled": True,
+            "allow_private_http": True,
+            "timeout_seconds": 55,
+            "max_concurrency": 1,
+            "authentication_headers": {},
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["state"] == "healthy"
+    assert saved.json()["last_tested_at"] == tested_profile["last_tested_at"]
+    assert saved.json()["last_health_at"] == tested_profile["last_health_at"]
 
     deleted = await authenticated_client.delete(
         f"/api/v1/direct-resolver/profiles/{resolver_id}",

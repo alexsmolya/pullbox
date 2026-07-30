@@ -1,5 +1,6 @@
 """Write-only secret and read-model contracts for resolver configuration."""
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -62,8 +63,11 @@ def test_resolver_auth_headers_are_encrypted_and_read_projection_is_secret_free(
     assert not hasattr(projection, "authentication_headers")
 
 
-def test_resolver_auth_header_updates_are_merge_or_clear_only() -> None:
+def test_resolver_auth_header_updates_do_not_erase_health_history() -> None:
     config = _config()
+    checked_at = datetime.now(UTC)
+    config.last_tested_at = checked_at
+    config.last_health_at = checked_at
     update_resolver_auth_headers(config, {"Authorization": "Bearer first"})
     update_resolver_auth_headers(
         config,
@@ -71,9 +75,9 @@ def test_resolver_auth_header_updates_are_merge_or_clear_only() -> None:
     )
 
     assert load_resolver_auth_headers(config).headers == {"X-API-Key": "replacement"}
-    assert config.state is DirectResolverState.UNKNOWN
-    assert config.last_tested_at is None
-    assert config.last_error_code is None
+    assert config.state is DirectResolverState.HEALTHY
+    assert config.last_tested_at == checked_at
+    assert config.last_health_at == checked_at
 
 
 @pytest.mark.parametrize(
