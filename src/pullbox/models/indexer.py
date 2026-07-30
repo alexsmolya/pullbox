@@ -3,8 +3,8 @@
 import enum
 from datetime import datetime
 
+from sqlalchemy import Boolean, Integer, String, Text
 from sqlalchemy import Enum as SQLAlchemyEnum
-from sqlalchemy import Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from pullbox.models.base import Base, IdentityMixin, TimestampMixin, UTCDateTime
@@ -21,6 +21,7 @@ class IndexerSource(enum.StrEnum):
 
     MANUAL = "manual"
     PROWLARR = "prowlarr"
+    JACKETT = "jackett"
 
 
 class IndexerConfig(Base, IdentityMixin, TimestampMixin):
@@ -34,9 +35,17 @@ class IndexerConfig(Base, IdentityMixin, TimestampMixin):
     priority: Mapped[int] = mapped_column(Integer, default=50)
     categories: Mapped[str | None] = mapped_column(String(255))
 
-    # Prowlarr sync tracking
+    # Manager sync tracking. The legacy Prowlarr integer remains during the
+    # additive migration so existing databases and integrations stay readable.
     source: Mapped[str] = mapped_column(String(20), default="manual")
     prowlarr_indexer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    manager_indexer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manager_available: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="1",
+        nullable=False,
+    )
 
     # Search capability flags (Prowlarr sync profiles)
     enable_rss: Mapped[bool] = mapped_column(default=True)

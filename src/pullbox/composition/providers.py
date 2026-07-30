@@ -33,6 +33,8 @@ logger = structlog.get_logger(__name__)
 # and registered under this ID (no per-indexer health tracking -
 # Prowlarr handles that internally).
 _PROWLARR_AGGREGATE_CONFIG_ID = -1
+_JACKETT_RATE_LIMIT_PER_MINUTE = 60
+_JACKETT_REQUEST_TIMEOUT_SECONDS = 60.0
 
 # Cache download clients so we reuse authenticated sessions across task cycles.
 # Keyed by (client_type, url, updated_at) so config changes invalidate the cache.
@@ -58,14 +60,22 @@ async def register_indexers(
     Prowlarr-synced Torznab indexers do NOT appear in the map - Prowlarr
     handles their health internally.
     """
-    result = await session.execute(select(IndexerConfig).where(IndexerConfig.enabled.is_(True)))
+    result = await session.execute(
+        select(IndexerConfig).where(
+            IndexerConfig.enabled.is_(True),
+            IndexerConfig.manager_available.is_(True),
+        )
+    )
     indexer_configs = list(result.scalars().all())
 
     configs_map: dict[int, IndexerConfig] = {}
     prowlarr_torznab_ids: list[int] = []
 
     for idx_cfg in indexer_configs:
+        if not idx_cfg.manager_available:
+            continue
         is_prowlarr_synced = str(idx_cfg.source) == IndexerSource.PROWLARR
+        is_jackett_synced = str(idx_cfg.source) == IndexerSource.JACKETT
 
         # Prowlarr-synced Torznab: aggregate into single ProwlarrIndexer
         if is_prowlarr_synced and idx_cfg.indexer_type == IndexerType.TORZNAB:
@@ -77,15 +87,37 @@ async def register_indexers(
         decrypted_api_key = decrypt_secret(idx_cfg.api_key)
 
         if idx_cfg.indexer_type == IndexerType.TORZNAB:
-            resolver_options = await build_manual_torznab_resolver_options(session, idx_cfg)
-            indexer: NewznabIndexer = TorznabIndexer(
-                name=idx_cfg.name,
-                url=idx_cfg.url,
-                api_key=decrypted_api_key,
-                resolver_enabled=bool(idx_cfg.resolver_enabled),
-                resolver_options=resolver_options,
-                cache_namespace=f"manual-torznab:{idx_cfg.id}",
+            resolver_options = (
+                ()
+                if is_jackett_synced
+                else await build_manual_torznab_resolver_options(session, idx_cfg)
             )
+            resolver_enabled = False if is_jackett_synced else bool(idx_cfg.resolver_enabled)
+            cache_namespace = (
+                f"jackett-torznab:{idx_cfg.id}"
+                if is_jackett_synced
+                else f"manual-torznab:{idx_cfg.id}"
+            )
+            if is_jackett_synced:
+                indexer: NewznabIndexer = TorznabIndexer(
+                    name=idx_cfg.name,
+                    url=idx_cfg.url,
+                    api_key=decrypted_api_key,
+                    rate_limit_per_minute=_JACKETT_RATE_LIMIT_PER_MINUTE,
+                    request_timeout=_JACKETT_REQUEST_TIMEOUT_SECONDS,
+                    resolver_enabled=resolver_enabled,
+                    resolver_options=resolver_options,
+                    cache_namespace=cache_namespace,
+                )
+            else:
+                indexer = TorznabIndexer(
+                    name=idx_cfg.name,
+                    url=idx_cfg.url,
+                    api_key=decrypted_api_key,
+                    resolver_enabled=resolver_enabled,
+                    resolver_options=resolver_options,
+                    cache_namespace=cache_namespace,
+                )
         else:
             indexer = NewznabIndexer(
                 name=idx_cfg.name,

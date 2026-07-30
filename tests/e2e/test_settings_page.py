@@ -307,6 +307,7 @@ class TestSettingsPage:
 
         panel = settings.panel("indexers")
         assert panel.locator("[data-testid='settings-indexers-prowlarr-card']").first.is_visible()
+        assert panel.locator("[data-testid='settings-indexers-jackett-card']").first.is_visible()
         assert panel.locator("[data-testid='settings-indexers-registry-card']").first.is_visible()
         assert panel.locator("[data-testid='settings-indexers-test-all']").first.is_visible()
         assert panel.locator("[data-testid='settings-indexers-add-indexer']").first.is_visible()
@@ -348,6 +349,37 @@ class TestSettingsPage:
             """
             () => {
               const button = document.querySelector("[data-testid='settings-indexers-prowlarr-save-sync']");
+              return !!button && !button.disabled;
+            }
+            """,
+            timeout=5000,
+        )
+        assert save_button.is_enabled()
+
+    def test_settings_indexers_jackett_save_sync_requires_dirty_state(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("indexers")
+
+        save_button = authed_page.locator(
+            "[data-testid='settings-indexers-jackett-save-sync']"
+        ).first
+        url_input = authed_page.locator("[data-testid='settings-indexers-jackett-url']").first
+        api_key_input = authed_page.locator(
+            "[data-testid='settings-indexers-jackett-api-key']"
+        ).first
+
+        assert save_button.is_disabled()
+        url_input.fill("http://127.0.0.1:9117")
+        api_key_input.fill("test-api-key")
+
+        authed_page.wait_for_function(
+            """
+            () => {
+              const button = document.querySelector("[data-testid='settings-indexers-jackett-save-sync']");
               return !!button && !button.disabled;
             }
             """,

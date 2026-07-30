@@ -29,7 +29,7 @@ from pullbox.providers.base import (
 
 logger = structlog.get_logger(__name__)
 
-_REQUEST_TIMEOUT = 10.0
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 
 # Newznab / Torznab XML namespaces
 # noinspection HttpUrlsUsage — XML namespace URIs, not HTTP links
@@ -60,11 +60,13 @@ class NewznabIndexer:
         url: str,
         api_key: str,
         rate_limit_per_minute: int = 5,
+        *,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         self._name = name
         self._base_url = url.rstrip("/")
         self._api_key = api_key
-        self._client = httpx.AsyncClient(timeout=_REQUEST_TIMEOUT)
+        self._client = httpx.AsyncClient(timeout=request_timeout)
         self._min_interval = 60.0 / rate_limit_per_minute
         self._last_request_time = 0.0
 

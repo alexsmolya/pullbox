@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added native Jackett indexer management with Prowlarr-consistent test and
+  synchronization controls, one independently managed Torznab source per
+  configured tracker, and duplicate-manager warnings.
+
 ### Changed
+
+- Preserve missing Prowlarr and Jackett tracker records as unavailable history
+  instead of deleting them, and give Jackett-managed searches a proxy-aware
+  timeout and request cadence while Jackett retains challenge ownership.
 
 ### Fixed
 

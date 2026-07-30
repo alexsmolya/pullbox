@@ -250,6 +250,80 @@ class TestRegisterIndexersAggregation:
         )
 
     @pytest.mark.asyncio
+    async def test_jackett_tracker_is_registered_individually_without_pullbox_resolver(
+        self,
+    ) -> None:
+        """Jackett owns challenge solving and each tracker keeps its own identity."""
+        from pullbox.composition.providers import register_indexers
+        from pullbox.providers.base import ProviderRegistry
+
+        cfg = MagicMock()
+        cfg.id = 44
+        cfg.name = "1337x (Jackett)"
+        cfg.source = "jackett"
+        cfg.manager_indexer_id = "1337x"
+        cfg.manager_available = True
+        cfg.prowlarr_indexer_id = None
+        cfg.indexer_type = "torznab"
+        cfg.url = "http://jackett:9117/api/v2.0/indexers/1337x/results/torznab"
+        cfg.api_key = "encrypted_key"
+        cfg.enabled = True
+        cfg.resolver_enabled = True
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [cfg]
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        registry = ProviderRegistry()
+
+        with (
+            patch("pullbox.composition.providers.decrypt_secret", return_value="decrypted_key"),
+            patch(
+                "pullbox.composition.providers.build_manual_torznab_resolver_options",
+                AsyncMock(),
+            ) as build_options,
+            patch("pullbox.composition.providers.TorznabIndexer") as torznab_cls,
+        ):
+            configs_map = await register_indexers(mock_session, registry)
+
+        assert configs_map == {44: cfg}
+        build_options.assert_not_awaited()
+        torznab_cls.assert_called_once_with(
+            name="1337x (Jackett)",
+            url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+            api_key="decrypted_key",
+            resolver_enabled=False,
+            resolver_options=(),
+            cache_namespace="jackett-torznab:44",
+            rate_limit_per_minute=60,
+            request_timeout=60.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_retired_manager_tracker_is_not_registered(self) -> None:
+        """A tracker missing from its manager remains historical but cannot search."""
+        from pullbox.composition.providers import register_indexers
+        from pullbox.providers.base import ProviderRegistry
+
+        cfg = MagicMock()
+        cfg.id = 45
+        cfg.source = "jackett"
+        cfg.manager_available = False
+        cfg.indexer_type = "torznab"
+        cfg.enabled = True
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [cfg]
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        registry = ProviderRegistry()
+
+        configs_map = await register_indexers(mock_session, registry)
+
+        assert configs_map == {}
+        assert registry.get_indexer_items() == []
+
+    @pytest.mark.asyncio
     async def test_mixed_newznab_and_torznab_prowlarr(self) -> None:
         """Prowlarr Newznab stays individual, Prowlarr Torznab aggregates."""
         from pullbox.composition.providers import _PROWLARR_AGGREGATE_CONFIG_ID, register_indexers

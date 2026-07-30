@@ -78,6 +78,8 @@ class IndexerResponse(BaseModel):
     categories: str | None = None
     source: str = "manual"
     prowlarr_indexer_id: int | None = None
+    manager_indexer_id: str | None = None
+    manager_available: bool = True
     enable_rss: bool = True
     enable_automatic_search: bool = True
     enable_interactive_search: bool = True
@@ -110,5 +112,29 @@ class ProwlarrSyncResult(BaseModel):
     added: int = 0
     updated: int = 0
     removed: int = 0
+    total: int = 0
+    indexers: list[IndexerResponse] = []
+
+
+class JackettSyncRequest(BaseModel):
+    """Request to discover configured trackers from a Jackett instance."""
+
+    jackett_url: str = Field(..., min_length=1, description="Jackett base URL")
+    jackett_api_key: str = Field(..., min_length=1, description="Jackett API key")
+
+    @field_validator("jackett_url")
+    @classmethod
+    def validate_jackett_url(cls, value: str) -> str:
+        """Normalize and validate the configured Jackett URL."""
+        return normalize_peer_base_url(value)
+
+
+class JackettSyncResult(BaseModel):
+    """Result of a Jackett tracker sync operation."""
+
+    added: int = 0
+    updated: int = 0
+    retired: int = 0
+    reactivated: int = 0
     total: int = 0
     indexers: list[IndexerResponse] = []

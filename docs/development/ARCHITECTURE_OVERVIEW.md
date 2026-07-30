@@ -1,8 +1,8 @@
 # Pullbox Architecture Overview
 
 **Author:** Adam Hernandez
-**Version:** 1.0
-**Last Modified:** 2026-05-15
+**Version:** 1.1
+**Last Modified:** 2026-07-29
 
 ## Purpose
 
@@ -292,7 +292,7 @@ The active implementation includes:
 
 - ComicVine metadata.
 - Pullbox Data public release payloads for What's New and opt-in telemetry.
-- Newznab, Torznab, and Prowlarr-backed indexers.
+- Newznab, Torznab, Prowlarr, and Jackett indexers.
 - SABnzbd, NZBGet, qBittorrent, Transmission, and Deluge download clients.
 
 Provider composition happens through `src/pullbox/composition/providers.py`.
@@ -316,6 +316,10 @@ constructed, and provider instances are registered for service use.
 - Prowlarr-synced Newznab indexers are kept as individual Newznab proxy
   endpoints because the direct proxy behavior can produce better category and
   result fidelity.
+- Jackett is configured through the same test-and-sync workflow as Prowlarr,
+  but each configured tracker is registered as an independent Torznab source.
+  Jackett owns downstream challenge resolution; Pullbox preserves local source
+  policy and retires missing manager rows instead of deleting their history.
 - Download clients may be cached across task cycles when config values have not
   changed.
 - Pullbox Data is not a general metadata proxy. Installed clients default to

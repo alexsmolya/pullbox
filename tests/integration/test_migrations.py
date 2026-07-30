@@ -69,6 +69,46 @@ class TestMigrationChain:
         finally:
             engine.dispose()
 
+    def test_indexer_manager_migration_backfills_prowlarr_identity(
+        self,
+        alembic_cfg,
+    ) -> None:
+        """Generic manager identity preserves existing Prowlarr rows."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "i4e5f6g70829")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO indexer_configs "
+                        "(name, indexer_type, url, api_key, enabled, priority, "
+                        "failure_count, source, prowlarr_indexer_id) "
+                        "VALUES ('1337x (Prowlarr)', 'TORZNAB', 'http://prowlarr/7', "
+                        "'encrypted', 1, 50, 0, 'prowlarr', 7)"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        columns = _get_columns(sync_url, "indexer_configs")
+        assert {"manager_indexer_id", "manager_available"}.issubset(columns)
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT manager_indexer_id, manager_available "
+                        "FROM indexer_configs WHERE source = 'prowlarr'"
+                    )
+                ).one()
+            assert tuple(row) == ("7", 1)
+        finally:
+            engine.dispose()
+
     def test_series_has_path_column(self, alembic_cfg) -> None:
         """Phase 2 migration adds path column to series."""
         cfg, sync_url = alembic_cfg

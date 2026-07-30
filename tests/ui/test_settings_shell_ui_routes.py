@@ -22,6 +22,7 @@ from pullbox.models.direct_acquisition import (
     DirectProviderTrustLevel,
 )
 from pullbox.models.download import DownloadClientType
+from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.utilities.settings import resolve_utility_directory
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -145,7 +146,7 @@ class TestSettingsRouteContracts:
         assert "Weekly refresh is a practical default" not in response.text
         assert "Lower values are safer" not in response.text
 
-    async def test_settings_indexers_prowlarr_api_key_matches_metadata_treatment(
+    async def test_settings_indexer_manager_api_keys_match_metadata_treatment(
         self,
         authenticated_client,
         sec_db,
@@ -157,6 +158,12 @@ class TestSettingsRouteContracts:
                     SystemConfig(
                         key="prowlarr_api_key",
                         value=encrypt_secret("1234567890abcde"),
+                        value_type="secret",
+                    ),
+                    SystemConfig(key="jackett_url", value="http://localhost:9117"),
+                    SystemConfig(
+                        key="jackett_api_key",
+                        value=encrypt_secret("abcdefghij12345"),
                         value_type="secret",
                     ),
                 ]
@@ -175,7 +182,76 @@ class TestSettingsRouteContracts:
         assert "(set — leave blank to keep)" in response.text
         assert "Current stored key:" in response.text
         assert "••••••••••abcde" in response.text
+        assert "`${data.removed} retired`" in response.text
+        assert "`${data.removed} removed`" not in response.text
+        assert 'data-testid="settings-indexers-jackett-form"' in response.text
+        assert '@submit.prevent="saveJackettAndSync()"' in response.text
+        assert 'name="jackett_username"' in response.text
+        assert 'data-testid="settings-indexers-jackett-api-key"' in response.text
+        assert r"\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u202212345" in response.text
         assert "pbFormatDurationMs(data.response_time_ms)" in response.text
+
+    async def test_settings_indexers_show_jackett_source_and_retired_state(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                IndexerConfig(
+                    name="1337x (Jackett)",
+                    indexer_type=IndexerType.TORZNAB,
+                    url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+                    api_key=encrypt_secret("jackett-key"),
+                    source="jackett",
+                    manager_indexer_id="1337x",
+                    manager_available=False,
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert "1337x (Jackett)" in response.text
+        assert '<span class="pill pill-purple">Jackett</span>' in response.text
+        assert "Unavailable in Jackett" in response.text
+        assert "Jackett owns tracker challenge resolution" in response.text
+
+    async def test_settings_indexers_warn_when_managers_sync_the_same_tracker(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add_all(
+                [
+                    IndexerConfig(
+                        name="1337x (Prowlarr)",
+                        indexer_type=IndexerType.TORZNAB,
+                        url="http://prowlarr:9696/7",
+                        api_key=encrypt_secret("prowlarr-key"),
+                        source="prowlarr",
+                        prowlarr_indexer_id=7,
+                        manager_indexer_id="7",
+                    ),
+                    IndexerConfig(
+                        name="1337x (Jackett)",
+                        indexer_type=IndexerType.TORZNAB,
+                        url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+                        api_key=encrypt_secret("jackett-key"),
+                        source="jackett",
+                        manager_indexer_id="1337x",
+                    ),
+                ]
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-indexers-manager-duplicates"' in response.text
+        assert "1337x is synchronized by both Prowlarr and Jackett" in response.text
 
     async def test_settings_indexers_source_priority_is_json_escaped(
         self,
@@ -785,6 +861,12 @@ class TestSettingsRouteContracts:
             assert 'data-testid="settings-indexers-prowlarr-api-key"' in response.text
             assert 'data-testid="settings-indexers-prowlarr-test"' in response.text
             assert 'data-testid="settings-indexers-prowlarr-save-sync"' in response.text
+            assert 'data-testid="settings-indexers-jackett-card"' in response.text
+            assert 'data-testid="settings-indexers-jackett-sync"' in response.text
+            assert 'data-testid="settings-indexers-jackett-url"' in response.text
+            assert 'data-testid="settings-indexers-jackett-api-key"' in response.text
+            assert 'data-testid="settings-indexers-jackett-test"' in response.text
+            assert 'data-testid="settings-indexers-jackett-save-sync"' in response.text
             assert 'data-testid="settings-indexers-registry-card"' in response.text
             assert 'data-testid="settings-indexers-test-all"' in response.text
             assert 'data-testid="settings-indexers-add-indexer"' in response.text

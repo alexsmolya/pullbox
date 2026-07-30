@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from pullbox.services.direct_resolver_service import NativeResolverOption
 from pullbox.providers.indexer.newznab import (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
     NewznabError,
     NewznabIndexer,
     _check_xml_error,
@@ -53,12 +54,19 @@ class TorznabIndexer(NewznabIndexer):
         api_key: str,
         rate_limit_per_minute: int = 5,
         *,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         resolver_enabled: bool | None = None,
         resolver_options: Sequence[NativeResolverOption] = (),
         request_transport: TorznabTransport | None = None,
         cache_namespace: str | None = None,
     ) -> None:
-        super().__init__(name, url, api_key, rate_limit_per_minute)
+        super().__init__(
+            name,
+            url,
+            api_key,
+            rate_limit_per_minute,
+            request_timeout=request_timeout,
+        )
         self._browser_resolver_enabled = (
             bool(resolver_options) if resolver_enabled is None else resolver_enabled
         )

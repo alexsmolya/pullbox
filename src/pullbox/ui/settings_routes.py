@@ -302,6 +302,24 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         )
         indexers: list[IndexerConfig] = list(indexer_result.scalars().all())
         ctx["indexers"] = indexers
+        manager_sources_by_name: dict[str, set[str]] = {}
+        manager_display_names: dict[str, str] = {}
+        for indexer in indexers:
+            source = str(indexer.source)
+            if source not in {"prowlarr", "jackett"} or not indexer.manager_available:
+                continue
+            suffix = f" ({source.title()})"
+            display_name = indexer.name
+            if display_name.casefold().endswith(suffix.casefold()):
+                display_name = display_name[: -len(suffix)]
+            normalized_name = " ".join(display_name.casefold().split())
+            manager_sources_by_name.setdefault(normalized_name, set()).add(source)
+            manager_display_names.setdefault(normalized_name, display_name)
+        ctx["indexer_manager_duplicates"] = sorted(
+            manager_display_names[name]
+            for name, sources in manager_sources_by_name.items()
+            if {"prowlarr", "jackett"}.issubset(sources)
+        )
         ctx["indexer_status_seed"] = load_indexer_status_seed(request, indexers)
         cfg_result = await session.execute(
             select(SystemConfig).where(
@@ -310,6 +328,8 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
                         "indexer_failure_threshold",
                         "prowlarr_url",
                         "prowlarr_api_key",
+                        "jackett_url",
+                        "jackett_api_key",
                         "source_priority",
                     ]
                 )
@@ -332,6 +352,19 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         configs["prowlarr_api_key"] = ""  # never send to browser
         configs["has_prowlarr_api_key"] = "true" if has_prowlarr_key else ""
         configs["obfuscated_prowlarr_api_key"] = obfuscated_prowlarr_key
+
+        has_jackett_key = bool(configs.get("jackett_api_key", ""))
+        obfuscated_jackett_key = ""
+        if has_jackett_key:
+            try:
+                obfuscated_jackett_key = obfuscate_api_key(
+                    decrypt_secret(configs["jackett_api_key"])
+                )
+            except (ValueError, Exception):
+                obfuscated_jackett_key = ""
+        configs["jackett_api_key"] = ""  # never send to browser
+        configs["has_jackett_api_key"] = "true" if has_jackett_key else ""
+        configs["obfuscated_jackett_api_key"] = obfuscated_jackett_key
         ctx["configs"] = configs
         # Load blocklist config for the blocklist section
         bl_row = await session.get(SystemConfig, "blocklist.release_groups")

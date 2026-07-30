@@ -959,6 +959,7 @@ class TestIndexersCheck:
         enabled: bool = True,
         source: str | None = None,
         prowlarr_indexer_id: int | None = None,
+        manager_available: bool = True,
         resolver_enabled: bool = False,
     ) -> None:
         from pullbox.models.indexer import IndexerConfig
@@ -972,6 +973,7 @@ class TestIndexersCheck:
                 enabled=enabled,
                 source=source,
                 prowlarr_indexer_id=prowlarr_indexer_id,
+                manager_available=manager_available,
                 resolver_enabled=resolver_enabled,
             )
         )
@@ -1265,6 +1267,8 @@ class TestIndexersCheck:
             name="NZBGeek",
             indexer_type=IndexerType.NEWZNAB,
             url="http://nzbgeek",
+            source="prowlarr",
+            prowlarr_indexer_id=7,
         )
 
         unavailable = ProviderHealthResult(
@@ -1295,6 +1299,77 @@ class TestIndexersCheck:
         assert subject_summaries["Prowlarr"].status == HealthStatus.UNHEALTHY
         assert subject_summaries["NZBGeek"].status == HealthStatus.UNKNOWN
         assert subject_summaries["NZBGeek"].message == ("Skipped because Prowlarr is unavailable")
+
+    @pytest.mark.asyncio
+    async def test_prowlarr_unavailable_still_checks_independent_jackett_tracker(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        from pullbox.models.indexer import IndexerType
+
+        await self._seed_prowlarr_config(db_session)
+        await self._seed_indexer_config(
+            db_session,
+            name="1337x (Jackett)",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+            source="jackett",
+        )
+
+        unavailable = ProviderHealthResult(
+            healthy=False,
+            message="Connection refused",
+            response_time_ms=0.0,
+        )
+        healthy = ProviderHealthResult(
+            healthy=True,
+            message="1337x: 8 categories available",
+            response_time_ms=80.0,
+            details={"categories": "8"},
+        )
+        service = _make_service(settings)
+        with (
+            patch(
+                "pullbox.providers.indexer.prowlarr.ProwlarrIndexer",
+                autospec=True,
+            ) as mock_prowlarr,
+            patch("pullbox.providers.indexer.torznab.TorznabIndexer") as mock_torznab,
+        ):
+            mock_prowlarr.return_value.test_connection = AsyncMock(return_value=unavailable)
+            mock_prowlarr.return_value.close = AsyncMock()
+            mock_torznab.return_value.test_connection = AsyncMock(return_value=healthy)
+            mock_torznab.return_value.close = AsyncMock()
+            outcomes = await service.run_check(db_session, "indexers")
+
+        mock_torznab.return_value.test_connection.assert_awaited_once()
+        assert outcomes[0].status == HealthStatus.DEGRADED
+        subject_summaries = {outcome.subject_label: outcome for outcome in outcomes[1:]}
+        assert subject_summaries["Prowlarr"].status == HealthStatus.UNHEALTHY
+        assert subject_summaries["1337x (Jackett)"].status == HealthStatus.HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_retired_manager_tracker_is_not_health_checked(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        from pullbox.models.indexer import IndexerType
+
+        await self._seed_indexer_config(
+            db_session,
+            name="Retired (Jackett)",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://jackett:9117/api/v2.0/indexers/retired/results/torznab",
+            source="jackett",
+            manager_available=False,
+        )
+
+        outcomes = await _make_service(settings).run_check(db_session, "indexers")
+
+        assert len(outcomes) == 1
+        assert outcomes[0].status == HealthStatus.UNKNOWN
+        assert outcomes[0].message == "Not configured"
 
     @pytest.mark.asyncio
     async def test_prowlarr_latency_degraded_still_runs_individual_indexer_checks(

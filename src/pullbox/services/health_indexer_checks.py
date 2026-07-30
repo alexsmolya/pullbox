@@ -50,7 +50,10 @@ async def check_indexers(
 
     result = await session.execute(
         select(IndexerConfig)
-        .where(IndexerConfig.enabled.is_(True))
+        .where(
+            IndexerConfig.enabled.is_(True),
+            IndexerConfig.manager_available.is_(True),
+        )
         .order_by(func.lower(IndexerConfig.name))
     )
     indexer_configs = list(result.scalars().all())
@@ -77,6 +80,7 @@ async def check_indexers(
     proxy_count = 0
     proxy_outcome: CheckOutcome | None = None
     prowlarr_blocks_indexers = False
+    prowlarr_skipped_count = 0
 
     if prowlarr_url and prowlarr_api_key:
         proxy_count = 1
@@ -93,31 +97,38 @@ async def check_indexers(
             flagged_names.append("Prowlarr")
         prowlarr_blocks_indexers = not _prowlarr_allows_indexer_checks(proxy_outcome)
 
-    if prowlarr_blocks_indexers and proxy_outcome is not None:
-        for config in indexer_configs:
+    from pullbox.models.indexer import IndexerSource
+    from pullbox.services.direct_resolver_service import (
+        build_manual_torznab_resolver_options,
+    )
+
+    for config in indexer_configs:
+        is_prowlarr_managed = str(config.source) == IndexerSource.PROWLARR
+        if prowlarr_blocks_indexers and proxy_outcome is not None and is_prowlarr_managed:
             outcome = _skipped_indexer_subject(config, proxy_outcome)
             subject_outcomes.append(outcome)
             summary_checks.append(_serialize_indexer_summary(outcome))
-    else:
-        from pullbox.services.direct_resolver_service import (
-            build_manual_torznab_resolver_options,
-        )
+            prowlarr_skipped_count += 1
+            continue
 
-        for config in indexer_configs:
-            resolver_options = await build_manual_torznab_resolver_options(session, config)
-            outcome = await check_indexer_subject(config, resolver_options)
-            subject_outcomes.append(outcome)
-            summary_checks.append(_serialize_indexer_summary(outcome))
-            total_ms += outcome.response_time_ms
-            if outcome.status == HealthStatus.HEALTHY:
-                healthy_count += 1
-            else:
-                flagged_names.append(config.name)
+        resolver_options = await build_manual_torznab_resolver_options(session, config)
+        outcome = await check_indexer_subject(config, resolver_options)
+        subject_outcomes.append(outcome)
+        summary_checks.append(_serialize_indexer_summary(outcome))
+        total_ms += outcome.response_time_ms
+        if outcome.status == HealthStatus.HEALTHY:
+            healthy_count += 1
+        else:
+            flagged_names.append(config.name)
 
     total = len(subject_outcomes)
     indexer_count = len(indexer_configs)
 
-    if prowlarr_blocks_indexers and proxy_outcome is not None:
+    if (
+        prowlarr_blocks_indexers
+        and proxy_outcome is not None
+        and prowlarr_skipped_count == indexer_count
+    ):
         component_status = proxy_outcome.status
         message = f"Prowlarr unavailable; skipped {indexer_count} indexer check(s)"
         guidance = (
