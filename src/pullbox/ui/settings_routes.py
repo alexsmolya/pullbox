@@ -383,17 +383,14 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         from pullbox.schemas.direct_provider import DirectProviderResponse
         from pullbox.services.direct_host_settings import list_direct_host_settings
         from pullbox.services.direct_provider_registration import list_direct_providers
-        from pullbox.services.direct_resolver_service import list_direct_resolvers
 
         providers = await list_direct_providers(session)
-        resolvers = await list_direct_resolvers(session)
-        hosts = await list_direct_host_settings(session)
+        hosts = await list_direct_host_settings(session) if providers else []
         ctx["direct_providers"] = providers
         ctx["direct_provider_seed"] = [
             DirectProviderResponse.model_validate(provider).model_dump(mode="json")
             for provider in providers
         ]
-        ctx["direct_resolvers"] = resolvers
         ctx["direct_hosts"] = hosts
         ctx["direct_host_seed"] = [
             DirectHostResponse.model_validate(host).model_dump(mode="json") for host in hosts

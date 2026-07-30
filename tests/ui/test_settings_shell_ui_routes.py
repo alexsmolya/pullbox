@@ -481,6 +481,10 @@ class TestSettingsRouteContracts:
         assert 'data-testid="settings-panel-direct"' in response.text
         assert 'data-testid="settings-direct-add-provider"' in response.text
         assert 'data-testid="settings-direct-provider-1"' in response.text
+        assert 'data-testid="settings-direct-resolver-summary"' not in response.text
+        provider_card_position = response.text.index('data-testid="settings-direct-registry-card"')
+        host_card_position = response.text.index('data-testid="settings-direct-hosts-card"')
+        assert provider_card_position < host_card_position
         assert "Example Direct Provider" in response.text
         assert "http://direct-provider:8780" in response.text
         assert "Result limit" in response.text
@@ -530,6 +534,19 @@ class TestSettingsRouteContracts:
         assert ">Provider configuration</summary>" not in response.text
         assert "encrypted-token-must-not-render" not in response.text
         assert "encrypted-account-token-must-not-render" not in response.text
+
+    async def test_direct_download_settings_hide_hosts_until_provider_is_registered(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-registry-card"' in response.text
+        assert 'data-testid="settings-direct-empty-state"' in response.text
+        assert 'data-testid="settings-direct-resolver-summary"' not in response.text
+        assert 'data-testid="settings-direct-hosts-card"' not in response.text
+        assert 'data-testid="settings-direct-host-modal"' not in response.text
 
     async def test_search_settings_render_ranked_browser_resolver_controls(
         self,
@@ -599,7 +616,7 @@ class TestSettingsRouteContracts:
         assert "form: {}," not in response.text
         assert "form: { auth_headers: [] }," in response.text
 
-    async def test_direct_and_indexer_settings_link_to_shared_resolver_management(
+    async def test_indexer_settings_link_to_shared_resolver_management(
         self,
         authenticated_client,
     ) -> None:  # type: ignore[no-untyped-def]
@@ -608,8 +625,8 @@ class TestSettingsRouteContracts:
 
         assert direct.status_code == 200
         assert indexers.status_code == 200
-        assert 'data-testid="settings-direct-resolver-summary"' in direct.text
-        assert 'href="/settings?tab=search#browser-resolvers"' in direct.text
+        assert 'data-testid="settings-direct-resolver-summary"' not in direct.text
+        assert 'href="/settings?tab=search#browser-resolvers"' not in direct.text
         assert 'data-testid="settings-indexers-resolver-summary"' in indexers.text
         assert 'href="/settings?tab=search#browser-resolvers"' in indexers.text
         assert 'data-testid="settings-indexers-manual-torznab-resolver"' in indexers.text
@@ -624,17 +641,28 @@ class TestSettingsRouteContracts:
         sec_db,
     ) -> None:  # type: ignore[no-untyped-def]
         async with sec_db() as session:
-            session.add(
-                DirectHostConfig(
-                    host_kind=DirectArtifactHostKind.PIXELDRAIN,
-                    enabled=True,
-                    preference=10,
-                    account_state=DirectHostAccountState.HEALTHY,
-                    encrypted_credentials={
-                        "api_key": encrypt_secret("pixeldrain-secret-must-not-render")
-                    },
-                    account_metadata={"configured_credential_fields": ["api_key"]},
-                )
+            session.add_all(
+                [
+                    DirectProviderConfig(
+                        provider_id="community.host-test",
+                        display_name="Host Test Provider",
+                        endpoint="http://host-test-provider:8780",
+                        state=DirectProviderState.HEALTHY,
+                        trust_level=DirectProviderTrustLevel.CUSTOM,
+                        negotiated_protocol="direct-download-provider/v1",
+                        encrypted_bearer_token="encrypted-provider-token",
+                    ),
+                    DirectHostConfig(
+                        host_kind=DirectArtifactHostKind.PIXELDRAIN,
+                        enabled=True,
+                        preference=10,
+                        account_state=DirectHostAccountState.HEALTHY,
+                        encrypted_credentials={
+                            "api_key": encrypt_secret("pixeldrain-secret-must-not-render")
+                        },
+                        account_metadata={"configured_credential_fields": ["api_key"]},
+                    ),
+                ]
             )
             await session.commit()
 
