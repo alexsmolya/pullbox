@@ -229,6 +229,33 @@ class TestIndexerCrudRoutes:
             with pytest.raises(NotFoundError):
                 await indexers_api.delete_indexer(999_003, object(), session)  # type: ignore[arg-type]
 
+    async def test_manager_indexer_update_accepts_synced_category_lists(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+    ) -> None:
+        categories = ",".join(str(category) for category in range(10_000, 10_100))
+
+        async with sec_db() as session:
+            indexer = await _seed_indexer(
+                session,
+                name="Large Category Set",
+                source="prowlarr",
+                prowlarr_indexer_id=42,
+            )
+            indexer.categories = categories
+            await session.flush()
+
+            updated = await indexers_api.update_indexer(
+                indexer.id,
+                IndexerUpdate(priority=7, categories=categories),
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+
+        assert len(categories) > 255
+        assert updated.priority == 7
+        assert updated.categories == categories
+
     async def test_browser_resolver_is_opt_in_for_manual_torznab_only(
         self,
         sec_db: async_sessionmaker[AsyncSession],

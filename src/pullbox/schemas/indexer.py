@@ -19,7 +19,7 @@ class IndexerCreate(BaseModel):
     )
     enabled: bool = Field(True, description="Whether this indexer is active")
     priority: int = Field(50, ge=1, le=100, description="Priority (lower = higher priority)")
-    categories: str | None = Field(None, max_length=255, description="Comma-separated category IDs")
+    categories: str | None = Field(None, description="Comma-separated category IDs")
     enable_rss: bool = Field(True, description="Enable RSS sync")
     enable_automatic_search: bool = Field(True, description="Enable automatic search")
     enable_interactive_search: bool = Field(True, description="Enable interactive (manual) search")
@@ -43,7 +43,7 @@ class IndexerUpdate(BaseModel):
     api_key: str | None = Field(None, min_length=1, max_length=255, description="API key")
     enabled: bool | None = Field(None, description="Whether this indexer is active")
     priority: int | None = Field(None, ge=1, le=100, description="Priority")
-    categories: str | None = Field(None, max_length=255, description="Comma-separated category IDs")
+    categories: str | None = Field(None, description="Comma-separated category IDs")
     enable_rss: bool | None = Field(None, description="Enable RSS sync")
     enable_automatic_search: bool | None = Field(None, description="Enable automatic search")
     enable_interactive_search: bool | None = Field(

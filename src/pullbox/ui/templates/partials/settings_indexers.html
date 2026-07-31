@@ -1010,6 +1010,27 @@ function indexersSettings() {
       return labels[type] || type;
     },
 
+    formatApiError(payload, fallback) {
+      const detail = payload?.detail ?? payload?.error?.message ?? payload?.message;
+      if (typeof detail === 'string' && detail.trim()) return detail;
+      if (Array.isArray(detail)) {
+        const messages = detail.map(item => {
+          if (typeof item === 'string') return item;
+          const message = item?.msg || item?.message;
+          if (!message) return '';
+          const field = Array.isArray(item?.loc)
+            ? item.loc.filter(part => part !== 'body').join('.')
+            : '';
+          return field ? `${field}: ${message}` : message;
+        }).filter(Boolean);
+        if (messages.length) return messages.join(' ');
+      }
+      if (detail && typeof detail === 'object') {
+        return detail.message || detail.msg || fallback;
+      }
+      return fallback;
+    },
+
     async quickDelete(id, name, source) {
       const label = source !== 'manual' ? 'Remove' : 'Delete';
       const ok = await pbConfirm({
@@ -1168,9 +1189,10 @@ function indexersSettings() {
         },
         body: JSON.stringify(body),
       })
-        .then(r => {
-          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Failed to save.'); });
-          return r.json();
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(this.formatApiError(data, 'Failed to save.'));
+          return data;
         })
         .then(() => {
           this.closeModal();
@@ -1216,7 +1238,11 @@ function indexersSettings() {
           method: 'POST',
           headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
         })
-          .then(r => r.json())
+          .then(async r => {
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(this.formatApiError(data, 'Test request failed.'));
+            return data;
+          })
           .then(data => {
             this.testSuccess = data.healthy;
             const ms = data.response_time_ms ? ` (${pbFormatDurationMs(data.response_time_ms)})` : '';
@@ -1328,9 +1354,10 @@ function indexersSettings() {
       }
 
       fetch(url, opts)
-        .then(r => {
-          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Sync failed.'); });
-          return r.json();
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(this.formatApiError(data, 'Sync failed.'));
+          return data;
         })
         .then(data => {
           this.prowlarr.success = true;
@@ -1424,9 +1451,10 @@ function indexersSettings() {
       }
 
       fetch(url, opts)
-        .then(r => {
-          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Sync failed.'); });
-          return r.json();
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(this.formatApiError(data, 'Sync failed.'));
+          return data;
         })
         .then(data => {
           this.jackett.success = true;

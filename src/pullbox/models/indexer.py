@@ -33,7 +33,7 @@ class IndexerConfig(Base, IdentityMixin, TimestampMixin):
     api_key: Mapped[str] = mapped_column(String(1024), nullable=False)  # encrypted at rest
     enabled: Mapped[bool] = mapped_column(default=True)
     priority: Mapped[int] = mapped_column(Integer, default=50)
-    categories: Mapped[str | None] = mapped_column(String(255))
+    categories: Mapped[str | None] = mapped_column(Text)
 
     # Manager sync tracking. The legacy Prowlarr integer remains during the
     # additive migration so existing databases and integrations stay readable.

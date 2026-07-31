@@ -344,6 +344,24 @@ class TestSettingsRouteContracts:
         assert response.status_code == 200
         assert "_silentTestAll" not in response.text
 
+    async def test_settings_indexer_modal_formats_structured_api_errors(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        block = _script_block(
+            response.text,
+            "function indexersSettings() {",
+            "</script>",
+        )
+        assert "formatApiError(payload, fallback)" in block
+        assert "Array.isArray(detail)" in block
+        assert "this.formatApiError(data, 'Failed to save.')" in block
+        assert "this.formatApiError(data, 'Test request failed.')" in block
+        assert "new Error(d?.detail || 'Failed to save.')" not in block
+
     async def test_settings_media_naming_preview_escapes_template_values_and_results(
         self,
         authenticated_client,
