@@ -546,6 +546,27 @@ async def _seed_series_library_data() -> None:
                             },
                             status=PendingMatchStatus.PENDING,
                         ),
+                        PendingMatch(
+                            issue_id=owned_issue.id,
+                            release_title="Batman 001 (2016) [Digital] Approved.cbz",
+                            download_url="https://indexer.example.com/dl/batman-001-approved",
+                            is_torrent=False,
+                            file_size=52_428_800,
+                            confidence="high",
+                            match_details={
+                                "parsed_series": "Batman",
+                                "parsed_issue": 1.0,
+                                "parsed_year": 2016,
+                                "series_similarity": 1.0,
+                                "issue_match": True,
+                                "year_match": True,
+                                "type_match": True,
+                                "indexer_name": "NZBGeek",
+                            },
+                            status=PendingMatchStatus.APPROVED,
+                            resolved_at=datetime.now(tz=UTC),
+                            resolved_by="e2e",
+                        ),
                     ]
                 )
 

@@ -169,6 +169,46 @@ class TestInterventionPage:
             "position": "relative",
         }
 
+    def test_intervention_history_details_toggle_tracks_the_visible_row(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        intervention = InterventionPage(authed_page, seeded_server)
+        intervention.goto()
+        intervention.history_tab.click()
+        intervention.history_panel.wait_for(state="visible", timeout=5000)
+
+        toggle = intervention.first_history_details_toggle
+        chevron = toggle.locator("svg")
+        detail_rows = intervention.history_panel.locator(
+            "[data-testid='intervention-history-detail-content']"
+        )
+
+        assert toggle.get_attribute("aria-expanded") == "false"
+        assert "rotate-180" not in (chevron.get_attribute("class") or "")
+        assert detail_rows.count() == 0
+
+        toggle.click()
+        wait_for_htmx(authed_page)
+        intervention.first_history_detail.wait_for(state="visible", timeout=5000)
+        assert toggle.get_attribute("aria-expanded") == "true"
+        assert "rotate-180" in (chevron.get_attribute("class") or "")
+        assert detail_rows.count() == 1
+
+        toggle.click()
+        authed_page.wait_for_function(
+            "() => !document.querySelector('[data-testid=intervention-history-detail-content]')"
+        )
+        assert toggle.get_attribute("aria-expanded") == "false"
+        assert "rotate-180" not in (chevron.get_attribute("class") or "")
+
+        toggle.click()
+        wait_for_htmx(authed_page)
+        intervention.first_history_detail.wait_for(state="visible", timeout=5000)
+        assert toggle.get_attribute("aria-expanded") == "true"
+        assert detail_rows.count() == 1
+
     def test_intervention_queue_table_keeps_actions_reachable_on_narrow_viewport(
         self,
         authed_page,

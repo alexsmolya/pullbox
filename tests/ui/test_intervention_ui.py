@@ -544,6 +544,11 @@ class TestHandlersDirect:
         assert 'data-testid="intervention-history-panel"' in body
         assert 'data-testid="intervention-history-table"' in body
         assert 'hx-get="/htmx/intervention/history/' in body
+        assert 'hx-trigger="pullbox-intervention-history-detail-' in body
+        assert "pbToggleLazyTableDetail($el, detailRowId," in body
+        assert "detailRowId: 'intervention-history-detail-row-" in body
+        assert "pbLazyTableDetailAfterRequest" in body
+        assert 'aria-expanded="false"' in body
         assert 'data-testid="intervention-history-detail-content"' not in body
         assert "Wrong cover scan" not in body
         assert 'class="table-detail-row"' not in body
