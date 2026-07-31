@@ -1047,6 +1047,54 @@ class TestSettingsPage:
         assert settings.dropdown_value("settings-utilities-log-level-select") == "ERROR"
         assert settings.dropdown_label("settings-utilities-log-level-select") == "Error"
 
+    def test_settings_search_language_dropdown_selects_and_resets(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        saved_payloads: list[dict[str, Any]] = []
+
+        def handle_config_update(route) -> None:  # type: ignore[no-untyped-def]
+            payload = route.request.post_data_json or {}
+            saved_payloads.append(payload)
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"updated": sorted(payload.get("values", {}).keys())}),
+            )
+
+        authed_page.route("**/api/v1/config", handle_config_update)
+        settings.goto("search")
+
+        settings.select_dropdown_option(
+            "settings-search-preferred-language-select",
+            "es",
+        )
+
+        assert settings.dropdown_value("settings-search-preferred-language-select") == "es"
+        assert settings.dropdown_label("settings-search-preferred-language-select") == "Spanish"
+
+        modifiers_card = (
+            settings.panel("search")
+            .locator(".section-card")
+            .filter(has=authed_page.get_by_text("Scoring modifiers", exact=True))
+            .first
+        )
+        modifiers_card.get_by_role("button", name="Reset to Defaults").click()
+
+        authed_page.wait_for_function(
+            """
+            () => document
+              .querySelector("[data-testid='settings-search-preferred-language-select']")
+              ?.getAttribute("data-dropdown-value") === "en"
+            """,
+            timeout=5000,
+        )
+        assert settings.dropdown_value("settings-search-preferred-language-select") == "en"
+        assert settings.dropdown_label("settings-search-preferred-language-select") == "English"
+        assert saved_payloads[-1]["values"]["preferred_language"] == "en"
+
     def test_settings_floating_dropdown_preserves_control_metrics(
         self,
         authed_page,

@@ -1100,11 +1100,16 @@ class TestSettingsRouteContracts:
             (
                 "search",
                 [
+                    "settings-search-preferred-language-select",
                     "settings-search-threshold-issue-select",
                     "settings-search-threshold-tpb-select",
                     "settings-search-threshold-compendium-select",
                 ],
-                ['<select x-model="thresholds.issue"', '<select x-model="thresholds.tpb"'],
+                [
+                    '<select name="preferred_language"',
+                    '<select x-model="thresholds.issue"',
+                    '<select x-model="thresholds.tpb"',
+                ],
             ),
         ],
     )
