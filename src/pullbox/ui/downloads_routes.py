@@ -17,7 +17,7 @@ from starlette.responses import Response
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
 from pullbox.models.client import DownloadClientConfig
-from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt, DirectArtifactAttempt
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue
 from pullbox.models.series import Series
@@ -270,6 +270,7 @@ def download_client_type_label(client_type: str) -> str:
         DownloadClientType.QBITTORRENT.value: "qBittorrent",
         DownloadClientType.TRANSMISSION.value: "Transmission",
         DownloadClientType.DELUGE.value: "Deluge",
+        DownloadClientType.DIRECT.value: "Direct Download",
     }
     return labels.get(client_type, client_type.replace("_", " ").title())
 
@@ -754,6 +755,49 @@ def _direct_source_label(provider_identity: str, host_kind: object) -> str:
     return f"{provider_label} via {host_label}" if host_label else provider_label
 
 
+async def build_download_history_client_labels(
+    session: AsyncSession,
+    history_items: Sequence[DownloadHistory],
+) -> dict[int, str]:
+    """Return client labels enriched with durable direct artifact hosts."""
+    labels = {
+        download.id: download_client_type_label(download.download_client.value)
+        for download in history_items
+    }
+    attempt_ids_by_download: dict[int, int] = {}
+    for download in history_items:
+        if download.download_client is not DownloadClientType.DIRECT or not download.external_id:
+            continue
+        prefix, separator, raw_attempt_id = download.external_id.partition(":")
+        if prefix == "direct" and separator and raw_attempt_id.isdigit():
+            attempt_ids_by_download[download.id] = int(raw_attempt_id)
+
+    if not attempt_ids_by_download:
+        return labels
+
+    artifact_rows = await session.execute(
+        select(
+            DirectArtifactAttempt.acquisition_attempt_id,
+            DirectArtifactAttempt.host_kind,
+        )
+        .where(DirectArtifactAttempt.acquisition_attempt_id.in_(attempt_ids_by_download.values()))
+        .order_by(
+            DirectArtifactAttempt.acquisition_attempt_id,
+            DirectArtifactAttempt.is_selected.desc(),
+            DirectArtifactAttempt.sequence_no.desc(),
+        )
+    )
+    host_by_attempt: dict[int, object] = {}
+    for attempt_id, host_kind in artifact_rows:
+        host_by_attempt.setdefault(attempt_id, host_kind)
+
+    direct_label = download_client_type_label(DownloadClientType.DIRECT.value)
+    for download_id, attempt_id in attempt_ids_by_download.items():
+        host_label = _direct_host_label(host_by_attempt.get(attempt_id))
+        labels[download_id] = f"{direct_label} · {host_label}" if host_label else direct_label
+    return labels
+
+
 async def load_download_history_context(
     session: AsyncSession,
     *,
@@ -870,9 +914,11 @@ async def load_download_history_context(
         .offset(offset)
     )
     history_items = list(history_result.unique().scalars().all())
+    history_client_labels = await build_download_history_client_labels(session, history_items)
 
     return {
         "history_items": history_items,
+        "history_client_labels": history_client_labels,
         "history_total": history_total,
         "history_completed_count": int(history_completed_count or 0),
         "history_failed_count": int(history_failed_count or 0),

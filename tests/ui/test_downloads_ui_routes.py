@@ -16,7 +16,14 @@ from sqlalchemy import select
 
 import pullbox.ui.routes as ui_routes
 from pullbox.models.client import DownloadClientConfig
-from pullbox.models.direct_acquisition import DirectAcquisitionAttempt, DirectAcquisitionState
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectArtifactAttempt,
+    DirectArtifactHostKind,
+    DirectArtifactRouteKind,
+    DirectArtifactState,
+)
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue
 from pullbox.models.series import Series
@@ -567,6 +574,59 @@ class TestDownloadsRouteContracts:
         assert "Done" not in response.text
         assert "Should Not Appear Imported.cbz" not in response.text
         assert "Should Not Appear Processing Failure.cbz" not in response.text
+
+    async def test_download_history_client_includes_direct_artifact_host(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            series = Series(title="Murder Drones", sort_title="murder drones")
+            session.add(series)
+            await session.flush()
+            issue = Issue(series_id=series.id, issue_number=4.0)
+            session.add(issue)
+            await session.flush()
+            attempt = DirectAcquisitionAttempt(
+                request_key="downloads-history:direct:datanodes",
+                issue_id=issue.id,
+                provider_identity="pullbox.getcomics",
+                provider_candidate_id="candidate-datanodes",
+                state=DirectAcquisitionState.FAILED,
+                candidate_snapshot={"display_title": "Murder Drones 004 (2026)"},
+            )
+            attempt.artifact_attempts = [
+                DirectArtifactAttempt(
+                    sequence_no=0,
+                    artifact_identity="datanodes-artifact",
+                    route_kind=DirectArtifactRouteKind.DIRECT,
+                    host_kind=DirectArtifactHostKind.DATANODES,
+                    state=DirectArtifactState.FAILED,
+                    is_selected=True,
+                )
+            ]
+            session.add(attempt)
+            await session.flush()
+            session.add(
+                DownloadHistory(
+                    issue_id=issue.id,
+                    title="Murder Drones 004 (2026)",
+                    download_url=f"pullbox-direct://attempt/{attempt.id}",
+                    download_client=DownloadClientType.DIRECT,
+                    external_id=f"direct:{attempt.id}",
+                    state=DownloadState.FAILED,
+                    error_message="Test failure",
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get(
+            "/htmx/downloads/history",
+            headers={"HX-Request": "true"},
+        )
+
+        assert response.status_code == 200
+        assert "Direct Download · DataNodes" in response.text
 
     async def test_download_history_error_detail_loads_only_on_expand(
         self,
