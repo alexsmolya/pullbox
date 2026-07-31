@@ -642,7 +642,7 @@
             class="flex flex-col flex-1 min-h-0">
         <input type="text" name="indexer_username" value="indexer" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
 
-        <div class="modal-body">
+        <div class="modal-body" x-ref="indexerModalBody">
         <div class="px-5 py-4 space-y-4">
 
           {# Prowlarr source notice #}
@@ -1031,6 +1031,21 @@ function indexersSettings() {
       return fallback;
     },
 
+    scrollIndexerModalToStatus() {
+      this.$nextTick(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const modalBody = this.$refs.indexerModalBody;
+            if (!modalBody) return;
+            modalBody.scrollTo({
+              top: modalBody.scrollHeight,
+              behavior: 'smooth',
+            });
+          });
+        });
+      });
+    },
+
     async quickDelete(id, name, source) {
       const label = source !== 'manual' ? 'Remove' : 'Delete';
       const ok = await pbConfirm({
@@ -1160,6 +1175,7 @@ function indexersSettings() {
     saveIndexer() {
       this.saving = true;
       this.modalError = '';
+      this.scrollIndexerModalToStatus();
 
       const body = {
         name: this.form.name,
@@ -1203,6 +1219,7 @@ function indexersSettings() {
         .catch(err => {
           this.modalError = err.message;
           this.saving = false;
+          this.scrollIndexerModalToStatus();
         });
     },
 
@@ -1234,6 +1251,7 @@ function indexersSettings() {
 
       if (this.modalMode === 'edit' && this.editingId) {
         this.testing = true;
+        this.scrollIndexerModalToStatus();
         fetch(`/api/v1/indexers/${this.editingId}/test`, {
           method: 'POST',
           headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
@@ -1251,14 +1269,18 @@ function indexersSettings() {
               : (data.message || 'Connection failed.');
             this.setIndexerResult(this.editingId, data.healthy);
           })
-          .catch(() => {
+          .catch(err => {
             this.testSuccess = false;
-            this.testMessage = 'Test request failed — check Pullbox logs.';
+            this.testMessage = err.message || 'Test request failed — check Pullbox logs.';
           })
-          .finally(() => { this.testing = false; });
+          .finally(() => {
+            this.testing = false;
+            this.scrollIndexerModalToStatus();
+          });
       } else {
         this.testSuccess = false;
         this.testMessage = 'Save the indexer first, then use Test to verify the connection.';
+        this.scrollIndexerModalToStatus();
       }
     },
 

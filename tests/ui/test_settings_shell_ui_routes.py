@@ -362,6 +362,32 @@ class TestSettingsRouteContracts:
         assert "this.formatApiError(data, 'Test request failed.')" in block
         assert "new Error(d?.detail || 'Failed to save.')" not in block
 
+    async def test_settings_indexer_modal_scrolls_to_test_and_save_status(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert 'x-ref="indexerModalBody"' in response.text
+        block = _script_block(
+            response.text,
+            "function indexersSettings() {",
+            "</script>",
+        )
+        save_block = _script_block(block, "    saveIndexer() {", "    async deleteIndexer() {")
+        test_block = _script_block(
+            block,
+            "    testModal() {",
+            "    async testIndexerConnection(indexerId) {",
+        )
+        assert "scrollIndexerModalToStatus()" in block
+        assert "this.scrollIndexerModalToStatus();" in save_block
+        assert "this.scrollIndexerModalToStatus();" in test_block
+        assert "top: modalBody.scrollHeight" in block
+        assert ".catch(err => {" in test_block
+        assert "this.testMessage = err.message ||" in test_block
+
     async def test_settings_media_naming_preview_escapes_template_values_and_results(
         self,
         authenticated_client,
