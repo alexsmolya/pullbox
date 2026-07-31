@@ -11,6 +11,13 @@ from pullbox.models.direct_acquisition import (
 from pullbox.providers.artifact_hosts.contract import ArtifactHostResolutionError
 
 _MAX_ARTIFACT_URL_LENGTH = 4_000
+_RETIRED_HOST_DOMAINS = frozenset(
+    {
+        "dropapk.com",
+        "dropapk.to",
+        "zippyshare.com",
+    }
+)
 _HOST_FAMILIES: tuple[tuple[DirectArtifactHostKind, frozenset[str]], ...] = (
     (
         DirectArtifactHostKind.PIXELDRAIN,
@@ -47,6 +54,26 @@ _HOST_FAMILIES: tuple[tuple[DirectArtifactHostKind, frozenset[str]], ...] = (
 
 def classify_artifact_host(raw_url: str) -> DirectArtifactHostKind:
     """Classify a safe HTTPS URL into the closed native host registry."""
+    hostname = _validated_https_hostname(raw_url)
+    if _matches_domain_family(hostname, _RETIRED_HOST_DOMAINS):
+        raise _unsupported_url()
+
+    for host_kind, domains in _HOST_FAMILIES:
+        if _matches_domain_family(hostname, domains):
+            return host_kind
+    return DirectArtifactHostKind.GENERIC_HTTPS
+
+
+def is_retired_artifact_host(raw_url: str) -> bool:
+    """Return whether a safe HTTPS URL belongs to a deliberately ignored host."""
+    try:
+        hostname = _validated_https_hostname(raw_url)
+    except ArtifactHostResolutionError:
+        return False
+    return _matches_domain_family(hostname, _RETIRED_HOST_DOMAINS)
+
+
+def _validated_https_hostname(raw_url: str) -> str:
     if (
         not isinstance(raw_url, str)
         or not raw_url.strip()
@@ -66,11 +93,11 @@ def classify_artifact_host(raw_url: str) -> DirectArtifactHostKind:
     ):
         raise _unsupported_url()
 
-    hostname = parsed.hostname.lower().rstrip(".")
-    for host_kind, domains in _HOST_FAMILIES:
-        if any(_is_domain_or_subdomain(hostname, domain) for domain in domains):
-            return host_kind
-    return DirectArtifactHostKind.GENERIC_HTTPS
+    return parsed.hostname.lower().rstrip(".")
+
+
+def _matches_domain_family(hostname: str, domains: frozenset[str]) -> bool:
+    return any(_is_domain_or_subdomain(hostname, domain) for domain in domains)
 
 
 def _is_domain_or_subdomain(hostname: str, domain: str) -> bool:

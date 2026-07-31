@@ -74,6 +74,23 @@ def test_unknown_https_is_only_a_generic_transport_candidate() -> None:
 
 
 @pytest.mark.parametrize(
+    "url",
+    [
+        "https://www12.zippyshare.com/v/example/file.html",
+        "https://dropapk.to/example",
+        "https://cdn.dropapk.com/example",
+    ],
+)
+def test_registry_rejects_retired_artifact_hosts(url: str) -> None:
+    with pytest.raises(ArtifactHostResolutionError) as raised:
+        classify_artifact_host(url)
+
+    assert raised.value.code == "unsupported_artifact_host"
+    assert raised.value.failure_class is DirectArtifactFailureClass.UNSUPPORTED_ARTIFACT_HOST
+    assert url not in repr(raised.value)
+
+
+@pytest.mark.parametrize(
     ("kind", "credentials", "expected"),
     [
         (DirectArtifactHostKind.GENERIC_HTTPS, {}, ArtifactHostCredentialMode.ANONYMOUS),

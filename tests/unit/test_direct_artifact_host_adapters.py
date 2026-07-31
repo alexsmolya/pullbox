@@ -115,6 +115,32 @@ async def test_generic_https_rejects_an_html_landing_page() -> None:
     assert raised.value.intervention is True
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www12.zippyshare.com/v/example/file.html",
+        "https://dropapk.to/example",
+    ],
+)
+async def test_generic_https_rejects_retired_hosts_without_network_access(url: str) -> None:
+    requests_made = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests_made
+        requests_made += 1
+        return httpx.Response(200, content=b"not-reached")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ArtifactHostResolutionError) as raised:
+            await GenericHttpsAdapter(client, resolver=_resolve_public).resolve(
+                _request(DirectArtifactHostKind.GENERIC_HTTPS, url, final=True),
+                credentials={},
+            )
+
+    assert raised.value.code == "unsupported_artifact_host"
+    assert requests_made == 0
+
+
 async def test_pixeldrain_resolves_public_or_account_downloads_from_file_info() -> None:
     seen_authorization: list[str | None] = []
 

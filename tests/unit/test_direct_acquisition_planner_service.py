@@ -261,6 +261,40 @@ async def test_planning_selects_best_eligible_route_and_persists_no_urls(
 
 
 @pytest.mark.asyncio
+async def test_planning_ignores_retired_hosts_when_viable_mirrors_remain(
+    session: AsyncSession,
+) -> None:
+    response = _response()
+    response.artifacts[0].mirrors.extend(
+        [
+            DirectMirror(
+                mirror_id="zippyshare-mirror",
+                host_kind="generic_https",
+                final_url="https://www12.zippyshare.com/v/example/file.html",
+            ),
+            DirectMirror(
+                mirror_id="dropapk-mirror",
+                host_kind="generic_https",
+                final_url="https://dropapk.to/example",
+            ),
+        ]
+    )
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.selected_artifact.host_kind is DirectArtifactHostKind.PIXELDRAIN
+    rendered = repr(result.attempt.plan_snapshot)
+    assert "zippyshare-mirror" not in rendered
+    assert "dropapk-mirror" not in rendered
+
+
+@pytest.mark.asyncio
 async def test_generic_only_provider_does_not_require_visible_host_setting(
     session: AsyncSession,
 ) -> None:

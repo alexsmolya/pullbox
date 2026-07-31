@@ -29,7 +29,10 @@ from pullbox.providers.artifact_hosts.contract import (
     HostResolutionRequest,
     sanitize_provider_headers,
 )
-from pullbox.providers.artifact_hosts.registry import classify_artifact_host
+from pullbox.providers.artifact_hosts.registry import (
+    classify_artifact_host,
+    is_retired_artifact_host,
+)
 from pullbox.providers.direct.client import DirectProviderClient, DirectProviderClientError
 from pullbox.providers.direct.contract import (
     DirectArtifact,
@@ -488,6 +491,13 @@ def _build_route_options(
             continue
         coverage = _artifact_coverage(artifact, requested)
         for mirror in artifact.mirrors:
+            location = mirror.final_url or mirror.share_url
+            if (
+                mirror.host_kind == DirectArtifactHostKind.GENERIC_HTTPS.value
+                and location is not None
+                and is_retired_artifact_host(location)
+            ):
+                continue
             _validate_stable_identity("provider mirror", mirror.mirror_id)
             host_kind = _validated_host_kind(mirror)
             config = host_configs.get(host_kind)
