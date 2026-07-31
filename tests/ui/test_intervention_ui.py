@@ -565,6 +565,45 @@ class TestHandlersDirect:
         assert "m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201" in body
 
     @pytest.mark.asyncio
+    async def test_intervention_queue_renders_direct_artifact_match_details(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Direct artifact review shows parsed evidence and the selected host."""
+        from pullbox.ui.routes import intervention_page
+
+        pending_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pending_ids[0])
+            assert pending is not None
+            pending.match_details = {
+                "source_kind": "direct",
+                "provider_identity": "pullbox.getcomics",
+                "provider_name": "pullbox.getcomics",
+                "artifact_host_kind": "datanodes",
+                "parsed_series": "Murder Drones",
+                "parsed_issue": "4",
+                "parsed_year": 2026,
+                "series_match_type": "exact",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            response = await intervention_page(
+                request=_mock_request(),
+                user=MagicMock(),
+                session=session,
+                tab="queue",
+            )
+
+        assert response.status_code == 200
+        body = response.body.decode()
+        assert "GetComics via DataNodes · Direct" in body
+        assert "Murder Drones" in body
+        assert "#4" in body
+        assert "2026" in body
+
+    @pytest.mark.asyncio
     async def test_intervention_history_detail_loads_only_on_expand(
         self,
         _db_factory: async_sessionmaker[AsyncSession],

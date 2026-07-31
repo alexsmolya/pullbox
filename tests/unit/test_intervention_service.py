@@ -368,6 +368,55 @@ class TestCreatePendingMatch:
         assert "getcomics.org/private" not in persisted
         assert "provider-secret" not in persisted
 
+    @pytest.mark.asyncio
+    async def test_runtime_direct_intervention_preserves_candidate_and_artifact_details(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Runtime artifact review keeps parsed evidence and selected host context."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+        async with db_factory() as session:
+            issue = await _seed_issue(
+                session,
+                series_title="Murder Drones",
+                issue_number=4.0,
+            )
+            attempt = await _seed_direct_attempt(session, issue.id)
+            attempt.candidate_snapshot = {
+                "display_title": "Murder Drones #4 (2026)",
+                "parsed": {
+                    "series_title": "Murder Drones",
+                    "issue_numbers": ["4"],
+                    "year": 2026,
+                },
+                "semantic_decision": {
+                    "confidence": "high",
+                    "series_similarity": 1.0,
+                    "match_type": "exact",
+                },
+            }
+            artifact = DirectArtifactAttempt(
+                acquisition_attempt_id=attempt.id,
+                sequence_no=0,
+                artifact_identity="route:datanodes-review",
+                route_kind=DirectArtifactRouteKind.DIRECT,
+                host_kind=DirectArtifactHostKind.DATANODES,
+                state=DirectArtifactState.INTERVENTION,
+                is_selected=True,
+            )
+            session.add(artifact)
+            await session.flush()
+            await session.refresh(attempt, ["artifact_attempts"])
+
+            pending = await svc.create_direct_attempt_intervention(session, attempt)
+            await session.commit()
+
+        assert pending.match_details["parsed_series"] == "Murder Drones"
+        assert pending.match_details["parsed_issue"] == "4"
+        assert pending.match_details["parsed_year"] == 2026
+        assert pending.match_details["artifact_host_kind"] == "datanodes"
+
 
 # ── TestApproveMatch ──────────────────────────────────────────────────
 

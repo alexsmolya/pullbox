@@ -122,7 +122,7 @@ def test_build_intervention_item_meta_falls_back_to_match_details_source() -> No
 
 
 def test_build_intervention_item_meta_labels_direct_provider() -> None:
-    """Direct adapter rows identify both their method and discovery provider."""
+    """Direct adapter rows identify their provider and selected artifact host."""
     from pullbox.ui.intervention_filter_helpers import build_intervention_item_meta
 
     pending_match = SimpleNamespace(
@@ -131,7 +131,9 @@ def test_build_intervention_item_meta_labels_direct_provider() -> None:
         indexer=None,
         match_details={
             "source_kind": "direct",
-            "provider_name": "GetComics",
+            "provider_name": "pullbox.getcomics",
+            "provider_identity": "pullbox.getcomics",
+            "artifact_host_kind": "datanodes",
             "series_match_type": "exact",
         },
     )
@@ -139,4 +141,4 @@ def test_build_intervention_item_meta_labels_direct_provider() -> None:
     meta = build_intervention_item_meta(pending_match)
 
     assert meta["protocol_label"] == "Direct"
-    assert meta["source_label"] == "GetComics"
+    assert meta["source_label"] == "GetComics via DataNodes"

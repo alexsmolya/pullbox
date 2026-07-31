@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
+    DirectArtifactAttempt,
     DirectArtifactFailureClass,
 )
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
@@ -56,6 +57,47 @@ class DirectRunnerLike(Protocol):
 
 DirectPlanner = Callable[..., Awaitable[DirectAcquisitionPlanningResult]]
 DirectRunnerGetter = Callable[[], DirectRunnerLike]
+
+
+def _direct_candidate_match_details(snapshot: dict[str, object]) -> dict[str, object]:
+    """Extract redacted parsed evidence from a durable direct candidate snapshot."""
+    parsed = snapshot.get("parsed")
+    if not isinstance(parsed, dict):
+        return {}
+
+    details: dict[str, object] = {}
+    series_title = parsed.get("series_title")
+    if isinstance(series_title, str) and series_title.strip():
+        details["parsed_series"] = series_title.strip()
+
+    issue_numbers = parsed.get("issue_numbers")
+    if isinstance(issue_numbers, list) and issue_numbers:
+        issue_number = issue_numbers[0]
+        if isinstance(issue_number, str | int | float) and not isinstance(issue_number, bool):
+            details["parsed_issue"] = issue_number
+
+    year = parsed.get("year")
+    if isinstance(year, int) and not isinstance(year, bool):
+        details["parsed_year"] = year
+    return details
+
+
+async def _direct_artifact_host_kind(
+    session: AsyncSession,
+    attempt_id: int,
+) -> str | None:
+    """Return the selected artifact host, falling back to the latest attempted route."""
+    result = await session.execute(
+        select(DirectArtifactAttempt.host_kind)
+        .where(DirectArtifactAttempt.acquisition_attempt_id == attempt_id)
+        .order_by(
+            DirectArtifactAttempt.is_selected.desc(),
+            DirectArtifactAttempt.sequence_no.desc(),
+        )
+        .limit(1)
+    )
+    host_kind = result.scalar_one_or_none()
+    return host_kind.value if host_kind is not None else None
 
 
 class InterventionService:
@@ -224,6 +266,8 @@ class InterventionService:
         semantic = snapshot.get("semantic_decision")
         semantic_details = semantic if isinstance(semantic, dict) else {}
         details = dict(pending_match.match_details or {}) if pending_match is not None else {}
+        details.update(_direct_candidate_match_details(snapshot))
+        artifact_host_kind = await _direct_artifact_host_kind(session, attempt.id)
         details.update(
             {
                 "source_kind": "direct",
@@ -238,6 +282,8 @@ class InterventionService:
                 "failure_code": attempt.failure_code,
             }
         )
+        if artifact_host_kind is not None:
+            details["artifact_host_kind"] = artifact_host_kind
         if pending_match is None:
             pending_match = PendingMatch(
                 issue_id=attempt.issue_id,

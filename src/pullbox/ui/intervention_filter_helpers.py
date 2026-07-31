@@ -36,6 +36,19 @@ INTERVENTION_HISTORY_SORT_OPTIONS = {
     "protocol",
     "resolved_at",
 }
+_DIRECT_PROVIDER_LABELS = {
+    "pullbox.getcomics": "GetComics",
+    "pullbox.annas_archive": "Anna's Archive",
+}
+_DIRECT_ARTIFACT_HOST_LABELS = {
+    "generic_https": "HTTPS",
+    "pixeldrain": "PixelDrain",
+    "mega": "MEGA",
+    "rootz": "Rootz",
+    "mediafire": "MediaFire",
+    "terabox": "TeraBox",
+    "datanodes": "DataNodes",
+}
 
 
 def normalize_intervention_tab(tab: str | None) -> str:
@@ -266,11 +279,14 @@ def build_intervention_item_meta(pending_match: Any) -> dict[str, object]:
         similarity_pct = round(float(similarity) * 100, 1)
 
     indexer = getattr(pending_match, "indexer", None)
-    source_label = (
-        indexer.name
-        if indexer is not None
-        else str(details.get("provider_name") or details.get("indexer_name") or "Unknown")
-    )
+    if details.get("source_kind") == "direct":
+        source_label = _direct_source_label(details)
+    else:
+        source_label = (
+            indexer.name
+            if indexer is not None
+            else str(details.get("provider_name") or details.get("indexer_name") or "Unknown")
+        )
 
     return {
         "protocol_label": intervention_protocol_label(
@@ -286,3 +302,19 @@ def build_intervention_item_meta(pending_match: Any) -> dict[str, object]:
         "source_label": source_label.strip() or "Unknown",
         "rejection_reason": str(details.get("rejection_reason") or "").strip(),
     }
+
+
+def _direct_source_label(details: dict[str, object]) -> str:
+    """Format a direct provider and selected artifact host for review UI."""
+    provider_identity = str(details.get("provider_identity") or "").strip()
+    provider_name = str(details.get("provider_name") or provider_identity or "Unknown").strip()
+    provider_label = _DIRECT_PROVIDER_LABELS.get(
+        provider_identity or provider_name,
+        _DIRECT_PROVIDER_LABELS.get(provider_name, provider_name),
+    )
+    host_kind = str(details.get("artifact_host_kind") or "").strip()
+    host_label = _DIRECT_ARTIFACT_HOST_LABELS.get(
+        host_kind,
+        host_kind.replace("_", " ").title(),
+    )
+    return f"{provider_label} via {host_label}" if host_label else provider_label
