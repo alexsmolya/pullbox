@@ -119,6 +119,7 @@ async def test_whats_new_page_renders_latest_cached_current_week(
     assert "pill-error" not in cache_status_markup
     assert "whats-new-cache-badge-error" not in cache_status_markup
     assert "Fresh" in response.text
+    assert 'data-testid="whats-new-refresh-now"' not in response.text
     assert "Absolute Flash #1" in response.text
     assert "No release data has been cached yet." not in response.text
 
@@ -1005,6 +1006,18 @@ async def test_whats_new_page_warns_when_cached_data_is_stale(
     assert "whats-new-cache-badge-success" not in cache_status_markup
     assert "Stale" in response.text
     assert "Showing cached release data while Pullbox waits for the next refresh." in response.text
+    assert 'data-testid="whats-new-refresh-now"' in response.text
+    assert "whatsNewRefreshControl(" in response.text
+    assert "currentStale: true" in response.text
+    assert "upcomingStale: false" in response.text
+    refresh_marker = response.text.index('data-testid="whats-new-refresh-now"')
+    refresh_start = response.text.rfind("<button", 0, refresh_marker)
+    refresh_end = response.text.index("</button>", refresh_marker)
+    refresh_markup = response.text[refresh_start:refresh_end]
+    assert 'class="btn-primary gap-2 shrink-0"' in refresh_markup
+    assert 'class="h-4 w-4"' in refresh_markup
+    assert refresh_markup.index("<svg") < refresh_markup.index("<span")
+    assert "Refresh now" in refresh_markup
     assert "Absolute Flash #1" in response.text
 
 

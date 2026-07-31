@@ -1101,6 +1101,141 @@ function settingsPage(config) {
   };
 }
 
+function whatsNewRefreshControl(config) {
+  var cfg = config || {};
+  return {
+    refreshing: false,
+    refreshMessage: "",
+    reloadPending: false,
+
+    csrfToken: function () {
+      return cfg.csrfToken || readCsrfTokenFromBody();
+    },
+
+    dispatchToast: function (message, level) {
+      if (typeof showToast === "function") {
+        showToast({ message: message, level: level });
+      }
+    },
+
+    staleEndpoints: function () {
+      var endpoints = [];
+      if (cfg.currentStale) {
+        endpoints.push("/api/v1/whats-new");
+      }
+      if (cfg.upcomingStale) {
+        endpoints.push("/api/v1/whats-new?upcoming=true");
+      }
+      return endpoints;
+    },
+
+    responseMessage: async function (response, fallback) {
+      try {
+        var body = await response.json();
+        if (body && body.error && body.error.message) {
+          return body.error.message;
+        }
+        if (body && body.message) {
+          return body.message;
+        }
+      } catch (_) {
+        // The fallback remains more useful than a JSON parsing error.
+      }
+      return fallback;
+    },
+
+    staleScopesAreFresh: async function () {
+      var endpoints = this.staleEndpoints();
+      if (endpoints.length === 0) {
+        return true;
+      }
+      var responses = await Promise.all(
+        endpoints.map(function (endpoint) {
+          return fetch(endpoint, {
+            headers: {
+              Accept: "application/json",
+              "Cache-Control": "no-store",
+            },
+            cache: "no-store",
+          });
+        })
+      );
+      for (var i = 0; i < responses.length; i += 1) {
+        if (!responses[i].ok) {
+          return false;
+        }
+        var payload = await responses[i].json();
+        if (!payload.cache || payload.cache.stale) {
+          return false;
+        }
+      }
+      return true;
+    },
+
+    waitForFreshData: async function () {
+      var maxAttempts = Number(cfg.maxAttempts || 30);
+      var pollIntervalMs = Number(cfg.pollIntervalMs || 2000);
+      for (var attempt = 0; attempt < maxAttempts; attempt += 1) {
+        await new Promise(function (resolve) {
+          window.setTimeout(resolve, attempt === 0 ? 500 : pollIntervalMs);
+        });
+        try {
+          if (await this.staleScopesAreFresh()) {
+            return true;
+          }
+        } catch (_) {
+          // A transient polling failure should not interrupt the queued refresh.
+        }
+      }
+      return false;
+    },
+
+    refreshNow: async function () {
+      if (this.refreshing) {
+        return;
+      }
+      this.refreshing = true;
+      this.reloadPending = false;
+      this.refreshMessage = "Requesting release refresh...";
+      try {
+        var response = await fetch("/api/v1/whats-new/refresh", {
+          method: "POST",
+          headers: { "X-CSRF-Token": this.csrfToken() },
+        });
+        if (response.status !== 202 && response.status !== 409) {
+          throw new Error(
+            await this.responseMessage(response, "Release data refresh could not be started.")
+          );
+        }
+
+        this.refreshMessage =
+          response.status === 409
+            ? "A release refresh is already running..."
+            : "Refreshing release data...";
+        if (!(await this.waitForFreshData())) {
+          this.refreshMessage =
+            "The refresh is taking longer than expected. You can try again.";
+          this.dispatchToast(this.refreshMessage, "warning");
+          return;
+        }
+
+        this.reloadPending = true;
+        this.refreshMessage = "Release data refreshed.";
+        this.dispatchToast(this.refreshMessage, "success");
+        window.location.reload();
+      } catch (err) {
+        this.refreshMessage =
+          err && err.message ? err.message : "Release data refresh could not be started.";
+        this.dispatchToast(this.refreshMessage, "error");
+      } finally {
+        if (!this.reloadPending) {
+          this.refreshing = false;
+        }
+      }
+    },
+  };
+}
+
 function healthPage(config) {
   var cfg = config || {};
   return {
