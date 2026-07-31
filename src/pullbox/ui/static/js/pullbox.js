@@ -16347,6 +16347,30 @@ function destroyAlpineTree(root) {
   }
 }
 
+function resolveHtmxLiveTarget(target) {
+  if (!target || target.isConnected !== false || !target.id) {
+    return target;
+  }
+
+  // outerHTML swaps leave event.detail.target pointing at the detached node.
+  // Resolve its replacement so interactive directives bind to the live DOM.
+  return document.getElementById(target.id) || target;
+}
+
+var _htmxRequestsNeedingAlpineInit = new WeakSet();
+
+function prepareAlpineSwap(detail, target) {
+  if (!detail || detail.shouldSwap === false) {
+    return false;
+  }
+
+  if (detail.xhr) {
+    _htmxRequestsNeedingAlpineInit.add(detail.xhr);
+  }
+  destroyAlpineTree(target);
+  return true;
+}
+
 function _purgeDetailHistoryRestoreEntry(pathname, search) {
   var normalizedPath = normalizePath(pathname || window.location.pathname);
   if (!_isDetailHistoryRestorePath(normalizedPath)) {
@@ -16451,7 +16475,7 @@ document.body.addEventListener("htmx:beforeSwap", function (e) {
     if (responseText && content && responseText.indexOf('id="content"') !== -1) {
       _importEventSourceRegistry.closeAll("content-before-swap");
       _importEventSourceRegistry.clearSuspended();
-      destroyAlpineTree(content);
+      prepareAlpineSwap(e.detail, content);
       e.detail.target = content;
       e.detail.selectOverride = "#content";
       e.detail.swapOverride = "outerHTML";
@@ -16482,8 +16506,26 @@ document.body.addEventListener("htmx:beforeSwap", function (e) {
       _importEventSourceRegistry.closeAll("content-before-swap");
       _importEventSourceRegistry.clearSuspended();
     }
-    destroyAlpineTree(e.detail.target);
+    prepareAlpineSwap(e.detail, e.detail.target);
   }
+});
+
+document.addEventListener("htmx:afterRequest", function (e) {
+  var detail = e.detail || {};
+  if (!detail.xhr || !_htmxRequestsNeedingAlpineInit.has(detail.xhr)) {
+    return;
+  }
+
+  _htmxRequestsNeedingAlpineInit.delete(detail.xhr);
+  var target = resolveHtmxLiveTarget(detail.target);
+  if (!target || target.isConnected === false) {
+    return;
+  }
+
+  if (window.Alpine) {
+    Alpine.initTree(target);
+  }
+  seedSearchFieldStates(target);
 });
 
 // After a shell content swap, update the header title from the full-page response.
@@ -17454,13 +17496,15 @@ document.addEventListener(
 
 // After hx-boost swaps #content: update sidebar active state + initialize Alpine
 document.addEventListener("htmx:afterSettle", function (e) {
-  if (e.detail.target && (e.detail.target.id === "main-area" || e.detail.target.id === "content")) {
-    if (e.detail.target.id === "content") {
+  var settledTarget = resolveHtmxLiveTarget(e.detail.target);
+
+  if (settledTarget && (settledTarget.id === "main-area" || settledTarget.id === "content")) {
+    if (settledTarget.id === "content") {
       window.__pbDetailHistoryRefreshPending = false;
     }
-    if (e.detail.target.id === "content") {
-      e.detail.target.scrollTop = 0;
-      e.detail.target.dispatchEvent(new Event("scroll"));
+    if (settledTarget.id === "content") {
+      settledTarget.scrollTop = 0;
+      settledTarget.dispatchEvent(new Event("scroll"));
     }
     syncAppShellNavigation(document);
 
@@ -17492,12 +17536,12 @@ document.addEventListener("htmx:afterSettle", function (e) {
 
   if (
     window.location.pathname === "/series" &&
-    e.detail.target &&
+    settledTarget &&
     (
-      e.detail.target.id === "content" ||
-      e.detail.target.id === "series-results-body" ||
-      e.detail.target.id === "series-summary" ||
-      e.detail.target.id === "series-pagination"
+      settledTarget.id === "content" ||
+      settledTarget.id === "series-results-body" ||
+      settledTarget.id === "series-summary" ||
+      settledTarget.id === "series-pagination"
     )
   ) {
     persistSeriesStateFromLocation();
@@ -17505,46 +17549,46 @@ document.addEventListener("htmx:afterSettle", function (e) {
 
   if (
     window.location.pathname === "/series" &&
-    e.detail.target &&
-    e.detail.target.id === "series-results-body"
+    settledTarget &&
+    settledTarget.id === "series-results-body"
   ) {
-    _refreshSeriesResultLinks(e.detail.target);
+    _refreshSeriesResultLinks(settledTarget);
   }
 
   if (
     window.location.pathname.indexOf("/series/") === 0 &&
-    e.detail.target &&
-    (e.detail.target.id === "content" || e.detail.target.id === "series-issues-panel")
+    settledTarget &&
+    (settledTarget.id === "content" || settledTarget.id === "series-issues-panel")
   ) {
-    _refreshSeriesIssueLinks(e.detail.target);
+    _refreshSeriesIssueLinks(settledTarget);
   }
 
   if (
     window.htmx &&
     typeof window.htmx.process === "function" &&
-    e.detail.target &&
-    (e.detail.target.id === "import-step-review" ||
-      e.detail.target.id === "import-step-review-shell" ||
-      e.detail.target.id === "conflicts-content")
+    settledTarget &&
+    (settledTarget.id === "import-step-review" ||
+      settledTarget.id === "import-step-review-shell" ||
+      settledTarget.id === "conflicts-content")
   ) {
-    window.htmx.process(e.detail.target);
+    window.htmx.process(settledTarget);
   }
 
   // Re-initialize Alpine components in the primary HTMX swap target.
-  if (window.Alpine && e.detail.target) {
-    Alpine.initTree(e.detail.target);
+  if (window.Alpine && settledTarget) {
+    Alpine.initTree(settledTarget);
   }
 
   if (
-    e.detail.target &&
-    (e.detail.target.id === "import-step-review" ||
-      e.detail.target.id === "import-step-review-shell")
+    settledTarget &&
+    (settledTarget.id === "import-step-review" ||
+      settledTarget.id === "import-step-review-shell")
   ) {
     var reviewRoot =
-      e.detail.target.matches &&
-      e.detail.target.matches("[data-testid='import-collection-review']")
-        ? e.detail.target
-        : e.detail.target.querySelector("[data-testid='import-collection-review']");
+      settledTarget.matches &&
+      settledTarget.matches("[data-testid='import-collection-review']")
+        ? settledTarget
+        : settledTarget.querySelector("[data-testid='import-collection-review']");
     if (reviewRoot && window.Alpine && typeof window.Alpine.$data === "function") {
       try {
         var reviewData = window.Alpine.$data(reviewRoot);
@@ -17566,8 +17610,8 @@ document.addEventListener("htmx:afterSettle", function (e) {
     }
   }
 
-  if (e.detail.target) {
-    seedSearchFieldStates(e.detail.target);
+  if (settledTarget) {
+    seedSearchFieldStates(settledTarget);
   }
 });
 
