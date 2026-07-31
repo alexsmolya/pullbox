@@ -302,11 +302,16 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         )
         ctx["configs"] = {c.key: c.value for c in cfg_result.scalars().all()}
     elif tab == "indexers":
+        from pullbox.models.direct_acquisition import DirectResolverConfig
+
         indexer_result = await session.execute(
             select(IndexerConfig).order_by(IndexerConfig.priority, IndexerConfig.name)
         )
         indexers: list[IndexerConfig] = list(indexer_result.scalars().all())
         ctx["indexers"] = indexers
+        ctx["browser_resolver_available"] = (
+            await session.scalar(select(DirectResolverConfig.id).limit(1)) is not None
+        )
         manager_sources_by_name: dict[str, set[str]] = {}
         manager_display_names: dict[str, str] = {}
         for indexer in indexers:

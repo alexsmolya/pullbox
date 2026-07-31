@@ -458,6 +458,39 @@ class TestSettingsPage:
         assert backdrop_box["y"] <= 1
         assert backdrop_box["height"] >= 1098
 
+    def test_settings_torznab_add_modal_uses_torznab_field_examples(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("indexers")
+
+        authed_page.locator("[data-testid='settings-indexers-add-indexer']").first.click()
+        modal = authed_page.locator("[data-testid='settings-indexers-modal']").first
+        modal.wait_for(state="visible", timeout=5000)
+        torznab_card = modal.locator("button").filter(has_text="Torznab")
+        assert torznab_card.get_by_text("Torrent indexer (1337x, etc.)", exact=True).is_visible()
+        torznab_card.click()
+
+        assert modal.locator('input[x-model="form.name"]').get_attribute("placeholder") == "Torznab"
+        assert (
+            modal.locator('input[x-model="form.url"]').get_attribute("placeholder")
+            == "https://api.torznab.com"
+        )
+        modal.get_by_role("button", name="Advanced Settings", exact=True).click()
+        resolver_option = modal.locator("[data-testid='settings-indexers-manual-torznab-resolver']")
+        resolver_option.wait_for(state="visible", timeout=5000)
+        resolver_toggle = resolver_option.locator('input[x-model="form.resolver_enabled"]')
+        assert resolver_option.get_by_text("Ranked browser resolver chain", exact=True).is_visible()
+        assert resolver_option.get_by_text(
+            "Only available for manually added torznab providers. Pullbox tries ordinary HTTP "
+            "first and never sends the API key or search query to a resolver.",
+            exact=True,
+        ).is_visible()
+        assert resolver_toggle.is_disabled()
+        assert "toggle-input" in (resolver_toggle.get_attribute("class") or "")
+
     def test_settings_footer_save_buttons_share_same_height(
         self,
         authed_page,

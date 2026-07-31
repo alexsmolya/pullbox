@@ -829,8 +829,16 @@ class TestSettingsRouteContracts:
         assert 'href="/settings?tab=search#browser-resolvers"' not in indexers.text
         assert "Manage in Search" not in indexers.text
         assert 'data-testid="settings-indexers-manual-torznab-resolver"' in indexers.text
-        assert "Try the ranked browser resolver chain" in indexers.text
-        assert "Manual Torznab only" in indexers.text
+        assert "Ranked browser resolver chain" in indexers.text
+        assert (
+            "Only available for manually added torznab providers. Pullbox tries ordinary HTTP "
+            "first and never sends the API key or search query to a resolver."
+        ) in indexers.text
+        assert 'class="peer toggle-input"' in indexers.text
+        assert ':disabled="!resolverChainAvailable"' in indexers.text
+        assert "resolverChainAvailable: false" in indexers.text
+        assert "Try the ranked browser resolver chain" not in indexers.text
+        assert "Manual Torznab only" not in indexers.text
         assert 'data-testid="settings-resolver-endpoint"' not in direct.text
         assert 'data-testid="settings-resolver-endpoint"' not in indexers.text
         assert 'data-testid="settings-resolver-endpoint"' not in search.text
@@ -1249,8 +1257,14 @@ class TestSettingsRouteContracts:
             assert "Save & Sync" in response.text
             assert "Save priority" in response.text
             assert "Save Changes" in response.text
-            assert 'placeholder="NZBgeek"' in response.text
-            assert 'placeholder="https://api.nzbgeek.info"' in response.text
+            assert (
+                ":placeholder=\"form.indexer_type === 'torznab' ? 'Torznab' : 'NZBgeek'\""
+                in response.text
+            )
+            assert (
+                ":placeholder=\"form.indexer_type === 'torznab' ? "
+                "'https://api.torznab.com' : 'https://api.nzbgeek.info'\"" in response.text
+            )
             assert 'autocomplete="nickname"' in response.text
             assert 'autocomplete="url"' in response.text
             assert response.text.count('@click="reset()"') >= 2

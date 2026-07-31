@@ -631,7 +631,7 @@
               </svg>
             </div>
             <p class="text-sm font-semibold text-pb-text">Torznab</p>
-            <p class="text-[11px] text-pb-text-dim mt-0.5">Torrent indexer (Jackett, etc.)</p>
+            <p class="text-[11px] text-pb-text-dim mt-0.5">Torrent indexer (1337x, etc.)</p>
           </button>
         </div>
       </div>
@@ -668,7 +668,8 @@
           <div class="grid grid-cols-[1fr_auto] gap-4 items-end">
             <div>
               <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Name</label>
-              <input type="text" x-model="form.name" placeholder="NZBgeek"
+              <input type="text" x-model="form.name"
+                     :placeholder="form.indexer_type === 'torznab' ? 'Torznab' : 'NZBgeek'"
                      :disabled="form.source !== 'manual'"
                      :class="form.source !== 'manual' ? 'opacity-60 cursor-not-allowed' : ''"
                      autocomplete="nickname"
@@ -686,7 +687,8 @@
           {# URL #}
           <div>
             <label class="block text-xs font-medium text-pb-text-sec mb-1.5">URL</label>
-            <input type="url" x-model="form.url" placeholder="https://api.nzbgeek.info"
+            <input type="url" x-model="form.url"
+                   :placeholder="form.indexer_type === 'torznab' ? 'https://api.torznab.com' : 'https://api.nzbgeek.info'"
                    :disabled="form.source !== 'manual'"
                    :class="form.source !== 'manual' ? 'opacity-60 cursor-not-allowed' : ''"
                    autocomplete="url"
@@ -759,16 +761,27 @@
               <div
                 x-show="form.indexer_type === 'torznab' && form.source === 'manual'"
                 data-testid="settings-indexers-manual-torznab-resolver"
-                class="rounded-lg border border-pb-border bg-pb-surface/40 p-3"
+                class="flex items-center justify-between gap-4 rounded-lg border border-pb-border bg-pb-surface/40 p-3"
               >
-                <label class="flex cursor-pointer items-start gap-3">
-                  <input type="checkbox" x-model="form.resolver_enabled" class="checkbox-pb mt-0.5">
-                  <span>
-                    <span class="block text-xs font-medium text-pb-text">Try the ranked browser resolver chain</span>
-                    <span class="mt-1 block text-[11px] leading-relaxed text-pb-text-dim">
-                      Manual Torznab only. Pullbox tries ordinary HTTP first and never sends the API key or search query to a resolver.
-                    </span>
-                  </span>
+                <div class="min-w-0">
+                  <p class="text-xs font-medium text-pb-text">Ranked browser resolver chain</p>
+                  <p class="mt-1 text-[11px] leading-relaxed text-pb-text-dim">
+                    Only available for manually added torznab providers. Pullbox tries ordinary HTTP first and never sends the API key or search query to a resolver.
+                  </p>
+                </div>
+                <label
+                  class="relative inline-flex shrink-0 items-center gap-2"
+                  :class="resolverChainAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'"
+                >
+                  <input
+                    type="checkbox"
+                    x-model="form.resolver_enabled"
+                    class="peer toggle-input"
+                    :disabled="!resolverChainAvailable"
+                    data-testid="settings-indexers-manual-torznab-resolver-toggle"
+                  >
+                  <span class="toggle-switch"></span>
+                  <span class="text-xs text-pb-text-sec" x-text="form.resolver_enabled ? 'Enabled' : 'Disabled'"></span>
                 </label>
               </div>
 
@@ -962,6 +975,7 @@ function indexersSettings() {
     testMessage: '',
     testSuccess: false,
     modalError: '',
+    resolverChainAvailable: {{ browser_resolver_available|default(false)|tojson }},
 
     form: {
       indexer_type: '', name: '', url: '', api_key: '', has_api_key: false, enabled: true,
@@ -1156,7 +1170,7 @@ function indexersSettings() {
             enable_rss: data.enable_rss !== false,
             enable_automatic_search: data.enable_automatic_search !== false,
             enable_interactive_search: data.enable_interactive_search !== false,
-            resolver_enabled: data.resolver_enabled === true,
+            resolver_enabled: this.resolverChainAvailable && data.resolver_enabled === true,
           };
           this.showModal = true;
         })
@@ -1186,7 +1200,9 @@ function indexersSettings() {
         enable_rss: this.form.enable_rss,
         enable_automatic_search: this.form.enable_automatic_search,
         enable_interactive_search: this.form.enable_interactive_search,
-        resolver_enabled: this.form.indexer_type === 'torznab' && this.form.source === 'manual'
+        resolver_enabled: this.resolverChainAvailable
+          && this.form.indexer_type === 'torznab'
+          && this.form.source === 'manual'
           ? this.form.resolver_enabled
           : false,
       };

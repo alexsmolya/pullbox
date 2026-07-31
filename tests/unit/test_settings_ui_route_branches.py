@@ -256,7 +256,7 @@ async def test_load_settings_tab_covers_all_data_tabs(
                 resolver_kind=DirectResolverKind.TRAWL,
                 priority=10,
                 endpoint="http://trawl:8151",
-                enabled=True,
+                enabled=False,
                 state=DirectResolverState.HEALTHY,
                 allow_private_http=True,
                 timeout_seconds=60,
@@ -301,6 +301,7 @@ async def test_load_settings_tab_covers_all_data_tabs(
     assert indexers["indexers"][0].name == "Prowlarr"  # type: ignore[index]
     assert indexers["indexer_status_seed"][1] is False  # type: ignore[index]
     assert indexers["configs"]["prowlarr_api_key"] == ""  # type: ignore[index]
+    assert indexers["browser_resolver_available"] is True
     assert indexers["blocked_groups"] == ["bad", "worse"]
     assert indexers["blocklist_expiry_days"] == "30"
     assert indexers["blocklist_auto_add"] is False
