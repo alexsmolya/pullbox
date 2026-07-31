@@ -320,6 +320,35 @@ class TestSettingsPage:
         assert panel.get_by_text("Before you raise the threshold", exact=True).count() == 0
         assert panel.get_by_text("When this helps most", exact=True).count() == 0
 
+    def test_settings_indexer_cards_keep_standard_vertical_gap(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("indexers")
+
+        gaps = authed_page.evaluate(
+            """
+            () => {
+              const box = (testId) => document
+                .querySelector(`[data-testid='${testId}']`)
+                ?.getBoundingClientRect();
+              const registry = box("settings-indexers-registry-card");
+              const priority = box("settings-indexers-priority-card");
+              const failure = box("settings-indexers-failure-card");
+              if (!registry || !priority || !failure) return null;
+              return {
+                registryToPriority: Math.round(priority.top - registry.bottom),
+                priorityToFailure: Math.round(failure.top - priority.bottom),
+              };
+            }
+            """
+        )
+
+        assert gaps is not None
+        assert gaps["registryToPriority"] == gaps["priorityToFailure"] == 24
+
     def test_settings_indexers_prowlarr_save_sync_requires_dirty_state(
         self,
         authed_page,

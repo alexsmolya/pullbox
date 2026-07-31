@@ -1382,7 +1382,7 @@
     @apply overflow-hidden rounded-xl border border-pb-border bg-pb-card;
     box-shadow: var(--pb-shadow-1);
   }
-  .admin-workspace-content .space-y-6 > .section-card:last-of-type {
+  .admin-workspace-content .space-y-6 > .section-card:not(:has(~ .section-card)) {
     margin-bottom: 0 !important;
   }
   .section-card-visible {
