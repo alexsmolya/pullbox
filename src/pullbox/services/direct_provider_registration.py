@@ -28,6 +28,12 @@ from pullbox.services.direct_configuration_service import (
     update_provider_configuration_secrets,
     write_provider_bearer_token,
 )
+from pullbox.services.direct_provider_quota import (
+    automatic_quota_reserve,
+    provider_quota_status,
+    provider_supports_quota,
+    set_automatic_quota_reserve,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -89,6 +95,13 @@ class DirectProviderRecord:
     last_health_at: datetime | None
     last_tested_at: datetime | None
     last_error_code: str | None
+    quota_supported: bool
+    quota_remaining: int | None
+    quota_limit: int | None
+    quota_window_seconds: int | None
+    quota_reset_at: datetime | None
+    quota_observed_at: datetime | None
+    automatic_quota_reserve: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +386,7 @@ async def update_direct_provider(
     public_configuration: Mapping[str, object] | None = None,
     secret_configuration: Mapping[str, str | None] | None = None,
     resolver_enabled: bool | None = None,
+    automatic_quota_reserve_value: int | None = None,
 ) -> DirectProviderRecord:
     """Update native provider settings while keeping secrets write-only."""
     config = await _get_config(session, provider_config_id)
@@ -408,6 +422,14 @@ async def update_direct_provider(
             configuration_changed = True
     if resolver_enabled is not None:
         config.resolver_enabled = resolver_enabled
+    if automatic_quota_reserve_value is not None:
+        try:
+            set_automatic_quota_reserve(config, automatic_quota_reserve_value)
+        except ValueError as exc:
+            raise DirectProviderRegistrationError(
+                "invalid_automatic_quota_reserve",
+                str(exc),
+            ) from exc
     if configuration_changed:
         config.enabled = False
         config.state = DirectProviderState.DISABLED
@@ -561,6 +583,7 @@ def _record(config: DirectProviderConfig) -> DirectProviderRecord:
     )
     if config.id is None:
         raise ValueError("Direct provider must be persisted before it can be read.")
+    quota = provider_quota_status(config)
     return DirectProviderRecord(
         id=config.id,
         provider_id=config.provider_id,
@@ -582,6 +605,13 @@ def _record(config: DirectProviderConfig) -> DirectProviderRecord:
         last_health_at=config.last_health_at,
         last_tested_at=config.last_tested_at,
         last_error_code=config.last_error_code,
+        quota_supported=provider_supports_quota(config),
+        quota_remaining=quota.remaining if quota else None,
+        quota_limit=quota.limit if quota else None,
+        quota_window_seconds=quota.window_seconds if quota else None,
+        quota_reset_at=quota.reset_at if quota else None,
+        quota_observed_at=quota.observed_at if quota else None,
+        automatic_quota_reserve=automatic_quota_reserve(config),
     )
 
 

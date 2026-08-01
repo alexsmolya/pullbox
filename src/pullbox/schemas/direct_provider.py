@@ -26,6 +26,7 @@ class DirectProviderUpdateRequest(BaseModel):
     public_configuration: dict[str, str | int | float | bool] | None = None
     secret_configuration: dict[str, str | None] | None = Field(default=None, repr=False)
     resolver_enabled: bool | None = None
+    automatic_quota_reserve: int | None = Field(default=None, ge=0, le=100_000)
 
 
 class DirectConfigurationControlResponse(BaseModel):
@@ -70,6 +71,13 @@ class DirectProviderResponse(BaseModel):
     last_health_at: datetime | None
     last_tested_at: datetime | None
     last_error_code: str | None
+    quota_supported: bool
+    quota_remaining: int | None
+    quota_limit: int | None
+    quota_window_seconds: int | None
+    quota_reset_at: datetime | None
+    quota_observed_at: datetime | None
+    automatic_quota_reserve: int
 
 
 class DirectProviderTestResponse(BaseModel):

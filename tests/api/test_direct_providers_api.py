@@ -33,7 +33,11 @@ def _csrf_header(client: AsyncClient) -> dict[str, str]:
     return {"X-CSRF-Token": AuthService.get_csrf_token_from_session(session_token) or ""}
 
 
-def _manifest(provider_id: str = "community.api") -> DirectManifestResponse:
+def _manifest(
+    provider_id: str = "community.api",
+    *,
+    quota: bool = False,
+) -> DirectManifestResponse:
     return DirectManifestResponse.model_validate(
         {
             "protocol_version": DIRECT_PROVIDER_PROTOCOL_V1,
@@ -50,7 +54,7 @@ def _manifest(provider_id: str = "community.api") -> DirectManifestResponse:
                 "resolve": True,
                 "health": True,
                 "browser_challenge": False,
-                "quota": False,
+                "quota": quota,
                 "configuration_schema": True,
             },
             "configuration_schema": {
@@ -220,3 +224,53 @@ async def test_provider_routes_require_interactive_authentication(
     unauthenticated_client: AsyncClient,
 ) -> None:
     assert (await unauthenticated_client.get("/api/v1/direct-providers")).status_code == 401
+
+
+async def test_quota_telemetry_and_automatic_reserve_are_exposed_and_configurable(
+    authenticated_client: AsyncClient,
+    sec_db: async_sessionmaker[AsyncSession],
+) -> None:
+    _ApiProviderClient.manifest_response = _manifest(quota=True)
+    headers = _csrf_header(authenticated_client)
+    created = await authenticated_client.post(
+        "/api/v1/direct-providers",
+        headers=headers,
+        json={
+            "endpoint": "http://provider:8780",
+            "bearer_token": TOKEN,
+            "allow_private_http": True,
+            "confirm_custom_provider": True,
+        },
+    )
+    provider_id = created.json()["id"]
+    async with sec_db() as session:
+        provider = await session.get(DirectProviderConfig, provider_id)
+        assert provider is not None
+        provider.configuration_metadata = {
+            **provider.configuration_metadata,
+            "quota_status": {
+                "remaining": 22,
+                "limit": 25,
+                "window_seconds": 64_800,
+                "reset_at": None,
+                "observed_at": "2026-07-31T12:00:00+00:00",
+            },
+        }
+        await session.commit()
+
+    listed = await authenticated_client.get("/api/v1/direct-providers")
+    payload = listed.json()[0]
+    assert payload["quota_supported"] is True
+    assert payload["quota_remaining"] == 22
+    assert payload["quota_limit"] == 25
+    assert payload["quota_window_seconds"] == 64_800
+    assert payload["automatic_quota_reserve"] == 5
+
+    updated = await authenticated_client.patch(
+        f"/api/v1/direct-providers/{provider_id}",
+        headers=headers,
+        json={"automatic_quota_reserve": 3},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["automatic_quota_reserve"] == 3

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -13,6 +13,13 @@ if TYPE_CHECKING:
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskExecutionResult:
+    """Optional logical status returned by a completed scheduler invocation."""
+
+    status: Literal["completed", "waiting"] = "completed"
 
 
 @dataclass

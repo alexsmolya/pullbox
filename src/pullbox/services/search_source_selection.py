@@ -37,47 +37,91 @@ def select_search_source(
     source_priority: list[str] | None = None,
 ) -> SearchSourceSelection | None:
     """Rank indexer and direct matches with the existing deterministic scorer."""
+    ranked = rank_search_sources(
+        outcome,
+        eval_kwargs,
+        source_priority=source_priority,
+        limit=1,
+    )
+    return ranked[0] if ranked else None
+
+
+def rank_search_sources(
+    outcome: IssueSearchOutcome,
+    eval_kwargs: SearchEvalKwargs,
+    *,
+    source_priority: list[str] | None = None,
+    limit: int | None = None,
+) -> tuple[SearchSourceSelection, ...]:
+    """Return fallback candidates by repeatedly applying the existing scorer."""
+    if limit is not None and limit <= 0:
+        return ()
+
     direct_matches = outcome.direct_outcome.matched if outcome.direct_outcome else ()
-    if not direct_matches:
-        if outcome.best_validation is None or outcome.best_release is None:
-            return None
-        return SearchSourceSelection(
-            source_kind="indexer",
-            release=outcome.best_release,
-            validation=outcome.best_validation,
+    ranked: list[SearchSourceSelection] = []
+    indexer_matches = outcome.matched
+    if (
+        not direct_matches
+        and outcome.best_validation is not None
+        and outcome.best_release is not None
+    ):
+        # Search evaluation already selected this winner. Preserve that result
+        # instead of scoring it a second time solely to build a fallback list.
+        ranked.append(
+            SearchSourceSelection(
+                source_kind="indexer",
+                release=outcome.best_release,
+                validation=outcome.best_validation,
+            )
         )
+        if limit == 1:
+            return tuple(ranked)
+        indexer_matches = [item for item in outcome.matched if item is not outcome.best_validation]
 
     candidates: list[tuple[str, ValidationResult, DirectValidatedCandidate | None]] = [
-        ("torrent" if item.release.is_torrent else "usenet", item, None) for item in outcome.matched
+        ("torrent" if item.release.is_torrent else "usenet", item, None) for item in indexer_matches
     ]
+    if not ranked and not candidates and outcome.best_validation is not None:
+        candidates.append(
+            (
+                "torrent" if outcome.best_validation.release.is_torrent else "usenet",
+                outcome.best_validation,
+                None,
+            )
+        )
     candidates.extend(("direct", item.validation, item) for item in direct_matches)
     normalized_priority = normalize_source_priority(source_priority)
     if normalized_priority is not None:
         priority_map = {source: index for index, source in enumerate(normalized_priority)}
         candidates.sort(key=lambda item: priority_map[item[0]])
 
-    validations = [item[1] for item in candidates]
-    selected = _select_best_validation(
-        validations,
-        min_score=eval_kwargs.get("min_score", DEFAULT_MIN_SCORE),
-        confidence_blend=eval_kwargs.get("confidence_blend", 0.40),
-        min_size_mb=eval_kwargs.get("min_size_mb", DEFAULT_MIN_SIZE_MB),
-        max_size_mb=eval_kwargs.get("max_size_mb", DEFAULT_MAX_SIZE_MB),
-        preferred_format=eval_kwargs.get("preferred_format"),
-        seeder_tiers=eval_kwargs.get("seeder_tiers"),
-        score_weights=eval_kwargs.get("score_weights"),
-        grabs_weight=eval_kwargs.get("grabs_weight", 0),
-        pack_penalty=eval_kwargs.get("pack_penalty", -20),
-        max_file_count=eval_kwargs.get("max_file_count", 5),
-        preferred_language=eval_kwargs.get("preferred_language", "en"),
-        digital_bonus=eval_kwargs.get("digital_bonus", 10),
-    )
-    if selected is None:
-        return None
-    direct_result = next((item[2] for item in candidates if item[1] is selected), None)
-    return SearchSourceSelection(
-        source_kind="direct" if direct_result is not None else "indexer",
-        release=selected.release,
-        validation=selected,
-        direct_result=direct_result,
-    )
+    remaining = list(candidates)
+    while remaining and (limit is None or len(ranked) < limit):
+        selected = _select_best_validation(
+            [item[1] for item in remaining],
+            min_score=eval_kwargs.get("min_score", DEFAULT_MIN_SCORE),
+            confidence_blend=eval_kwargs.get("confidence_blend", 0.40),
+            min_size_mb=eval_kwargs.get("min_size_mb", DEFAULT_MIN_SIZE_MB),
+            max_size_mb=eval_kwargs.get("max_size_mb", DEFAULT_MAX_SIZE_MB),
+            preferred_format=eval_kwargs.get("preferred_format"),
+            seeder_tiers=eval_kwargs.get("seeder_tiers"),
+            score_weights=eval_kwargs.get("score_weights"),
+            grabs_weight=eval_kwargs.get("grabs_weight", 0),
+            pack_penalty=eval_kwargs.get("pack_penalty", -20),
+            max_file_count=eval_kwargs.get("max_file_count", 5),
+            preferred_language=eval_kwargs.get("preferred_language", "en"),
+            digital_bonus=eval_kwargs.get("digital_bonus", 10),
+        )
+        if selected is None:
+            break
+        selected_index = next(index for index, item in enumerate(remaining) if item[1] is selected)
+        _, _, direct_result = remaining.pop(selected_index)
+        ranked.append(
+            SearchSourceSelection(
+                source_kind="direct" if direct_result is not None else "indexer",
+                release=selected.release,
+                validation=selected,
+                direct_result=direct_result,
+            )
+        )
+    return tuple(ranked)

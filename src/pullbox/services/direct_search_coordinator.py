@@ -32,6 +32,7 @@ from pullbox.providers.direct.contract import (
     DirectSearchRequest,
     DirectSearchResponse,
 )
+from pullbox.services.direct_provider_quota import refresh_expired_provider_quota
 from pullbox.services.release_validator import ReleaseValidator, ValidationResult
 
 if TYPE_CHECKING:
@@ -162,7 +163,11 @@ async def load_direct_search_providers(
         .where(
             DirectProviderConfig.enabled.is_(True),
             DirectProviderConfig.state.in_(
-                (DirectProviderState.HEALTHY, DirectProviderState.DEGRADED)
+                (
+                    DirectProviderState.HEALTHY,
+                    DirectProviderState.DEGRADED,
+                    DirectProviderState.RATE_LIMITED,
+                )
             ),
         )
         .order_by(
@@ -173,6 +178,11 @@ async def load_direct_search_providers(
     )
     providers: list[DirectSearchProvider] = []
     for config in result.scalars().all():
+        quota_refreshed = refresh_expired_provider_quota(config)
+        if config.state is DirectProviderState.RATE_LIMITED and not quota_refreshed:
+            continue
+        if quota_refreshed:
+            await session.flush()
         material = load_provider_secret_material(config)
         if not material.bearer_token:
             logger.warning(

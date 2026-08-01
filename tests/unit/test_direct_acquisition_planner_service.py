@@ -30,6 +30,7 @@ from pullbox.providers.direct.contract import (
     DirectArtifactCoverage,
     DirectArtifactRoute,
     DirectMirror,
+    DirectQuotaStatus,
     DirectResolveResponse,
     DirectResolverProfile,
 )
@@ -721,10 +722,101 @@ async def test_planning_normalizes_provider_error_and_persists_retry_context(
     assert error.value.code == "provider_timed_out"
     attempt = await session.get(DirectAcquisitionAttempt, 1)
     assert attempt is not None
-    assert attempt.state is DirectAcquisitionState.INTERVENTION
+    assert attempt.state is DirectAcquisitionState.FAILED
     assert attempt.failure_class is DirectArtifactFailureClass.PROVIDER_UNAVAILABLE
     assert attempt.failure_code == "provider_timed_out"
     assert "secret.invalid" not in (attempt.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_planning_persists_provider_quota_from_successful_resolution(
+    session: AsyncSession,
+) -> None:
+    response = _response()
+    response.quota = DirectQuotaStatus(remaining=22, limit=25, window_seconds=64_800)
+
+    await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    provider = await session.get(DirectProviderConfig, 1)
+    assert provider is not None
+    quota = provider.configuration_metadata["quota_status"]
+    assert quota["remaining"] == 22
+    assert quota["limit"] == 25
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "expected_state"),
+    [
+        ("source_quota_limited", DirectProviderState.RATE_LIMITED),
+        ("source_authentication_required", DirectProviderState.AUTHENTICATION_REQUIRED),
+        ("source_unavailable", DirectProviderState.DEGRADED),
+        ("candidate_not_found", DirectProviderState.HEALTHY),
+    ],
+)
+async def test_source_failures_do_not_create_intervention_rows(
+    session: AsyncSession,
+    code: str,
+    expected_state: DirectProviderState,
+) -> None:
+    client = _FailingResolveClient(
+        DirectProviderClientError(
+            code,
+            "Safe provider failure.",
+            retryable=code == "source_unavailable",
+        )
+    )
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: client,
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.intervention is False
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    provider = await session.get(DirectProviderConfig, 1)
+    assert attempt is not None
+    assert provider is not None
+    assert attempt.state is DirectAcquisitionState.FAILED
+    assert provider.state is expected_state
+
+
+@pytest.mark.asyncio
+async def test_first_quota_failure_persists_provider_retry_window(
+    session: AsyncSession,
+) -> None:
+    client = _FailingResolveClient(
+        DirectProviderClientError(
+            "source_quota_limited",
+            "Safe provider failure.",
+            retry_after_seconds=64_800,
+        )
+    )
+
+    with pytest.raises(DirectAcquisitionPlanningError):
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: client,
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    provider = await session.get(DirectProviderConfig, 1)
+    assert provider is not None
+    quota = provider.configuration_metadata["quota_status"]
+    assert quota["remaining"] == 0
+    assert quota["reset_at"] is not None
 
 
 @pytest.mark.asyncio

@@ -127,6 +127,7 @@ async def update_provider_registration(
             public_configuration=body.public_configuration,
             secret_configuration=body.secret_configuration,
             resolver_enabled=body.resolver_enabled,
+            automatic_quota_reserve_value=body.automatic_quota_reserve,
         )
         return _response(value)
     except DirectProviderRegistrationError as exc:

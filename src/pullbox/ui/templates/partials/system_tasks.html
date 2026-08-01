@@ -68,6 +68,15 @@
                     <div class="min-w-0">
                       <p class="font-medium text-pb-text" x-text="task.name"></p>
                       <p class="downloads-mono-dim-cell mt-1" x-text="task.task_id"></p>
+                      <template x-if="task.sweep_progress">
+                        <div
+                          class="mt-2 space-y-0.5 text-xs text-pb-text-sec"
+                          data-testid="search-wanted-sweep-progress"
+                        >
+                          <p x-text="`${task.sweep_progress.attempted} of ${task.sweep_progress.total} attempted · ${task.sweep_progress.remaining} remaining`"></p>
+                          <p class="text-pb-text-dim" x-text="`Batch ${task.sweep_progress.batch_number} · ${task.sweep_progress.message}`"></p>
+                        </div>
+                      </template>
                     </div>
                   </td>
                   <td>
@@ -80,7 +89,7 @@
                     <span class="downloads-mono-dim-cell" x-text="taskDurationLabel(task)"></span>
                   </td>
                   <td>
-                    <span class="text-pb-text" x-text="task.next_run_time ? timeAgo(task.next_run_time) : '—'"></span>
+                    <span class="text-pb-text" x-text="taskNextExecutionLabel(task)"></span>
                   </td>
                   <td>
                     <span class="pill" :class="taskStatePillClass(task)" x-text="taskStateLabel(task)"></span>
@@ -267,6 +276,7 @@ function taskManager(initialTasks) {
       if (this.isTaskQueued(task)) return 'queued';
       if (!task.last_execution) return 'idle';
       if (task.last_status === 'deferred') return 'deferred';
+      if (task.last_status === 'waiting' || task.sweep_progress?.state === 'waiting') return 'waiting';
       if (task.last_status === 'cancelled') return 'interrupted';
       if (task.last_status === 'failed') return 'failed';
       return 'healthy';
@@ -303,11 +313,18 @@ function taskManager(initialTasks) {
       return task.last_duration_seconds != null ? this.formatDuration(task.last_duration_seconds) : '—';
     },
 
+    taskNextExecutionLabel(task) {
+      const continuation = task.sweep_progress?.next_batch_at;
+      const nextRun = continuation || task.next_run_time;
+      return nextRun ? this.timeAgo(nextRun) : '—';
+    },
+
     taskStateLabel(task) {
       const state = this.taskState(task);
       if (state === 'running') return 'Running';
       if (state === 'queued') return 'Queued';
       if (state === 'deferred') return 'Deferred';
+      if (state === 'waiting') return 'Paused between batches';
       if (state === 'interrupted') return 'Interrupted';
       if (state === 'failed') return 'Failed';
       if (state === 'idle') return 'Never run';
@@ -319,6 +336,7 @@ function taskManager(initialTasks) {
       if (state === 'running') return 'pill-info';
       if (state === 'queued') return 'pill-neutral';
       if (state === 'deferred') return 'pill-warning';
+      if (state === 'waiting') return 'pill-warning';
       if (state === 'interrupted') return 'pill-warning';
       if (state === 'failed') return 'pill-error';
       if (state === 'idle') return 'pill-neutral';
@@ -346,6 +364,9 @@ function taskManager(initialTasks) {
       }
       if (task.last_status === 'failed') {
         return 'The most recent execution failed. Review the dependency it relies on before you trigger it again.';
+      }
+      if (task.last_status === 'waiting') {
+        return 'This sweep is paused between bounded batches and will continue automatically at the displayed time. Run now advances the next batch early.';
       }
       return 'The most recent execution completed normally. Use Run now when you need fresh state before the next scheduled window.';
     },

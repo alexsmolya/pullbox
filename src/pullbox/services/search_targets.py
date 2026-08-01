@@ -235,3 +235,40 @@ async def load_wanted_issue_search_targets(
         .limit(limit)
     )
     return [_target_from_row(row) for row in result.all()]
+
+
+async def load_wanted_issue_search_targets_by_ids(
+    session: AsyncSession,
+    issue_ids: list[int],
+) -> list[IssueSearchTarget]:
+    """Load still-eligible wanted targets while preserving snapshot order."""
+    if not issue_ids:
+        return []
+    result = await session.execute(
+        select(
+            Issue.id.label("issue_id"),
+            Issue.series_id.label("series_id"),
+            Issue.issue_number.label("issue_number"),
+            Issue.issue_type.label("issue_type"),
+            Issue.title.label("issue_title"),
+            Series.title.label("series_title"),
+            Series.year_start.label("series_year"),
+            Series.alternate_names.label("alternate_names"),
+        )
+        .join(Series, Series.id == Issue.series_id)
+        .where(
+            Issue.id.in_(issue_ids),
+            Issue.status == IssueStatus.WANTED,
+            Series.monitored.is_(True),
+            ~exists().where(
+                and_(
+                    PendingMatch.issue_id == Issue.id,
+                    PendingMatch.status == PendingMatchStatus.PENDING,
+                )
+            ),
+        )
+    )
+    targets_by_id = {
+        target.issue_id: target for target in (_target_from_row(row) for row in result.all())
+    }
+    return [targets_by_id[issue_id] for issue_id in issue_ids if issue_id in targets_by_id]

@@ -627,6 +627,12 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler.register_tasks(overrides=overrides)
     await scheduler.load_persisted_stats()
     scheduler.start()
+    try:
+        from pullbox.tasks.search_task import recover_wanted_search_sweep_schedule
+
+        await recover_wanted_search_sweep_schedule()
+    except Exception:
+        logger.warning("search_wanted_sweep_recovery_failed", exc_info=True)
 
     search_on_add_recovery_task = asyncio.create_task(recover_recent_search_on_add_misses())
     _startup_background_tasks.add(search_on_add_recovery_task)

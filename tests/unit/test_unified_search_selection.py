@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from unittest.mock import MagicMock
+
 from pullbox.models.issue import IssueType
 from pullbox.providers.base import ReleaseResult
 from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
@@ -11,7 +14,7 @@ from pullbox.services.direct_search_coordinator import (
     DirectValidatedCandidate,
 )
 from pullbox.services.release_validator import ReleaseValidator
-from pullbox.services.search_source_selection import select_search_source
+from pullbox.services.search_source_selection import rank_search_sources, select_search_source
 from pullbox.services.search_targets import IssueSearchOutcome, IssueSearchTarget
 
 
@@ -72,7 +75,7 @@ def _direct_result(release: ReleaseResult) -> DirectValidatedCandidate:
 
 def _outcome(
     indexer_release: ReleaseResult,
-    direct_result: DirectValidatedCandidate,
+    direct_result: DirectValidatedCandidate | None,
 ) -> IssueSearchOutcome:
     validation = _validation(indexer_release)
     target = IssueSearchTarget(
@@ -95,12 +98,16 @@ def _outcome(
         best_validation=validation,
         search_details={},
         elapsed_ms=1,
-        direct_outcome=DirectSearchOutcome(
-            matched=(direct_result,),
-            rejected=(),
-            failures=(),
-            providers_searched=1,
-            elapsed_ms=1,
+        direct_outcome=(
+            DirectSearchOutcome(
+                matched=(direct_result,),
+                rejected=(),
+                failures=(),
+                providers_searched=1,
+                elapsed_ms=1,
+            )
+            if direct_result is not None
+            else None
         ),
     )
 
@@ -142,3 +149,32 @@ def test_equal_score_respects_direct_first_source_priority() -> None:
     assert selected is not None
     assert selected.source_kind == "direct"
     assert selected.direct_result is direct
+
+
+def test_ranked_sources_reuse_existing_scorer_for_fallback_order() -> None:
+    indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
+    direct = _direct_result(_release("Batman 001 (2016) (Digital).cbz", "GetComics"))
+
+    ranked = rank_search_sources(_outcome(indexer, direct), {})
+
+    assert [item.source_kind for item in ranked] == ["direct", "indexer"]
+    assert ranked[0].validation is direct.validation
+    assert ranked[1].release is indexer
+
+
+def test_indexer_only_selection_preserves_precomputed_winner() -> None:
+    indexer = _release("Batman 001 (2016) (Digital).cbz", "Indexer")
+    sparse_validation = MagicMock()
+    sparse_validation.release = None
+    outcome = replace(
+        _outcome(indexer, None),
+        best_validation=sparse_validation,
+        matched=[sparse_validation],
+    )
+
+    ranked = rank_search_sources(outcome, {})
+
+    assert len(ranked) == 1
+    assert ranked[0].source_kind == "indexer"
+    assert ranked[0].release is indexer
+    assert ranked[0].validation is sparse_validation

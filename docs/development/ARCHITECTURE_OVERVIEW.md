@@ -341,6 +341,12 @@ Search and acquisition are coordinated through several focused service modules:
 - `search_scoring.py` and `search_evaluation.py` rank acceptable releases.
 - `download_service.py` sends selected releases to a configured download
   client.
+- `wanted_search_sweep.py` persists the complete fair-order target snapshot for
+  bounded Search Wanted continuation.
+- `search_source_selection.py` applies the existing deterministic scorer to
+  indexer and direct-provider candidates, including fallback order.
+- `direct_provider_quota.py` owns provider-generic capacity observations and
+  the automatic-download reserve policy.
 - Post-download and library services process completed files into the library.
 
 The normal happy path looks like this:
@@ -377,6 +383,19 @@ Wanted issue or manual search
 - Search behavior is intentionally split into smaller modules so parsing,
   validation, scoring, indexing, and orchestration can be tested separately.
 - Manual search may fan out more broadly than automated wanted search.
+- Search Wanted snapshots every eligible Wanted issue, processes at most 100
+  per batch, and resumes the same restart-safe sweep hourly until complete.
+  Never-searched issues run first, followed by least-recently searched issues;
+  pending intervention rows are excluded from the snapshot.
+- Direct-source quota, authentication, stale-candidate, and temporary-source
+  failures do not create intervention rows. Automatic routing continues through
+  the remaining candidates already accepted by the unchanged matcher. Semantic
+  uncertainty and actionable resolver/host configuration still use
+  intervention.
+- Quota-capable providers default to five reserved manual downloads. Automatic
+  search stops at the configured reserve; manual grabs may consume it. Only the
+  latest provider-generic capacity observation is stored, never account download
+  history.
 - Blocklist behavior is part of the search trust model. A blocked release
   should not keep reappearing as a normal candidate.
 

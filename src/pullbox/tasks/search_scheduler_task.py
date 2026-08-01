@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pullbox.core.scheduler import scheduled_task
+from pullbox.core.scheduler import TaskExecutionResult, scheduled_task
 from pullbox.tasks.search_task import purge_search_logs, search_wanted
 
 
@@ -12,9 +12,9 @@ from pullbox.tasks.search_task import purge_search_logs, search_wanted
     display_name="Search Wanted",
     hours=6,
 )
-async def scheduled_search_wanted() -> None:
+async def scheduled_search_wanted() -> TaskExecutionResult:
     """Run the wanted-issue search sweep on its configured cadence."""
-    await search_wanted()
+    return await search_wanted()
 
 
 @scheduled_task(

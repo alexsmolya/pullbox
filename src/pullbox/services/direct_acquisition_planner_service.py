@@ -65,6 +65,10 @@ from pullbox.services.direct_coverage_planner import (
     plan_direct_coverage,
 )
 from pullbox.services.direct_provider_capabilities import manifest_artifact_host_kinds
+from pullbox.services.direct_provider_quota import (
+    record_provider_quota,
+    record_provider_resolution_error,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -190,6 +194,8 @@ async def plan_direct_acquisition(
             provider_secret_loader=provider_secret_loader,
             deadline=clock() + timedelta(seconds=_RESOLVE_SECONDS),
         )
+        if response.quota is not None:
+            record_provider_quota(provider, response.quota, observed_at=clock())
         host_configs = await _load_host_configs(session)
         title_only_override = _allows_title_only_coverage(attempt, response.artifacts)
         resolved_routes = _build_route_options(
@@ -277,7 +283,12 @@ async def plan_direct_acquisition(
             initial_source,
         )
     except DirectAcquisitionPlanningError as exc:
-        transition_acquisition(attempt, DirectAcquisitionState.INTERVENTION, at=clock())
+        state = (
+            DirectAcquisitionState.INTERVENTION
+            if exc.intervention
+            else DirectAcquisitionState.FAILED
+        )
+        transition_acquisition(attempt, state, at=clock())
         attempt.failure_class = exc.failure_class
         attempt.failure_code = exc.code
         attempt.error_message = sanitize_log_string(str(exc))
@@ -286,7 +297,7 @@ async def plan_direct_acquisition(
             revision=(attempt.progress_revision or 0) + 1,
             snapshot={
                 "schema_version": 1,
-                "stage": "intervention",
+                "stage": state.value,
                 "failure_code": exc.code,
             },
         )
@@ -474,6 +485,12 @@ async def _resolve_provider_candidate(
                     "resolver_"
                 )
                 if not retry_allowed or option_index == len(options) - 1:
+                    record_provider_resolution_error(
+                        provider,
+                        exc.code,
+                        retry_after_seconds=exc.retry_after_seconds,
+                    )
+                    await session.flush()
                     raise _provider_planning_error(exc) from exc
         if last_error is not None:
             raise _provider_planning_error(last_error) from last_error
@@ -487,6 +504,18 @@ async def _resolve_provider_candidate(
 
 def _provider_planning_error(error: DirectProviderClientError) -> DirectAcquisitionPlanningError:
     retryable = error.retryable
+    source_failure = error.code in {
+        "source_quota_limited",
+        "source_authentication_required",
+        "source_unavailable",
+        "source_malformed_response",
+        "candidate_not_found",
+    }
+    failure_class = (
+        DirectArtifactFailureClass.CANDIDATE_INVALID
+        if error.code == "candidate_not_found"
+        else DirectArtifactFailureClass.PROVIDER_UNAVAILABLE
+    )
     return DirectAcquisitionPlanningError(
         error.code,
         (
@@ -494,9 +523,9 @@ def _provider_planning_error(error: DirectProviderClientError) -> DirectAcquisit
             if retryable
             else "The direct provider could not resolve this result."
         ),
-        failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+        failure_class=failure_class,
         retryable=retryable,
-        intervention=not retryable,
+        intervention=not retryable and not source_failure,
     )
 
 
@@ -531,6 +560,28 @@ def _validate_planning_source(
         raise DirectAcquisitionPlanningError(
             "provider_disabled",
             "The direct provider is disabled.",
+        )
+    if provider.state is DirectProviderState.RATE_LIMITED:
+        raise DirectAcquisitionPlanningError(
+            "source_quota_limited",
+            "The direct provider source quota is exhausted.",
+            failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+            intervention=False,
+        )
+    if provider.state is DirectProviderState.AUTHENTICATION_REQUIRED:
+        raise DirectAcquisitionPlanningError(
+            "source_authentication_required",
+            "The direct provider source authentication needs attention.",
+            failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+            intervention=False,
+        )
+    if provider.state is DirectProviderState.UNAVAILABLE:
+        raise DirectAcquisitionPlanningError(
+            "source_unavailable",
+            "The direct provider source is temporarily unavailable.",
+            failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+            retryable=True,
+            intervention=False,
         )
 
     snapshot = attempt.candidate_snapshot or {}

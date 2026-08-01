@@ -180,6 +180,28 @@ def test_search_and_resolve_responses_are_bounded() -> None:
         )
 
 
+def test_resolve_response_accepts_bounded_quota_without_download_history() -> None:
+    response = DirectResolveResponse.model_validate(
+        {
+            "protocol_version": DIRECT_PROVIDER_PROTOCOL_V1,
+            "request_id": "22222222-2222-4222-8222-222222222222",
+            "artifacts": [],
+            "quota": {
+                "remaining": 22,
+                "limit": 25,
+                "window_seconds": 64_800,
+                "recently_downloaded_md5s": ["must-not-cross-the-boundary"],
+            },
+        }
+    )
+
+    assert response.quota is not None
+    assert response.quota.remaining == 22
+    assert response.quota.limit == 25
+    assert response.quota.window_seconds == 64_800
+    assert "recently_downloaded" not in response.quota.model_dump()
+
+
 def test_source_credentials_are_hidden_from_request_repr() -> None:
     request = DirectSearchRequest(
         protocol_version=DIRECT_PROVIDER_PROTOCOL_V1,

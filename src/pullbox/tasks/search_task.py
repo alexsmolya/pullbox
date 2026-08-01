@@ -14,15 +14,21 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy.exc import OperationalError
 
 from pullbox.composition.events import build_domain_event_bus
+from pullbox.config import get_settings
 from pullbox.core.config_resolver import get_int_setting, load_system_config_values, parse_bool
 from pullbox.core.log_deduper import log_deduped_warning
-from pullbox.core.scheduler import get_current_task_trigger_type
+from pullbox.core.scheduler import (
+    TaskExecutionResult,
+    get_current_task_trigger_type,
+    get_scheduler,
+)
 from pullbox.core.sqlite_lock import (
     SQLITE_LOCK_RETRY_ATTEMPTS,
     is_sqlite_locked_error,
@@ -63,6 +69,17 @@ from pullbox.services.search_service import (
     load_wanted_issue_search_targets,
 )
 from pullbox.services.search_source_selection import select_search_source
+from pullbox.services.wanted_search_sweep import (
+    WantedSearchSweepState,
+    checkpoint_wanted_search_items,
+    complete_wanted_search_batch,
+    create_wanted_search_sweep,
+    load_wanted_search_batch,
+    load_wanted_search_sweep,
+    mark_wanted_search_batch_running,
+    pause_wanted_search_sweep,
+    save_wanted_search_sweep,
+)
 from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
 
 logger = structlog.get_logger(__name__)
@@ -72,7 +89,7 @@ _ORIGINAL_SEARCH_WANTED = SearchService.search_wanted
 _SEARCH_TWO_PASS_CONFIG_KEY = "search_two_pass_enabled"
 _SEARCH_LOG_RETENTION_CONFIG_KEY = "search_log_retention_days"
 _SEARCH_WANTED_CURSOR_CONFIG_KEY = "search_wanted_cursor"
-_SEARCH_WANTED_BATCH_LIMIT = 50
+_SEARCH_WANTED_BATCH_LIMIT = 100
 _DEFAULT_SEARCH_LOG_RETENTION_DAYS = 7
 
 
@@ -301,6 +318,14 @@ async def _persist_wanted_search_outcome(
             if total_results == 0 and routed.action_status == "no_match"
             else routed.action_status
         )
+        next_details = dict(outcome.search_details)
+        if routed.notices:
+            next_details["notices"] = list(routed.notices)
+            logger.info(
+                "search_source_fallback",
+                issue_id=target.issue_id,
+                notices=list(routed.notices),
+            )
 
         search_log.results_found = total_results
         search_log.results_grabbed = issue_grabbed
@@ -311,7 +336,7 @@ async def _persist_wanted_search_outcome(
         )
         search_log.details = _merge_search_log_details(
             existing_details=search_log.details or {},
-            next_details=outcome.search_details,
+            next_details=next_details,
             run_state="completed",
             action_status=action_status,
         )
@@ -483,6 +508,9 @@ async def _persist_series_search_outcome(
                 )
 
         details = dict(selected_outcome.search_details)
+        if routed.notices:
+            details["notices"] = list(routed.notices)
+            issue_log.info("search_source_fallback", notices=list(routed.notices))
         if fallback_outcome is not None:
             total_found = len(primary_outcome.raw_results) + len(fallback_outcome.raw_results)
             details["results_count"] = total_found
@@ -1100,11 +1128,12 @@ async def search_series_issues(
             return {"wanted": 0, "sent": 0, "queued": 0}
 
 
-async def search_wanted() -> None:
-    """Search indexers for all wanted issues and route matches."""
+async def search_wanted() -> TaskExecutionResult:
+    """Run one bounded batch in a durable complete wanted-issue sweep."""
     factory = get_session_factory()
     trigger_type = get_current_task_trigger_type()
     runtime: SearchRuntime | None = None
+    sweep: WantedSearchSweepState | None = None
     targets: list[IssueSearchTarget] = []
     pending_log_ids: dict[int, int] = {}
     wanted_outcomes: list[IssueSearchOutcome] = []
@@ -1127,12 +1156,77 @@ async def search_wanted() -> None:
                         key="search_wanted_missing_indexers",
                         action_required="Enable at least one indexer to search wanted issues.",
                     )
-                    return
+                    return TaskExecutionResult()
 
-                targets = await _load_rotated_wanted_issue_targets(session)
-                if not targets:
+                now = datetime.now(UTC)
+                sweep = await load_wanted_search_sweep(session)
+                if sweep is None or sweep.state in {"completed", "failed"}:
+                    sweep = await create_wanted_search_sweep(
+                        session,
+                        trigger_type=trigger_type,
+                        now=now,
+                    )
+                elif (
+                    sweep.state == "waiting"
+                    and sweep.next_batch_at is not None
+                    and sweep.next_batch_at > now
+                    and trigger_type != "manual"
+                ):
+                    _schedule_wanted_sweep_continuation(sweep)
+                    await session.commit()
+                    return TaskExecutionResult(status="waiting")
+                else:
+                    sweep = mark_wanted_search_batch_running(sweep)
+                    await save_wanted_search_sweep(session, sweep)
+
+                batch = await load_wanted_search_batch(
+                    session,
+                    sweep,
+                    limit=_SEARCH_WANTED_BATCH_LIMIT,
+                )
+                targets = batch.targets
+                if batch.skipped_issue_ids:
+                    sweep = checkpoint_wanted_search_items(
+                        sweep,
+                        issue_ids=batch.skipped_issue_ids,
+                        searched_count=0,
+                        sent=0,
+                        queued=0,
+                        failed=0,
+                    )
+                    await save_wanted_search_sweep(session, sweep)
+                    await session.commit()
+                if not batch.issue_ids:
+                    completed = complete_wanted_search_batch(
+                        sweep,
+                        issue_ids=[],
+                        searched_count=0,
+                        sent=0,
+                        queued=0,
+                        failed=0,
+                        now=now,
+                    )
+                    await save_wanted_search_sweep(session, completed)
+                    await session.commit()
+                    await _sync_wanted_sweep_schedule(session, completed)
                     logger.debug("search_wanted_no_targets")
-                    return
+                    return TaskExecutionResult()
+                if not targets:
+                    completed = complete_wanted_search_batch(
+                        sweep,
+                        issue_ids=[],
+                        searched_count=0,
+                        sent=0,
+                        queued=0,
+                        failed=0,
+                        now=now,
+                    )
+                    await save_wanted_search_sweep(session, completed)
+                    await session.commit()
+                    await _sync_wanted_sweep_schedule(session, completed)
+                    return TaskExecutionResult(
+                        status="completed" if completed.state == "completed" else "waiting"
+                    )
                 preload_ms = int((time.monotonic() - preload_started_at) * 1000)
                 pending_log_ids = await _create_pending_wanted_search_logs(
                     session,
@@ -1159,12 +1253,12 @@ async def search_wanted() -> None:
                 raise
 
         if runtime is None:
-            return
+            return TaskExecutionResult()
 
         search_svc = SearchService(
             runtime.registry,
             failure_threshold=runtime.failure_threshold,
-            ignore_indexer_backoff=trigger_type == "manual",
+            ignore_indexer_backoff=False,
             direct_providers=runtime.direct_providers,
         )
         download_svc = _build_download_service(runtime.registry)
@@ -1175,7 +1269,7 @@ async def search_wanted() -> None:
         failed = 0
 
         async def _process_outcome(outcome: IssueSearchOutcome) -> None:
-            nonlocal failed, queued, routing_ms, sent
+            nonlocal failed, queued, routing_ms, sent, sweep
             issue_id = outcome.target.issue_id
             if issue_id in processed_issue_ids:
                 return
@@ -1195,6 +1289,18 @@ async def search_wanted() -> None:
             routing_ms += int((time.monotonic() - routing_started_at) * 1000)
             processed_issue_ids.add(issue_id)
             wanted_outcomes.append(outcome)
+            if sweep is None:
+                raise RuntimeError("Wanted search sweep state was not initialized.")
+            sweep = checkpoint_wanted_search_items(
+                sweep,
+                issue_ids=[issue_id],
+                searched_count=1,
+                sent=issue_sent,
+                queued=issue_queued,
+                failed=issue_failed,
+            )
+            await save_wanted_search_sweep(session, sweep)
+            await session.commit()
 
         try:
             search_started_at = time.monotonic()
@@ -1246,20 +1352,64 @@ async def search_wanted() -> None:
                     error_message="Search returned no outcome for this issue.",
                 )
                 failed += len(remaining_log_ids)
+                if sweep is None:
+                    raise RuntimeError("Wanted search sweep state was not initialized.")
+                missing_issue_ids = list(remaining_log_ids)
+                sweep = checkpoint_wanted_search_items(
+                    sweep,
+                    issue_ids=missing_issue_ids,
+                    searched_count=len(missing_issue_ids),
+                    sent=0,
+                    queued=0,
+                    failed=len(missing_issue_ids),
+                )
+                await save_wanted_search_sweep(session, sweep)
+                await session.commit()
 
             total_elapsed_ms = int((time.monotonic() - search_started_at) * 1000)
             search_fanout_ms = max(0, total_elapsed_ms - routing_ms)
 
+            if sweep is None:
+                raise RuntimeError("Wanted search sweep state was not initialized.")
+            completed_sweep = complete_wanted_search_batch(
+                sweep,
+                issue_ids=[],
+                searched_count=0,
+                sent=0,
+                queued=0,
+                failed=0,
+                now=datetime.now(UTC),
+            )
+            await save_wanted_search_sweep(session, completed_sweep)
+            await session.commit()
+            await _sync_wanted_sweep_schedule(session, completed_sweep)
+            log_event = (
+                "search_wanted_complete"
+                if completed_sweep.state == "completed"
+                else "search_wanted_batch_complete"
+            )
             logger.info(
-                "search_wanted_complete",
+                log_event,
                 sent=sent,
                 queued=queued,
                 failed=failed,
                 total=len(wanted_outcomes),
+                sweep_attempted=completed_sweep.attempted_count,
+                sweep_total=completed_sweep.total_targets,
+                sweep_remaining=completed_sweep.remaining_count,
+                batch_number=completed_sweep.batch_number,
+                next_batch_at=(
+                    completed_sweep.next_batch_at.isoformat()
+                    if completed_sweep.next_batch_at
+                    else None
+                ),
                 preload_ms=preload_ms,
                 search_fanout_ms=search_fanout_ms,
                 routing_ms=routing_ms,
                 **_search_outcome_log_diagnostics(wanted_outcomes),
+            )
+            return TaskExecutionResult(
+                status="completed" if completed_sweep.state == "completed" else "waiting"
             )
         except asyncio.CancelledError:
             await session.rollback()
@@ -1275,6 +1425,14 @@ async def search_wanted() -> None:
                 run_state="cancelled",
                 error_message="Search was cancelled before completion.",
             )
+            if sweep is not None:
+                paused = pause_wanted_search_sweep(
+                    sweep,
+                    message="Interrupted; retrying the current batch later",
+                )
+                await save_wanted_search_sweep(session, paused)
+                await session.commit()
+                _schedule_wanted_sweep_continuation(paused)
             raise
         except Exception:
             await session.rollback()
@@ -1290,8 +1448,71 @@ async def search_wanted() -> None:
                 run_state="failed",
                 error_message="Search failed before completion.",
             )
+            if sweep is not None:
+                paused = pause_wanted_search_sweep(
+                    sweep,
+                    message="Batch failed; retrying later",
+                )
+                await save_wanted_search_sweep(session, paused)
+                await session.commit()
+                _schedule_wanted_sweep_continuation(paused)
             logger.exception("search_wanted_failed")
             raise
+
+
+async def recover_wanted_search_sweep_schedule() -> bool:
+    """Restore an interrupted continuation after process startup."""
+    factory = get_session_factory()
+    async with factory() as session:
+        sweep = await load_wanted_search_sweep(session)
+        if (
+            sweep is None
+            or sweep.state not in {"running", "waiting"}
+            or not sweep.pending_issue_ids
+        ):
+            return False
+        if sweep.state == "running":
+            sweep = pause_wanted_search_sweep(
+                sweep,
+                now=datetime.now(UTC) - timedelta(hours=1),
+                message="Resuming interrupted batch",
+            )
+            await save_wanted_search_sweep(session, sweep)
+            await session.commit()
+        _schedule_wanted_sweep_continuation(sweep)
+        return True
+
+
+def _schedule_wanted_sweep_continuation(sweep: WantedSearchSweepState) -> None:
+    run_at = sweep.next_batch_at or datetime.now(UTC)
+    if run_at <= datetime.now(UTC):
+        run_at = datetime.now(UTC) + timedelta(seconds=1)
+    get_scheduler().schedule_task_continuation(
+        "search_wanted",
+        run_at=run_at,
+        interval_seconds=3600,
+    )
+
+
+async def _sync_wanted_sweep_schedule(
+    session: AsyncSession,
+    sweep: WantedSearchSweepState,
+) -> None:
+    scheduler = get_scheduler()
+    if sweep.state == "waiting":
+        _schedule_wanted_sweep_continuation(sweep)
+        return
+    scheduler.clear_task_continuation("search_wanted")
+    configs = await load_system_config_values(session, ("search_interval_hours",))
+    interval_hours = get_int_setting(
+        configs,
+        "search_interval_hours",
+        get_settings().search_interval_hours,
+    )
+    scheduler.delay_task_next_run(
+        "search_wanted",
+        run_at=datetime.now(UTC) + timedelta(hours=max(1, interval_hours)),
+    )
 
 
 async def purge_search_logs() -> None:

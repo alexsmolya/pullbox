@@ -39,10 +39,24 @@ logger = structlog.get_logger(__name__)
 class DirectProviderClientError(RuntimeError):
     """A classified, redacted provider communication failure."""
 
-    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.retry_after_seconds = (
+            retry_after_seconds
+            if isinstance(retry_after_seconds, int)
+            and not isinstance(retry_after_seconds, bool)
+            and 0 <= retry_after_seconds <= 86_400
+            else None
+        )
 
 
 class DirectProviderClient:
@@ -248,6 +262,15 @@ class DirectProviderClient:
                 retryable=True,
             ) from exc
 
+        remote_failure = _safe_provider_error(content)
+        if remote_failure is not None:
+            remote_code, message, retryable, retry_after_seconds = remote_failure
+            raise DirectProviderClientError(
+                remote_code,
+                message,
+                retryable=retryable,
+                retry_after_seconds=retry_after_seconds,
+            )
         if response.status_code == 401:
             raise DirectProviderClientError(
                 "provider_authentication_failed",
@@ -265,13 +288,6 @@ class DirectProviderClient:
                 "Provider protocol is incompatible.",
             )
         if response.status_code >= 400:
-            remote_code = _safe_retryable_error_code(content)
-            if remote_code is not None:
-                raise DirectProviderClientError(
-                    remote_code,
-                    "Provider source access requires browser challenge handling.",
-                    retryable=True,
-                )
             raise DirectProviderClientError(
                 "provider_request_failed",
                 f"Provider returned HTTP {response.status_code}.",
@@ -297,7 +313,7 @@ def _response_result_count(response: BaseModel) -> int | None:
     return None
 
 
-def _safe_retryable_error_code(content: bytes) -> str | None:
+def _safe_provider_error(content: bytes) -> tuple[str, str, bool, int | None] | None:
     try:
         decoded = json.loads(content)
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -307,8 +323,33 @@ def _safe_retryable_error_code(content: bytes) -> str | None:
     code = decoded["error"].get("code")
     if not isinstance(code, str) or _PROVIDER_ERROR_CODE.fullmatch(code) is None:
         return None
-    if code == "browser_challenge_required" or code.startswith("resolver_"):
-        return code
+    safe_failures = {
+        "source_quota_limited": ("Provider source quota is unavailable.", False),
+        "source_authentication_required": (
+            "Provider source authentication is required.",
+            False,
+        ),
+        "source_unavailable": ("Provider source is temporarily unavailable.", True),
+        "source_malformed_response": ("Provider source returned an invalid response.", False),
+        "candidate_not_found": ("Provider candidate is no longer available.", False),
+        "browser_challenge_required": (
+            "Provider source access requires browser challenge handling.",
+            True,
+        ),
+    }
+    raw_retry_after = decoded["error"].get("retry_after_seconds")
+    retry_after_seconds = (
+        raw_retry_after
+        if isinstance(raw_retry_after, int)
+        and not isinstance(raw_retry_after, bool)
+        and 0 <= raw_retry_after <= 86_400
+        else None
+    )
+    if code in safe_failures:
+        message, retryable = safe_failures[code]
+        return code, message, retryable, retry_after_seconds
+    if code.startswith("resolver_"):
+        return code, "Provider browser resolver attempt failed.", True, retry_after_seconds
     return None
 
 

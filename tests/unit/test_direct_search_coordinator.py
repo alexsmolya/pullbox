@@ -395,6 +395,45 @@ async def test_loader_decrypts_only_usable_provider_operations(db_session: Async
     assert "member-secret" not in repr(providers[0])
 
 
+async def test_loader_recovers_provider_after_quota_window_expires(
+    db_session: AsyncSession,
+) -> None:
+    secret_provider = MagicMock()
+    secret_provider.secret_key.return_value = "direct-search-coordinator-test-secret"
+    _get_fernet.cache_clear()
+    with patch("pullbox.core.config_file.get_config_provider", return_value=secret_provider):
+        provider = DirectProviderConfig(
+            provider_id="pullbox.annas_archive",
+            display_name="Anna's Archive",
+            endpoint="http://annas-provider:8780",
+            enabled=True,
+            priority=10,
+            state=DirectProviderState.RATE_LIMITED,
+            negotiated_protocol=DIRECT_PROVIDER_PROTOCOL_V1,
+            trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+            configuration_metadata={
+                "quota_status": {
+                    "remaining": 0,
+                    "limit": 25,
+                    "window_seconds": 60,
+                    "reset_at": "2020-01-01T00:01:00+00:00",
+                    "observed_at": "2020-01-01T00:00:00+00:00",
+                },
+            },
+            manifest_snapshot={"capabilities": {"quota": True}},
+        )
+        write_provider_bearer_token(provider, "provider-bearer-token-with-enough-length")
+        db_session.add(provider)
+        await db_session.flush()
+
+        providers = await load_direct_search_providers(db_session)
+
+    _get_fernet.cache_clear()
+    assert len(providers) == 1
+    assert provider.state is DirectProviderState.DEGRADED
+    assert provider.configuration_metadata.get("quota_status") is None
+
+
 async def test_persisted_discovery_is_restart_safe_and_contains_no_urls_or_secrets(
     db_session: AsyncSession,
 ) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
@@ -169,6 +170,40 @@ def _outcome(target: IssueSearchTarget, provider: DirectSearchProvider) -> Issue
     )
 
 
+def _outcome_with_indexer_fallback(
+    target: IssueSearchTarget,
+    provider: DirectSearchProvider,
+) -> IssueSearchOutcome:
+    outcome = _outcome(target, provider)
+    release = ReleaseResult(
+        title="Batman 001 (2016) (Digital).cbz",
+        indexer_name="Fallback Indexer",
+        download_url="https://indexer.example/download/1",
+        size_bytes=None,
+        age_days=None,
+        seeders=None,
+        leechers=None,
+        grabs=None,
+        is_torrent=False,
+        category="Books/Comics",
+        published_at=None,
+    )
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series=target.series_title,
+        wanted_issue=target.issue_number,
+        wanted_year=target.series_year,
+    )[0][0]
+    return replace(
+        outcome,
+        raw_results=[release],
+        filtered_results=[release],
+        matched=[validation],
+        best_release=release,
+        best_validation=validation,
+    )
+
+
 async def test_direct_result_below_threshold_becomes_durable_intervention(
     db_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -232,8 +267,124 @@ async def test_direct_planning_failure_creates_visible_intervention(
             download_service=AsyncMock(),
             intervention_service=intervention_service,
             runner=SimpleNamespace(dispatch=AsyncMock()),
+            source_priority=["direct", "torrent", "usenet"],
             planner=planner,
         )
 
     assert routed.action_status == "intervention"
     intervention_service.create_direct_pending_match.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_non_intervention_direct_failure_falls_back_to_ranked_indexer(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target, provider, search_log_id = await _seed(db_factory)
+    download_service = AsyncMock()
+    intervention_service = AsyncMock()
+    planner = AsyncMock(
+        side_effect=DirectAcquisitionPlanningError(
+            "source_quota_limited",
+            "Source quota is exhausted.",
+            failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+            intervention=False,
+        )
+    )
+
+    async with db_factory() as session:
+        routed = await route_search_acquisition(
+            session,
+            outcome=_outcome_with_indexer_fallback(target, provider),
+            search_log_id=search_log_id,
+            eval_kwargs={},
+            type_thresholds={"issue": "high"},
+            download_service=download_service,
+            intervention_service=intervention_service,
+            runner=SimpleNamespace(dispatch=AsyncMock()),
+            source_priority=["direct", "torrent", "usenet"],
+            planner=planner,
+        )
+
+    assert routed.action_status == "downloading"
+    assert routed.source_kind == "indexer"
+    assert routed.notices == ("GetComics quota exhausted; continuing with other sources.",)
+    download_service.send_to_client.assert_awaited_once()
+    intervention_service.create_direct_pending_match.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_automatic_quota_reserve_skips_direct_and_preserves_manual_slots(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target, provider, search_log_id = await _seed(db_factory)
+    download_service = AsyncMock()
+    planner = AsyncMock()
+    async with db_factory() as session:
+        config = await session.get(DirectProviderConfig, provider.provider_config_id)
+        assert config is not None
+        config.manifest_snapshot = {"capabilities": {"quota": True}}
+        config.configuration_metadata = {
+            "automatic_quota_reserve": 5,
+            "quota_status": {
+                "remaining": 5,
+                "limit": 25,
+                "window_seconds": 64_800,
+                "reset_at": None,
+                "observed_at": "2026-07-31T12:00:00+00:00",
+            },
+        }
+        await session.commit()
+
+        routed = await route_search_acquisition(
+            session,
+            outcome=_outcome_with_indexer_fallback(target, provider),
+            search_log_id=search_log_id,
+            eval_kwargs={},
+            type_thresholds={"issue": "high"},
+            download_service=download_service,
+            intervention_service=AsyncMock(),
+            runner=SimpleNamespace(dispatch=AsyncMock()),
+            source_priority=["direct", "torrent", "usenet"],
+            planner=planner,
+        )
+
+    assert routed.source_kind == "indexer"
+    assert routed.notices == (
+        "GetComics automatic reserve reached; reserved slots remain available for manual grabs.",
+    )
+    planner.assert_not_awaited()
+    download_service.send_to_client.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_non_intervention_direct_failure_without_fallback_does_not_queue_review(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target, provider, search_log_id = await _seed(db_factory)
+    intervention_service = AsyncMock()
+    planner = AsyncMock(
+        side_effect=DirectAcquisitionPlanningError(
+            "source_authentication_required",
+            "Source authentication is required.",
+            failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+            intervention=False,
+        )
+    )
+
+    async with db_factory() as session:
+        routed = await route_search_acquisition(
+            session,
+            outcome=_outcome(target, provider),
+            search_log_id=search_log_id,
+            eval_kwargs={},
+            type_thresholds={"issue": "high"},
+            download_service=AsyncMock(),
+            intervention_service=intervention_service,
+            runner=SimpleNamespace(dispatch=AsyncMock()),
+            planner=planner,
+        )
+
+    assert routed.grabbed == 0
+    assert routed.queued == 0
+    assert routed.action_status == "source_unavailable"
+    intervention_service.create_direct_pending_match.assert_not_awaited()

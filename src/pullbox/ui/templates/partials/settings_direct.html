@@ -111,6 +111,11 @@
                   <span class="pill pill-muted">Priority {{ provider.priority }}</span>
                   {% if provider.provider_version %}<span class="pill pill-muted">v{{ provider.provider_version }}</span>{% endif %}
                   {% if provider.negotiated_protocol %}<span class="pill pill-info">Protocol v1</span>{% endif %}
+                  {% if provider.quota_supported and provider.quota_remaining is not none %}
+                    <span class="pill {{ 'pill-warning' if provider.quota_remaining <= provider.automatic_quota_reserve else 'pill-info' }}">
+                      {% if provider.quota_limit is not none %}{{ provider.quota_remaining }} of {{ provider.quota_limit }} remaining{% else %}{{ provider.quota_remaining }} remaining{% endif %}
+                    </span>
+                  {% endif %}
                 </div>
 
                 <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
@@ -130,6 +135,22 @@
                     <dt class="text-pb-text-dim">Resolver handoff</dt>
                     <dd class="mt-0.5 text-pb-text-sec">{{ 'Enabled' if provider.resolver_enabled else 'Disabled' }}</dd>
                   </div>
+                  {% if provider.quota_supported %}
+                  <div>
+                    <dt class="text-pb-text-dim">Automatic reserve</dt>
+                    <dd class="mt-0.5 text-pb-text-sec">{{ provider.automatic_quota_reserve }} fast downloads</dd>
+                  </div>
+                  <div>
+                    <dt class="text-pb-text-dim">Quota last checked</dt>
+                    <dd class="mt-0.5 text-pb-text-sec">{{ provider.quota_observed_at|localtime if provider.quota_observed_at else 'Not reported yet' }}</dd>
+                  </div>
+                  {% if provider.quota_reset_at %}
+                  <div>
+                    <dt class="text-pb-text-dim">Automatic retry after</dt>
+                    <dd class="mt-0.5 text-pb-text-sec">{{ provider.quota_reset_at|localtime }}</dd>
+                  </div>
+                  {% endif %}
+                  {% endif %}
                 </dl>
 
               </div>
@@ -399,6 +420,21 @@
                 <div class="inline-alert inline-alert-info">
                   <p class="text-xs">Changing credentials or provider configuration requires a successful health test before an enabled provider can return to service.</p>
                 </div>
+                <template x-if="activeProvider.quota_supported">
+                  <div class="rounded-lg border border-pb-border bg-pb-surface/40 px-3 py-2.5">
+                    <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="direct-provider-quota-reserve">Automatic reserve</label>
+                    <input
+                      id="direct-provider-quota-reserve"
+                      type="number"
+                      min="0"
+                      max="100000"
+                      class="input-pb"
+                      data-testid="settings-direct-provider-modal-quota-reserve"
+                      x-model="form.automatic_quota_reserve"
+                    >
+                    <p class="mt-1 text-[11px] text-pb-text-dim">Automatic searches stop at this many remaining downloads. Manual grabs may use the reserved slots.</p>
+                  </div>
+                </template>
                 <div class="flex items-center justify-between gap-4 rounded-lg border border-pb-border bg-pb-surface/40 px-3 py-2.5">
                   <div>
                     <p class="text-xs font-medium text-pb-text">Provider status</p>
@@ -676,6 +712,7 @@ function directProviderSettings(initialProviders, initialHosts) {
         enabled: false,
         priority: 50,
         resolver_enabled: false,
+        automatic_quota_reserve: 5,
         configuration: {},
       };
     },
@@ -707,6 +744,7 @@ function directProviderSettings(initialProviders, initialHosts) {
       this.form.enabled = Boolean(provider.enabled);
       this.form.priority = provider.priority;
       this.form.resolver_enabled = provider.resolver_enabled;
+      this.form.automatic_quota_reserve = provider.automatic_quota_reserve;
       provider.configuration_controls.forEach(control => {
         if (control.secret) {
           this.form.configuration[control.name] = '';
@@ -918,6 +956,7 @@ function directProviderSettings(initialProviders, initialHosts) {
           const body = {
             priority: Number(this.form.priority),
             resolver_enabled: this.form.resolver_enabled,
+            automatic_quota_reserve: Number(this.form.automatic_quota_reserve),
             public_configuration: publicConfiguration,
           };
           if (this.form.bearer_token) body.bearer_token = this.form.bearer_token;

@@ -276,10 +276,20 @@ class DirectArtifact(DirectContractModel):
         return self
 
 
+class DirectQuotaStatus(DirectContractModel):
+    """Optional source-account capacity without account activity history."""
+
+    remaining: int | None = Field(default=None, ge=0, le=1_000_000)
+    limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    window_seconds: int | None = Field(default=None, ge=1, le=31_536_000)
+    reset_at: datetime | None = None
+
+
 class DirectResolveResponse(DirectContractModel):
     protocol_version: Literal["direct-download-provider/v1"]
     request_id: UUID
     artifacts: Annotated[list[DirectArtifact], Field(max_length=MAX_DIRECT_PROVIDER_RESULTS)]
+    quota: DirectQuotaStatus | None = None
 
 
 def negotiate_direct_provider_protocol(provider_versions: list[str]) -> str:

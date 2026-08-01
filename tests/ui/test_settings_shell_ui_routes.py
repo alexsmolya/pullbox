@@ -496,6 +496,14 @@ class TestSettingsRouteContracts:
                     },
                     configuration_metadata={
                         "allow_private_http": True,
+                        "automatic_quota_reserve": 5,
+                        "quota_status": {
+                            "remaining": 22,
+                            "limit": 25,
+                            "window_seconds": 64_800,
+                            "reset_at": "2026-08-01T06:00:00+00:00",
+                            "observed_at": "2026-07-31T12:00:00+00:00",
+                        },
                         "public_values": {
                             "result_limit": 20,
                             "source_url": "https://annas-archive.gl",
@@ -517,6 +525,7 @@ class TestSettingsRouteContracts:
                             "search": True,
                             "resolve": True,
                             "health": True,
+                            "quota": True,
                             "configuration_schema": True,
                         },
                         "configuration_schema": {
@@ -577,6 +586,12 @@ class TestSettingsRouteContracts:
         assert 'role="listbox"' in response.text
         assert "<datalist" not in response.text
         assert "Configured" in response.text
+        assert "22 of 25 remaining" in response.text
+        assert "Automatic reserve" in response.text
+        assert "Automatic retry after" in response.text
+        assert 'data-testid="settings-direct-provider-modal-quota-reserve"' in response.text
+        assert 'x-model="form.automatic_quota_reserve"' in response.text
+        assert "automatic_quota_reserve: Number(this.form.automatic_quota_reserve)" in response.text
         assert "identity does not verify the running image" in response.text
         assert '@click="openConfigure(1)"' in response.text
         assert '@keydown.enter.prevent="openConfigure(1)"' in response.text

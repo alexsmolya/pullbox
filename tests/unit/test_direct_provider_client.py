@@ -305,6 +305,35 @@ async def test_client_preserves_bounded_browser_challenge_error_codes() -> None:
     assert TOKEN not in str(exc_info.value)
 
 
+async def test_client_preserves_bounded_source_quota_retry_hint() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            429,
+            json={
+                "error": {
+                    "code": "source_quota_limited",
+                    "message": TOKEN,
+                    "retry_after_seconds": 64_800,
+                }
+            },
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = DirectProviderClient(
+            endpoint="https://provider.example",
+            bearer_token=TOKEN,
+            resolver=_resolve_public,
+            http_client=http_client,
+        )
+
+        with pytest.raises(DirectProviderClientError) as exc_info:
+            await client.manifest()
+
+    assert exc_info.value.code == "source_quota_limited"
+    assert exc_info.value.retry_after_seconds == 64_800
+    assert TOKEN not in str(exc_info.value)
+
+
 async def test_client_preserves_cooperative_cancellation() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(60)
@@ -391,3 +420,46 @@ async def test_client_logs_only_classified_failure_details() -> None:
     assert event["failure_code"] == "provider_authentication_failed"
     assert isinstance(event["duration_ms"], int | float)
     assert TOKEN not in str(event)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "remote_code", "retryable"),
+    [
+        (429, "source_quota_limited", False),
+        (401, "source_authentication_required", False),
+        (503, "source_unavailable", True),
+        (503, "source_malformed_response", False),
+        (404, "candidate_not_found", False),
+    ],
+)
+async def test_client_preserves_allowlisted_source_failure_codes(
+    status_code: int,
+    remote_code: str,
+    retryable: bool,
+) -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            status_code,
+            json={"error": {"code": remote_code, "message": TOKEN}},
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = DirectProviderClient(
+            endpoint="https://provider.example",
+            bearer_token=TOKEN,
+            resolver=_resolve_public,
+            http_client=http_client,
+        )
+        request = DirectResolveRequest(
+            protocol_version=DIRECT_PROVIDER_PROTOCOL_V1,
+            request_id=UUID("22222222-2222-4222-8222-222222222222"),
+            deadline=datetime.now(UTC) + timedelta(minutes=1),
+            provider_candidate_id="candidate-1",
+        )
+
+        with pytest.raises(DirectProviderClientError) as exc_info:
+            await client.resolve(request)
+
+    assert exc_info.value.code == remote_code
+    assert exc_info.value.retryable is retryable
+    assert TOKEN not in str(exc_info.value)
