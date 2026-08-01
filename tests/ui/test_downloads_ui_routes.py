@@ -1036,6 +1036,7 @@ class TestDownloadsRouteContracts:
                     "bytes_per_second": 2048,
                     "eta_seconds": 12,
                     "total_bytes": 1000,
+                    "source_slow": True,
                 },
             )
             session.add(attempt)
@@ -1074,6 +1075,7 @@ class TestDownloadsRouteContracts:
         assert snapshot.size_bytes == 1000
         assert snapshot.client_state == "Downloading from PixelDrain"
         assert snapshot.source_label == "GetComics via PixelDrain"
+        assert snapshot.source_slow is True
         register.assert_not_awaited()
 
     async def test_direct_progress_labels_ranked_and_required_resolver_attempts(self) -> None:
@@ -1329,6 +1331,35 @@ class TestDownloadQueueRowViewHelpers:
         assert row.primary_phase == "Downloading from PixelDrain"
         assert row.client_label == "GetComics via PixelDrain"
         assert row.progress_label == "37%"
+
+    def test_direct_download_row_reports_sustained_slow_source(self) -> None:
+        download = DownloadHistory(
+            title="Slow Direct Issue.cbz",
+            state=DownloadState.DOWNLOADING,
+            download_client=DownloadClientType.DIRECT,
+            download_url="pullbox-direct://attempt/8",
+        )
+
+        row = ui_routes._build_download_queue_row_view(
+            download,
+            SimpleNamespace(
+                progress=0.42,
+                speed_bytes=34 * 1024,
+                eta_seconds=600,
+                client_state="Downloading from HTTPS",
+                source_label="Anna's Archive via HTTPS",
+                source_slow=True,
+            ),
+            None,
+        )
+
+        assert row.primary_phase == "Source responding slowly"
+        assert row.status_pill == "pill-warning"
+        assert row.progress_tone == "is-amber"
+        assert row.status_detail == (
+            "The source is still transferring data below 500 kbps. Pullbox will keep downloading."
+        )
+        assert row.speed_bytes == 34 * 1024
 
     def test_direct_download_row_describes_unknown_total_without_fake_percent(self) -> None:
         download = DownloadHistory(

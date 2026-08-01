@@ -283,9 +283,12 @@ async def plan_direct_acquisition(
             initial_source,
         )
     except DirectAcquisitionPlanningError as exc:
+        preserve_pre_plan_review = (
+            pre_plan_review and exc.failure_class is DirectArtifactFailureClass.PROVIDER_UNAVAILABLE
+        )
         state = (
             DirectAcquisitionState.INTERVENTION
-            if exc.intervention
+            if exc.intervention or preserve_pre_plan_review
             else DirectAcquisitionState.FAILED
         )
         transition_acquisition(attempt, state, at=clock())

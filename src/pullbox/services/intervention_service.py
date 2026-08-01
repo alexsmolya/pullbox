@@ -24,6 +24,7 @@ from pullbox.models.direct_acquisition import (
 )
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.services.direct_acquisition_planner_service import (
+    DirectAcquisitionPlanningError,
     DirectAcquisitionPlanningResult,
     plan_direct_acquisition,
 )
@@ -385,8 +386,19 @@ class InterventionService:
             raise ValueError("Pending match has an invalid direct attempt reference")
 
         initial_source = None
-        if attempt.failure_code == "semantic_review_required" and not attempt.artifact_attempts:
-            planned = await self._direct_planner(session, acquisition_id=attempt_id)
+        if not attempt.artifact_attempts:
+            try:
+                planned = await self._direct_planner(session, acquisition_id=attempt_id)
+            except DirectAcquisitionPlanningError as exc:
+                if exc.code == "candidate_not_found":
+                    pending_match.status = PendingMatchStatus.EXPIRED
+                    pending_match.resolved_at = datetime.now(UTC)
+                    pending_match.resolved_by = "system"
+                    details = dict(pending_match.match_details or {})
+                    details["resolution_reason"] = exc.code
+                    pending_match.match_details = details
+                    await session.commit()
+                raise
             attempt = planned.attempt
             artifact = planned.selected_artifact
             initial_source = planned.initial_source

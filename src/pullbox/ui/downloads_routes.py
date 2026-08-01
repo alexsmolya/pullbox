@@ -382,6 +382,7 @@ def build_download_queue_row_view(
     eta_seconds = snapshot_value(progress, "eta_seconds")
     bytes_transferred = snapshot_value(progress, "bytes_transferred")
     progress_indeterminate = bool(snapshot_value(progress, "is_indeterminate"))
+    source_slow = bool(snapshot_value(progress, "source_slow"))
 
     primary_phase = "Queued"
     status_pill = "pill-info"
@@ -445,6 +446,14 @@ def build_download_queue_row_view(
                 progress_label = f"{round(progress_pct):.0f}%"
             if not progress_indeterminate and isinstance(eta_seconds, int) and eta_seconds > 0:
                 eta_text = _eta(eta_seconds)
+            if download.download_client is DownloadClientType.DIRECT and source_slow:
+                primary_phase = "Source responding slowly"
+                status_pill = "pill-warning"
+                status_detail = (
+                    "The source is still transferring data below 500 kbps. "
+                    "Pullbox will keep downloading."
+                )
+                progress_tone = "is-amber"
 
     return DownloadQueueRowView(
         download=download,
@@ -510,9 +519,7 @@ async def load_download_queue_context(session: AsyncSession) -> dict[str, object
         1 for row in waiting_rows if row.primary_phase in {"Queued", "Retry pending"}
     )
     paused_count = sum(1 for row in waiting_rows if row.primary_phase == "Paused")
-    combined_speed = sum(
-        row.speed_bytes or 0 for row in active_rows if row.primary_phase == "Downloading"
-    )
+    combined_speed = sum(row.speed_bytes or 0 for row in active_rows)
 
     return {
         "queue_items": queue_items,
@@ -592,6 +599,7 @@ async def load_download_progress_map(
                     and not isinstance(raw_percent, int | float)
                     and not isinstance(total, int | float)
                 ),
+                source_slow=snapshot.get("source_slow") is True,
             )
     pollable_items = [
         item

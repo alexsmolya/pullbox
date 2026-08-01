@@ -15,6 +15,7 @@ from pullbox.models.indexer import IndexerConfig
 from pullbox.models.issue import Issue
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series
+from pullbox.services.direct_acquisition_planner_service import DirectAcquisitionPlanningError
 from pullbox.ui.intervention_context_loaders import (
     build_intervention_queue_filters,
     load_intervention_context,
@@ -609,6 +610,25 @@ async def htmx_intervention_bulk_reject(
     return response
 
 
+def _direct_approval_failure_message(
+    pending_match: PendingMatch,
+    error: DirectAcquisitionPlanningError,
+) -> str:
+    provider_name = str((pending_match.match_details or {}).get("provider_name") or "Provider")
+    if error.code == "candidate_not_found":
+        return (
+            f"{provider_name} no longer offers a downloadable file for this result. "
+            "It was removed from the queue; run a new search to try another source."
+        )
+    if error.code == "source_quota_limited":
+        return f"{provider_name} has no download quota available right now. Try again later."
+    if error.code == "source_authentication_required":
+        return f"{provider_name} authentication needs attention before this result can download."
+    if error.retryable or error.code in {"source_unavailable", "provider_timed_out"}:
+        return f"{provider_name} is temporarily unavailable. Try approving this result again soon."
+    return "This direct result cannot be queued until its provider configuration is corrected."
+
+
 @router.post(
     "/htmx/intervention/{pending_id}/approve",
     response_class=HTMLResponse,
@@ -665,7 +685,26 @@ async def htmx_intervention_approve(
 
     try:
         await svc.approve_match(session, pending_id)
-    except (ValueError, Exception):
+    except DirectAcquisitionPlanningError as exc:
+        logger.warning(
+            "htmx_direct_intervention_approve_unavailable",
+            pending_id=pending_id,
+            failure_code=exc.code,
+        )
+        return _templates().TemplateResponse(
+            request,
+            "partials/intervention_action_result.html",
+            _ctx(
+                request,
+                user,
+                pending_id=pending_id,
+                heading="Could Not Approve",
+                title=release_title,
+                message=_direct_approval_failure_message(pm, exc),
+                tone="error",
+            ),
+        )
+    except Exception:
         logger.exception("htmx_intervention_approve_failed", pending_id=pending_id)
         failure_message = (
             "Failed to queue this direct release for acquisition."

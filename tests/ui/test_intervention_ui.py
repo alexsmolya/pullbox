@@ -869,6 +869,52 @@ class TestHandlersDirect:
         approve.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_htmx_direct_candidate_not_found_returns_actionable_message(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Unavailable direct candidates explain that a new search is required."""
+        from pullbox.services.direct_acquisition_planner_service import (
+            DirectAcquisitionPlanningError,
+        )
+        from pullbox.ui.routes import htmx_intervention_approve
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pm_ids[0])
+            assert pending is not None
+            pending.download_url = "pullbox-direct://attempt/17"
+            pending.match_details = {
+                "source_kind": "direct",
+                "direct_attempt_id": 17,
+                "provider_name": "Anna's Archive",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            with patch(
+                "pullbox.services.intervention_service.InterventionService.approve_match",
+                new_callable=AsyncMock,
+                side_effect=DirectAcquisitionPlanningError(
+                    "candidate_not_found",
+                    "Candidate unavailable.",
+                    intervention=False,
+                ),
+            ):
+                response = await htmx_intervention_approve(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        body = response.body.decode()
+        assert "Anna&#39;s Archive" in body
+        assert "removed from the queue" in body
+        assert "run a new search" in body
+        assert "Failed to queue" not in body
+
+    @pytest.mark.asyncio
     async def test_htmx_approve_service_error(
         self,
         _db_factory: async_sessionmaker[AsyncSession],

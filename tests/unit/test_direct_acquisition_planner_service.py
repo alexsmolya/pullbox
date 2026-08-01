@@ -699,6 +699,47 @@ async def test_planning_retries_pre_plan_intervention_after_configuration_is_fix
 
 
 @pytest.mark.asyncio
+async def test_pre_plan_review_survives_temporary_provider_failure_for_retry(
+    session: AsyncSession,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.state = DirectAcquisitionState.INTERVENTION
+    attempt.failure_code = "semantic_review_required"
+    await session.flush()
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: _FailingResolveClient(
+                DirectProviderClientError(
+                    "source_unavailable",
+                    "Source is temporarily unavailable.",
+                    retryable=True,
+                )
+            ),
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.code == "source_unavailable"
+    assert attempt.state is DirectAcquisitionState.INTERVENTION
+    assert attempt.failure_code == "source_unavailable"
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(_response()),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.attempt.state is DirectAcquisitionState.PLANNED
+    assert result.attempt.failure_code is None
+
+
+@pytest.mark.asyncio
 async def test_planning_normalizes_provider_error_and_persists_retry_context(
     session: AsyncSession,
 ) -> None:

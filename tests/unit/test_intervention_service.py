@@ -575,6 +575,83 @@ class TestApproveMatch:
         assert pending.status == PendingMatchStatus.APPROVED
 
     @pytest.mark.asyncio
+    async def test_approve_direct_match_replans_pre_plan_provider_failure(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A reviewed candidate with no artifact remains safe to plan again."""
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock()
+        runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+        svc = InterventionService(
+            direct_planner=planner,
+            direct_runner_getter=lambda: runner,
+        )
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            attempt.failure_code = "source_unavailable"
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+            planner.return_value = SimpleNamespace(
+                attempt=attempt,
+                selected_artifact=SimpleNamespace(id=92),
+                initial_source=object(),
+            )
+
+            result = await svc.approve_match(session, pending.id)
+
+        planner.assert_awaited_once_with(session, acquisition_id=attempt.id)
+        runner.dispatch.assert_awaited_once_with(
+            attempt.id,
+            92,
+            initial_source=planner.return_value.initial_source,
+        )
+        assert result is attempt
+        assert pending.status == PendingMatchStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_unavailable_direct_candidate_expires_pending_review(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A candidate that cannot resolve no longer blocks later searches."""
+        from pullbox.services.direct_acquisition_planner_service import (
+            DirectAcquisitionPlanningError,
+        )
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock(
+            side_effect=DirectAcquisitionPlanningError(
+                "candidate_not_found",
+                "The provider candidate is unavailable.",
+                failure_class=DirectArtifactFailureClass.CANDIDATE_INVALID,
+                intervention=False,
+            )
+        )
+        svc = InterventionService(
+            direct_planner=planner,
+            direct_runner_getter=lambda: SimpleNamespace(dispatch=AsyncMock()),
+        )
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+
+            with pytest.raises(DirectAcquisitionPlanningError, match="unavailable"):
+                await svc.approve_match(session, pending.id)
+
+            await session.refresh(pending)
+
+        assert pending.status == PendingMatchStatus.EXPIRED
+        assert pending.resolved_by == "system"
+        assert pending.match_details["resolution_reason"] == "candidate_not_found"
+
+    @pytest.mark.asyncio
     async def test_approve_direct_runtime_intervention_resumes_selected_artifact(
         self, db_factory: async_sessionmaker[AsyncSession]
     ) -> None:

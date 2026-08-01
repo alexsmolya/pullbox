@@ -90,6 +90,21 @@ class TestBugRegressions:
         assert validated[0].confidence == MatchConfidence.HIGH
 
     @pytest.mark.regression
+    def test_scene_style_numbered_pdf_is_auto_grabbable_match(self) -> None:
+        results = [make_release("bb-Sacrificers.No.7.pdf")]
+
+        validated = self.validator.validate_results(
+            results,
+            wanted_series="The Sacrificers",
+            wanted_issue=7.0,
+            wanted_year=2023,
+        )
+
+        assert len(validated) == 1
+        assert validated[0].parsed.series_name == "Sacrificers"
+        assert validated[0].confidence == MatchConfidence.MEDIUM
+
+    @pytest.mark.regression
     def test_publisher_prefixed_volume_subtitle_release_is_accepted(self) -> None:
         """Publisher-prefixed NZBGeek volumes should not fail series matching."""
         results = [

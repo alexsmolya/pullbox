@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -88,6 +89,11 @@ Clock = Callable[[], datetime]
 
 _PROGRESS_INTERVAL_SECONDS = 1.0
 _PROGRESS_BYTES = 8 * 1024**2
+_SLOW_SOURCE_THRESHOLD_BYTES_PER_SECOND = 500_000 / 8
+_SLOW_SOURCE_RECOVERY_BYTES_PER_SECOND = 750_000 / 8
+_SLOW_SOURCE_WINDOW_SECONDS = 60.0
+_SLOW_SOURCE_RECOVERY_WINDOW_SECONDS = 30.0
+_SLOW_SOURCE_MIN_BYTES = 2 * 1024**2
 _ROUTE_SOURCE_FAILURE_CODES = frozenset(
     {
         "provider_artifact_changed",
@@ -95,6 +101,74 @@ _ROUTE_SOURCE_FAILURE_CODES = frozenset(
         "provider_host_kind_mismatch",
     }
 )
+
+
+class _SlowSourceTracker:
+    """Detect sustained slow progress without treating a stalled source as slow."""
+
+    def __init__(self) -> None:
+        self._samples: deque[tuple[float, int]] = deque()
+        self._is_slow = False
+
+    def observe(
+        self,
+        *,
+        at: float,
+        bytes_transferred: int,
+    ) -> bool:
+        """Return whether the transfer currently meets the slow-source contract."""
+        if self._samples and bytes_transferred < self._samples[-1][1]:
+            self._samples.clear()
+            self._is_slow = False
+        self._samples.append((at, bytes_transferred))
+        self._prune(at)
+
+        if self._is_slow:
+            recovery_rate = self._rolling_rate(
+                at=at,
+                bytes_transferred=bytes_transferred,
+                window_seconds=_SLOW_SOURCE_RECOVERY_WINDOW_SECONDS,
+            )
+            if recovery_rate is not None and recovery_rate > _SLOW_SOURCE_RECOVERY_BYTES_PER_SECOND:
+                self._is_slow = False
+            return self._is_slow
+
+        slow_rate = self._rolling_rate(
+            at=at,
+            bytes_transferred=bytes_transferred,
+            window_seconds=_SLOW_SOURCE_WINDOW_SECONDS,
+        )
+        self._is_slow = bool(
+            bytes_transferred >= _SLOW_SOURCE_MIN_BYTES
+            and slow_rate is not None
+            and slow_rate < _SLOW_SOURCE_THRESHOLD_BYTES_PER_SECOND
+        )
+        return self._is_slow
+
+    def _prune(self, at: float) -> None:
+        cutoff = at - _SLOW_SOURCE_WINDOW_SECONDS
+        while len(self._samples) > 1 and self._samples[1][0] <= cutoff:
+            self._samples.popleft()
+
+    def _rolling_rate(
+        self,
+        *,
+        at: float,
+        bytes_transferred: int,
+        window_seconds: float,
+    ) -> float | None:
+        cutoff = at - window_seconds
+        baseline: tuple[float, int] | None = None
+        for sample in self._samples:
+            if sample[0] > cutoff:
+                break
+            baseline = sample
+        if baseline is None or at - baseline[0] < window_seconds:
+            return None
+        byte_delta = bytes_transferred - baseline[1]
+        if byte_delta <= 0:
+            return None
+        return byte_delta / (at - baseline[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -675,6 +749,10 @@ class _ProgressWriter:
         self._now = now
         self._last_saved_at = 0.0
         self._last_saved_bytes = -1
+        self._last_saved_source_slow = bool(
+            (attempt.progress_snapshot or {}).get("source_slow") is True
+        )
+        self._slow_source_tracker = _SlowSourceTracker()
 
     async def write_resolver_attempt(self, event: ArtifactResolutionProgress) -> None:
         await self.write(
@@ -703,8 +781,17 @@ class _ProgressWriter:
         current_bytes = (
             snapshot.bytes_transferred if snapshot is not None else self._artifact.bytes_transferred
         )
+        source_slow = False
+        source_slow_changed = False
+        if stage == "downloading":
+            source_slow = self._slow_source_tracker.observe(
+                at=now,
+                bytes_transferred=current_bytes,
+            )
+            source_slow_changed = source_slow != self._last_saved_source_slow
         if (
             not force
+            and not source_slow_changed
             and self._last_saved_bytes >= 0
             and now - self._last_saved_at < _PROGRESS_INTERVAL_SECONDS
             and current_bytes - self._last_saved_bytes < _PROGRESS_BYTES
@@ -721,6 +808,8 @@ class _ProgressWriter:
             "bytes_per_second": snapshot.bytes_per_second if snapshot is not None else None,
             "eta_seconds": snapshot.eta_seconds if snapshot is not None else None,
         }
+        if stage == "downloading":
+            data["source_slow"] = source_slow
         if details:
             data.update(details)
         advance_acquisition_progress(
@@ -738,6 +827,7 @@ class _ProgressWriter:
         await self._session.commit()
         self._last_saved_at = now
         self._last_saved_bytes = current_bytes
+        self._last_saved_source_slow = source_slow
 
 
 async def _load_attempt(

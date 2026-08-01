@@ -60,6 +60,7 @@ from pullbox.services.blocklist_service import BlocklistService
 from pullbox.services.direct_acquisition_executor import (
     DirectAcquisitionExecutor,
     _recover_http_checkpoint,
+    _SlowSourceTracker,
 )
 from pullbox.services.direct_acquisition_fallback import queue_next_artifact_route
 from pullbox.services.direct_acquisition_planner_service import (
@@ -73,6 +74,46 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+
+
+def test_slow_source_tracker_requires_sustained_progress_regardless_of_eta() -> None:
+    tracker = _SlowSourceTracker()
+
+    assert tracker.observe(at=0.0, bytes_transferred=0) is False
+    assert tracker.observe(at=59.0, bytes_transferred=2 * 1024**2) is False
+    assert tracker.observe(at=60.0, bytes_transferred=2 * 1024**2) is True
+
+    stalled = _SlowSourceTracker()
+    assert stalled.observe(at=0.0, bytes_transferred=0) is False
+    assert stalled.observe(at=60.0, bytes_transferred=0) is False
+
+
+def test_slow_source_tracker_uses_recovery_hysteresis() -> None:
+    tracker = _SlowSourceTracker()
+
+    assert tracker.observe(at=0.0, bytes_transferred=0) is False
+    assert tracker.observe(at=60.0, bytes_transferred=2 * 1024**2) is True
+    assert tracker.observe(at=75.0, bytes_transferred=4 * 1024**2) is True
+    assert tracker.observe(at=90.0, bytes_transferred=6 * 1024**2) is False
+
+    boundary = _SlowSourceTracker()
+    assert boundary.observe(at=0.0, bytes_transferred=0) is False
+    assert boundary.observe(at=60.0, bytes_transferred=2 * 1024**2) is True
+    exactly_750_kbps = 2 * 1024**2 + int((750_000 / 8) * 30)
+    assert (
+        boundary.observe(
+            at=90.0,
+            bytes_transferred=exactly_750_kbps,
+        )
+        is True
+    )
+    assert (
+        boundary.observe(
+            at=120.0,
+            bytes_transferred=exactly_750_kbps + 100_000 * 30,
+        )
+        is False
+    )
 
 
 @pytest.fixture
