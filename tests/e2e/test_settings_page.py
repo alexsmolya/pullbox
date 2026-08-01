@@ -478,6 +478,9 @@ class TestSettingsPage:
             modal.locator('input[x-model="form.url"]').get_attribute("placeholder")
             == "https://api.torznab.com"
         )
+        modal.locator('input[x-model="form.name"]').fill("Public Torznab")
+        modal.locator('input[x-model="form.url"]').fill("https://indexer.example")
+        assert modal.get_by_role("button", name="Add Indexer", exact=True).is_enabled()
         modal.get_by_role("button", name="Advanced Settings", exact=True).click()
         resolver_option = modal.locator("[data-testid='settings-indexers-manual-torznab-resolver']")
         resolver_option.wait_for(state="visible", timeout=5000)

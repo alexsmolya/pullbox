@@ -160,6 +160,31 @@ def _reset_fake_prowlarr() -> None:
 
 @pytest.mark.asyncio
 class TestIndexerCrudRoutes:
+    async def test_manual_indexer_api_key_is_optional(
+        self,
+        sec_db: async_sessionmaker[AsyncSession],
+    ) -> None:
+        body = IndexerCreate.model_validate(
+            {
+                "name": "Public Torznab",
+                "indexer_type": "torznab",
+                "url": "https://indexer.example",
+            }
+        )
+
+        async with sec_db() as session:
+            created = await indexers_api.add_indexer(
+                body,
+                object(),  # type: ignore[arg-type]
+                session,
+            )
+            stored = await session.get(IndexerConfig, created.id)
+
+        assert body.api_key == ""
+        assert created.has_api_key is False
+        assert stored is not None
+        assert stored.api_key == ""
+
     async def test_crud_routes_redact_encrypt_preserve_and_delete(
         self,
         sec_db: async_sessionmaker[AsyncSession],

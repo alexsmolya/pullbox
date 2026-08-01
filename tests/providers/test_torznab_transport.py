@@ -489,6 +489,23 @@ async def test_torznab_indexer_routes_caps_search_and_descriptor_through_transpo
     transport.fetch_descriptor.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_torznab_indexer_omits_empty_api_key() -> None:
+    transport = AsyncMock()
+    transport.get_text.return_value = "<caps><categories /></caps>"
+    indexer = TorznabIndexer(
+        name="Public Torznab",
+        url="https://indexer.example",
+        api_key="",
+        rate_limit_per_minute=6000,
+        request_transport=transport,
+    )
+
+    await indexer.get_capabilities()
+
+    assert transport.get_text.await_args.kwargs["params"] == {"t": "caps"}
+
+
 def test_opted_in_torznab_keeps_descriptor_handoff_without_healthy_resolvers() -> None:
     indexer = TorznabIndexer(
         name="Manual Torznab",

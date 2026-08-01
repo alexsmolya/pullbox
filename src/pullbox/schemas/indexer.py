@@ -14,9 +14,7 @@ class IndexerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Display name")
     indexer_type: IndexerType = Field(description="Indexer protocol type")
     url: str = Field(..., min_length=1, max_length=500, description="Base URL of the indexer")
-    api_key: str = Field(
-        ..., min_length=1, max_length=255, description="API key for authentication"
-    )
+    api_key: str = Field("", max_length=255, description="Optional API key for authentication")
     enabled: bool = Field(True, description="Whether this indexer is active")
     priority: int = Field(50, ge=1, le=100, description="Priority (lower = higher priority)")
     categories: str | None = Field(None, description="Comma-separated category IDs")

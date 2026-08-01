@@ -97,7 +97,9 @@ class TorznabIndexer(NewznabIndexer):
     async def _request(self, params: dict[str, Any]) -> str:
         """Issue the credentialed API request through the bounded transport."""
         await self._wait_for_rate_limit()
-        request_params: dict[str, Any] = {"apikey": self._api_key, **params}
+        request_params: dict[str, Any] = (
+            {"apikey": self._api_key, **params} if self._api_key else dict(params)
+        )
         function = str(params.get("t", "request"))
         try:
             text = await self._request_transport.get_text(

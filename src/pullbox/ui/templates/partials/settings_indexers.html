@@ -700,6 +700,9 @@
           <div>
             <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
               API Key
+              <template x-if="form.source === 'manual' && !(modalMode === 'edit' && form.has_api_key)">
+                <span class="text-pb-text-dim font-normal ml-1">(optional)</span>
+              </template>
               <template x-if="modalMode === 'edit' && form.has_api_key">
                 <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
               </template>
@@ -851,7 +854,7 @@
             </button>
 
             <button type="submit"
-                    :disabled="saving || !form.name || !form.url || !form.indexer_type || (!form.api_key && !form.has_api_key && form.source === 'manual')"
+                    :disabled="saving || !form.name || !form.url || !form.indexer_type"
                     class="btn-primary btn-sm">
               <span x-text="saving ? 'Saving...' : (modalMode === 'add' ? 'Add Indexer' : 'Save Changes')"></span>
             </button>

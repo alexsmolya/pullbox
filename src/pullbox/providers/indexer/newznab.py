@@ -50,7 +50,7 @@ class NewznabIndexer:
     Args:
         name: Human-readable indexer name.
         url: Base URL of the Newznab-compatible API.
-        api_key: API key for authentication.
+        api_key: Optional API key for authentication.
         rate_limit_per_minute: Maximum requests per minute (default 5).
     """
 
@@ -104,7 +104,9 @@ class NewznabIndexer:
         """Make a rate-limited GET request, returning raw XML text."""
         await self._wait_for_rate_limit()
 
-        request_params: dict[str, Any] = {"apikey": self._api_key, **params}
+        request_params: dict[str, Any] = (
+            {"apikey": self._api_key, **params} if self._api_key else dict(params)
+        )
         url = f"{self._base_url}/api"
 
         log = logger.bind(indexer=self._name, function=params.get("t"))
