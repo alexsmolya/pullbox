@@ -270,6 +270,7 @@ def test_resolution_error_never_renders_sensitive_context() -> None:
         failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
         retryable=True,
         intervention=False,
+        http_status=503,
         sensitive_context={
             "url": "https://example.test/signed?token=secret",
             "authorization": "Bearer secret",
@@ -281,4 +282,19 @@ def test_resolution_error_never_renders_sensitive_context() -> None:
     assert "token=secret" not in rendered
     assert "Bearer secret" not in rendered
     assert error.code == "host_unavailable"
+    assert error.http_status == 503
     assert str(error) == "Artifact host is temporarily unavailable."
+
+
+@pytest.mark.parametrize("status", [True, 99, 600])
+def test_resolution_error_discards_invalid_http_status(status: int) -> None:
+    error = ArtifactHostResolutionError(
+        code="host_unavailable",
+        message="Artifact host is temporarily unavailable.",
+        failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
+        retryable=True,
+        intervention=False,
+        http_status=status,
+    )
+
+    assert error.http_status is None

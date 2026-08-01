@@ -691,6 +691,7 @@ class DirectAcquisitionExecutor:
             host_kind=artifact.host_kind.value,
             failure_class=exc.failure_class.value,
             failure_code=exc.code,
+            http_status=getattr(exc, "http_status", None),
             retryable=bool(exc.retryable),
             retry_count=attempt.retry_count,
             max_retries=attempt.max_retries,

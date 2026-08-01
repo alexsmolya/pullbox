@@ -144,6 +144,35 @@ async def test_generic_https_rejects_an_html_landing_page() -> None:
     assert raised.value.intervention is True
 
 
+@pytest.mark.parametrize("status", [404, 410])
+async def test_generic_https_classifies_a_missing_file_as_a_permanent_mirror(
+    status: int,
+) -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(status, headers={"Content-Length": "0"})
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ArtifactHostResolutionError) as raised:
+            await GenericHttpsAdapter(client, resolver=_resolve_public).resolve(
+                _request(
+                    DirectArtifactHostKind.GENERIC_HTTPS,
+                    "https://files.example.test/missing.cbz",
+                    final=True,
+                ),
+                credentials={},
+            )
+
+    assert raised.value.code == "artifact_file_unavailable"
+    assert str(raised.value) == (
+        "The selected file is no longer available at this secure download location. "
+        "Choose another search result."
+    )
+    assert raised.value.failure_class is DirectArtifactFailureClass.PERMANENT_MIRROR
+    assert raised.value.retryable is False
+    assert raised.value.intervention is True
+    assert raised.value.http_status == status
+
+
 @pytest.mark.parametrize(
     "url",
     [

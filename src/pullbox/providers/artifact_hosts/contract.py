@@ -109,6 +109,7 @@ class ArtifactHostResolutionError(RuntimeError):
         failure_class: DirectArtifactFailureClass,
         retryable: bool,
         intervention: bool,
+        http_status: int | None = None,
         sensitive_context: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__(message)
@@ -117,6 +118,13 @@ class ArtifactHostResolutionError(RuntimeError):
         self.failure_class = failure_class
         self.retryable = retryable
         self.intervention = intervention
+        self.http_status = (
+            http_status
+            if isinstance(http_status, int)
+            and not isinstance(http_status, bool)
+            and 100 <= http_status <= 599
+            else None
+        )
         self._sensitive_context = dict(sensitive_context or {})
 
     def __repr__(self) -> str:

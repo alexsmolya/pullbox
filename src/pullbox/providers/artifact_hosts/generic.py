@@ -75,6 +75,18 @@ class GenericHttpsAdapter:
             headers={"Accept": "application/octet-stream", "Range": "bytes=0-0"},
             read_body=False,
         )
+        if response.status_code in {404, 410}:
+            raise ArtifactHostResolutionError(
+                code="artifact_file_unavailable",
+                message=(
+                    "The selected file is no longer available at this secure download location. "
+                    "Choose another search result."
+                ),
+                failure_class=DirectArtifactFailureClass.PERMANENT_MIRROR,
+                retryable=False,
+                intervention=True,
+                http_status=response.status_code,
+            )
         if response.status_code >= 400:
             raise ArtifactHostResolutionError(
                 code="artifact_host_unavailable",
@@ -82,6 +94,7 @@ class GenericHttpsAdapter:
                 failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
                 retryable=response.status_code >= 500 or response.status_code == 429,
                 intervention=response.status_code < 500 and response.status_code != 429,
+                http_status=response.status_code,
             )
         content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
         if content_type.startswith("text/") or content_type in _HTML_CONTENT_TYPES:
