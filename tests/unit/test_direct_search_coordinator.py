@@ -225,6 +225,22 @@ async def test_one_provider_failure_is_isolated_and_redacted() -> None:
     assert "secret upstream" not in repr(outcome)
 
 
+async def test_duplicate_provider_candidate_identity_is_returned_once() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    candidate = _candidate(provider, "Absolute Superman 009 (2025)")
+    _Client.responses = {provider.provider_identity: [candidate, candidate]}
+
+    outcome = await search_direct_issue_target(
+        _target(),
+        [provider],
+        client_factory=_factory,
+    )
+
+    assert len(outcome.matched) == 1
+    assert outcome.matched[0].candidate.provider_candidate_id == candidate.provider_candidate_id
+
+
 async def test_provider_search_tries_ordinary_http_then_ranked_resolvers() -> None:
     _reset()
     provider = replace(
@@ -311,6 +327,23 @@ async def test_request_scopes_each_provider_secret_and_normalized_intent() -> No
     assert request.source_credentials == provider.source_credentials
     assert "member-secret" not in repr(request)
     assert isinstance(request.request_id, UUID)
+
+
+async def test_collection_target_declares_volume_coverage() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    _Client.responses = {provider.provider_identity: []}
+    target = replace(
+        _target(),
+        issue_number=1,
+        issue_type=IssueType.DELUXE,
+    )
+
+    await search_direct_issue_target(target, [provider], client_factory=_factory)
+
+    request = _Client.requests[0][1]
+    assert request.intent.issue_number == "1"
+    assert request.intent.volume == "1"
 
 
 async def test_loader_decrypts_only_usable_provider_operations(db_session: AsyncSession) -> None:
@@ -422,3 +455,4 @@ async def test_persisted_discovery_is_restart_safe_and_contains_no_urls_or_secre
     assert stored.provider_candidate_id == candidate.provider_candidate_id
     assert stored.state.value == "discovered"
     assert stored.requested_coverage["issue_numbers"] == ["9"]
+    assert stored.requested_coverage["volume"] is None

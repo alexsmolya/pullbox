@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
@@ -300,16 +301,28 @@ async def test_direct_provider(
         await session.flush()
         return DirectProviderTestResult(False, state, str(message), checked_at)
 
-    state, usable = _state_from_health(health)
+    configured_source_domain = _configured_source_domain(config)
+    state, usable = _state_from_health(
+        health,
+        configured_source_domain=configured_source_domain,
+    )
     config.negotiated_protocol = negotiated
     config.display_name = manifest.display_name
     config.manifest_snapshot = manifest.model_dump(mode="json")
     config.last_health_at = checked_at
     config.last_tested_at = checked_at
-    config.last_error_code = _health_error_code(health)
+    config.last_error_code = _health_error_code(
+        health,
+        configured_source_domain=configured_source_domain,
+    )
     config.state = state
     await session.flush()
-    return DirectProviderTestResult(usable, state, health.message, checked_at)
+    message = (
+        "The configured source domain is currently unreachable."
+        if config.last_error_code == "provider_source_unavailable"
+        else health.message
+    )
+    return DirectProviderTestResult(usable, state, message, checked_at)
 
 
 async def enable_direct_provider(
@@ -429,7 +442,15 @@ def _trust_level(provider_id: str) -> DirectProviderTrustLevel:
     return DirectProviderTrustLevel.CUSTOM
 
 
-def _state_from_health(health: DirectHealthResponse) -> tuple[DirectProviderState, bool]:
+def _state_from_health(
+    health: DirectHealthResponse,
+    *,
+    configured_source_domain: str | None = None,
+) -> tuple[DirectProviderState, bool]:
+    if health.process_status == DirectProviderStatus.HEALTHY and _configured_source_is_unreachable(
+        health, configured_source_domain
+    ):
+        return DirectProviderState.DEGRADED, False
     status = (
         health.process_status
         if health.process_status != DirectProviderStatus.HEALTHY
@@ -448,9 +469,41 @@ def _state_from_health(health: DirectHealthResponse) -> tuple[DirectProviderStat
     return mapping.get(status, (DirectProviderState.UNAVAILABLE, False))
 
 
-def _health_error_code(health: DirectHealthResponse) -> str | None:
-    state, usable = _state_from_health(health)
+def _health_error_code(
+    health: DirectHealthResponse,
+    *,
+    configured_source_domain: str | None = None,
+) -> str | None:
+    if _configured_source_is_unreachable(health, configured_source_domain):
+        return "provider_source_unavailable"
+    state, usable = _state_from_health(
+        health,
+        configured_source_domain=configured_source_domain,
+    )
     return None if usable else state.value
+
+
+def _configured_source_domain(config: DirectProviderConfig) -> str | None:
+    raw_public = _metadata(config).get("public_values", {})
+    if not isinstance(raw_public, dict):
+        return None
+    raw_domain = raw_public.get("domain")
+    if not isinstance(raw_domain, str):
+        return None
+    try:
+        return urlsplit(raw_domain).hostname
+    except ValueError:
+        return None
+
+
+def _configured_source_is_unreachable(
+    health: DirectHealthResponse,
+    configured_source_domain: str | None,
+) -> bool:
+    if not configured_source_domain:
+        return False
+    value = health.diagnostics.get(f"source.{configured_source_domain}")
+    return isinstance(value, str) and value.casefold() == "unreachable"
 
 
 def _state_for_error(code: str) -> DirectProviderState:

@@ -15,6 +15,7 @@ from pullbox.schemas.search import (
     SearchHistoryBulkDeleteResponse,
     SeriesSearchResult,
 )
+from pullbox.services.direct_discovery_retention import prune_unstarted_direct_discoveries
 
 logger = structlog.get_logger(__name__)
 
@@ -150,6 +151,7 @@ async def delete_search_history_entry(
     if log is None:
         raise NotFoundError("SearchLog", log_id)
 
+    await prune_unstarted_direct_discoveries(session, [log_id])
     await session.delete(log)
     await session.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -165,6 +167,7 @@ async def clear_search_history(
     deleted = result.scalar_one()
 
     if deleted:
+        await prune_unstarted_direct_discoveries(session, select(SearchLog.id))
         await session.execute(delete(SearchLog))
         await session.flush()
 

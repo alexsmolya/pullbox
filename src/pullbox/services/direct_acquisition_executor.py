@@ -279,8 +279,6 @@ class DirectAcquisitionExecutor:
             return _result(attempt, artifact)
         except DirectAcquisitionPlanningError as exc:
             failure = _route_source_failure(exc)
-            if failure is None:
-                raise
             return await self._classified_failure(
                 session,
                 attempt,
@@ -873,15 +871,21 @@ def _validate_source_request(
 
 def _route_source_failure(
     error: DirectAcquisitionPlanningError,
-) -> ArtifactHostResolutionError | None:
-    if error.code not in _ROUTE_SOURCE_FAILURE_CODES:
-        return None
+) -> ArtifactHostResolutionError:
+    if error.code in _ROUTE_SOURCE_FAILURE_CODES:
+        return ArtifactHostResolutionError(
+            code=error.code,
+            message="The selected artifact route is no longer offered by the provider.",
+            failure_class=DirectArtifactFailureClass.PERMANENT_MIRROR,
+            retryable=False,
+            intervention=True,
+        )
     return ArtifactHostResolutionError(
         code=error.code,
-        message="The selected artifact route is no longer offered by the provider.",
-        failure_class=DirectArtifactFailureClass.PERMANENT_MIRROR,
-        retryable=False,
-        intervention=True,
+        message=str(error),
+        failure_class=error.failure_class,
+        retryable=error.retryable,
+        intervention=error.intervention,
     )
 
 

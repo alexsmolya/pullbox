@@ -73,6 +73,7 @@ class GenericHttpsAdapter:
             resolver=self._resolver,
             allowed_domains=None,
             headers={"Accept": "application/octet-stream", "Range": "bytes=0-0"},
+            read_body=False,
         )
         if response.status_code >= 400:
             raise ArtifactHostResolutionError(

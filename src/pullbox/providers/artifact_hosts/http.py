@@ -124,6 +124,7 @@ async def request_bounded(
     cookies: httpx.Cookies | None = None,
     max_response_bytes: int = _MAX_ADAPTER_RESPONSE_BYTES,
     max_redirects: int = _MAX_REDIRECTS,
+    read_body: bool = True,
 ) -> BoundedArtifactResponse:
     """Perform one bounded request while revalidating every redirect target."""
     current_url = raw_url
@@ -159,7 +160,7 @@ async def request_bounded(
         response: httpx.Response | None = None
         try:
             response = await client.send(request, stream=True, follow_redirects=False)
-            content = await _read_bounded(response, max_response_bytes)
+            content = await _read_bounded(response, max_response_bytes) if read_body else b""
         except asyncio.CancelledError:
             raise
         except (httpx.HTTPError, TimeoutError) as exc:

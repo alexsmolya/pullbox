@@ -42,6 +42,7 @@ from pullbox.models.series import Series
 from pullbox.services import search_runtime as _search_runtime
 from pullbox.services.blocklist_service import BlocklistService
 from pullbox.services.direct_acquisition_planner_service import plan_direct_acquisition
+from pullbox.services.direct_discovery_retention import prune_unstarted_direct_discoveries
 from pullbox.services.download_service import DownloadService
 from pullbox.services.intervention_service import InterventionService
 from pullbox.services.release_validator import (
@@ -1297,7 +1298,7 @@ async def purge_search_logs() -> None:
     """Delete search log entries older than the configured retention period."""
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import delete
+    from sqlalchemy import delete, select
 
     factory = get_session_factory()
 
@@ -1306,6 +1307,8 @@ async def purge_search_logs() -> None:
             retention_days = await _load_search_log_retention_days(session)
 
             cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+            old_search_log_ids = select(SearchLog.id).where(SearchLog.created_at < cutoff)
+            await prune_unstarted_direct_discoveries(session, old_search_log_ids)
             result = await session.execute(delete(SearchLog).where(SearchLog.created_at < cutoff))
             pruned = result.rowcount  # type: ignore[attr-defined]
             await session.commit()

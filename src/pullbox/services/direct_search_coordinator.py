@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from pullbox.core.log_sanitizer import sanitize_log_mapping, sanitize_log_string
 from pullbox.core.name_matcher import NameMatcher
+from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -219,6 +220,7 @@ async def persist_direct_search_discoveries(
     """Persist redacted candidate evidence and return server-issued IDs."""
     pending: list[tuple[DirectAcquisitionAttempt, DirectValidatedCandidate]] = []
     issue_number = f"{target.issue_number:g}"
+    volume = _target_volume(target)
     for result in (*outcome.matched, *outcome.rejected):
         attempt = DirectAcquisitionAttempt(
             request_key=f"direct-search:{uuid4().hex}",
@@ -231,6 +233,7 @@ async def persist_direct_search_discoveries(
             requested_coverage={
                 "issue_numbers": [issue_number],
                 "issue_type": target.issue_type.value,
+                "volume": volume,
             },
             candidate_snapshot=_candidate_snapshot(result),
             plan_snapshot={},
@@ -402,7 +405,15 @@ async def _search_provider(
 
     matched: list[DirectValidatedCandidate] = []
     rejected: list[DirectValidatedCandidate] = []
+    seen_candidate_ids: set[str] = set()
     for candidate in response.candidates:
+        if candidate.provider_candidate_id in seen_candidate_ids:
+            logger.warning(
+                "direct_search_duplicate_candidate_ignored",
+                provider_id=provider.provider_identity,
+            )
+            continue
+        seen_candidate_ids.add(candidate.provider_candidate_id)
         release = _candidate_release(provider, candidate)
         accepted, declined = validator.validate_all_results(
             [release],
@@ -482,11 +493,18 @@ def _build_intent(target: IssueSearchTarget) -> DirectSearchIntent:
         alternate_titles=list(target.alternate_names or []),
         issue_number=issue_number,
         issue_type=target.issue_type.value,
-        volume=issue_number if target.issue_type.value == "volume" else None,
+        volume=_target_volume(target),
         year=target.series_year,
         preferred_formats=["cbz", "cbr", "cb7", "pdf"],
         quality_preferences=["digital", "retail"],
     )
+
+
+def _target_volume(target: IssueSearchTarget) -> str | None:
+    """Map collection issue numbering onto provider volume coverage."""
+    if issue_type_family(target.issue_type) is not TypeFamily.COLLECTION:
+        return None
+    return f"{target.issue_number:g}"
 
 
 def _candidate_release(

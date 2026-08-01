@@ -91,6 +91,35 @@ async def test_generic_https_accepts_a_probed_final_file_with_resume_validators(
     assert transfer.range_supported is True
 
 
+async def test_generic_https_accepts_large_files_when_server_ignores_range_probe() -> None:
+    file_size = 3 * 1024 * 1024
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={
+                "Content-Type": "application/vnd.comicbook+zip",
+                "Content-Length": str(file_size),
+                "Content-Disposition": 'attachment; filename="large.cbz"',
+            },
+            content=b"P" * file_size,
+        )
+    )
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        transfer = await GenericHttpsAdapter(client, resolver=_resolve_public).resolve(
+            _request(
+                DirectArtifactHostKind.GENERIC_HTTPS,
+                "https://files.example.test/large.cbz",
+                final=True,
+            ),
+            credentials={},
+        )
+
+    assert transfer.expected_size == file_size
+    assert transfer.filename_hint == "large.cbz"
+    assert transfer.range_supported is False
+
+
 async def test_generic_https_rejects_an_html_landing_page() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(

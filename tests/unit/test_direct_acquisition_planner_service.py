@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
@@ -232,6 +232,16 @@ class _FallbackResolveClient(_ResolveClient):
         return self.response.model_copy(update={"request_id": request.request_id})
 
 
+class _FailingResolveClient(_ResolveClient):
+    def __init__(self, error: DirectProviderClientError) -> None:
+        super().__init__(_response())
+        self.error = error
+
+    async def resolve(self, request: Any) -> DirectResolveResponse:
+        self.requests.append(request)
+        raise self.error
+
+
 @pytest.mark.asyncio
 async def test_planning_selects_best_eligible_route_and_persists_no_urls(
     session: AsyncSession,
@@ -258,6 +268,210 @@ async def test_planning_selects_best_eligible_route_and_persists_no_urls(
     assert "token" not in rendered.casefold()
     assert "pixel-mirror" in rendered
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_coverage",
+    [
+        {"issue_numbers": ["1"], "issue_type": "deluxe"},
+        {"issue_numbers": ["1"], "issue_type": "deluxe", "volume": "1"},
+    ],
+)
+async def test_planning_accepts_matching_volume_only_coverage_for_collection(
+    session: AsyncSession,
+    requested_coverage: dict[str, object],
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = requested_coverage
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage(volume="1")
+    await session.flush()
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.plan.complete is True
+    assert result.plan.requested == frozenset({"1"})
+    assert result.selected_artifact.host_kind is DirectArtifactHostKind.PIXELDRAIN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_coverage", "artifact_volume"),
+    [
+        ({"issue_numbers": ["1"], "issue_type": "issue"}, "1"),
+        (
+            {"issue_numbers": ["1"], "issue_type": "deluxe", "volume": "1"},
+            "2",
+        ),
+    ],
+)
+async def test_planning_rejects_unsafe_volume_only_coverage(
+    session: AsyncSession,
+    requested_coverage: dict[str, object],
+    artifact_volume: str,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = requested_coverage
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage(volume=artifact_volume)
+    await session.flush()
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.code == "no_eligible_complete_plan"
+
+
+@pytest.mark.asyncio
+async def test_planning_accepts_one_exact_title_only_nonstandard_artifact(
+    session: AsyncSession,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = {
+        "issue_numbers": ["1"],
+        "issue_type": "deluxe",
+        "volume": "1",
+    }
+    attempt.candidate_snapshot = {
+        "display_title": "Planner Series Deluxe Edition (2026)",
+        "semantic_decision": {
+            "is_match": False,
+            "confidence": "low",
+            "series_similarity": 1.0,
+            "match_type": "title_only",
+        },
+    }
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage()
+    await session.flush()
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.plan.complete is True
+    assert result.attempt.plan_snapshot["coverage"]["title_only_override"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("issue_type", "series_similarity", "artifact_count"),
+    [
+        ("issue", 1.0, 1),
+        ("deluxe", 0.89, 1),
+        ("deluxe", 1.0, 2),
+    ],
+)
+async def test_planning_rejects_unsafe_title_only_coverage(
+    session: AsyncSession,
+    issue_type: str,
+    series_similarity: float,
+    artifact_count: int,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = {
+        "issue_numbers": ["1"],
+        "issue_type": issue_type,
+        "volume": "1",
+    }
+    attempt.candidate_snapshot = {
+        "display_title": "Planner Series Deluxe Edition (2026)",
+        "semantic_decision": {
+            "is_match": False,
+            "confidence": "low",
+            "series_similarity": series_similarity,
+            "match_type": "title_only",
+        },
+    }
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage()
+    if artifact_count == 2:
+        response.artifacts.append(
+            DirectArtifact(
+                artifact_id="provider-artifact-2",
+                coverage=DirectArtifactCoverage(),
+                route=DirectArtifactRoute.DIRECT_ARTIFACT,
+                format="cbz",
+                mirrors=[
+                    DirectMirror(
+                        mirror_id="provider-artifact-2-mirror",
+                        host_kind="pixeldrain",
+                        share_url="https://pixeldrain.com/u/second",
+                    )
+                ],
+            )
+        )
+    await session.flush()
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.code == "no_eligible_complete_plan"
+
+
+@pytest.mark.asyncio
+async def test_planning_fails_closed_instead_of_truncating_multi_artifact_plan(
+    session: AsyncSession,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = {"issue_numbers": ["1", "2"], "issue_type": "issue"}
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage(issue_numbers=["1"])
+    response.artifacts.append(
+        DirectArtifact(
+            artifact_id="provider-artifact-2",
+            coverage=DirectArtifactCoverage(issue_numbers=["2"]),
+            route=DirectArtifactRoute.DIRECT_ARTIFACT,
+            format="cbz",
+            mirrors=[
+                DirectMirror(
+                    mirror_id="provider-artifact-2-mirror",
+                    host_kind="pixeldrain",
+                    share_url="https://pixeldrain.com/u/second",
+                )
+            ],
+        )
+    )
+    await session.flush()
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.code == "multi_artifact_plan_unsupported"
 
 
 @pytest.mark.asyncio
@@ -462,7 +676,7 @@ async def test_planning_accepts_only_pre_plan_semantic_review_intervention(
 
 
 @pytest.mark.asyncio
-async def test_planning_rejects_non_semantic_intervention(
+async def test_planning_retries_pre_plan_intervention_after_configuration_is_fixed(
     session: AsyncSession,
 ) -> None:
     attempt = await session.get(DirectAcquisitionAttempt, 1)
@@ -471,16 +685,89 @@ async def test_planning_rejects_non_semantic_intervention(
     attempt.failure_code = "artifact_host_auth_required"
     await session.flush()
 
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(_response()),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.attempt.state is DirectAcquisitionState.PLANNED
+    assert result.attempt.failure_code is None
+
+
+@pytest.mark.asyncio
+async def test_planning_normalizes_provider_error_and_persists_retry_context(
+    session: AsyncSession,
+) -> None:
+    client = _FailingResolveClient(
+        DirectProviderClientError(
+            "provider_timed_out",
+            "Provider timed out at https://secret.invalid/path?token=hidden",
+            retryable=True,
+        )
+    )
+
     with pytest.raises(DirectAcquisitionPlanningError) as error:
         await plan_direct_acquisition(
             session,
             acquisition_id=1,
-            provider_client_factory=lambda **_kwargs: _ResolveClient(_response()),
+            provider_client_factory=lambda **_kwargs: client,
             provider_secret_loader=lambda _config: _provider_material(),
             now=lambda: NOW,
         )
 
-    assert error.value.code == "acquisition_not_discovered"
+    assert error.value.code == "provider_timed_out"
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    assert attempt.state is DirectAcquisitionState.INTERVENTION
+    assert attempt.failure_class is DirectArtifactFailureClass.PROVIDER_UNAVAILABLE
+    assert attempt.failure_code == "provider_timed_out"
+    assert "secret.invalid" not in (attempt.error_message or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("provider_disabled", "provider_disabled"),
+        ("candidate_disabled", "candidate_not_resolvable"),
+        ("candidate_expired", "candidate_expired"),
+    ],
+)
+async def test_planning_revalidates_provider_and_candidate_discovery_state(
+    session: AsyncSession,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    provider = await session.get(DirectProviderConfig, 1)
+    assert attempt is not None
+    assert provider is not None
+    if mutation == "provider_disabled":
+        provider.enabled = False
+    elif mutation == "candidate_disabled":
+        attempt.candidate_snapshot = {"can_resolve": False}
+    else:
+        attempt.candidate_snapshot = {
+            "can_resolve": True,
+            "expires_at": (NOW - timedelta(seconds=1)).isoformat(),
+        }
+    client = _ResolveClient(_response())
+    await session.flush()
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: client,
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.code == expected_code
+    assert client.requests == []
 
 
 @pytest.mark.asyncio
@@ -530,6 +817,34 @@ async def test_planning_fails_closed_when_provider_host_claim_disagrees_with_url
     attempt = await session.get(DirectAcquisitionAttempt, 1)
     assert attempt is not None
     assert "mega.nz" not in repr(attempt.progress_snapshot)
+
+
+@pytest.mark.asyncio
+async def test_planning_classifies_unsafe_provider_headers_without_a_raw_error(
+    session: AsyncSession,
+) -> None:
+    response = _response()
+    response.artifacts[0].mirrors[1] = DirectMirror(
+        mirror_id="unsafe-header-mirror",
+        host_kind="pixeldrain",
+        share_url="https://pixeldrain.com/u/abc123",
+        source_headers={"Authorization": "Bearer provider-secret"},
+    )
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.code == "unsafe_provider_header"
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    assert attempt.failure_class is DirectArtifactFailureClass.CANDIDATE_INVALID
+    assert "provider-secret" not in repr(attempt.progress_snapshot)
 
 
 @pytest.mark.asyncio

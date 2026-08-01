@@ -61,6 +61,7 @@ from pullbox.services.direct_acquisition_executor import (
     DirectAcquisitionExecutor,
     _recover_http_checkpoint,
 )
+from pullbox.services.direct_acquisition_fallback import queue_next_artifact_route
 from pullbox.services.direct_acquisition_planner_service import (
     DirectAcquisitionPlanningError,
 )
@@ -773,6 +774,7 @@ async def test_executor_falls_back_to_next_ranked_route_without_blocking_provide
         "artifacts": [
             {
                 "artifact_identity": "route:mega",
+                "content_identity": "artifact:primary",
                 "route_kind": "direct",
                 "host_kind": "mega",
                 "eligible": True,
@@ -781,6 +783,7 @@ async def test_executor_falls_back_to_next_ranked_route_without_blocking_provide
             },
             {
                 "artifact_identity": "route:pixeldrain",
+                "content_identity": "artifact:primary",
                 "route_kind": "direct",
                 "host_kind": "pixeldrain",
                 "eligible": True,
@@ -859,6 +862,50 @@ async def test_executor_falls_back_to_next_ranked_route_without_blocking_provide
 
 
 @pytest.mark.asyncio
+async def test_fallback_never_switches_to_a_different_provider_artifact(
+    session: AsyncSession,
+) -> None:
+    attempt = _attempt()
+    failed = attempt.artifact_attempts[0]
+    failed.artifact_identity = "route:issue-1-mega"
+    failed.host_kind = DirectArtifactHostKind.MEGA
+    failed.failure_class = DirectArtifactFailureClass.TRANSIENT_HOST
+    failed.failure_code = "artifact_host_unavailable"
+    failed.error_message = "The selected host is temporarily unavailable."
+    attempt.plan_snapshot = {
+        "schema_version": 1,
+        "selected_artifact_identity": failed.artifact_identity,
+        "artifacts": [
+            {
+                "artifact_identity": failed.artifact_identity,
+                "content_identity": "artifact:issue-1",
+                "route_kind": "direct",
+                "host_kind": "mega",
+                "eligible": True,
+                "eligibility_code": "eligible",
+                "expected_size": 100,
+            },
+            {
+                "artifact_identity": "route:issue-2-pixeldrain",
+                "content_identity": "artifact:issue-2",
+                "route_kind": "direct",
+                "host_kind": "pixeldrain",
+                "eligible": True,
+                "eligibility_code": "eligible",
+                "expected_size": 100,
+            },
+        ],
+    }
+    session.add(attempt)
+    await session.commit()
+
+    fallback = await queue_next_artifact_route(session, attempt, failed, at=NOW)
+
+    assert fallback is None
+    assert len(attempt.artifact_attempts) == 1
+
+
+@pytest.mark.asyncio
 async def test_executor_falls_back_when_selected_provider_mirror_disappears(
     session: AsyncSession,
     tmp_path: Path,
@@ -876,6 +923,7 @@ async def test_executor_falls_back_when_selected_provider_mirror_disappears(
         "artifacts": [
             {
                 "artifact_identity": "route:mega",
+                "content_identity": "artifact:primary",
                 "route_kind": "direct",
                 "host_kind": "mega",
                 "eligible": True,
@@ -883,6 +931,7 @@ async def test_executor_falls_back_when_selected_provider_mirror_disappears(
             },
             {
                 "artifact_identity": "route:pixeldrain",
+                "content_identity": "artifact:primary",
                 "route_kind": "direct",
                 "host_kind": "pixeldrain",
                 "eligible": True,
@@ -921,6 +970,42 @@ async def test_executor_falls_back_when_selected_provider_mirror_disappears(
     blocklist = (await session.execute(select(BlocklistEntry))).scalars().all()
     assert len(blocklist) == 1
     assert blocklist[0].release_group == "MEGA"
+
+
+@pytest.mark.asyncio
+async def test_executor_classifies_provider_authentication_failure_during_reresolution(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    session.add(attempt)
+    await session.commit()
+
+    async def authentication_failed() -> HostResolutionRequest:
+        raise DirectAcquisitionPlanningError(
+            "provider_authentication_failed",
+            "The direct provider bearer token is unavailable.",
+            failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+            retryable=False,
+            intervention=True,
+        )
+
+    result = await _executor(
+        tmp_path,
+        transport=object(),
+        post_processor=_successful_post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=authentication_failed,
+    )
+
+    assert result.state is DirectAcquisitionState.INTERVENTION
+    assert attempt.failure_class is DirectArtifactFailureClass.PROVIDER_UNAVAILABLE
+    assert attempt.failure_code == "provider_authentication_failed"
+    assert artifact.failure_code == "provider_authentication_failed"
 
 
 async def _async_value[T](value: T) -> T:

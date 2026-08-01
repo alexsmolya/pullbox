@@ -38,6 +38,7 @@ def _artifacts() -> list[ArtifactPlanSnapshotInput]:
     return [
         ArtifactPlanSnapshotInput(
             artifact_identity="artifact-pixeldrain",
+            content_identity="content-primary",
             content_rank=0,
             transport_rank=1,
             route_kind=DirectArtifactRouteKind.DIRECT,
@@ -54,6 +55,7 @@ def _artifacts() -> list[ArtifactPlanSnapshotInput]:
         ),
         ArtifactPlanSnapshotInput(
             artifact_identity="artifact-generic",
+            content_identity="content-primary",
             content_rank=0,
             transport_rank=0,
             route_kind=DirectArtifactRouteKind.DIRECT,
@@ -70,6 +72,7 @@ def _artifacts() -> list[ArtifactPlanSnapshotInput]:
         ),
         ArtifactPlanSnapshotInput(
             artifact_identity="artifact-terabox",
+            content_identity="content-primary",
             content_rank=0,
             transport_rank=3,
             route_kind=DirectArtifactRouteKind.DIRECT,
@@ -158,6 +161,7 @@ def test_plan_snapshot_rejects_identifiers_that_could_persist_signed_urls(
     artifact = _artifacts()[0]
     unsafe = ArtifactPlanSnapshotInput(
         artifact_identity=artifact_identity,
+        content_identity=artifact.content_identity,
         content_rank=artifact.content_rank,
         transport_rank=artifact.transport_rank,
         route_kind=artifact.route_kind,

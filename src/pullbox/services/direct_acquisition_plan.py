@@ -30,6 +30,7 @@ class ArtifactPlanSnapshotInput:
     """Non-sensitive planner output persisted for one artifact option."""
 
     artifact_identity: str
+    content_identity: str
     content_rank: int
     transport_rank: int
     route_kind: DirectArtifactRouteKind
@@ -127,6 +128,7 @@ def record_acquisition_plan(
 
 def _validate_artifact(artifact: ArtifactPlanSnapshotInput) -> None:
     _validate_identity("artifact identity", artifact.artifact_identity)
+    _validate_identity("content identity", artifact.content_identity)
     if not _REASON_CODE.fullmatch(artifact.eligibility_code):
         raise ValidationError("Invalid artifact eligibility code.")
     for label, value in (
@@ -151,6 +153,7 @@ def _validate_identity(label: str, value: str) -> None:
 def _serialize_artifact(artifact: ArtifactPlanSnapshotInput) -> dict[str, object]:
     return {
         "artifact_identity": artifact.artifact_identity,
+        "content_identity": artifact.content_identity,
         "content_rank": artifact.content_rank,
         "transport_rank": artifact.transport_rank,
         "route_kind": artifact.route_kind.value,

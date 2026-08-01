@@ -72,6 +72,7 @@ def _health(
     *,
     process_status: str = "healthy",
     source_status: str = "healthy",
+    diagnostics: dict[str, object] | None = None,
 ) -> DirectHealthResponse:
     return DirectHealthResponse.model_validate(
         {
@@ -80,7 +81,7 @@ def _health(
             "source_status": source_status,
             "message": "Provider health checked.",
             "retry_after_seconds": None,
-            "diagnostics": {},
+            "diagnostics": diagnostics or {},
         }
     )
 
@@ -332,6 +333,63 @@ async def test_failed_connection_test_is_classified_and_never_exposes_token(
     assert result.usable is False
     assert result.state == DirectProviderState.AUTHENTICATION_REQUIRED
     assert "registration-token" not in result.message
+
+
+async def test_connection_test_uses_configured_anna_domain_health(
+    db_session: AsyncSession,
+) -> None:
+    _FakeProviderClient.manifest_response = _manifest(
+        provider_id="pullbox.annas_archive",
+        configuration_schema={
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "format": "uri",
+                    "enum": [
+                        "https://annas-archive.gl",
+                        "https://annas-archive.pk",
+                        "https://annas-archive.gd",
+                    ],
+                }
+            },
+            "additionalProperties": False,
+        },
+    )
+    registered = await register_direct_provider(
+        db_session,
+        DirectProviderRegistrationInput(
+            endpoint="http://provider:8780",
+            bearer_token="registration-token-with-sufficient-length",
+            allow_private_http=True,
+        ),
+        client_factory=_factory,
+    )
+    await update_direct_provider(
+        db_session,
+        registered.id,
+        public_configuration={"domain": "https://annas-archive.gd"},
+    )
+    _FakeProviderClient.health_response = _health(
+        diagnostics={
+            "source": "reachable",
+            "source.annas-archive.gl": "reachable",
+            "source.annas-archive.pk": "reachable",
+            "source.annas-archive.gd": "unreachable",
+        }
+    )
+
+    result = await run_direct_provider_test(
+        db_session,
+        registered.id,
+        client_factory=_factory,
+    )
+
+    assert result.usable is False
+    assert result.state == DirectProviderState.DEGRADED
+    stored = await db_session.get(DirectProviderConfig, registered.id)
+    assert stored is not None
+    assert stored.last_error_code == "provider_source_unavailable"
 
 
 async def test_configuration_updates_validate_controls_and_disable_until_retested(

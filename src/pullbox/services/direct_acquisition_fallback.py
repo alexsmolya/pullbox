@@ -79,9 +79,17 @@ async def queue_next_artifact_route(
 
     attempted = {artifact.artifact_identity for artifact in attempt.artifact_attempts}
     await _auto_blocklist_failed_route(session, attempt, failed_artifact, at=at)
+    failed_content_identity = _route_content_identity(
+        raw_artifacts,
+        failed_artifact.artifact_identity,
+    )
+    if failed_content_identity is None:
+        return None
     next_route: dict[str, object] | None = None
     for raw_route in raw_artifacts:
         if not isinstance(raw_route, dict) or raw_route.get("eligible") is not True:
+            continue
+        if raw_route.get("content_identity") != failed_content_identity:
             continue
         identity = raw_route.get("artifact_identity")
         if isinstance(identity, str) and identity not in attempted:
@@ -185,6 +193,18 @@ async def queue_next_artifact_route(
         fallback_host=fallback.host_kind.value,
     )
     return fallback
+
+
+def _route_content_identity(
+    routes: list[object],
+    route_identity: str,
+) -> str | None:
+    for route in routes:
+        if not isinstance(route, dict) or route.get("artifact_identity") != route_identity:
+            continue
+        content_identity = route.get("content_identity")
+        return content_identity if isinstance(content_identity, str) else None
+    return None
 
 
 async def _auto_blocklist_failed_route(

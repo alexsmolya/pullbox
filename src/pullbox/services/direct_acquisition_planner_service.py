@@ -13,10 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from pullbox.core.exceptions import ValidationError
+from pullbox.core.log_sanitizer import sanitize_log_string
+from pullbox.core.release_parser import issues_match, normalize_issue_number
+from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
     DirectArtifactAttempt,
+    DirectArtifactFailureClass,
     DirectArtifactHostKind,
     DirectArtifactRouteKind,
     DirectArtifactState,
@@ -25,7 +29,9 @@ from pullbox.models.direct_acquisition import (
     DirectProviderConfig,
     DirectProviderState,
 )
+from pullbox.models.issue import IssueType
 from pullbox.providers.artifact_hosts.contract import (
+    ArtifactHostResolutionError,
     HostResolutionRequest,
     sanitize_provider_headers,
 )
@@ -101,9 +107,20 @@ ProviderSecretLoader = Callable[[DirectProviderConfig], ProviderSecretMaterial]
 class DirectAcquisitionPlanningError(RuntimeError):
     """Stable planning failure that never includes provider URLs or secrets."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        failure_class: DirectArtifactFailureClass = DirectArtifactFailureClass.USER_ACTION,
+        retryable: bool = False,
+        intervention: bool = True,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.failure_class = failure_class
+        self.retryable = retryable
+        self.intervention = intervention
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(code={self.code!r})"
@@ -155,23 +172,16 @@ async def plan_direct_acquisition(
     """Resolve and persist one direct candidate using current host eligibility."""
     attempt = await _load_attempt(session, acquisition_id)
     pre_plan_review = (
-        attempt.state is DirectAcquisitionState.INTERVENTION
-        and attempt.failure_code == "semantic_review_required"
-        and not attempt.artifact_attempts
+        attempt.state is DirectAcquisitionState.INTERVENTION and not attempt.artifact_attempts
     )
     if attempt.state is not DirectAcquisitionState.DISCOVERED and not pre_plan_review:
         raise DirectAcquisitionPlanningError(
             "acquisition_not_discovered",
             "Only a discovered or pre-plan reviewed direct result can be planned.",
         )
-    provider = attempt.provider_config
-    if provider is None or provider.id != attempt.provider_config_id:
-        raise DirectAcquisitionPlanningError(
-            "provider_configuration_missing",
-            "The direct provider configuration is no longer available.",
-        )
     clock = now or (lambda: datetime.now(UTC))
     try:
+        provider = _validate_planning_source(attempt, at=clock())
         response = await _resolve_provider_candidate(
             session,
             attempt,
@@ -181,7 +191,14 @@ async def plan_direct_acquisition(
             deadline=clock() + timedelta(seconds=_RESOLVE_SECONDS),
         )
         host_configs = await _load_host_configs(session)
-        resolved_routes = _build_route_options(attempt, provider, response.artifacts, host_configs)
+        title_only_override = _allows_title_only_coverage(attempt, response.artifacts)
+        resolved_routes = _build_route_options(
+            attempt,
+            provider,
+            response.artifacts,
+            host_configs,
+            allow_title_only=title_only_override,
+        )
         blocked_routes = await BlocklistService.get_blocked_direct_artifact_routes(
             session,
             {route.route.route_identity for route in resolved_routes},
@@ -197,6 +214,11 @@ async def plan_direct_acquisition(
                 "no_eligible_complete_plan",
                 "No enabled artifact route completely covers this issue.",
             )
+        if len(plan.selected) != 1:
+            raise DirectAcquisitionPlanningError(
+                "multi_artifact_plan_unsupported",
+                "This result requires multiple files and cannot be attached to one issue safely.",
+            )
         selected_plan = plan.selected[0]
         selected_route = next(
             route
@@ -204,12 +226,19 @@ async def plan_direct_acquisition(
             if route.artifact_identity == selected_plan.artifact_identity
             and route.route.route_identity == selected_plan.selected_route_identity
         )
+        initial_source = _host_resolution_request(
+            artifact_identity=selected_route.route.route_identity,
+            host_kind=selected_route.route.host_kind,
+            artifact=selected_route.artifact,
+            mirror=selected_route.mirror,
+        )
         snapshot = _build_durable_snapshot(
             attempt,
             provider,
             resolved_routes,
             plan,
             selected_route,
+            title_only_override=title_only_override,
         )
         record_acquisition_plan(
             attempt,
@@ -245,15 +274,13 @@ async def plan_direct_acquisition(
             attempt,
             artifact_row,
             plan,
-            _host_resolution_request(
-                artifact_identity=artifact_row.artifact_identity,
-                host_kind=selected_route.route.host_kind,
-                artifact=selected_route.artifact,
-                mirror=selected_route.mirror,
-            ),
+            initial_source,
         )
     except DirectAcquisitionPlanningError as exc:
         transition_acquisition(attempt, DirectAcquisitionState.INTERVENTION, at=clock())
+        attempt.failure_class = exc.failure_class
+        attempt.failure_code = exc.code
+        attempt.error_message = sanitize_log_string(str(exc))
         advance_acquisition_progress(
             attempt,
             revision=(attempt.progress_revision or 0) + 1,
@@ -447,15 +474,30 @@ async def _resolve_provider_candidate(
                     "resolver_"
                 )
                 if not retry_allowed or option_index == len(options) - 1:
-                    raise
+                    raise _provider_planning_error(exc) from exc
         if last_error is not None:
-            raise last_error
+            raise _provider_planning_error(last_error) from last_error
         raise DirectAcquisitionPlanningError(
             "provider_resolve_unavailable",
             "The direct provider had no executable resolution path.",
         )
     finally:
         await client.aclose()
+
+
+def _provider_planning_error(error: DirectProviderClientError) -> DirectAcquisitionPlanningError:
+    retryable = error.retryable
+    return DirectAcquisitionPlanningError(
+        error.code,
+        (
+            "The direct provider is temporarily unavailable."
+            if retryable
+            else "The direct provider could not resolve this result."
+        ),
+        failure_class=DirectArtifactFailureClass.PROVIDER_UNAVAILABLE,
+        retryable=retryable,
+        intervention=not retryable,
+    )
 
 
 def _default_client_factory(
@@ -474,14 +516,69 @@ def _default_client_factory(
     )
 
 
+def _validate_planning_source(
+    attempt: DirectAcquisitionAttempt,
+    *,
+    at: datetime,
+) -> DirectProviderConfig:
+    provider = attempt.provider_config
+    if provider is None or provider.id != attempt.provider_config_id:
+        raise DirectAcquisitionPlanningError(
+            "provider_configuration_missing",
+            "The direct provider configuration is no longer available.",
+        )
+    if not provider.enabled or provider.state is DirectProviderState.DISABLED:
+        raise DirectAcquisitionPlanningError(
+            "provider_disabled",
+            "The direct provider is disabled.",
+        )
+
+    snapshot = attempt.candidate_snapshot or {}
+    if snapshot.get("can_resolve") is False:
+        raise DirectAcquisitionPlanningError(
+            "candidate_not_resolvable",
+            "The direct provider marked this result as unavailable for resolution.",
+            failure_class=DirectArtifactFailureClass.CANDIDATE_INVALID,
+        )
+    raw_expiry = snapshot.get("expires_at")
+    if raw_expiry is None:
+        return provider
+    if not isinstance(raw_expiry, str):
+        raise DirectAcquisitionPlanningError(
+            "candidate_expiry_invalid",
+            "The direct result expiration is invalid.",
+            failure_class=DirectArtifactFailureClass.CANDIDATE_INVALID,
+        )
+    try:
+        expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise DirectAcquisitionPlanningError(
+            "candidate_expiry_invalid",
+            "The direct result expiration is invalid.",
+            failure_class=DirectArtifactFailureClass.CANDIDATE_INVALID,
+        ) from exc
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    if expiry <= at:
+        raise DirectAcquisitionPlanningError(
+            "candidate_expired",
+            "The direct result expired and must be searched again.",
+            failure_class=DirectArtifactFailureClass.CANDIDATE_INVALID,
+        )
+    return provider
+
+
 def _build_route_options(
     attempt: DirectAcquisitionAttempt,
     provider: DirectProviderConfig,
     artifacts: Sequence[DirectArtifact],
     host_configs: Mapping[DirectArtifactHostKind, DirectHostConfig],
+    *,
+    allow_title_only: bool = False,
 ) -> list[_ResolvedRoute]:
     routes: list[_ResolvedRoute] = []
     requested = _requested_coverage(attempt)
+    requested_volume = _requested_volume(attempt, requested)
     provider_confidence = _candidate_confidence(attempt.candidate_snapshot)
     declared_host_kinds = manifest_artifact_host_kinds(provider.manifest_snapshot)
     internal_generic_https = declared_host_kinds == {DirectArtifactHostKind.GENERIC_HTTPS}
@@ -489,7 +586,12 @@ def _build_route_options(
         _validate_stable_identity("provider artifact", artifact.artifact_id)
         if artifact.route is not DirectArtifactRoute.DIRECT_ARTIFACT:
             continue
-        coverage = _artifact_coverage(artifact, requested)
+        coverage = _artifact_coverage(
+            artifact,
+            requested,
+            requested_volume=requested_volume,
+            allow_title_only=allow_title_only,
+        )
         for mirror in artifact.mirrors:
             location = mirror.final_url or mirror.share_url
             if (
@@ -556,10 +658,13 @@ def _build_durable_snapshot(
     routes: Sequence[_ResolvedRoute],
     plan: DirectCoveragePlan,
     selected: _ResolvedRoute,
+    *,
+    title_only_override: bool,
 ) -> dict[str, object]:
     ranking_inputs = [
         ArtifactPlanSnapshotInput(
             artifact_identity=route.route.route_identity,
+            content_identity=route.artifact_identity,
             content_rank=route.option.semantic_rank + route.option.quality_rank,
             transport_rank=route.route.transport_rank,
             route_kind=route.route.route_kind,
@@ -589,6 +694,7 @@ def _build_durable_snapshot(
         "complete": plan.complete,
         "explanation_code": plan.explanation_code,
         "pinned_route_applied": plan.pinned_route_applied,
+        "title_only_override": title_only_override,
     }
     snapshot["route_sources"] = [
         {
@@ -666,13 +772,91 @@ def _requested_coverage(attempt: DirectAcquisitionAttempt) -> frozenset[str]:
 def _artifact_coverage(
     artifact: DirectArtifact,
     requested: frozenset[str],
+    *,
+    requested_volume: str | None,
+    allow_title_only: bool,
 ) -> frozenset[str]:
     coverage = frozenset(str(value).strip() for value in artifact.coverage.issue_numbers)
     if coverage:
         return coverage
     if artifact.coverage.issue_ids:
         return requested
+    if allow_title_only:
+        return requested
+    artifact_volume = str(artifact.coverage.volume or "").strip()
+    if (
+        requested_volume is not None
+        and artifact_volume
+        and _coverage_numbers_match(requested_volume, artifact_volume)
+    ):
+        return requested
     return frozenset()
+
+
+def _allows_title_only_coverage(
+    attempt: DirectAcquisitionAttempt,
+    artifacts: Sequence[DirectArtifact],
+) -> bool:
+    if len(artifacts) != 1 or len(_requested_coverage(attempt)) != 1:
+        return False
+    artifact = artifacts[0]
+    if (
+        artifact.route is not DirectArtifactRoute.DIRECT_ARTIFACT
+        or artifact.coverage.issue_numbers
+        or artifact.coverage.issue_ids
+        or artifact.coverage.volume
+    ):
+        return False
+    raw_type = (attempt.requested_coverage or {}).get("issue_type")
+    try:
+        issue_type = IssueType(str(raw_type))
+    except ValueError:
+        return False
+    if issue_type_family(issue_type) is TypeFamily.STANDARD:
+        return False
+    semantic = (attempt.candidate_snapshot or {}).get("semantic_decision")
+    if not isinstance(semantic, dict):
+        return False
+    similarity = semantic.get("series_similarity")
+    return isinstance(similarity, int | float) and float(similarity) >= 0.98
+
+
+def _requested_volume(
+    attempt: DirectAcquisitionAttempt,
+    requested: frozenset[str],
+) -> str | None:
+    raw = attempt.requested_coverage or {}
+    raw_issue_type = raw.get("issue_type")
+    try:
+        issue_type = IssueType(str(raw_issue_type))
+    except ValueError:
+        return None
+    if issue_type_family(issue_type) is not TypeFamily.COLLECTION:
+        return None
+
+    raw_volume = raw.get("volume")
+    if raw_volume is None:
+        return next(iter(requested)) if len(requested) == 1 else None
+    if not isinstance(raw_volume, str):
+        raise DirectAcquisitionPlanningError(
+            "requested_coverage_invalid",
+            "The direct acquisition volume coverage is invalid.",
+        )
+    volume = raw_volume.strip()
+    if not volume or len(volume) > 100:
+        raise DirectAcquisitionPlanningError(
+            "requested_coverage_invalid",
+            "The direct acquisition volume coverage is invalid.",
+        )
+    return volume
+
+
+def _coverage_numbers_match(requested: str, offered: str) -> bool:
+    if requested.casefold() == offered.casefold():
+        return True
+    requested_number = normalize_issue_number(requested)
+    offered_number = normalize_issue_number(offered)
+    return requested_number is not None and issues_match(requested_number, offered_number)
 
 
 def _candidate_confidence(snapshot: Mapping[str, object]) -> float:
@@ -781,12 +965,22 @@ def _host_resolution_request(
     artifact: DirectArtifact,
     mirror: DirectMirror,
 ) -> HostResolutionRequest:
+    try:
+        provider_headers = sanitize_provider_headers(mirror.source_headers)
+    except ArtifactHostResolutionError as exc:
+        raise DirectAcquisitionPlanningError(
+            exc.code,
+            exc.message,
+            failure_class=exc.failure_class,
+            retryable=exc.retryable,
+            intervention=exc.intervention,
+        ) from exc
     return HostResolutionRequest(
         artifact_identity=artifact_identity,
         host_kind=host_kind,
         share_url=mirror.share_url,
         final_url=mirror.final_url,
-        provider_headers=sanitize_provider_headers(mirror.source_headers),
+        provider_headers=provider_headers,
         expected_size=mirror.size_bytes or artifact.size_bytes,
         checksum=mirror.checksum,
         etag=mirror.etag,

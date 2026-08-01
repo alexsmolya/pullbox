@@ -522,6 +522,21 @@ class SearchService:
         if direct_task is None:
             return await indexer_search
         indexer_outcome, direct_outcome = await asyncio.gather(indexer_search, direct_task)
+        direct_results = [
+            item.release for item in (*direct_outcome.matched, *direct_outcome.rejected)
+        ]
+        kept_direct_results = await BlocklistService.filter_results(session, direct_results)
+        if len(kept_direct_results) != len(direct_results):
+            kept_direct_ids = {id(result) for result in kept_direct_results}
+            direct_outcome = replace(
+                direct_outcome,
+                matched=tuple(
+                    item for item in direct_outcome.matched if id(item.release) in kept_direct_ids
+                ),
+                rejected=tuple(
+                    item for item in direct_outcome.rejected if id(item.release) in kept_direct_ids
+                ),
+            )
         indexer_outcome.search_details["direct_search"] = _direct_search_diagnostics(direct_outcome)
         return replace(indexer_outcome, direct_outcome=direct_outcome)
 

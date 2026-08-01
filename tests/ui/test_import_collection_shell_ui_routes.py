@@ -688,9 +688,9 @@ class TestImportShellRouteContracts:
             "src/pullbox/ui/templates/partials/import_step_review.html"
         ).read_text()
 
-        assert 'e.detail.target.id === "import-step-review"' in script
-        assert 'e.detail.target.id === "conflicts-content"' in script
-        assert "window.htmx.process(e.detail.target);" in script
+        assert 'settledTarget.id === "import-step-review"' in script
+        assert 'settledTarget.id === "conflicts-content"' in script
+        assert "window.htmx.process(settledTarget);" in script
         assert "reviewData.rehydrateAfterShellSwap();" in script
         assert "currentConflictPanelData: function () {" in script
         assert "await panel.saveAllResolutions();" in script

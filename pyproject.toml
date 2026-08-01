@@ -65,6 +65,7 @@ dev = [
     "factory-boy~=3.3",
     "safety~=3.0",
     "authlib>=1.6.11",  # transitive via safety — floor for GHSA-jj8c-mmj3-mmgv
+    "nltk>=3.10.0",  # transitive via safety — floors for 2026 SSRF/path traversal/ReDoS CVEs
     "types-defusedxml~=0.7",
     "types-psutil~=7.2",
     "requests>=2.33.0",  # transitive (pip-audit, safety) — floor for CVE-2026-25645
