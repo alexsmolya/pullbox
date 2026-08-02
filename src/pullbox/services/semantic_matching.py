@@ -224,6 +224,7 @@ class SemanticMatchEngine:
                 metadata=metadata,
                 wanted_issue=wanted_issue,
                 wanted_issue_title=wanted_issue_title,
+                wanted_series_issue_count=wanted_series_issue_count,
             )
             if inference_rejection is not None:
                 return inference_rejection
@@ -293,9 +294,19 @@ class SemanticMatchEngine:
                     return subtitle_check
             elif wanted_is_collection:
                 if effective_issue is None:
-                    issue_check_skipped = True
                     issue_confirmed = True
-                    match_method = "collection_series_match"
+                    if _is_explicit_single_collection_match(
+                        metadata=metadata,
+                        wanted_issue=wanted_issue,
+                        wanted_issue_type=wanted_issue_type,
+                        wanted_series_issue_count=wanted_series_issue_count,
+                        compatibility_mode=compatibility.mode,
+                        title_match_type=match_result.match_type,
+                    ):
+                        match_method = "explicit_single_collection"
+                    else:
+                        issue_check_skipped = True
+                        match_method = "collection_series_match"
                 elif issues_match(wanted_issue, effective_issue):
                     issue_confirmed = True
                     match_method = "issue_number"
@@ -574,9 +585,20 @@ def _validate_issue_to_collection_inference(
     metadata: SourceMetadata,
     wanted_issue: float,
     wanted_issue_title: str | None,
+    wanted_series_issue_count: int | None,
 ) -> IssueMatchDecision | None:
     """Require title evidence before treating a numbered standard issue as a collection."""
     subtitle = collection_title_subtitle(wanted_issue_title)
+    if subtitle is None and wanted_series_issue_count == 1 and metadata.issue_number is not None:
+        return IssueMatchDecision(
+            is_match=False,
+            confidence=MatchConfidence.LOW,
+            match_method="numbered_issue_collection_mismatch",
+            rejection_reason=(
+                "Numbered standard issue cannot satisfy a single-record collection target."
+            ),
+            match_diagnostics={"type_mode": "issue_to_collection_inference"},
+        )
     if not subtitle:
         return None
 
@@ -596,6 +618,27 @@ def _validate_issue_to_collection_inference(
             "Ambiguous issue-vs-volume result: standard issue lacks collection title evidence."
         ),
         match_diagnostics={"type_mode": "issue_to_collection_inference"},
+    )
+
+
+def _is_explicit_single_collection_match(
+    *,
+    metadata: SourceMetadata,
+    wanted_issue: float,
+    wanted_issue_type: IssueType,
+    wanted_series_issue_count: int | None,
+    compatibility_mode: str,
+    title_match_type: str,
+) -> bool:
+    """Trust a numberless collection when its explicit identity is otherwise exact."""
+    return (
+        wanted_issue == 1.0
+        and wanted_series_issue_count == 1
+        and issue_type_family(wanted_issue_type) == TypeFamily.COLLECTION
+        and metadata.issue_type == wanted_issue_type
+        and metadata.signals.get("issue_type") == MetadataSignal.RELEASE_TITLE
+        and compatibility_mode == "exact"
+        and title_match_type == "exact"
     )
 
 

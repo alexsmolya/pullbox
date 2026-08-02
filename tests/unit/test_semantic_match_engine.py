@@ -6,6 +6,7 @@ import pytest
 
 from pullbox.core.source_metadata import MetadataSignal, SourceMetadataExtractor
 from pullbox.models.issue import IssueType
+from pullbox.models.library import MatchConfidence
 from pullbox.providers.base import SeriesSearchResult
 from pullbox.services.semantic_matching import (
     ImportPolicy,
@@ -137,7 +138,49 @@ class TestSemanticMatchEngine:
         )
 
         assert decision.is_match is True
+        assert decision.confidence == MatchConfidence.LOW
         assert decision.match_diagnostics["issue_check_skipped"] is True
+
+    @pytest.mark.regression
+    def test_explicit_single_issue_tpb_without_number_is_high_confidence(self) -> None:
+        metadata = self.extractor.from_release_title(
+            "John Carpenter\u2019s Tales of Science Fiction \u2013 THE ENVOY (TPB) (2023)"
+        )
+
+        decision = SemanticMatchEngine(self.config, SearchPolicy()).match_against_issue(
+            metadata=metadata,
+            wanted_series="John Carpenter's Tales of Science Fiction: The Envoy",
+            wanted_issue=1.0,
+            wanted_year=2023,
+            wanted_issue_type=IssueType.TPB,
+            wanted_issue_title="TPB",
+            wanted_series_issue_count=1,
+        )
+
+        assert decision.is_match is True
+        assert decision.confidence == MatchConfidence.HIGH
+        assert decision.match_method == "explicit_single_collection"
+
+    @pytest.mark.regression
+    def test_numbered_standard_issue_does_not_satisfy_single_issue_tpb(self) -> None:
+        metadata = self.extractor.from_release_title(
+            "John Carpenter's Tales of Science Fiction - The Envoy 01 (of 03) "
+            "(2023) (digital) (Leifman-Empire).cbz"
+        )
+
+        decision = SemanticMatchEngine(self.config, SearchPolicy()).match_against_issue(
+            metadata=metadata,
+            wanted_series="John Carpenter's Tales of Science Fiction: The Envoy",
+            wanted_issue=1.0,
+            wanted_year=2023,
+            wanted_issue_type=IssueType.TPB,
+            wanted_issue_title="TPB",
+            wanted_series_issue_count=1,
+        )
+
+        assert decision.is_match is False
+        assert decision.match_method == "numbered_issue_collection_mismatch"
+        assert "standard issue" in (decision.rejection_reason or "").lower()
 
     @pytest.mark.regression
     def test_search_policy_matches_single_issue_collection_by_volume_subtitle(self) -> None:
@@ -297,6 +340,7 @@ class TestSemanticMatchEngine:
         )
 
         assert decision.is_match is True
+        assert decision.confidence == MatchConfidence.LOW
         assert decision.lowers_confidence is True
 
     def test_collection_source_prefers_single_ended_series_shape(self) -> None:

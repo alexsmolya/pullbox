@@ -250,6 +250,46 @@ class TestConfidenceGradation:
         assert validated[0].is_match is True
 
     @pytest.mark.regression
+    def test_explicit_single_issue_tpb_without_number_is_high_confidence(self) -> None:
+        validated = self.validator.validate_results(
+            [
+                make_release(
+                    "John Carpenter\u2019s Tales of Science Fiction \u2013 THE ENVOY (TPB) (2023)"
+                )
+            ],
+            wanted_series="John Carpenter's Tales of Science Fiction: The Envoy",
+            wanted_issue=1.0,
+            wanted_year=2023,
+            wanted_issue_type=IssueType.TPB,
+            wanted_issue_title="TPB",
+            wanted_series_issue_count=1,
+        )
+
+        assert len(validated) == 1
+        assert validated[0].confidence == MatchConfidence.HIGH
+
+    @pytest.mark.regression
+    def test_numbered_standard_issue_is_rejected_for_single_issue_tpb(self) -> None:
+        matched, rejected = self.validator.validate_all_results(
+            [
+                make_release(
+                    "John Carpenter's Tales of Science Fiction - The Envoy 01 (of 03) "
+                    "(2023) (digital) (Leifman-Empire).cbz"
+                )
+            ],
+            wanted_series="John Carpenter's Tales of Science Fiction: The Envoy",
+            wanted_issue=1.0,
+            wanted_year=2023,
+            wanted_issue_type=IssueType.TPB,
+            wanted_issue_title="TPB",
+            wanted_series_issue_count=1,
+        )
+
+        assert matched == []
+        assert len(rejected) == 1
+        assert "standard issue" in (rejected[0].rejection_reason or "").lower()
+
+    @pytest.mark.regression
     def test_standard_issue_does_not_satisfy_named_collection_volume(self) -> None:
         matched, rejected = self.validator.validate_all_results(
             [make_release("Immortal Thor 003 (2023) (Digital-HD) (Shan-Empire)")],
