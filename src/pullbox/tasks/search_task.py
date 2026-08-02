@@ -772,6 +772,7 @@ async def _build_mocked_issue_outcome(
             wanted_year=target.series_year,
             wanted_issue_type=target.issue_type,
             alternate_names=target.alternate_names,
+            source_priority=runtime.source_priority,
             **runtime.eval_kwargs,
         )
 
@@ -833,6 +834,7 @@ async def _build_mocked_wanted_outcome(
                 wanted_year=target.series_year,
                 wanted_issue_type=target.issue_type,
                 alternate_names=target.alternate_names,
+                source_priority=runtime.source_priority,
                 **runtime.eval_kwargs,
             )
         except Exception as exc:  # pragma: no cover - exercised by integration tests

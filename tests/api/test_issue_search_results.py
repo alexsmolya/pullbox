@@ -69,6 +69,7 @@ def _make_release(
     size_bytes: int | None = 100_000_000,
     age_days: int | None = 5,
     is_torrent: bool = False,
+    ranking_priority: int = 25,
 ) -> ReleaseResult:
     return ReleaseResult(
         title=title,
@@ -82,6 +83,7 @@ def _make_release(
         is_torrent=is_torrent,
         category="comics",
         published_at=None,
+        ranking_priority=ranking_priority,
     )
 
 
@@ -473,6 +475,36 @@ async def test_build_interactive_results_custom_eval_kwargs() -> None:
 
     # Different blend should produce different quality scores
     assert items_default[0].quality_score != items_custom[0].quality_score
+
+
+def test_interactive_results_rank_indexers_within_the_selected_source_lane() -> None:
+    from pullbox.api.v1.issues import build_interactive_results
+
+    lower_priority = _make_release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Lower priority",
+        ranking_priority=50,
+    )
+    higher_priority = _make_release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Higher priority",
+        ranking_priority=1,
+    )
+    matched, rejected = ReleaseValidator().validate_all_results(
+        [lower_priority, higher_priority],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )
+
+    items, _ = build_interactive_results(
+        matched,
+        rejected,
+        {},
+        source_priority=["usenet", "torrent", "direct"],
+    )
+
+    assert [item.indexer_name for item in items] == ["Higher priority", "Lower priority"]
 
 
 # ── API Tests ──────────────────────────────────────────────────────────

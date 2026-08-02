@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from pullbox.core.exceptions import ProviderError
 from pullbox.models import Base
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
@@ -19,6 +20,7 @@ from pullbox.models.direct_acquisition import (
     DirectProviderState,
     DirectProviderTrustLevel,
 )
+from pullbox.models.download import DownloadState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
@@ -204,6 +206,51 @@ def _outcome_with_indexer_fallback(
     )
 
 
+def _outcome_with_indexer_queue_fallback(target: IssueSearchTarget) -> IssueSearchOutcome:
+    usenet = ReleaseResult(
+        title="Batman 001 (2016) (Digital).cbz",
+        indexer_name="Usenet Indexer",
+        download_url="https://indexer.example/download/usenet",
+        size_bytes=100_000_000,
+        age_days=1,
+        seeders=None,
+        leechers=None,
+        grabs=10,
+        is_torrent=False,
+        category="Books/Comics",
+        published_at=None,
+        ranking_priority=5,
+    )
+    torrent = replace(
+        usenet,
+        indexer_name="Torrent Indexer",
+        download_url="https://indexer.example/download/torrent",
+        seeders=20,
+        grabs=None,
+        is_torrent=True,
+    )
+    validations = ReleaseValidator().validate_all_results(
+        [torrent, usenet],
+        wanted_series=target.series_title,
+        wanted_issue=target.issue_number,
+        wanted_year=target.series_year,
+    )[0]
+    usenet_validation = next(item for item in validations if not item.release.is_torrent)
+    return IssueSearchOutcome(
+        target=target,
+        mode="fast",
+        query_count=1,
+        raw_results=[torrent, usenet],
+        filtered_results=[torrent, usenet],
+        matched=validations,
+        rejected=[],
+        best_release=usenet,
+        best_validation=usenet_validation,
+        search_details={},
+        elapsed_ms=1,
+    )
+
+
 async def test_direct_result_below_threshold_becomes_durable_intervention(
     db_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -310,6 +357,65 @@ async def test_non_intervention_direct_failure_falls_back_to_ranked_indexer(
     assert routed.notices == ("GetComics quota exhausted; continuing with other sources.",)
     download_service.send_to_client.assert_awaited_once()
     intervention_service.create_direct_pending_match.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_indexer_queue_falls_back_to_next_source(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target, _provider, search_log_id = await _seed(db_factory)
+    download_service = AsyncMock()
+    download_service.send_to_client.side_effect = [
+        SimpleNamespace(state=DownloadState.FAILED, error_message="NZB was rejected"),
+        SimpleNamespace(state=DownloadState.SENT, error_message=None),
+    ]
+
+    async with db_factory() as session:
+        routed = await route_search_acquisition(
+            session,
+            outcome=_outcome_with_indexer_queue_fallback(target),
+            search_log_id=search_log_id,
+            eval_kwargs={},
+            type_thresholds={"issue": "high"},
+            download_service=download_service,
+            intervention_service=AsyncMock(),
+            runner=None,
+            source_priority=["usenet", "torrent", "direct"],
+        )
+
+    assert routed.action_status == "downloading"
+    assert routed.source_kind == "indexer"
+    assert download_service.send_to_client.await_count == 2
+    assert routed.notices == ("Usenet Indexer could not be queued; continuing with other sources.",)
+
+
+@pytest.mark.asyncio
+async def test_missing_preferred_download_client_falls_back_to_next_source(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target, _provider, search_log_id = await _seed(db_factory)
+    download_service = AsyncMock()
+    download_service.send_to_client.side_effect = [
+        ProviderError("download", "No NZB download client configured"),
+        SimpleNamespace(state=DownloadState.SENT, error_message=None),
+    ]
+
+    async with db_factory() as session:
+        routed = await route_search_acquisition(
+            session,
+            outcome=_outcome_with_indexer_queue_fallback(target),
+            search_log_id=search_log_id,
+            eval_kwargs={},
+            type_thresholds={"issue": "high"},
+            download_service=download_service,
+            intervention_service=AsyncMock(),
+            runner=None,
+            source_priority=["usenet", "torrent", "direct"],
+        )
+
+    assert routed.action_status == "downloading"
+    assert download_service.send_to_client.await_count == 2
+    assert routed.notices == ("Usenet Indexer could not be queued; continuing with other sources.",)
 
 
 @pytest.mark.asyncio

@@ -45,7 +45,7 @@ def normalize_source_priority(value: object) -> list[str] | None:
 
 def score_release(
     release: ReleaseResult,
-    indexer_priority: int = 25,
+    indexer_priority: int | None = None,
     *,
     min_size_mb: int = DEFAULT_MIN_SIZE_MB,
     max_size_mb: int = DEFAULT_MAX_SIZE_MB,
@@ -90,7 +90,8 @@ def score_release(
         w_priority, w_age, w_size, w_format = raw_weights
         w_grabs = 0.0
 
-    priority_score = _score_indexer_priority(indexer_priority)
+    resolved_priority = release.ranking_priority if indexer_priority is None else indexer_priority
+    priority_score = _score_indexer_priority(resolved_priority)
     age_score = _score_age(release.age_days)
     size_score = _score_size(release.size_bytes, min_size_mb, max_size_mb)
     format_score = _score_format(release.title, preferred_format=preferred_format)

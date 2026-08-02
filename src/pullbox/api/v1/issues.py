@@ -254,16 +254,10 @@ def build_interactive_results(
             )
         )
 
-    # Sort matched results by source priority (stable — preserves score order within protocol)
-    if source_priority:
-        priority_map = {proto: idx for idx, proto in enumerate(source_priority)}
-        default_rank = len(source_priority)
-        matched_items.sort(
-            key=lambda item: priority_map.get(
-                "torrent" if item.is_torrent else "usenet",
-                default_rank,
-            )
-        )
+    matched_items = sort_interactive_results_by_source_priority(
+        matched_items,
+        source_priority,
+    )
 
     return matched_items, rejected_items
 
@@ -320,16 +314,20 @@ def sort_interactive_results_by_source_priority[
 ) -> list[InteractiveResultT]:
     """Stable-sort combined indexer and direct rows by protocol preference."""
     normalized = normalize_source_priority(source_priority)
-    if normalized is None:
-        return list(items)
-    priority_map = {source: index for index, source in enumerate(normalized)}
+    priority_map = (
+        {source: index for index, source in enumerate(normalized)} if normalized is not None else {}
+    )
 
     def _source(item: SearchResultItem | RejectedResultItem) -> str:
         if item.source_kind == "direct":
             return "direct"
         return "torrent" if item.is_torrent else "usenet"
 
-    return sorted(items, key=lambda item: priority_map[_source(item)])
+    def _rank(item: SearchResultItem | RejectedResultItem) -> tuple[int, float]:
+        score = getattr(item, "quality_score", None)
+        return priority_map.get(_source(item), 0), -float(score) if score is not None else 0.0
+
+    return sorted(items, key=_rank)
 
 
 def _build_issue_context(target: IssueSearchTarget) -> InteractiveSearchIssue:

@@ -156,7 +156,17 @@ async def search_indexers(
         before = len(results)
         result_indexer_id = config_id if config_id >= 0 else None
         filtered_results = [
-            replace(result, indexer_id=result_indexer_id)
+            replace(
+                result,
+                indexer_id=(
+                    result_indexer_id if result_indexer_id is not None else result.indexer_id
+                ),
+                ranking_priority=(
+                    cfg.priority
+                    if cfg is not None and isinstance(cfg.priority, int)
+                    else result.ranking_priority
+                ),
+            )
             for result in results
             if _is_comic_category(result.category)
         ]

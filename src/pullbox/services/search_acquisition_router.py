@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from pullbox.core.exceptions import ProviderError
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -13,6 +14,7 @@ from pullbox.models.direct_acquisition import (
     DirectProviderConfig,
     DirectProviderState,
 )
+from pullbox.models.download import DownloadState
 from pullbox.services.direct_acquisition_planner_service import (
     DirectAcquisitionPlanningError,
     DirectAcquisitionPlanningResult,
@@ -142,11 +144,18 @@ async def route_search_acquisition(
         )
         if selected.source_kind == "indexer":
             if auto_grab:
-                await download_service.send_to_client(
-                    session,
-                    selected.release,
-                    target.issue_id,
-                )
+                try:
+                    download = await download_service.send_to_client(
+                        session,
+                        selected.release,
+                        target.issue_id,
+                    )
+                except ProviderError:
+                    notices.append(_indexer_failure_notice(selected.release.indexer_name))
+                    continue
+                if getattr(download, "state", None) == DownloadState.FAILED:
+                    notices.append(_indexer_failure_notice(selected.release.indexer_name))
+                    continue
                 return SearchAcquisitionRoutingResult(
                     1, 0, "downloading", confidence, "indexer", tuple(notices)
                 )
@@ -236,6 +245,11 @@ async def route_search_acquisition(
         None,
         tuple(notices),
     )
+
+
+def _indexer_failure_notice(indexer_name: str) -> str:
+    """Describe an indexer queue failure without exposing provider details."""
+    return f"{indexer_name} could not be queued; continuing with other sources."
 
 
 async def _queue_direct_semantic_review(

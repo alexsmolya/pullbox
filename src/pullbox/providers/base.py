@@ -151,6 +151,7 @@ class ReleaseResult:
     published_at: datetime | None
     info_url: str | None = None
     indexer_id: int | None = None
+    ranking_priority: int = 25
 
 
 @dataclass(frozen=True)

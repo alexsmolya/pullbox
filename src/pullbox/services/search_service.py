@@ -769,7 +769,7 @@ class SearchService:
     @staticmethod
     def evaluate_results(
         results: list[ReleaseResult],
-        indexer_priority: int = 25,
+        indexer_priority: int | None = None,
         min_score: float = DEFAULT_MIN_SCORE,
         *,
         wanted_series: str | None = None,
@@ -794,6 +794,7 @@ class SearchService:
         max_file_count: int = 5,
         preferred_language: str = "en",
         digital_bonus: int = 10,
+        source_priority: list[str] | None = None,
     ) -> ReleaseResult | None:
         """Compatibility facade for release validation and result ranking."""
         return _search_evaluation.evaluate_results(
@@ -822,6 +823,7 @@ class SearchService:
             max_file_count=max_file_count,
             preferred_language=preferred_language,
             digital_bonus=digital_bonus,
+            source_priority=source_priority,
             log_type_detection_func=log_type_detection,
             log=logger,
         )

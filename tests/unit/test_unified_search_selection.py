@@ -18,7 +18,14 @@ from pullbox.services.search_source_selection import rank_search_sources, select
 from pullbox.services.search_targets import IssueSearchOutcome, IssueSearchTarget
 
 
-def _release(title: str, source: str, *, size: int = 100_000_000) -> ReleaseResult:
+def _release(
+    title: str,
+    source: str,
+    *,
+    size: int = 100_000_000,
+    is_torrent: bool = True,
+    ranking_priority: int = 25,
+) -> ReleaseResult:
     return ReleaseResult(
         title=title,
         indexer_name=source,
@@ -28,9 +35,10 @@ def _release(title: str, source: str, *, size: int = 100_000_000) -> ReleaseResu
         seeders=10,
         leechers=1,
         grabs=None,
-        is_torrent=True,
+        is_torrent=is_torrent,
         category="7030",
         published_at=None,
+        ranking_priority=ranking_priority,
     )
 
 
@@ -112,6 +120,19 @@ def _outcome(
     )
 
 
+def _indexer_only_outcome(*releases: ReleaseResult) -> IssueSearchOutcome:
+    outcome = _outcome(releases[0], None)
+    validations = [_validation(release) for release in releases]
+    return replace(
+        outcome,
+        raw_results=list(releases),
+        filtered_results=list(releases),
+        matched=validations,
+        best_release=None,
+        best_validation=None,
+    )
+
+
 def test_direct_candidate_can_win_using_existing_search_score() -> None:
     indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
     direct = _direct_result(_release("Batman 001 (2016) (Digital).cbz", "GetComics"))
@@ -149,6 +170,54 @@ def test_equal_score_respects_direct_first_source_priority() -> None:
     assert selected is not None
     assert selected.source_kind == "direct"
     assert selected.direct_result is direct
+
+
+def test_source_lane_precedes_cross_protocol_quality_score() -> None:
+    usenet = _release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Usenet",
+        size=25_000_000,
+        is_torrent=False,
+    )
+    torrent = _release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Torrent",
+        size=100_000_000,
+        is_torrent=True,
+    )
+
+    selected = select_search_source(
+        _indexer_only_outcome(torrent, usenet),
+        {},
+        source_priority=["usenet", "torrent", "direct"],
+    )
+
+    assert selected is not None
+    assert selected.release is usenet
+
+
+def test_indexer_priority_ranks_candidates_within_one_source_lane() -> None:
+    lower_priority = _release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Lower priority",
+        is_torrent=False,
+        ranking_priority=50,
+    )
+    higher_priority = _release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Higher priority",
+        is_torrent=False,
+        ranking_priority=1,
+    )
+
+    selected = select_search_source(
+        _indexer_only_outcome(lower_priority, higher_priority),
+        {},
+        source_priority=["usenet", "torrent", "direct"],
+    )
+
+    assert selected is not None
+    assert selected.release is higher_priority
 
 
 def test_ranked_sources_reuse_existing_scorer_for_fallback_order() -> None:

@@ -840,6 +840,7 @@ async def test_manual_search_bypasses_backoff_and_automated_empty_cache() -> Non
         indexer_type=IndexerType.NEWZNAB,
         url="https://prowlarr.test/15",
         api_key="encrypted",
+        priority=7,
         failure_count=3,
     )
     config.disabled_until = datetime.now(UTC) + timedelta(hours=2)
@@ -852,7 +853,8 @@ async def test_manual_search_bypasses_backoff_and_automated_empty_cache() -> Non
     manual = SearchService(registry, ignore_indexer_backoff=True)
     results = await manual.search(query, indexer_configs=indexer_configs)
 
-    assert results == [replace(release, indexer_id=1)]
+    assert results == [replace(release, indexer_id=1, ranking_priority=7)]
+    assert getattr(results[0], "ranking_priority", None) == 7
     indexer.search.assert_awaited_once()
     assert config.failure_count == 0
     assert config.disabled_until is None

@@ -70,6 +70,7 @@ async def register_indexers(
 
     configs_map: dict[int, IndexerConfig] = {}
     prowlarr_torznab_ids: list[int] = []
+    prowlarr_indexer_rankings: dict[int, tuple[int, int]] = {}
 
     for idx_cfg in indexer_configs:
         if not idx_cfg.manager_available:
@@ -81,6 +82,10 @@ async def register_indexers(
         if is_prowlarr_synced and idx_cfg.indexer_type == IndexerType.TORZNAB:
             if idx_cfg.prowlarr_indexer_id is not None:
                 prowlarr_torznab_ids.append(idx_cfg.prowlarr_indexer_id)
+                prowlarr_indexer_rankings[idx_cfg.prowlarr_indexer_id] = (
+                    idx_cfg.id,
+                    idx_cfg.priority,
+                )
             continue
 
         # Prowlarr-synced Newznab and all manual indexers: register individually
@@ -135,6 +140,7 @@ async def register_indexers(
                 url=prowlarr_url,
                 api_key=prowlarr_api_key,
                 indexer_ids=prowlarr_torznab_ids,
+                indexer_rankings=prowlarr_indexer_rankings,
             )
             registry.register_indexer(_PROWLARR_AGGREGATE_CONFIG_ID, aggregate)
             logger.debug(

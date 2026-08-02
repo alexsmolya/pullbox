@@ -36,6 +36,24 @@ class TestProwlarrIndexerParams:
         p = ProwlarrIndexer(url="http://prowlarr:9696", api_key="test")
         assert p._indexer_ids is None
 
+    def test_aggregate_result_keeps_local_id_and_priority(self) -> None:
+        results = ProwlarrIndexer._parse_api_results(
+            [
+                {
+                    "title": "Batman 001 (2025)",
+                    "indexer": "1337x",
+                    "indexerId": 101,
+                    "protocol": "torrent",
+                    "downloadUrl": "https://prowlarr.test/download/1",
+                    "categories": [{"name": "Books/Comics"}],
+                }
+            ],
+            {101: (7, 3)},
+        )
+
+        assert results[0].indexer_id == 7
+        assert results[0].ranking_priority == 3
+
     @pytest.mark.asyncio
     async def test_search_sends_categories_as_list(self) -> None:
         """categories param should be a list of ints for repeated query params."""
@@ -108,6 +126,7 @@ class TestRegisterIndexersAggregation:
             cfg.url = f"http://prowlarr:9696/{100 + i}"
             cfg.api_key = "encrypted_key"
             cfg.enabled = True
+            cfg.priority = i * 10
             configs.append(cfg)
 
         mock_session = AsyncMock()
@@ -139,6 +158,11 @@ class TestRegisterIndexersAggregation:
         assert config_id == _PROWLARR_AGGREGATE_CONFIG_ID
         assert isinstance(indexer, ProwlarrIndexer)
         assert indexer._indexer_ids == [101, 102, 103]
+        assert getattr(indexer, "_indexer_rankings", None) == {
+            101: (1, 10),
+            102: (2, 20),
+            103: (3, 30),
+        }
 
     @pytest.mark.asyncio
     async def test_prowlarr_newznab_registered_individually(self) -> None:

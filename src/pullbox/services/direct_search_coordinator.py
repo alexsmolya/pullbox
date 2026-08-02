@@ -537,6 +537,7 @@ def _candidate_release(
         category="Books/Comics",
         published_at=None,
         info_url=_safe_source_reference(candidate.source_reference, provider.source_domains),
+        ranking_priority=provider.provider_priority,
     )
 
 

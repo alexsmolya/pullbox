@@ -338,7 +338,11 @@ Search and acquisition are coordinated through several focused service modules:
 - `search_indexers.py` calls configured indexers.
 - `release_parser.py` and matching helpers parse release titles.
 - `release_validator.py` rejects mismatches and unsafe candidates.
-- `search_scoring.py` and `search_evaluation.py` rank acceptable releases.
+- `search_scoring.py` and `search_evaluation.py` rank acceptable releases. The
+  configured Search Priority orders the `usenet`, `torrent`, and `direct`
+  source lanes. Within each lane, the deterministic quality score includes the
+  individual indexer or direct-provider priority; lower numeric priority is
+  preferred.
 - `download_service.py` sends selected releases to a configured download
   client.
 - `wanted_search_sweep.py` persists the complete fair-order target snapshot for
@@ -358,8 +362,8 @@ Wanted issue or manual search
   -> Search enabled indexers
   -> Parse release titles
   -> Validate against series, issue, year, and type
-  -> Score accepted results
-  -> Grab selected result
+  -> Order accepted results by source lane, then score within each lane
+  -> Grab the selected result, falling through on an expected queue failure
   -> Monitor download
   -> Process completed files
   -> Match or intervene
@@ -373,6 +377,8 @@ Wanted issue or manual search
   behavior.
 - Keep manual and automated search on shared parsing, validation, and scoring
   primitives so behavior does not drift.
+- Apply source and provider priority consistently in manual-result presentation,
+  automated winner selection, and acquisition fallback.
 - Make mode-specific search differences explicit, covered, and visible in
   rejected-result explanations.
 - Prefer targeted query and scoring changes over broad matching looseness.
@@ -392,6 +398,9 @@ Wanted issue or manual search
   the remaining candidates already accepted by the unchanged matcher. Semantic
   uncertainty and actionable resolver/host configuration still use
   intervention.
+- An expected indexer queue failure also advances to the next accepted
+  candidate. Database errors and unexpected programming failures still surface
+  instead of being mistaken for a source failure.
 - Quota-capable providers default to five reserved manual downloads. Automatic
   search stops at the configured reserve; manual grabs may consume it. Only the
   latest provider-generic capacity observation is stored, never account download

@@ -111,6 +111,7 @@ def rank_search_sources(
             max_file_count=eval_kwargs.get("max_file_count", 5),
             preferred_language=eval_kwargs.get("preferred_language", "en"),
             digital_bonus=eval_kwargs.get("digital_bonus", 10),
+            source_priority=normalized_priority,
         )
         if selected is None:
             break
