@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from pullbox.core.exceptions import ValidationError
 from pullbox.core.log_sanitizer import sanitize_log_string
+from pullbox.core.name_matcher import NameMatcher
 from pullbox.core.release_parser import issues_match, normalize_issue_number
 from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.direct_acquisition import (
@@ -851,14 +852,14 @@ def _allows_title_only_coverage(
     attempt: DirectAcquisitionAttempt,
     artifacts: Sequence[DirectArtifact],
 ) -> bool:
-    if len(artifacts) != 1 or len(_requested_coverage(attempt)) != 1:
+    if not artifacts or len(_requested_coverage(attempt)) != 1:
         return False
-    artifact = artifacts[0]
-    if (
+    if any(
         artifact.route is not DirectArtifactRoute.DIRECT_ARTIFACT
         or artifact.coverage.issue_numbers
         or artifact.coverage.issue_ids
         or artifact.coverage.volume
+        for artifact in artifacts
     ):
         return False
     raw_type = (attempt.requested_coverage or {}).get("issue_type")
@@ -872,7 +873,34 @@ def _allows_title_only_coverage(
     if not isinstance(semantic, dict):
         return False
     similarity = semantic.get("series_similarity")
-    return isinstance(similarity, int | float) and float(similarity) >= 0.98
+    if not isinstance(similarity, int | float) or float(similarity) < 0.98:
+        return False
+    if len(artifacts) == 1:
+        return True
+    return semantic.get("is_match") is True and _alternatives_match_candidate_title(
+        attempt,
+        artifacts,
+    )
+
+
+def _alternatives_match_candidate_title(
+    attempt: DirectAcquisitionAttempt,
+    artifacts: Sequence[DirectArtifact],
+) -> bool:
+    parsed = (attempt.candidate_snapshot or {}).get("parsed")
+    if not isinstance(parsed, dict):
+        return False
+    candidate_title = parsed.get("series_title")
+    if not isinstance(candidate_title, str):
+        return False
+    normalized_candidate = NameMatcher.normalize(candidate_title)
+    if not normalized_candidate:
+        return False
+    return all(
+        isinstance(artifact.coverage.description, str)
+        and NameMatcher.normalize(artifact.coverage.description) == normalized_candidate
+        for artifact in artifacts
+    )
 
 
 def _requested_volume(

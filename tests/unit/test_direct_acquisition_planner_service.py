@@ -375,6 +375,109 @@ async def test_planning_accepts_one_exact_title_only_nonstandard_artifact(
 
 
 @pytest.mark.asyncio
+async def test_planning_accepts_exact_title_only_collection_quality_alternatives(
+    session: AsyncSession,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = {
+        "issue_numbers": ["1"],
+        "issue_type": "tpb",
+        "volume": "1",
+    }
+    attempt.candidate_snapshot = {
+        "display_title": "Black Science Compendium (TPB) (2023)",
+        "parsed": {"series_title": "Black Science Compendium"},
+        "semantic_decision": {
+            "is_match": True,
+            "confidence": "low",
+            "series_similarity": 1.0,
+            "match_type": "exact",
+        },
+    }
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage(description="Black Science Compendium")
+    response.artifacts.append(
+        DirectArtifact(
+            artifact_id="provider-artifact-sd",
+            coverage=DirectArtifactCoverage(description="Black Science Compendium"),
+            route=DirectArtifactRoute.DIRECT_ARTIFACT,
+            format="cbz",
+            size_bytes=651 * 1024 * 1024,
+            mirrors=[
+                DirectMirror(
+                    mirror_id="provider-artifact-sd-mirror",
+                    host_kind="pixeldrain",
+                    share_url="https://pixeldrain.com/u/sd",
+                )
+            ],
+        )
+    )
+    await session.flush()
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.plan.complete is True
+    assert len(result.plan.selected) == 1
+    assert result.attempt.plan_snapshot["coverage"]["title_only_override"] is True
+
+
+@pytest.mark.asyncio
+async def test_planning_rejects_title_only_alternatives_with_mixed_collection_titles(
+    session: AsyncSession,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = {
+        "issue_numbers": ["1"],
+        "issue_type": "tpb",
+        "volume": "1",
+    }
+    attempt.candidate_snapshot = {
+        "parsed": {"series_title": "Black Science Compendium"},
+        "semantic_decision": {
+            "is_match": True,
+            "series_similarity": 1.0,
+        },
+    }
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage(description="Black Science Compendium")
+    response.artifacts.append(
+        DirectArtifact(
+            artifact_id="provider-artifact-unrelated",
+            coverage=DirectArtifactCoverage(description="Another Collection"),
+            route=DirectArtifactRoute.DIRECT_ARTIFACT,
+            format="cbz",
+            mirrors=[
+                DirectMirror(
+                    mirror_id="provider-artifact-unrelated-mirror",
+                    host_kind="pixeldrain",
+                    share_url="https://pixeldrain.com/u/unrelated",
+                )
+            ],
+        )
+    )
+    await session.flush()
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert error.value.code == "no_eligible_complete_plan"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("issue_type", "series_similarity", "artifact_count"),
     [
