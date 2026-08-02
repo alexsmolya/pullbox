@@ -44,6 +44,7 @@ class ArtifactPlanSnapshotInput:
     range_supported: bool
     resolver_required: bool
     expected_size: int | None
+    fallback_identity: str | None = None
 
 
 def build_plan_snapshot(
@@ -129,6 +130,8 @@ def record_acquisition_plan(
 def _validate_artifact(artifact: ArtifactPlanSnapshotInput) -> None:
     _validate_identity("artifact identity", artifact.artifact_identity)
     _validate_identity("content identity", artifact.content_identity)
+    if artifact.fallback_identity is not None:
+        _validate_identity("fallback identity", artifact.fallback_identity)
     if not _REASON_CODE.fullmatch(artifact.eligibility_code):
         raise ValidationError("Invalid artifact eligibility code.")
     for label, value in (
@@ -151,7 +154,7 @@ def _validate_identity(label: str, value: str) -> None:
 
 
 def _serialize_artifact(artifact: ArtifactPlanSnapshotInput) -> dict[str, object]:
-    return {
+    serialized: dict[str, object] = {
         "artifact_identity": artifact.artifact_identity,
         "content_identity": artifact.content_identity,
         "content_rank": artifact.content_rank,
@@ -168,6 +171,9 @@ def _serialize_artifact(artifact: ArtifactPlanSnapshotInput) -> dict[str, object
         "resolver_required": artifact.resolver_required,
         "expected_size": artifact.expected_size,
     }
+    if artifact.fallback_identity is not None:
+        serialized["fallback_identity"] = artifact.fallback_identity
+    return serialized
 
 
 def _json_copy(value: Mapping[str, object]) -> dict[str, object]:

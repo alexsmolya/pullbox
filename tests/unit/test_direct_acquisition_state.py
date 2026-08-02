@@ -64,7 +64,9 @@ def _artifact(state: DirectArtifactState) -> DirectArtifactAttempt:
         (DirectAcquisitionState.POST_PROCESSING, DirectAcquisitionState.COMPLETED),
         (DirectAcquisitionState.RESOLVING, DirectAcquisitionState.RETRY_PENDING),
         (DirectAcquisitionState.RETRY_PENDING, DirectAcquisitionState.RESOLVING),
+        (DirectAcquisitionState.RETRY_PENDING, DirectAcquisitionState.QUEUED),
         (DirectAcquisitionState.INTERVENTION, DirectAcquisitionState.RESOLVING),
+        (DirectAcquisitionState.INTERVENTION, DirectAcquisitionState.QUEUED),
     ],
 )
 def test_valid_acquisition_transitions(current, target) -> None:  # type: ignore[no-untyped-def]

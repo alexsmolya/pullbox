@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy import and_, exists, or_, select
 
+from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series
@@ -34,7 +35,15 @@ class IssueSearchTarget:
     issue_type: IssueType
     issue_title: str | None = None
     series_year: int | None = None
+    release_year: int | None = None
     alternate_names: list[str] | None = None
+
+    @property
+    def search_year(self) -> int | None:
+        """Use publication year for collections and series year for serial issues."""
+        if issue_type_family(self.issue_type) is TypeFamily.COLLECTION:
+            return self.release_year or self.series_year
+        return self.series_year
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,7 @@ class SearchIssueTargetFunc(Protocol):
 
 def _target_from_row(row: Any) -> IssueSearchTarget:
     """Build a search target from a SQLAlchemy row with the expected labels."""
+    release_date = getattr(row, "release_date", None) or getattr(row, "store_date", None)
     return IssueSearchTarget(
         issue_id=int(row.issue_id),
         series_id=int(row.series_id),
@@ -88,6 +98,7 @@ def _target_from_row(row: Any) -> IssueSearchTarget:
         issue_type=IssueType(str(row.issue_type)) if row.issue_type else IssueType.ISSUE,
         issue_title=str(row.issue_title) if row.issue_title else None,
         series_year=int(row.series_year) if row.series_year else None,
+        release_year=release_date.year if release_date is not None else None,
         alternate_names=list(row.alternate_names) if row.alternate_names else None,
     )
 
@@ -104,6 +115,8 @@ async def load_issue_search_target(
             Issue.issue_number.label("issue_number"),
             Issue.issue_type.label("issue_type"),
             Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
@@ -130,6 +143,8 @@ async def load_series_wanted_search_targets(
             Issue.issue_number.label("issue_number"),
             Issue.issue_type.label("issue_type"),
             Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
@@ -225,6 +240,8 @@ async def load_wanted_issue_search_targets(
             Issue.issue_number.label("issue_number"),
             Issue.issue_type.label("issue_type"),
             Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
@@ -251,6 +268,8 @@ async def load_wanted_issue_search_targets_by_ids(
             Issue.issue_number.label("issue_number"),
             Issue.issue_type.label("issue_type"),
             Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),

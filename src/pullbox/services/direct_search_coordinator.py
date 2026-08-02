@@ -58,6 +58,7 @@ _CONFIDENCE_RANK = {
     MatchConfidence.MEDIUM: 1,
     MatchConfidence.LOW: 2,
 }
+_COLLECTION_EDITION_QUALIFIERS = ("expanded edition",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,9 +430,10 @@ async def _search_provider(
             [release],
             wanted_series=target.series_title,
             wanted_issue=target.issue_number,
-            wanted_year=target.series_year,
+            wanted_year=target.search_year,
             wanted_issue_type=target.issue_type,
-            alternate_names=target.alternate_names,
+            alternate_names=_validation_alternate_names(target, candidate),
+            wanted_issue_title=target.issue_title,
         )
         validation = accepted[0] if accepted else declined[0]
         result = DirectValidatedCandidate(
@@ -442,6 +444,28 @@ async def _search_provider(
         )
         (matched if validation.is_match else rejected).append(result)
     return matched, rejected, None
+
+
+def _validation_alternate_names(
+    target: IssueSearchTarget,
+    candidate: DirectCandidate,
+) -> list[str]:
+    """Recognize bounded edition qualifiers without weakening title matching."""
+    alternate_names = list(target.alternate_names or [])
+    if issue_type_family(target.issue_type) is not TypeFamily.COLLECTION:
+        return alternate_names
+
+    candidate_title = candidate.parsed.series_title.strip()
+    normalized_candidate = NameMatcher.normalize(candidate_title)
+    for base_title in (target.series_title, *alternate_names):
+        normalized_base = NameMatcher.normalize(base_title)
+        if normalized_candidate in {
+            f"{normalized_base} {qualifier}" for qualifier in _COLLECTION_EDITION_QUALIFIERS
+        }:
+            if candidate_title not in alternate_names:
+                alternate_names.append(candidate_title)
+            break
+    return alternate_names
 
 
 async def _search_with_resolver_fallback(
@@ -504,7 +528,10 @@ def _build_intent(target: IssueSearchTarget) -> DirectSearchIntent:
         issue_number=issue_number,
         issue_type=target.issue_type.value,
         volume=_target_volume(target),
-        year=target.series_year,
+        issue_title=target.issue_title,
+        series_year=target.series_year,
+        release_year=target.release_year,
+        year=target.search_year,
         preferred_formats=["cbz", "cbr", "cb7", "pdf"],
         quality_preferences=["digital", "retail"],
     )

@@ -564,10 +564,12 @@ async def htmx_intervention_bulk_reject(
 
     svc = InterventionService()
     successful_rejects = 0
+    blocklisted_rejects = 0
     for pm_id in pm_ids:
         try:
-            await svc.reject_match(session, pm_id)
+            blocklisted = await svc.reject_match(session, pm_id)
             successful_rejects += 1
+            blocklisted_rejects += int(blocklisted)
         except (ValueError, Exception):
             logger.warning("htmx_bulk_reject_item_failed", pending_id=pm_id)
 
@@ -599,11 +601,23 @@ async def htmx_intervention_bulk_reject(
 
     if successful_rejects > 0:
         noun = "release" if successful_rejects == 1 else "releases"
+        dismissed_rejects = successful_rejects - blocklisted_rejects
+        if blocklisted_rejects == successful_rejects:
+            message = (
+                f"Rejected {successful_rejects} {noun} and added "
+                + ("it" if successful_rejects == 1 else "them")
+                + " to the blocklist."
+            )
+        elif blocklisted_rejects == 0:
+            message = f"Dismissed {successful_rejects} failed {noun} without blocklisting."
+        else:
+            message = (
+                f"Resolved {successful_rejects} {noun}: {blocklisted_rejects} blocklisted "
+                f"and {dismissed_rejects} failed reviews dismissed."
+            )
         _toast_response(
             response,
-            f"Rejected {successful_rejects} {noun} and added "
-            + ("it" if successful_rejects == 1 else "them")
-            + " to the blocklist.",
+            message,
             "success",
         )
 
@@ -790,7 +804,7 @@ async def htmx_intervention_reject(
 
     svc = InterventionService()
     try:
-        await svc.reject_match(session, pending_id)
+        blocklisted = await svc.reject_match(session, pending_id)
     except ValueError:
         logger.exception("htmx_intervention_reject_failed", pending_id=pending_id)
         return Response(status_code=404)
@@ -816,7 +830,11 @@ async def htmx_intervention_reject(
         )
         return _toast_response(
             _templates().TemplateResponse(request, template_name, ctx),
-            "Release rejected and added to the blocklist.",
+            (
+                "Release rejected and added to the blocklist."
+                if blocklisted
+                else "Failed release dismissed without blocklisting."
+            ),
             "success",
         )
 
@@ -827,9 +845,13 @@ async def htmx_intervention_reject(
             request,
             user,
             pending_id=pending_id,
-            heading="Rejected",
+            heading="Rejected" if blocklisted else "Dismissed",
             title=release_title,
-            message="Release removed from the intervention queue and added to the blocklist.",
+            message=(
+                "Release removed from the intervention queue and added to the blocklist."
+                if blocklisted
+                else "Failed release removed from the intervention queue without blocklisting."
+            ),
             tone="neutral",
         ),
     )

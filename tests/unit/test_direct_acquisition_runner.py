@@ -206,6 +206,18 @@ class _InactiveCancelExecutor:
 
 
 @dataclass
+class _CompletingExecutor:
+    artifact_ids: list[int] = field(default_factory=list)
+
+    async def execute(self, session: AsyncSession, **kwargs: Any) -> None:
+        self.artifact_ids.append(kwargs["artifact_id"])
+        attempt = await session.get(DirectAcquisitionAttempt, kwargs["acquisition_id"])
+        assert attempt is not None
+        attempt.state = DirectAcquisitionState.COMPLETED
+        await session.commit()
+
+
+@dataclass
 class _FallbackExecutor:
     artifact_ids: list[int] = field(default_factory=list)
 
@@ -517,4 +529,83 @@ async def test_runner_reopens_terminal_attempt_for_explicit_retry(
 
     executor.release.set()
     await runner.wait_idle()
+    await runner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runner_manual_retry_never_requeues_a_blocklisted_route(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        artifact = await session.get(DirectArtifactAttempt, 1)
+        assert attempt is not None and artifact is not None
+        attempt.state = DirectAcquisitionState.FAILED
+        attempt.plan_snapshot = {
+            "schema_version": 1,
+            "selected_artifact_identity": "route:one",
+            "artifacts": [
+                {
+                    "artifact_identity": "route:one",
+                    "content_identity": "artifact:primary",
+                    "route_kind": "direct",
+                    "host_kind": "generic_https",
+                    "eligible": True,
+                    "eligibility_code": "eligible",
+                },
+                {
+                    "artifact_identity": "route:two",
+                    "content_identity": "artifact:primary",
+                    "route_kind": "direct",
+                    "host_kind": "pixeldrain",
+                    "eligible": True,
+                    "eligibility_code": "eligible",
+                },
+            ],
+        }
+        artifact.state = DirectArtifactState.FAILED
+        artifact.failure_class = DirectArtifactFailureClass.PERMANENT_MIRROR
+        artifact.failure_code = "artifact_not_found"
+        artifact.error_message = "The selected route no longer exists."
+        session.add(
+            BlocklistEntry(
+                release_title="Runner Series 001 (2026)",
+                release_title_normalized="direct-artifact:route:one",
+                download_url="pullbox-direct://artifact/route:one",
+                issue_id=1,
+                reason=BlocklistReason.FAILED,
+                release_group="Generic Https",
+            )
+        )
+        await session.commit()
+
+    executor = _CompletingExecutor()
+
+    async def resolver(_session: AsyncSession, **kwargs: Any) -> HostResolutionRequest:
+        assert kwargs["artifact_id"] != 1
+        return HostResolutionRequest(
+            artifact_identity="route:two",
+            host_kind=DirectArtifactHostKind.PIXELDRAIN,
+            share_url="https://pixeldrain.com/u/fallback",
+            final_url=None,
+        )
+
+    runner = DirectAcquisitionRunner(
+        session_factory,
+        executor=executor,
+        source_resolver=resolver,
+    )
+
+    assert await runner.retry(1) is True
+    await runner.wait_idle()
+
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        assert attempt is not None
+        await session.refresh(attempt, attribute_names=["artifact_attempts"])
+        selected = [artifact for artifact in attempt.artifact_attempts if artifact.is_selected]
+        assert len(selected) == 1
+        assert selected[0].artifact_identity == "route:two"
+        assert executor.artifact_ids == [selected[0].id]
+
     await runner.aclose()

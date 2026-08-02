@@ -20,6 +20,8 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactState,
 )
 from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
+from pullbox.services.blocklist_service import BlocklistService
+from pullbox.services.direct_acquisition_fallback import queue_next_artifact_route
 from pullbox.services.direct_acquisition_planner_service import (
     resolve_planned_artifact_source,
 )
@@ -178,18 +180,15 @@ class DirectAcquisitionRunner:
             if len(selected) != 1:
                 return False
             artifact = selected[0]
+            blocked = await BlocklistService.get_blocked_direct_artifact_routes(
+                session,
+                {artifact.artifact_identity},
+            )
             if attempt.state in {
                 DirectAcquisitionState.FAILED,
                 DirectAcquisitionState.CANCELLED,
             }:
                 reopen_terminal_acquisition_for_retry(attempt, artifact)
-                await sync_direct_download_history(
-                    session,
-                    attempt,
-                    artifact,
-                    at=datetime.now(UTC),
-                )
-                await session.commit()
             elif attempt.state is DirectAcquisitionState.INTERVENTION:
                 advance_acquisition_progress(
                     attempt,
@@ -200,10 +199,28 @@ class DirectAcquisitionRunner:
                         "artifact_attempt_id": artifact.id,
                     },
                 )
-                await session.commit()
             else:
                 return False
-            artifact_id = artifact.id
+            if artifact.artifact_identity in blocked:
+                fallback = await queue_next_artifact_route(
+                    session,
+                    attempt,
+                    artifact,
+                    at=datetime.now(UTC),
+                )
+                if fallback is None:
+                    await session.rollback()
+                    return False
+                artifact_id = fallback.id
+            else:
+                await sync_direct_download_history(
+                    session,
+                    attempt,
+                    artifact,
+                    at=datetime.now(UTC),
+                )
+                await session.commit()
+                artifact_id = artifact.id
 
         return await self.dispatch(acquisition_id, artifact_id)
 

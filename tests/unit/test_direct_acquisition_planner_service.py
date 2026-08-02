@@ -272,6 +272,26 @@ async def test_planning_selects_best_eligible_route_and_persists_no_urls(
 
 
 @pytest.mark.asyncio
+async def test_planning_uses_estimated_size_for_ranking_not_transfer_identity(
+    session: AsyncSession,
+) -> None:
+    response = _generic_response()
+    response.artifacts[0].size_is_estimate = True
+    response.artifacts[0].mirrors[0].size_bytes = None
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.selected_artifact.expected_size == 100
+    assert result.initial_source.expected_size is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "requested_coverage",
     [
@@ -426,6 +446,9 @@ async def test_planning_accepts_exact_title_only_collection_quality_alternatives
     assert result.plan.complete is True
     assert len(result.plan.selected) == 1
     assert result.attempt.plan_snapshot["coverage"]["title_only_override"] is True
+    routes = result.attempt.plan_snapshot["artifacts"]
+    assert len({route["content_identity"] for route in routes}) == 2
+    assert len({route["fallback_identity"] for route in routes}) == 1
 
 
 @pytest.mark.asyncio

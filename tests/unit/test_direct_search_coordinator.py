@@ -346,6 +346,100 @@ async def test_collection_target_declares_volume_coverage() -> None:
     assert request.intent.volume == "1"
 
 
+async def test_collection_intent_carries_title_and_distinct_years() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    _Client.responses = {provider.provider_identity: []}
+    target = replace(
+        _target(),
+        series_title="Immortal Thor",
+        issue_number=3,
+        issue_type=IssueType.VOLUME,
+        issue_title="Vol. 3: The End of All Songs",
+        series_year=2024,
+        release_year=2025,
+    )
+
+    await search_direct_issue_target(target, [provider], client_factory=_factory)
+
+    intent = _Client.requests[0][1].intent
+    assert intent.issue_title == "Vol. 3: The End of All Songs"
+    assert intent.series_year == 2024
+    assert intent.release_year == 2025
+    assert intent.year == 2025
+
+
+async def test_collection_target_accepts_trailing_expanded_edition_qualifier() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    target = replace(
+        _target(),
+        series_title="Henchgirl",
+        issue_number=1,
+        issue_type=IssueType.TPB,
+        series_year=2020,
+        alternate_names=[],
+    )
+    candidate = _candidate(provider, "Henchgirl (Expanded Edition) (2020)").model_copy(
+        update={
+            "parsed": DirectParsedCandidate(
+                series_title="Henchgirl (Expanded Edition",
+                issue_numbers=[],
+                year=2020,
+                format=None,
+            )
+        }
+    )
+    _Client.responses = {provider.provider_identity: [candidate]}
+
+    outcome = await search_direct_issue_target(
+        target,
+        [provider],
+        client_factory=_factory,
+    )
+
+    assert len(outcome.matched) == 1
+    assert outcome.rejected == ()
+    assert outcome.matched[0].validation.series_similarity == 1.0
+    assert outcome.matched[0].validation.match_type == "alternate"
+
+
+async def test_collection_target_rejects_expanded_edition_for_different_series() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    target = replace(
+        _target(),
+        series_title="Henchgirl",
+        issue_number=1,
+        issue_type=IssueType.TPB,
+        series_year=2020,
+        alternate_names=[],
+    )
+    candidate = _candidate(
+        provider,
+        "Different Henchgirl (Expanded Edition) (2020)",
+    ).model_copy(
+        update={
+            "parsed": DirectParsedCandidate(
+                series_title="Different Henchgirl (Expanded Edition",
+                issue_numbers=[],
+                year=2020,
+                format=None,
+            )
+        }
+    )
+    _Client.responses = {provider.provider_identity: [candidate]}
+
+    outcome = await search_direct_issue_target(
+        target,
+        [provider],
+        client_factory=_factory,
+    )
+
+    assert outcome.matched == ()
+    assert len(outcome.rejected) == 1
+
+
 async def test_loader_decrypts_only_usable_provider_operations(db_session: AsyncSession) -> None:
     secret_provider = MagicMock()
     secret_provider.secret_key.return_value = "direct-search-coordinator-test-secret"

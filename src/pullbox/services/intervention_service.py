@@ -433,8 +433,10 @@ class InterventionService:
         session: AsyncSession,
         pending_id: int,
         reason: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Reject a pending match.
+
+        Returns whether the rejected release is now covered by the blocklist.
 
         Raises:
             ValueError: If pending match not found or not in PENDING status.
@@ -446,23 +448,32 @@ class InterventionService:
             raise ValueError(f"Pending match {pending_id} is not pending (status={pm.status})")
 
         direct_attempt_id = _direct_attempt_id(pm)
+        should_blocklist_release = True
         if direct_attempt_id is not None:
             attempt = await session.get(DirectAcquisitionAttempt, direct_attempt_id)
             if attempt is None or attempt.issue_id != pm.issue_id:
                 raise ValueError("Pending match has an invalid direct attempt reference")
-            transition_acquisition(attempt, DirectAcquisitionState.CANCELLED)
-            attempt.failure_class = DirectArtifactFailureClass.USER_ACTION
-            attempt.failure_code = "user_rejected"
-            attempt.error_message = "The direct result was rejected by the user."
-            advance_acquisition_progress(
-                attempt,
-                revision=attempt.progress_revision + 1,
-                snapshot={
-                    "schema_version": 1,
-                    "stage": "cancelled",
-                    "failure_code": "user_rejected",
-                },
-            )
+            attempt_state = DirectAcquisitionState(attempt.state)
+            if attempt_state in {
+                DirectAcquisitionState.COMPLETED,
+                DirectAcquisitionState.CANCELLED,
+                DirectAcquisitionState.FAILED,
+            }:
+                should_blocklist_release = False
+            else:
+                transition_acquisition(attempt, DirectAcquisitionState.CANCELLED)
+                attempt.failure_class = DirectArtifactFailureClass.USER_ACTION
+                attempt.failure_code = "user_rejected"
+                attempt.error_message = "The direct result was rejected by the user."
+                advance_acquisition_progress(
+                    attempt,
+                    revision=attempt.progress_revision + 1,
+                    snapshot={
+                        "schema_version": 1,
+                        "stage": "cancelled",
+                        "failure_code": "user_rejected",
+                    },
+                )
 
         pm.status = PendingMatchStatus.REJECTED
         pm.resolved_at = datetime.now(UTC)
@@ -480,29 +491,32 @@ class InterventionService:
             reason=reason,
         )
 
-        # Add to blocklist so this release is not grabbed again
-        try:
-            from pullbox.core.release_parser import parse_release_title
-            from pullbox.models.blocklist import BlocklistReason
-            from pullbox.services.blocklist_service import BlocklistService
+        blocklist_applied = False
+        if should_blocklist_release:
+            try:
+                from pullbox.core.release_parser import parse_release_title
+                from pullbox.models.blocklist import BlocklistReason
+                from pullbox.services.blocklist_service import BlocklistService
 
-            parsed = parse_release_title(pm.release_title)
-            release_group = parsed.scan_group if parsed else None
+                parsed = parse_release_title(pm.release_title)
+                release_group = parsed.scan_group if parsed else None
 
-            await BlocklistService.add_entry(
-                session,
-                pm.release_title,
-                BlocklistReason.REJECTED,
-                download_url=None if direct_attempt_id is not None else pm.download_url,
-                issue_id=pm.issue_id,
-                indexer_id=pm.indexer_id,
-                release_group=release_group,
-            )
-        except Exception:
-            logger.debug(
-                "blocklist_reject_add_failed",
-                pending_id=pending_id,
-            )
+                await BlocklistService.add_entry(
+                    session,
+                    pm.release_title,
+                    BlocklistReason.REJECTED,
+                    download_url=None if direct_attempt_id is not None else pm.download_url,
+                    issue_id=pm.issue_id,
+                    indexer_id=pm.indexer_id,
+                    release_group=release_group,
+                )
+                blocklist_applied = True
+            except Exception:
+                logger.debug(
+                    "blocklist_reject_add_failed",
+                    pending_id=pending_id,
+                )
+        return blocklist_applied
 
     async def get_pending(
         self,

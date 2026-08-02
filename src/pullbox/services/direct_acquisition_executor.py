@@ -94,13 +94,13 @@ _SLOW_SOURCE_RECOVERY_BYTES_PER_SECOND = 750_000 / 8
 _SLOW_SOURCE_WINDOW_SECONDS = 60.0
 _SLOW_SOURCE_RECOVERY_WINDOW_SECONDS = 30.0
 _SLOW_SOURCE_MIN_BYTES = 2 * 1024**2
-_ROUTE_SOURCE_FAILURE_CODES = frozenset(
+_TRANSIENT_PROVIDER_CHURN_CODES = frozenset(
     {
         "provider_artifact_changed",
         "provider_mirror_changed",
-        "provider_host_kind_mismatch",
     }
 )
+_PERMANENT_ROUTE_SOURCE_FAILURE_CODES = frozenset({"provider_host_kind_mismatch"})
 
 
 class _SlowSourceTracker:
@@ -963,7 +963,15 @@ def _validate_source_request(
 def _route_source_failure(
     error: DirectAcquisitionPlanningError,
 ) -> ArtifactHostResolutionError:
-    if error.code in _ROUTE_SOURCE_FAILURE_CODES:
+    if error.code in _TRANSIENT_PROVIDER_CHURN_CODES:
+        return ArtifactHostResolutionError(
+            code=error.code,
+            message="The provider response temporarily omitted the selected source.",
+            failure_class=DirectArtifactFailureClass.RESOLVER,
+            retryable=False,
+            intervention=True,
+        )
+    if error.code in _PERMANENT_ROUTE_SOURCE_FAILURE_CODES:
         return ArtifactHostResolutionError(
             code=error.code,
             message="The selected artifact route is no longer offered by the provider.",

@@ -974,6 +974,34 @@ class TestHandlersDirect:
         assert "added to the blocklist" in body
 
     @pytest.mark.asyncio
+    async def test_htmx_reject_failed_direct_review_reports_dismissal(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A stale failed direct review is dismissed without claiming it was blocklisted."""
+        from pullbox.ui.routes import htmx_intervention_reject
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        with patch(
+            "pullbox.services.intervention_service.InterventionService.reject_match",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            async with _db_factory() as session:
+                resp = await htmx_intervention_reject(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        assert resp.status_code == 200
+        body = resp.body.decode()
+        assert "Dismissed" in body
+        assert "without blocklisting" in body
+        assert "added to the blocklist" not in body
+
+    @pytest.mark.asyncio
     async def test_htmx_reject_queue_refresh_sets_blocklist_toast(
         self,
         _db_factory: async_sessionmaker[AsyncSession],

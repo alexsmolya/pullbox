@@ -344,6 +344,7 @@ def evaluate_results(
     wanted_issue: float | None = None,
     wanted_year: int | None = None,
     wanted_issue_type: IssueType = IssueType.ISSUE,
+    wanted_issue_title: str | None = None,
     alternate_names: list[str] | None = None,
     ignore_words: list[str] | None = None,
     fuzzy_high_threshold: float | None = None,
@@ -405,6 +406,7 @@ def evaluate_results(
             wanted_year=wanted_year,
             wanted_issue_type=wanted_issue_type,
             alternate_names=alternate_names,
+            wanted_issue_title=wanted_issue_title,
         )
 
         log_type_detection_func(

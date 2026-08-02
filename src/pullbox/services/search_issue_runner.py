@@ -149,9 +149,10 @@ async def search_issue_target(
         filtered_results,
         wanted_series=target.series_title,
         wanted_issue=target.issue_number,
-        wanted_year=target.series_year,
+        wanted_year=target.search_year,
         wanted_issue_type=target.issue_type,
         alternate_names=target.alternate_names,
+        wanted_issue_title=target.issue_title,
     )
     log_type_detection_func(
         matched,

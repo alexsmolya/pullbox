@@ -249,6 +249,35 @@ class TestConfidenceGradation:
         assert len(validated) == 1
         assert validated[0].is_match is True
 
+    @pytest.mark.regression
+    def test_standard_issue_does_not_satisfy_named_collection_volume(self) -> None:
+        matched, rejected = self.validator.validate_all_results(
+            [make_release("Immortal Thor 003 (2023) (Digital-HD) (Shan-Empire)")],
+            wanted_series="Immortal Thor",
+            wanted_issue=3.0,
+            wanted_year=2024,
+            wanted_issue_type=IssueType.VOLUME,
+            wanted_issue_title="Vol. 3: The End of All Songs",
+        )
+
+        assert matched == []
+        assert len(rejected) == 1
+        assert "Ambiguous issue-vs-volume" in (rejected[0].rejection_reason or "")
+
+    @pytest.mark.regression
+    def test_named_collection_volume_accepts_matching_subtitle(self) -> None:
+        validated = self.validator.validate_results(
+            [make_release("Immortal Thor Vol. 3 - The End Of All Songs (TPB) (2025)")],
+            wanted_series="Immortal Thor",
+            wanted_issue=3.0,
+            wanted_year=2024,
+            wanted_issue_type=IssueType.VOLUME,
+            wanted_issue_title="Vol. 3: The End of All Songs",
+        )
+
+        assert len(validated) == 1
+        assert validated[0].is_match is True
+
 
 class TestIgnoreWords:
     """Tests for ignore word filtering."""

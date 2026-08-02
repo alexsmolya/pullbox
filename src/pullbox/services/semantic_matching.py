@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pullbox.core.issue_title import collection_title_subtitle
 from pullbox.core.name_matcher import NameMatcher
 from pullbox.core.naming import extract_base_series_title
 from pullbox.core.release_parser import issues_match, normalize_issue_number
@@ -217,6 +218,15 @@ class SemanticMatchEngine:
                 match_diagnostics={"type_mode": compatibility.mode},
             )
 
+        if compatibility.mode == "issue_to_collection_inference":
+            inference_rejection = _validate_issue_to_collection_inference(
+                metadata=metadata,
+                wanted_issue=wanted_issue,
+                wanted_issue_title=wanted_issue_title,
+            )
+            if inference_rejection is not None:
+                return inference_rejection
+
         issue_check_skipped = False
         issue_confirmed = False
         match_method = "series_issue_match"
@@ -259,7 +269,10 @@ class SemanticMatchEngine:
                 and compatibility.prefer_volume_number
                 and _has_volume_subtitle_hint(metadata)
                 and issues_match(wanted_issue, effective_issue)
-                and self._policy.require_volume_subtitle_corroboration
+                and (
+                    self._policy.require_volume_subtitle_corroboration
+                    or collection_title_subtitle(wanted_issue_title) is not None
+                )
             ):
                 issue_confirmed = True
                 match_method = "issue_number"
@@ -278,9 +291,9 @@ class SemanticMatchEngine:
                 elif issues_match(wanted_issue, effective_issue):
                     issue_confirmed = True
                     match_method = "issue_number"
-                    if (
-                        compatibility.prefer_volume_number
-                        and self._policy.require_volume_subtitle_corroboration
+                    if compatibility.prefer_volume_number and (
+                        self._policy.require_volume_subtitle_corroboration
+                        or collection_title_subtitle(wanted_issue_title) is not None
                     ):
                         subtitle_check = _validate_volume_subtitle_hint(
                             metadata=metadata,
@@ -548,6 +561,36 @@ def _validate_volume_subtitle_hint(
             f"Issue title mismatch: subtitle '{subtitle}' not found in target titles."
         ),
         match_diagnostics={"volume_subtitle_hint": hint},
+    )
+
+
+def _validate_issue_to_collection_inference(
+    *,
+    metadata: SourceMetadata,
+    wanted_issue: float,
+    wanted_issue_title: str | None,
+) -> IssueMatchDecision | None:
+    """Require title evidence before treating a numbered standard issue as a collection."""
+    subtitle = collection_title_subtitle(wanted_issue_title)
+    if not subtitle:
+        return None
+
+    subtitle_tokens = _subtitle_tokens(subtitle)
+    candidate_tokens = _subtitle_tokens(metadata.original_title)
+    if subtitle_tokens and subtitle_tokens.issubset(candidate_tokens):
+        return None
+
+    if wanted_issue == 1.0 and metadata.issue_number is None:
+        return None
+
+    return IssueMatchDecision(
+        is_match=False,
+        confidence=MatchConfidence.LOW,
+        match_method="ambiguous_issue_collection_type",
+        rejection_reason=(
+            "Ambiguous issue-vs-volume result: standard issue lacks collection title evidence."
+        ),
+        match_diagnostics={"type_mode": "issue_to_collection_inference"},
     )
 
 

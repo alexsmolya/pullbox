@@ -161,6 +161,9 @@ class DirectSearchIntent(DirectContractModel):
     issue_number: str | None = Field(default=None, max_length=50)
     issue_type: str | None = Field(default=None, max_length=40)
     volume: str | None = Field(default=None, max_length=100)
+    issue_title: str | None = Field(default=None, max_length=500)
+    series_year: int | None = Field(default=None, ge=1800, le=2200)
+    release_year: int | None = Field(default=None, ge=1800, le=2200)
     year: int | None = Field(default=None, ge=1800, le=2200)
     publisher: str | None = Field(default=None, max_length=300)
     language: str | None = Field(default=None, max_length=20)
@@ -262,6 +265,7 @@ class DirectArtifact(DirectContractModel):
     edition: str | None = Field(default=None, max_length=200)
     release_group: str | None = Field(default=None, max_length=200)
     size_bytes: int | None = Field(default=None, ge=0)
+    size_is_estimate: bool = False
     mirrors: list[DirectMirror] = Field(default_factory=list, max_length=50)
     magnet_uri: str | None = Field(default=None, max_length=10_000, repr=False)
     limitations: list[str] = Field(default_factory=list, max_length=50)

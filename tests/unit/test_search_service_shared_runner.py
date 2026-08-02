@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import MethodType, SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -72,6 +72,7 @@ def _make_target(
     issue_type: IssueType = IssueType.ISSUE,
     issue_title: str | None = "Issue #1",
     series_year: int | None = 2025,
+    release_year: int | None = None,
     alternate_names: list[str] | None = None,
 ) -> IssueSearchTarget:
     return IssueSearchTarget(
@@ -82,6 +83,7 @@ def _make_target(
         issue_type=issue_type,
         issue_title=issue_title,
         series_year=series_year,
+        release_year=release_year,
         alternate_names=alternate_names,
     )
 
@@ -163,6 +165,7 @@ async def _seed_search_rows(
             comicvine_id=201,
             issue_number=9.0,
             title="Vol. 1: All Weather Turns To Storm",
+            release_date=date(2024, 12, 4),
             status=IssueStatus.WANTED,
             issue_type=IssueType.TPB,
         )
@@ -203,6 +206,7 @@ async def test_load_issue_and_wanted_targets_filter_and_shape(
         assert target is not None
         assert target.series_title == "Absolute Superman"
         assert target.issue_type == IssueType.TPB
+        assert target.release_year == 2024
         assert target.alternate_names == ["AS"]
 
         assert await load_issue_search_target(session, 99999) is None
@@ -355,7 +359,9 @@ def test_issue_query_builders_cover_fast_deep_and_fallback_variants() -> None:
 
     fast_queries = service._build_issue_queries(collection_target, mode="fast")
     assert [(query.series_title, query.issue_number) for query in fast_queries] == [
-        ("Absolute Superman", 1.0)
+        ("Absolute Superman Vol 1 All Weather Turns To Storm", None),
+        ("Absolute Superman TPB 1", None),
+        ("Absolute Superman Vol 1", None),
     ]
 
     deep_queries = service._build_issue_queries(collection_target, mode="deep")
@@ -427,8 +433,45 @@ def test_fast_wanted_queries_keep_typed_and_collection_searches_bounded() -> Non
         ("Batman Annual", 1.0)
     ]
     assert [(query.series_title, query.issue_number) for query in tpb_queries] == [
-        ("Absolute Superman", 1.0)
+        ("Absolute Superman Vol 1 All Weather Turns To Storm", None),
+        ("Absolute Superman TPB 1", None),
+        ("Absolute Superman Vol 1", None),
     ]
+
+
+def test_collection_queries_use_release_year_and_ignore_generic_issue_titles() -> None:
+    service = SearchService(ProviderRegistry())
+    immortal_thor = _make_target(
+        series_title="Immortal Thor",
+        issue_number=3.0,
+        issue_type=IssueType.VOLUME,
+        issue_title="Vol. 3: The End of All Songs",
+        series_year=2024,
+        release_year=2025,
+    )
+    generic_title = _make_target(
+        series_title="Immortal Thor",
+        issue_number=3.0,
+        issue_type=IssueType.TPB,
+        issue_title="HC/TPB",
+        series_year=2024,
+        release_year=2025,
+    )
+
+    title_queries = service._build_issue_queries(immortal_thor, mode="fast")
+    generic_queries = service._build_issue_queries(generic_title, mode="fast")
+
+    assert [query.series_title for query in title_queries] == [
+        "Immortal Thor Vol 3 The End of All Songs",
+        "Immortal Thor Vol 3",
+        "Immortal Thor Volume 3",
+    ]
+    assert {query.year for query in title_queries} == {2025}
+    assert [query.series_title for query in generic_queries] == [
+        "Immortal Thor TPB 3",
+        "Immortal Thor Vol 3",
+    ]
+    assert all("HC/TPB" not in query.series_title for query in generic_queries)
 
 
 def test_deduping_and_min_score_filtering_cover_edge_cases() -> None:

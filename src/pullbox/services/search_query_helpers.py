@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from pullbox.core.issue_title import collection_title_fragment, collection_title_subtitle
+from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.issue import IssueType
 from pullbox.providers.base import SearchQuery
 
@@ -59,8 +61,13 @@ def _is_better_release(new: ReleaseResult, existing: ReleaseResult) -> bool:
     return (new.grabs or 0) > (existing.grabs or 0)
 
 
+def _append_unique(values: list[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
 def _extract_subtitle(issue_title: str) -> str | None:
-    """Extract a useful subtitle from an issue title."""
+    """Compatibility helper for callers that require a multi-word subtitle."""
     cleaned = re.sub(
         r"^(?:Vol(?:ume)?\.?\s*\d+|Part\s+\d+|Book\s+\d+|#?\d+)\s*[:\-\u2013\u2014]\s*",
         "",
@@ -77,6 +84,21 @@ def _extract_subtitle(issue_title: str) -> str | None:
     if cleaned and len(cleaned.split()) >= 2:
         return cleaned
     return None
+
+
+def _collection_query_strings(target: IssueSearchTarget) -> list[str]:
+    """Build bounded title-first queries for a collection target."""
+    queries: list[str] = []
+    title_fragment = collection_title_fragment(target.issue_title)
+    if title_fragment:
+        _append_unique(queries, _sanitize_query(f"{target.series_title} {title_fragment}"))
+    for query in _build_type_queries(
+        target.series_title,
+        target.issue_number,
+        target.issue_type,
+    ):
+        _append_unique(queries, query)
+    return queries
 
 
 def _is_comic_category(category: str | None) -> bool:
@@ -182,11 +204,21 @@ def build_issue_queries(
                     target.issue_number,
                 )
             ]
+        if issue_type_family(issue_type) is TypeFamily.COLLECTION and not force_generic:
+            return [
+                SearchQuery(
+                    series_title=query_string,
+                    issue_number=None,
+                    year=target.search_year,
+                    issue_type=issue_type.value,
+                )
+                for query_string in _collection_query_strings(target)
+            ]
         return [
             SearchQuery(
                 series_title=target.series_title,
                 issue_number=target.issue_number,
-                year=target.series_year,
+                year=target.search_year,
                 issue_type=issue_type.value,
             )
         ]
@@ -198,24 +230,26 @@ def build_issue_queries(
             IssueType.ISSUE,
         )
     else:
-        query_strings = _build_type_queries(
-            target.series_title,
-            target.issue_number,
-            issue_type,
-        )
+        query_strings = _collection_query_strings(target)
+        if issue_type_family(issue_type) is not TypeFamily.COLLECTION:
+            query_strings = _build_type_queries(
+                target.series_title,
+                target.issue_number,
+                issue_type,
+            )
 
     if not force_generic and issue_type in _COLLECTION_TYPES:
         plain = _sanitize_query(target.series_title)
         if plain not in query_strings:
             query_strings.append(plain)
 
-    if not force_generic and target.series_year:
-        year_query = _sanitize_query(f"{target.series_title} {target.series_year}")
-        if year_query not in query_strings:
-            query_strings.append(year_query)
+    if not force_generic:
+        for year in (target.search_year, target.series_year):
+            if year:
+                _append_unique(query_strings, _sanitize_query(f"{target.series_title} {year}"))
 
     if not force_generic and issue_type in _COLLECTION_TYPES and target.issue_title:
-        subtitle = _extract_subtitle(target.issue_title)
+        subtitle = collection_title_subtitle(target.issue_title)
         if subtitle:
             subtitle_query = _sanitize_query(f"{target.series_title} {subtitle}")
             if subtitle_query not in query_strings:
@@ -225,7 +259,7 @@ def build_issue_queries(
         SearchQuery(
             series_title=query_string,
             issue_number=None,
-            year=target.series_year,
+            year=target.search_year,
             issue_type=issue_type.value,
         )
         for query_string in query_strings
@@ -247,7 +281,7 @@ def build_auto_fallback_queries(target: IssueSearchTarget) -> list[SearchQuery]:
             SearchQuery(
                 series_title=query_string,
                 issue_number=None,
-                year=target.series_year,
+                year=target.search_year,
                 issue_type=target.issue_type.value,
             )
             for query_string in generic_queries
@@ -257,7 +291,7 @@ def build_auto_fallback_queries(target: IssueSearchTarget) -> list[SearchQuery]:
         SearchQuery(
             series_title=_sanitize_query(target.series_title),
             issue_number=None,
-            year=target.series_year,
+            year=target.search_year,
             issue_type=target.issue_type.value,
         )
     ]

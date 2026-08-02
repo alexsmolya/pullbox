@@ -19,10 +19,11 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.blocklist import BlocklistEntry
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -812,12 +813,45 @@ class TestRejectMatch:
             session.add(pending)
             await session.commit()
 
-            await svc.reject_match(session, pending.id, reason="Wrong edition")
+            blocklisted = await svc.reject_match(session, pending.id, reason="Wrong edition")
             await session.commit()
 
         assert pending.status == PendingMatchStatus.REJECTED
+        assert blocklisted is True
         assert attempt.state is DirectAcquisitionState.CANCELLED
         assert attempt.failure_code == "user_rejected"
+
+    @pytest.mark.asyncio
+    async def test_reject_direct_match_preserves_failed_attempt(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A stale review can be dismissed after its acquisition already failed."""
+        from pullbox.services.intervention_service import InterventionService
+
+        svc = InterventionService()
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            attempt.state = DirectAcquisitionState.FAILED
+            attempt.failure_class = DirectArtifactFailureClass.PERMANENT_MIRROR
+            attempt.failure_code = "artifact_unavailable"
+            attempt.error_message = "The source is no longer available."
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+
+            blocklisted = await svc.reject_match(session, pending.id)
+            await session.commit()
+
+        assert pending.status == PendingMatchStatus.REJECTED
+        assert blocklisted is False
+        assert attempt.state is DirectAcquisitionState.FAILED
+        assert attempt.failure_class is DirectArtifactFailureClass.PERMANENT_MIRROR
+        assert attempt.failure_code == "artifact_unavailable"
+        assert attempt.error_message == "The source is no longer available."
+        async with db_factory() as session:
+            result = await session.execute(select(BlocklistEntry))
+            assert result.scalar_one_or_none() is None
 
 
 # ── TestGetPending ────────────────────────────────────────────────────

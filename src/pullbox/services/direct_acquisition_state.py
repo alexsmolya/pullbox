@@ -88,6 +88,7 @@ ACQUISITION_TRANSITIONS: dict[DirectAcquisitionState, frozenset[DirectAcquisitio
     ),
     DirectAcquisitionState.RETRY_PENDING: frozenset(
         {
+            DirectAcquisitionState.QUEUED,
             DirectAcquisitionState.RESOLVING,
             DirectAcquisitionState.CANCELLED,
             DirectAcquisitionState.FAILED,
@@ -96,6 +97,7 @@ ACQUISITION_TRANSITIONS: dict[DirectAcquisitionState, frozenset[DirectAcquisitio
     DirectAcquisitionState.INTERVENTION: frozenset(
         {
             DirectAcquisitionState.PLANNED,
+            DirectAcquisitionState.QUEUED,
             DirectAcquisitionState.RESOLVING,
             DirectAcquisitionState.POST_PROCESSING,
             DirectAcquisitionState.CANCELLED,

@@ -716,6 +716,11 @@ def _build_durable_snapshot(
     *,
     title_only_override: bool,
 ) -> dict[str, object]:
+    fallback_identity = _verified_alternative_fallback_identity(
+        attempt,
+        routes,
+        title_only_override=title_only_override,
+    )
     ranking_inputs = [
         ArtifactPlanSnapshotInput(
             artifact_identity=route.route.route_identity,
@@ -733,6 +738,7 @@ def _build_durable_snapshot(
             range_supported=route.route.resumable,
             resolver_required=route.route.resolver_required,
             expected_size=route.option.expected_size,
+            fallback_identity=fallback_identity,
         )
         for route in routes
     ]
@@ -760,6 +766,26 @@ def _build_durable_snapshot(
         for route in sorted(routes, key=lambda item: item.route.route_identity)
     ]
     return snapshot
+
+
+def _verified_alternative_fallback_identity(
+    attempt: DirectAcquisitionAttempt,
+    routes: Sequence[_ResolvedRoute],
+    *,
+    title_only_override: bool,
+) -> str | None:
+    if not title_only_override or len({route.artifact_identity for route in routes}) < 2:
+        return None
+    parsed = (attempt.candidate_snapshot or {}).get("parsed")
+    candidate_title = parsed.get("series_title") if isinstance(parsed, dict) else None
+    if not isinstance(candidate_title, str):
+        return None
+    normalized_title = NameMatcher.normalize(candidate_title)
+    if not normalized_title:
+        return None
+    requested = "|".join(sorted(_requested_coverage(attempt)))
+    digest = hashlib.sha256(f"{normalized_title}|{requested}".encode()).hexdigest()[:32]
+    return f"coverage:{digest}"
 
 
 def _planner_options(routes: Sequence[_ResolvedRoute]) -> list[DirectArtifactOption]:
@@ -1057,13 +1083,16 @@ def _host_resolution_request(
             retryable=exc.retryable,
             intervention=exc.intervention,
         ) from exc
+    expected_size = mirror.size_bytes
+    if expected_size is None and not artifact.size_is_estimate:
+        expected_size = artifact.size_bytes
     return HostResolutionRequest(
         artifact_identity=artifact_identity,
         host_kind=host_kind,
         share_url=mirror.share_url,
         final_url=mirror.final_url,
         provider_headers=provider_headers,
-        expected_size=mirror.size_bytes or artifact.size_bytes,
+        expected_size=expected_size,
         checksum=mirror.checksum,
         etag=mirror.etag,
         last_modified=mirror.last_modified,

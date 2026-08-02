@@ -962,7 +962,7 @@ async def test_fallback_never_switches_to_a_different_provider_artifact(
 ) -> None:
     attempt = _attempt()
     failed = attempt.artifact_attempts[0]
-    failed.artifact_identity = "route:issue-1-mega"
+    failed.artifact_identity = "route:1111"
     failed.host_kind = DirectArtifactHostKind.MEGA
     failed.failure_class = DirectArtifactFailureClass.TRANSIENT_HOST
     failed.failure_code = "artifact_host_unavailable"
@@ -981,7 +981,7 @@ async def test_fallback_never_switches_to_a_different_provider_artifact(
                 "expected_size": 100,
             },
             {
-                "artifact_identity": "route:issue-2-pixeldrain",
+                "artifact_identity": "route:2222",
                 "content_identity": "artifact:issue-2",
                 "route_kind": "direct",
                 "host_kind": "pixeldrain",
@@ -1001,9 +1001,58 @@ async def test_fallback_never_switches_to_a_different_provider_artifact(
 
 
 @pytest.mark.asyncio
-async def test_executor_falls_back_when_selected_provider_mirror_disappears(
+async def test_fallback_switches_to_explicitly_verified_equivalent_artifact(
+    session: AsyncSession,
+) -> None:
+    attempt = _attempt()
+    failed = attempt.artifact_attempts[0]
+    failed.artifact_identity = "route:aaaa"
+    failed.host_kind = DirectArtifactHostKind.MEDIAFIRE
+    failed.failure_class = DirectArtifactFailureClass.TRANSIENT_HOST
+    failed.failure_code = "artifact_host_unavailable"
+    failed.error_message = "The selected host is temporarily unavailable."
+    attempt.plan_snapshot = {
+        "schema_version": 1,
+        "selected_artifact_identity": failed.artifact_identity,
+        "artifacts": [
+            {
+                "artifact_identity": failed.artifact_identity,
+                "content_identity": "artifact:sd",
+                "fallback_identity": "coverage:black-science-compendium",
+                "route_kind": "direct",
+                "host_kind": "mediafire",
+                "eligible": True,
+                "eligibility_code": "eligible",
+                "expected_size": 651 * 1024 * 1024,
+            },
+            {
+                "artifact_identity": "route:bbbb",
+                "content_identity": "artifact:hd",
+                "fallback_identity": "coverage:black-science-compendium",
+                "route_kind": "direct",
+                "host_kind": "terabox",
+                "eligible": True,
+                "eligibility_code": "eligible",
+                "expected_size": 2_040_109_466,
+            },
+        ],
+    }
+    session.add(attempt)
+    await session.commit()
+
+    fallback = await queue_next_artifact_route(session, attempt, failed, at=NOW)
+
+    assert fallback is not None
+    assert fallback.host_kind is DirectArtifactHostKind.TERABOX
+    assert fallback.artifact_identity == "route:bbbb"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_code", ["provider_artifact_changed", "provider_mirror_changed"])
+async def test_executor_falls_back_without_blocklisting_transient_provider_churn(
     session: AsyncSession,
     tmp_path: Path,
+    failure_code: str,
 ) -> None:
     attempt = _attempt()
     artifact = attempt.artifact_attempts[0]
@@ -1039,8 +1088,8 @@ async def test_executor_falls_back_when_selected_provider_mirror_disappears(
 
     async def missing_mirror() -> HostResolutionRequest:
         raise DirectAcquisitionPlanningError(
-            "provider_mirror_changed",
-            "The provider no longer returns the selected mirror.",
+            failure_code,
+            "The provider response temporarily omitted the selected source.",
         )
 
     result = await _executor(
@@ -1057,14 +1106,13 @@ async def test_executor_falls_back_when_selected_provider_mirror_disappears(
     await session.refresh(attempt, attribute_names=["artifact_attempts"])
     failed, fallback = sorted(attempt.artifact_attempts, key=lambda item: item.sequence_no)
     assert result.state is DirectAcquisitionState.QUEUED
-    assert failed.failure_class is DirectArtifactFailureClass.PERMANENT_MIRROR
-    assert failed.failure_code == "provider_mirror_changed"
+    assert failed.failure_class is DirectArtifactFailureClass.RESOLVER
+    assert failed.failure_code == failure_code
     assert fallback.host_kind is DirectArtifactHostKind.PIXELDRAIN
     assert fallback.is_selected is True
     assert attempt.provider_identity == "community.test"
     blocklist = (await session.execute(select(BlocklistEntry))).scalars().all()
-    assert len(blocklist) == 1
-    assert blocklist[0].release_group == "MEGA"
+    assert blocklist == []
 
 
 @pytest.mark.asyncio

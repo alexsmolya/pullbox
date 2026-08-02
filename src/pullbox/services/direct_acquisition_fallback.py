@@ -79,22 +79,32 @@ async def queue_next_artifact_route(
     if not isinstance(raw_artifacts, list):
         return None
 
-    attempted = {artifact.artifact_identity for artifact in attempt.artifact_attempts}
     await _auto_blocklist_failed_route(session, attempt, failed_artifact, at=at)
-    failed_content_identity = _route_content_identity(
+    attempted = {artifact.artifact_identity for artifact in attempt.artifact_attempts}
+    route_identities = {
+        identity
+        for raw_route in raw_artifacts
+        if isinstance(raw_route, dict)
+        and isinstance((identity := raw_route.get("artifact_identity")), str)
+    }
+    blocked = await BlocklistService.get_blocked_direct_artifact_routes(
+        session,
+        route_identities,
+    )
+    failed_fallback_identity = _route_fallback_identity(
         raw_artifacts,
         failed_artifact.artifact_identity,
     )
-    if failed_content_identity is None:
+    if failed_fallback_identity is None:
         return None
     next_route: dict[str, object] | None = None
     for raw_route in raw_artifacts:
         if not isinstance(raw_route, dict) or raw_route.get("eligible") is not True:
             continue
-        if raw_route.get("content_identity") != failed_content_identity:
+        if _snapshot_fallback_identity(raw_route) != failed_fallback_identity:
             continue
         identity = raw_route.get("artifact_identity")
-        if isinstance(identity, str) and identity not in attempted:
+        if isinstance(identity, str) and identity not in attempted and identity not in blocked:
             next_route = raw_route
             break
     if next_route is None:
@@ -197,16 +207,23 @@ async def queue_next_artifact_route(
     return fallback
 
 
-def _route_content_identity(
+def _route_fallback_identity(
     routes: list[object],
     route_identity: str,
 ) -> str | None:
     for route in routes:
         if not isinstance(route, dict) or route.get("artifact_identity") != route_identity:
             continue
-        content_identity = route.get("content_identity")
-        return content_identity if isinstance(content_identity, str) else None
+        return _snapshot_fallback_identity(route)
     return None
+
+
+def _snapshot_fallback_identity(route: dict[str, object]) -> str | None:
+    fallback_identity = route.get("fallback_identity")
+    if isinstance(fallback_identity, str):
+        return fallback_identity
+    content_identity = route.get("content_identity")
+    return content_identity if isinstance(content_identity, str) else None
 
 
 async def _auto_blocklist_failed_route(

@@ -769,8 +769,9 @@ async def _build_mocked_issue_outcome(
             filtered_results,
             wanted_series=target.series_title,
             wanted_issue=target.issue_number,
-            wanted_year=target.series_year,
+            wanted_year=target.search_year,
             wanted_issue_type=target.issue_type,
+            wanted_issue_title=target.issue_title,
             alternate_names=target.alternate_names,
             source_priority=runtime.source_priority,
             **runtime.eval_kwargs,
@@ -785,9 +786,10 @@ async def _build_mocked_issue_outcome(
             [best],
             wanted_series=target.series_title,
             wanted_issue=target.issue_number,
-            wanted_year=target.series_year,
+            wanted_year=target.search_year,
             wanted_issue_type=target.issue_type,
             alternate_names=target.alternate_names,
+            wanted_issue_title=target.issue_title,
         )
         if matched:
             best_validation = matched[0]
@@ -831,8 +833,9 @@ async def _build_mocked_wanted_outcome(
                 filtered_results,
                 wanted_series=target.series_title,
                 wanted_issue=target.issue_number,
-                wanted_year=target.series_year,
+                wanted_year=target.search_year,
                 wanted_issue_type=target.issue_type,
+                wanted_issue_title=target.issue_title,
                 alternate_names=target.alternate_names,
                 source_priority=runtime.source_priority,
                 **runtime.eval_kwargs,
@@ -856,9 +859,10 @@ async def _build_mocked_wanted_outcome(
             [best],
             wanted_series=target.series_title,
             wanted_issue=target.issue_number,
-            wanted_year=target.series_year,
+            wanted_year=target.search_year,
             wanted_issue_type=target.issue_type,
             alternate_names=target.alternate_names,
+            wanted_issue_title=target.issue_title,
         )
         if matched:
             best_validation = matched[0]

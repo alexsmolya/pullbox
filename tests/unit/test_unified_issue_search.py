@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -103,6 +104,56 @@ async def test_quick_first_deep_fallback_searches_direct_provider_only_once(
     assert indexer_calls == 3
     assert direct_calls == 1
     assert outcome.direct_outcome is not None
+
+
+async def test_collection_quick_first_does_not_stop_on_standard_issue_false_positive(
+    db_session: AsyncSession,
+) -> None:
+    target = IssueSearchTarget(
+        issue_id=72,
+        series_id=18,
+        series_title="Immortal Thor",
+        issue_number=3,
+        issue_type=IssueType.VOLUME,
+        issue_title="Vol. 3: The End of All Songs",
+        series_year=2024,
+        release_year=2024,
+    )
+    wrong_issue = ReleaseResult(
+        title="Immortal Thor 003 (2023) (Digital-HD) (Shan-Empire)",
+        indexer_name="NZBgeek",
+        download_url="https://example.test/wrong",
+        size_bytes=100_000_000,
+        age_days=1,
+        seeders=None,
+        leechers=None,
+        grabs=10,
+        is_torrent=False,
+        category="7030",
+        published_at=None,
+    )
+    correct_volume = replace(
+        wrong_issue,
+        title="Immortal Thor Vol. 3 - The End Of All Songs (TPB) (2025)",
+        download_url="https://example.test/correct",
+    )
+    calls = 0
+
+    async def run_indexers(*_args: object, **_kwargs: object):
+        nonlocal calls
+        calls += 1
+        return ([wrong_issue] if calls == 1 else [correct_volume]), {}, []
+
+    service = SearchService(ProviderRegistry())
+    service._run_query_batch_with_provenance = run_indexers  # type: ignore[method-assign]
+
+    outcome = await service.search_issue_target_quick_first(db_session, target)
+
+    assert calls == 2
+    assert outcome.search_details["search_strategy"] == "quick_first_deep_fallback"
+    assert [item.release.download_url for item in outcome.matched] == [
+        "https://example.test/correct"
+    ]
 
 
 async def test_unified_search_persists_secret_free_direct_resolver_diagnostics(
