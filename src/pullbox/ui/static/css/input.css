@@ -370,6 +370,38 @@
   ::selection {
     background-color: var(--pb-selection);
   }
+
+  /* Interactive cursor contract: pointer */
+  :where(
+    a[href]:not([aria-disabled="true"]),
+    button:not(:disabled):not([aria-disabled="true"]),
+    input[type="button"]:not(:disabled),
+    input[type="submit"]:not(:disabled),
+    input[type="reset"]:not(:disabled),
+    input[type="checkbox"]:not(:disabled),
+    input[type="radio"]:not(:disabled),
+    input[type="file"]:not(:disabled),
+    input[type="image"]:not(:disabled),
+    select:not(:disabled),
+    summary,
+    [role="button"]:not([aria-disabled="true"]),
+    [role="link"]:not([aria-disabled="true"]),
+    label:has(
+      :is(input[type="checkbox"], input[type="radio"], input[type="file"]):not(:disabled)
+    )
+  ) {
+    cursor: pointer;
+  }
+
+  /* Interactive cursor contract: not-allowed */
+  :where(
+    button:disabled,
+    input:disabled,
+    select:disabled,
+    [aria-disabled="true"]
+  ) {
+    cursor: not-allowed;
+  }
 }
 
 /* ── Component Classes ─────────────────────────────────────────────── */
