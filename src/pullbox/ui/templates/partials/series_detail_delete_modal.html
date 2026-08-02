@@ -16,9 +16,14 @@ Are you sure you want to delete {{ series.title }}? This removes the series and 
     syncDeleteOptions() {
       this.deleteFiles = !!this.deleteFolder;
     },
+    deleteReturnUrl() {
+      const backLink = document.querySelector('[data-testid=series-detail-back-link]');
+      return backLink?.getAttribute('href') || '/series';
+    },
     submitDelete() {
       if (this.deleting) return;
       this.deleting = true;
+      const returnUrl = this.deleteReturnUrl();
       fetch('/htmx/series/{{ series.id }}/delete', {
         method: 'POST',
         headers: {
@@ -32,7 +37,7 @@ Are you sure you want to delete {{ series.title }}? This removes the series and 
       })
         .then((response) => {
           if (!response.ok) throw new Error('Failed to delete series');
-          window.location.assign('/series');
+          window.location.assign(returnUrl);
         })
         .catch(() => {
           if (typeof showToast === 'function') {
