@@ -640,6 +640,11 @@ def _direct_approval_failure_message(
         return f"{provider_name} authentication needs attention before this result can download."
     if error.retryable or error.code in {"source_unavailable", "provider_timed_out"}:
         return f"{provider_name} is temporarily unavailable. Try approving this result again soon."
+    if error.code == "no_eligible_complete_plan":
+        return (
+            "Pullbox could not verify a complete, eligible download route for the requested "
+            "issue. Check the result or artifact-host settings, then try again."
+        )
     return "This direct result cannot be queued until its provider configuration is corrected."
 
 

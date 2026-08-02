@@ -915,6 +915,49 @@ class TestHandlersDirect:
         assert "Failed to queue" not in body
 
     @pytest.mark.asyncio
+    async def test_htmx_direct_incomplete_plan_does_not_blame_provider_configuration(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Incomplete artifact coverage reports the safe-planning failure accurately."""
+        from pullbox.services.direct_acquisition_planner_service import (
+            DirectAcquisitionPlanningError,
+        )
+        from pullbox.ui.routes import htmx_intervention_approve
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pm_ids[0])
+            assert pending is not None
+            pending.download_url = "pullbox-direct://attempt/17"
+            pending.match_details = {
+                "source_kind": "direct",
+                "direct_attempt_id": 17,
+                "provider_name": "GetComics",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            with patch(
+                "pullbox.services.intervention_service.InterventionService.approve_match",
+                new_callable=AsyncMock,
+                side_effect=DirectAcquisitionPlanningError(
+                    "no_eligible_complete_plan",
+                    "No enabled artifact route completely covers this issue.",
+                ),
+            ):
+                response = await htmx_intervention_approve(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        body = response.body.decode()
+        assert "complete, eligible download route" in body
+        assert "provider configuration" not in body
+
+    @pytest.mark.asyncio
     async def test_htmx_approve_service_error(
         self,
         _db_factory: async_sessionmaker[AsyncSession],
