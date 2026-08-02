@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pullbox.core.issue_title import collection_title_subtitle
+from pullbox.core.issue_title import collection_title_number, collection_title_subtitle
 from pullbox.core.name_matcher import NameMatcher
 from pullbox.core.naming import extract_base_series_title
 from pullbox.core.release_parser import issues_match, normalize_issue_number
@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 _matcher = NameMatcher()
 _PART_TITLE_RE = re.compile(
     r"\bpart\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+    re.IGNORECASE,
+)
+_COLLECTION_ORDINAL_RE = re.compile(
+    r"\b(?:book|v|vol(?:ume)?)\.?\s*#?0*(?P<number>\d+(?:\.\d+)?)\b",
     re.IGNORECASE,
 )
 
@@ -293,7 +297,13 @@ class SemanticMatchEngine:
                 if subtitle_check is not None:
                     return subtitle_check
             elif wanted_is_collection:
-                if effective_issue is None:
+                if _explicit_collection_ordinal_matches(
+                    metadata=metadata,
+                    wanted_issue_title=wanted_issue_title,
+                ) and not _has_volume_subtitle_hint(metadata):
+                    issue_confirmed = True
+                    match_method = "collection_title_ordinal"
+                elif effective_issue is None:
                     issue_confirmed = True
                     if _is_explicit_single_collection_match(
                         metadata=metadata,
@@ -588,6 +598,11 @@ def _validate_issue_to_collection_inference(
     wanted_series_issue_count: int | None,
 ) -> IssueMatchDecision | None:
     """Require title evidence before treating a numbered standard issue as a collection."""
+    if _explicit_collection_ordinal_matches(
+        metadata=metadata,
+        wanted_issue_title=wanted_issue_title,
+    ):
+        return None
     subtitle = collection_title_subtitle(wanted_issue_title)
     if subtitle is None and wanted_series_issue_count == 1 and metadata.issue_number is not None:
         return IssueMatchDecision(
@@ -618,6 +633,21 @@ def _validate_issue_to_collection_inference(
             "Ambiguous issue-vs-volume result: standard issue lacks collection title evidence."
         ),
         match_diagnostics={"type_mode": "issue_to_collection_inference"},
+    )
+
+
+def _explicit_collection_ordinal_matches(
+    *,
+    metadata: SourceMetadata,
+    wanted_issue_title: str | None,
+) -> bool:
+    """Match an explicit Book/Volume ordinal without trusting a bare issue number."""
+    wanted_ordinal = normalize_issue_number(collection_title_number(wanted_issue_title))
+    if wanted_ordinal is None:
+        return False
+    return any(
+        issues_match(wanted_ordinal, normalize_issue_number(match.group("number")))
+        for match in _COLLECTION_ORDINAL_RE.finditer(metadata.original_title)
     )
 
 

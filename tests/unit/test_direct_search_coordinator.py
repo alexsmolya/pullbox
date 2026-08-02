@@ -400,6 +400,44 @@ async def test_single_issue_collection_direct_search_uses_subtitle_identity() ->
     ]
 
 
+async def test_single_issue_collection_accepts_matching_book_ordinal() -> None:
+    _reset()
+    provider = _provider("pullbox.annas_archive", 10)
+    candidate = _candidate(
+        provider,
+        "Marvel action. Spider-Man. Bad luck. Book 3",
+    ).model_copy(
+        update={
+            "provider_candidate_id": "marvel-action-spider-man-bad-luck-book-3",
+            "parsed": DirectParsedCandidate(
+                series_title="Marvel action. Spider-Man. Bad luck. Book",
+                issue_numbers=["3"],
+                year=None,
+                format=None,
+            ),
+        }
+    )
+    _Client.responses = {provider.provider_identity: [candidate]}
+    target = replace(
+        _target(),
+        series_title="Marvel Action: Spider-Man: Bad Luck",
+        issue_number=1,
+        issue_type=IssueType.TPB,
+        issue_title="Book 3",
+        series_year=2020,
+        release_year=2020,
+        series_issue_count=1,
+        alternate_names=[],
+    )
+
+    outcome = await search_direct_issue_target(target, [provider], client_factory=_factory)
+
+    assert [item.candidate.provider_candidate_id for item in outcome.matched] == [
+        "marvel-action-spider-man-bad-luck-book-3"
+    ]
+    assert outcome.rejected == ()
+
+
 async def test_collection_intent_carries_title_and_distinct_years() -> None:
     _reset()
     provider = _provider("pullbox.getcomics", 10)

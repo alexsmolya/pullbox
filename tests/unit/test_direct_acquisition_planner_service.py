@@ -959,6 +959,32 @@ async def test_source_failures_do_not_create_intervention_rows(
 
 
 @pytest.mark.asyncio
+async def test_unavailable_candidate_error_tells_user_to_try_another_result(
+    session: AsyncSession,
+) -> None:
+    client = _FailingResolveClient(
+        DirectProviderClientError(
+            "candidate_not_found",
+            "Provider-specific source details must not be exposed.",
+            retryable=False,
+        )
+    )
+
+    with pytest.raises(DirectAcquisitionPlanningError) as error:
+        await plan_direct_acquisition(
+            session,
+            acquisition_id=1,
+            provider_client_factory=lambda **_kwargs: client,
+            provider_secret_loader=lambda _config: _provider_material(),
+            now=lambda: NOW,
+        )
+
+    assert str(error.value) == (
+        "The selected direct result is no longer downloadable. Try another search result."
+    )
+
+
+@pytest.mark.asyncio
 async def test_first_quota_failure_persists_provider_retry_window(
     session: AsyncSession,
 ) -> None:

@@ -525,7 +525,11 @@ def _provider_planning_error(error: DirectProviderClientError) -> DirectAcquisit
         (
             "The direct provider is temporarily unavailable."
             if retryable
-            else "The direct provider could not resolve this result."
+            else (
+                "The selected direct result is no longer downloadable. Try another search result."
+                if error.code == "candidate_not_found"
+                else "The direct provider could not resolve this result."
+            )
         ),
         failure_class=failure_class,
         retryable=retryable,
