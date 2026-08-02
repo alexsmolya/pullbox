@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pullbox.core.issue_title import collection_title_number, collection_title_subtitle
-from pullbox.core.name_matcher import NameMatcher
+from pullbox.core.name_matcher import NameMatcher, NameMatchResult
 from pullbox.core.naming import extract_base_series_title
 from pullbox.core.release_parser import issues_match, normalize_issue_number
 from pullbox.core.source_metadata import MetadataSignal
@@ -211,6 +211,23 @@ class SemanticMatchEngine:
                 )
                 if combined_match.similarity > match_result.similarity:
                     match_result = combined_match
+        single_word_collection_prefix = False
+        if not match_result.is_match and _is_safe_single_word_collection_prefix(
+            policy=self._policy,
+            metadata=metadata,
+            wanted_series=wanted_series,
+            wanted_issue=wanted_issue,
+            wanted_year=wanted_year,
+            wanted_issue_type=wanted_issue_type,
+            wanted_series_issue_count=wanted_series_issue_count,
+        ):
+            match_result = NameMatchResult(
+                is_match=True,
+                similarity=0.95,
+                match_type="starts_with",
+                matched_against=wanted_series,
+            )
+            single_word_collection_prefix = True
         if not match_result.is_match:
             return IssueMatchDecision(
                 is_match=False,
@@ -411,6 +428,7 @@ class SemanticMatchEngine:
                 "issue_check_skipped": issue_check_skipped,
                 "series_similarity": round(match_result.similarity, 4),
                 "match_type": match_result.match_type,
+                "single_word_collection_prefix": single_word_collection_prefix,
             },
         )
 
@@ -535,6 +553,39 @@ def _lower_confidence(confidence: MatchConfidence) -> MatchConfidence:
     if confidence == MatchConfidence.HIGH:
         return MatchConfidence.MEDIUM
     return MatchConfidence.LOW
+
+
+def _is_safe_single_word_collection_prefix(
+    *,
+    policy: WorkflowPolicy,
+    metadata: SourceMetadata,
+    wanted_series: str,
+    wanted_issue: float,
+    wanted_year: int | None,
+    wanted_issue_type: IssueType,
+    wanted_series_issue_count: int | None,
+) -> bool:
+    """Allow a subtitle-bearing one-word title only for an exact-year singleton collection."""
+    if (
+        policy.name != "search"
+        or issue_type_family(wanted_issue_type) != TypeFamily.COLLECTION
+        or wanted_issue != 1.0
+        or wanted_series_issue_count != 1
+        or metadata.issue_number is not None
+        or metadata.volume is not None
+        or wanted_year is None
+        or metadata.year != wanted_year
+    ):
+        return False
+
+    normalized_target = NameMatcher.normalize(wanted_series)
+    normalized_candidate = NameMatcher.normalize(metadata.series_name or "")
+    if len(normalized_target.split()) != 1:
+        return False
+    prefix = f"{normalized_target} "
+    if not normalized_candidate.startswith(prefix):
+        return False
+    return len(normalized_candidate.removeprefix(prefix).split()) >= 2
 
 
 def _normalize_volume_number(volume: str) -> float | None:

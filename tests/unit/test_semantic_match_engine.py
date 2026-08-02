@@ -142,6 +142,55 @@ class TestSemanticMatchEngine:
         assert decision.match_diagnostics["issue_check_skipped"] is True
 
     @pytest.mark.regression
+    def test_search_policy_accepts_exact_year_subtitle_for_single_word_graphic_novel(
+        self,
+    ) -> None:
+        metadata = self.extractor.from_release_title(
+            "Taproot - A Story about a Gardener and a Ghost (2017) (digital) (Mr Norrell-Empire)"
+        )
+
+        decision = SemanticMatchEngine(self.config, SearchPolicy()).match_against_issue(
+            metadata=metadata,
+            wanted_series="Taproot",
+            wanted_issue=1.0,
+            wanted_year=2017,
+            wanted_issue_type=IssueType.GN,
+            wanted_issue_title="GN",
+            wanted_series_issue_count=1,
+        )
+
+        assert decision.is_match is True
+        assert decision.match_method == "collection_series_match"
+        assert decision.match_diagnostics["single_word_collection_prefix"] is True
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        ("wanted_year", "wanted_series_issue_count"),
+        [(2018, 1), (2017, 2)],
+    )
+    def test_search_policy_rejects_ambiguous_single_word_collection_prefix(
+        self,
+        wanted_year: int,
+        wanted_series_issue_count: int,
+    ) -> None:
+        metadata = self.extractor.from_release_title(
+            "Taproot - A Story about a Gardener and a Ghost (2017) (digital) (Mr Norrell-Empire)"
+        )
+
+        decision = SemanticMatchEngine(self.config, SearchPolicy()).match_against_issue(
+            metadata=metadata,
+            wanted_series="Taproot",
+            wanted_issue=1.0,
+            wanted_year=wanted_year,
+            wanted_issue_type=IssueType.GN,
+            wanted_issue_title="GN",
+            wanted_series_issue_count=wanted_series_issue_count,
+        )
+
+        assert decision.is_match is False
+        assert decision.match_method == "series_mismatch"
+
+    @pytest.mark.regression
     def test_explicit_single_issue_tpb_without_number_is_high_confidence(self) -> None:
         metadata = self.extractor.from_release_title(
             "John Carpenter\u2019s Tales of Science Fiction \u2013 THE ENVOY (TPB) (2023)"
