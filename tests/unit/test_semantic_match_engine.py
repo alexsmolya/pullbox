@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pullbox.core.source_metadata import MetadataSignal, SourceMetadataExtractor
 from pullbox.models.issue import IssueType
 from pullbox.providers.base import SeriesSearchResult
@@ -136,6 +138,44 @@ class TestSemanticMatchEngine:
 
         assert decision.is_match is True
         assert decision.match_diagnostics["issue_check_skipped"] is True
+
+    @pytest.mark.regression
+    def test_search_policy_matches_single_issue_collection_by_volume_subtitle(self) -> None:
+        metadata = self.extractor.from_release_title(
+            "Clean Room v02 - Exile (2016) (digital-Empire).cbr"
+        )
+
+        decision = SemanticMatchEngine(self.config, SearchPolicy()).match_against_issue(
+            metadata=metadata,
+            wanted_series="Clean Room: Exile",
+            wanted_issue=1.0,
+            wanted_year=2016,
+            wanted_issue_type=IssueType.VOLUME,
+            wanted_issue_title="Volume 2",
+            wanted_series_issue_count=1,
+        )
+
+        assert decision.is_match is True
+        assert decision.match_method == "single_issue_collection_volume_subtitle"
+
+    @pytest.mark.regression
+    def test_search_policy_rejects_sibling_single_issue_collection_subtitle(self) -> None:
+        metadata = self.extractor.from_release_title(
+            "Clean Room v01 - Immaculate Conception (2016) (Digital) (Zone-Empire).cbr"
+        )
+
+        decision = SemanticMatchEngine(self.config, SearchPolicy()).match_against_issue(
+            metadata=metadata,
+            wanted_series="Clean Room: Exile",
+            wanted_issue=1.0,
+            wanted_year=2016,
+            wanted_issue_type=IssueType.VOLUME,
+            wanted_issue_title="Volume 2",
+            wanted_series_issue_count=1,
+        )
+
+        assert decision.is_match is False
+        assert decision.match_method == "issue_title_mismatch"
 
     def test_search_policy_rejects_part_title_as_implicit_issue_one(self) -> None:
         metadata = self.extractor.from_release_title(

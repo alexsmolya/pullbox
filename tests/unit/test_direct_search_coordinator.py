@@ -346,6 +346,60 @@ async def test_collection_target_declares_volume_coverage() -> None:
     assert request.intent.volume == "1"
 
 
+async def test_collection_target_uses_explicit_issue_title_volume_ordinal() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    _Client.responses = {provider.provider_identity: []}
+    target = replace(
+        _target(),
+        series_title="Clean Room: Exile",
+        issue_number=1,
+        issue_type=IssueType.VOLUME,
+        issue_title="Volume 2",
+        series_issue_count=1,
+    )
+
+    await search_direct_issue_target(target, [provider], client_factory=_factory)
+
+    request = _Client.requests[0][1]
+    assert request.intent.issue_number == "1"
+    assert request.intent.volume == "2"
+
+
+async def test_single_issue_collection_direct_search_uses_subtitle_identity() -> None:
+    _reset()
+    provider = _provider("pullbox.annas_archive", 10)
+    correct = _candidate(
+        provider,
+        "Clean Room v02 - Exile (2016) (digital-Empire).cbr",
+    ).model_copy(update={"provider_candidate_id": "clean-room-exile"})
+    sibling = _candidate(
+        provider,
+        "Clean Room v01 - Immaculate Conception (2016) (Digital) (Zone-Empire).cbr",
+    ).model_copy(update={"provider_candidate_id": "clean-room-immaculate-conception"})
+    _Client.responses = {provider.provider_identity: [correct, sibling]}
+    target = replace(
+        _target(),
+        series_title="Clean Room: Exile",
+        issue_number=1,
+        issue_type=IssueType.VOLUME,
+        issue_title="Volume 2",
+        series_year=2016,
+        release_year=2016,
+        series_issue_count=1,
+        alternate_names=[],
+    )
+
+    outcome = await search_direct_issue_target(target, [provider], client_factory=_factory)
+
+    assert [item.candidate.provider_candidate_id for item in outcome.matched] == [
+        "clean-room-exile"
+    ]
+    assert [item.candidate.provider_candidate_id for item in outcome.rejected] == [
+        "clean-room-immaculate-conception"
+    ]
+
+
 async def test_collection_intent_carries_title_and_distinct_years() -> None:
     _reset()
     provider = _provider("pullbox.getcomics", 10)

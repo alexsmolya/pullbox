@@ -151,6 +151,7 @@ class SemanticMatchEngine:
         alternate_names: list[str] | None = None,
         wanted_issue_cv_id: int | None = None,
         wanted_issue_title: str | None = None,
+        wanted_series_issue_count: int | None = None,
     ) -> IssueMatchDecision:
         """Return a workflow-aware semantic match decision for one issue target."""
         compatibility = issue_type_compatibility(
@@ -263,16 +264,23 @@ class SemanticMatchEngine:
 
             wanted_is_collection = issue_type_family(wanted_issue_type) == TypeFamily.COLLECTION
             issue_omitted_ok = effective_issue is None and wanted_issue == 1.0
+            subtitle_corroboration_required = (
+                self._policy.require_volume_subtitle_corroboration
+                or collection_title_subtitle(wanted_issue_title) is not None
+                or _is_single_issue_subtitle_collection_target(
+                    metadata=metadata,
+                    wanted_series=wanted_series,
+                    wanted_issue=wanted_issue,
+                    wanted_series_issue_count=wanted_series_issue_count,
+                )
+            )
 
             if (
                 wanted_is_collection
                 and compatibility.prefer_volume_number
                 and _has_volume_subtitle_hint(metadata)
                 and issues_match(wanted_issue, effective_issue)
-                and (
-                    self._policy.require_volume_subtitle_corroboration
-                    or collection_title_subtitle(wanted_issue_title) is not None
-                )
+                and subtitle_corroboration_required
             ):
                 issue_confirmed = True
                 match_method = "issue_number"
@@ -291,10 +299,7 @@ class SemanticMatchEngine:
                 elif issues_match(wanted_issue, effective_issue):
                     issue_confirmed = True
                     match_method = "issue_number"
-                    if compatibility.prefer_volume_number and (
-                        self._policy.require_volume_subtitle_corroboration
-                        or collection_title_subtitle(wanted_issue_title) is not None
-                    ):
+                    if compatibility.prefer_volume_number and subtitle_corroboration_required:
                         subtitle_check = _validate_volume_subtitle_hint(
                             metadata=metadata,
                             wanted_series=wanted_series,
@@ -305,7 +310,7 @@ class SemanticMatchEngine:
                 elif (
                     wanted_issue == 1.0
                     and _has_volume_subtitle_hint(metadata)
-                    and self._policy.require_volume_subtitle_corroboration
+                    and subtitle_corroboration_required
                 ):
                     subtitle_check = _validate_volume_subtitle_hint(
                         metadata=metadata,
@@ -597,6 +602,24 @@ def _validate_issue_to_collection_inference(
 def _has_volume_subtitle_hint(metadata: SourceMetadata) -> bool:
     """Return True when parsed metadata carries a volume subtitle hint."""
     return isinstance(metadata.diagnostics.get("volume_subtitle_hint"), dict)
+
+
+def _is_single_issue_subtitle_collection_target(
+    *,
+    metadata: SourceMetadata,
+    wanted_series: str,
+    wanted_issue: float,
+    wanted_series_issue_count: int | None,
+) -> bool:
+    """Identify ComicVine series that model one titled collection volume as issue one."""
+    if wanted_issue != 1.0 or wanted_series_issue_count != 1:
+        return False
+    hint = metadata.diagnostics.get("volume_subtitle_hint")
+    if not isinstance(hint, dict):
+        return False
+    base_series = NameMatcher.normalize(str(hint.get("base_series") or ""))
+    target_series = NameMatcher.normalize(wanted_series)
+    return bool(base_series and target_series.startswith(f"{base_series} "))
 
 
 def _subtitle_tokens(value: str) -> set[str]:

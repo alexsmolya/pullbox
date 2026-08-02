@@ -14,6 +14,7 @@ from uuid import uuid4
 import structlog
 from sqlalchemy import select
 
+from pullbox.core.issue_title import collection_title_number
 from pullbox.core.log_sanitizer import sanitize_log_mapping, sanitize_log_string
 from pullbox.core.name_matcher import NameMatcher
 from pullbox.core.type_semantics import TypeFamily, issue_type_family
@@ -434,6 +435,7 @@ async def _search_provider(
             wanted_issue_type=target.issue_type,
             alternate_names=_validation_alternate_names(target, candidate),
             wanted_issue_title=target.issue_title,
+            wanted_series_issue_count=target.series_issue_count,
         )
         validation = accepted[0] if accepted else declined[0]
         result = DirectValidatedCandidate(
@@ -541,7 +543,7 @@ def _target_volume(target: IssueSearchTarget) -> str | None:
     """Map collection issue numbering onto provider volume coverage."""
     if issue_type_family(target.issue_type) is not TypeFamily.COLLECTION:
         return None
-    return f"{target.issue_number:g}"
+    return collection_title_number(target.issue_title) or f"{target.issue_number:g}"
 
 
 def _candidate_release(

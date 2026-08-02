@@ -37,6 +37,7 @@ class IssueSearchTarget:
     series_year: int | None = None
     release_year: int | None = None
     alternate_names: list[str] | None = None
+    series_issue_count: int | None = None
 
     @property
     def search_year(self) -> int | None:
@@ -90,6 +91,7 @@ class SearchIssueTargetFunc(Protocol):
 def _target_from_row(row: Any) -> IssueSearchTarget:
     """Build a search target from a SQLAlchemy row with the expected labels."""
     release_date = getattr(row, "release_date", None) or getattr(row, "store_date", None)
+    series_issue_count = getattr(row, "series_issue_count", None)
     return IssueSearchTarget(
         issue_id=int(row.issue_id),
         series_id=int(row.series_id),
@@ -100,6 +102,7 @@ def _target_from_row(row: Any) -> IssueSearchTarget:
         series_year=int(row.series_year) if row.series_year else None,
         release_year=release_date.year if release_date is not None else None,
         alternate_names=list(row.alternate_names) if row.alternate_names else None,
+        series_issue_count=(int(series_issue_count) if series_issue_count is not None else None),
     )
 
 
@@ -120,6 +123,7 @@ async def load_issue_search_target(
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
         )
         .join(Series, Series.id == Issue.series_id)
         .where(Issue.id == issue_id)
@@ -148,6 +152,7 @@ async def load_series_wanted_search_targets(
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
         )
         .join(Series, Series.id == Issue.series_id)
         .where(Issue.series_id == series_id)
@@ -245,6 +250,7 @@ async def load_wanted_issue_search_targets(
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
         )
         .join(Series, Series.id == Issue.series_id)
         .where(*filters)
@@ -273,6 +279,7 @@ async def load_wanted_issue_search_targets_by_ids(
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
         )
         .join(Series, Series.id == Issue.series_id)
         .where(

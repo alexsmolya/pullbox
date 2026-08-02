@@ -208,6 +208,7 @@ async def test_load_issue_and_wanted_targets_filter_and_shape(
         assert target.issue_type == IssueType.TPB
         assert target.release_year == 2024
         assert target.alternate_names == ["AS"]
+        assert target.series_issue_count == 2
 
         assert await load_issue_search_target(session, 99999) is None
 

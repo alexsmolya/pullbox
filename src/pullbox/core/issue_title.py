@@ -76,3 +76,12 @@ def collection_title_subtitle(value: str | None) -> str | None:
         subtitle = prefix.group("subtitle").strip()
         return subtitle or None
     return title
+
+
+def collection_title_number(value: str | None) -> str | None:
+    """Return an explicit collection ordinal even when the title has no subtitle."""
+    title = re.sub(r"\s+", " ", value or "").strip()
+    if not title:
+        return None
+    prefix = _COLLECTION_PREFIX_RE.match(title)
+    return prefix.group("number") if prefix is not None else None
