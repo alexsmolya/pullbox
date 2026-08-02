@@ -46,12 +46,14 @@ _ROUTE_SCOPED_FAILURES = frozenset(
         DirectArtifactFailureClass.ARTIFACT_HOST_CHALLENGE,
         DirectArtifactFailureClass.HOST_QUOTA,
         DirectArtifactFailureClass.RESOLVER,
+        DirectArtifactFailureClass.UNSAFE_ROUTE,
     }
 )
 _PERSISTENT_ROUTE_FAILURES = frozenset(
     {
         DirectArtifactFailureClass.PERMANENT_MIRROR,
         DirectArtifactFailureClass.UNSUPPORTED_ARTIFACT_HOST,
+        DirectArtifactFailureClass.UNSAFE_ROUTE,
     }
 )
 _AUTO_BLOCKLIST_CONFIG_KEY = "blocklist.auto_add_on_failure"

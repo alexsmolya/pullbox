@@ -246,6 +246,7 @@ class DirectArtifactFailureClass(enum.StrEnum):
     HOST_QUOTA = "host_quota"
     CANDIDATE_INVALID = "candidate_invalid"
     RESOLVER = "resolver"
+    UNSAFE_ROUTE = "unsafe_route"
     SAFETY = "safety"
     POST_PROCESS = "post_process"
     USER_ACTION = "user_action"

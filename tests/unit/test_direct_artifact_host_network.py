@@ -47,7 +47,7 @@ async def test_artifact_url_rejects_private_or_mixed_dns(
         )
 
     assert raised.value.code == "unsafe_artifact_url"
-    assert raised.value.failure_class is DirectArtifactFailureClass.SAFETY
+    assert raised.value.failure_class is DirectArtifactFailureClass.UNSAFE_ROUTE
 
 
 async def test_redirect_target_is_revalidated_before_the_second_request() -> None:

@@ -62,7 +62,10 @@ from pullbox.services.direct_acquisition_executor import (
     _recover_http_checkpoint,
     _SlowSourceTracker,
 )
-from pullbox.services.direct_acquisition_fallback import queue_next_artifact_route
+from pullbox.services.direct_acquisition_fallback import (
+    queue_next_artifact_route,
+    supports_route_fallback,
+)
 from pullbox.services.direct_acquisition_planner_service import (
     DirectAcquisitionPlanningError,
 )
@@ -74,6 +77,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+
+
+def test_unsafe_routes_fall_back_while_content_safety_remains_a_hard_stop() -> None:
+    assert supports_route_fallback(DirectArtifactFailureClass.UNSAFE_ROUTE) is True
+    assert supports_route_fallback(DirectArtifactFailureClass.SAFETY) is False
 
 
 def test_slow_source_tracker_requires_sustained_progress_regardless_of_eta() -> None:
@@ -900,6 +908,52 @@ async def test_executor_falls_back_to_next_ranked_route_without_blocking_provide
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_unsafe_route_is_blocklisted_before_same_content_fallback(
+    session: AsyncSession,
+) -> None:
+    attempt = _attempt()
+    failed = attempt.artifact_attempts[0]
+    failed.artifact_identity = "route:generic"
+    failed.failure_class = DirectArtifactFailureClass.UNSAFE_ROUTE
+    failed.failure_code = "unsafe_artifact_url"
+    failed.error_message = "The artifact URL did not pass public HTTPS safety checks."
+    attempt.plan_snapshot = {
+        "schema_version": 1,
+        "selected_artifact_identity": failed.artifact_identity,
+        "artifacts": [
+            {
+                "artifact_identity": failed.artifact_identity,
+                "content_identity": "artifact:primary",
+                "route_kind": "direct",
+                "host_kind": "generic_https",
+                "eligible": True,
+                "eligibility_code": "eligible",
+            },
+            {
+                "artifact_identity": "route:pixeldrain",
+                "content_identity": "artifact:primary",
+                "route_kind": "direct",
+                "host_kind": "pixeldrain",
+                "eligible": True,
+                "eligibility_code": "eligible",
+            },
+        ],
+    }
+    session.add(attempt)
+    await session.commit()
+
+    fallback = await queue_next_artifact_route(session, attempt, failed, at=NOW)
+
+    assert fallback is not None
+    assert fallback.host_kind is DirectArtifactHostKind.PIXELDRAIN
+    assert fallback.is_selected is True
+    blocklist = (await session.execute(select(BlocklistEntry))).scalars().all()
+    assert len(blocklist) == 1
+    assert blocklist[0].release_group == "Generic Https"
+    assert blocklist[0].download_url == "pullbox-direct://artifact/route:generic"
 
 
 @pytest.mark.asyncio

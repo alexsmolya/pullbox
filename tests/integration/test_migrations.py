@@ -450,6 +450,95 @@ class TestMigrationChain:
         finally:
             engine.dispose()
 
+    def test_direct_failure_constraints_include_route_safety(self, alembic_cfg) -> None:
+        """Unsafe routes persist separately from hard-stop content safety failures."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            inspector = inspect(engine)
+            for table in ("direct_acquisition_attempts", "direct_artifact_attempts"):
+                constraints = {
+                    item["name"]: item["sqltext"] for item in inspector.get_check_constraints(table)
+                }
+                assert "unsafe_route" in constraints["directartifactfailureclass"]
+        finally:
+            engine.dispose()
+
+    def test_direct_route_safety_migration_reclassifies_known_url_failures(
+        self,
+        alembic_cfg,
+    ) -> None:
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "l7m8n9o0p123")
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO series "
+                        "(id, title, sort_title, status, issue_count, monitored) "
+                        "VALUES (9901, 'Route Safety', 'Route Safety', 'continuing', 1, 1)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO issues (id, series_id, issue_number, status) "
+                        "VALUES (9901, 9901, '1', 'wanted')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO direct_acquisition_attempts "
+                        "(id, request_key, issue_id, provider_identity, provider_candidate_id, "
+                        "failure_class, failure_code) VALUES "
+                        "(9901, 'route-safety-migration', 9901, 'test', 'candidate', "
+                        "'safety', 'unsafe_artifact_url')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO direct_artifact_attempts "
+                        "(id, acquisition_attempt_id, sequence_no, artifact_identity, "
+                        "route_kind, host_kind, failure_class, failure_code) VALUES "
+                        "(9901, 9901, 0, 'route:test', 'direct', 'generic_https', "
+                        "'safety', 'unsafe_artifact_url')"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                acquisition = conn.execute(
+                    text("SELECT failure_class FROM direct_acquisition_attempts WHERE id = 9901")
+                ).scalar_one()
+                artifact = conn.execute(
+                    text("SELECT failure_class FROM direct_artifact_attempts WHERE id = 9901")
+                ).scalar_one()
+            assert acquisition == "unsafe_route"
+            assert artifact == "unsafe_route"
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "l7m8n9o0p123")
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                acquisition = conn.execute(
+                    text("SELECT failure_class FROM direct_acquisition_attempts WHERE id = 9901")
+                ).scalar_one()
+                artifact = conn.execute(
+                    text("SELECT failure_class FROM direct_artifact_attempts WHERE id = 9901")
+                ).scalar_one()
+            assert acquisition == "safety"
+            assert artifact == "safety"
+        finally:
+            engine.dispose()
+
     def test_direct_host_reachability_migration_backfills_existing_status(
         self,
         alembic_cfg,

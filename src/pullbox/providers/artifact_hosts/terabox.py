@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from pullbox.models.direct_acquisition import DirectArtifactHostKind
 from pullbox.providers.artifact_hosts.contract import HostResolutionRequest, ResolvedTransfer
@@ -84,6 +84,7 @@ class TeraBoxAdapter:
             expected_kind=self.host_kind,
             credentials=credentials,
         )
+        source_url = _canonical_share_url(source_url)
         session = credentials.get("cookie") or credentials.get("session_token")
         if not session:
             raise auth_required()
@@ -167,6 +168,12 @@ def _extract_short_url(url: str) -> str:
     if not value or len(value) > 512 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
         raise contract_changed()
     return value
+
+
+def _canonical_share_url(url: str) -> str:
+    """Route supported aliases through TeraBox's stable public HTTPS share host."""
+    parsed = urlsplit(url)
+    return urlunsplit(("https", "www.1024terabox.com", parsed.path, parsed.query, ""))
 
 
 def _extract_js_token(document: str) -> str:

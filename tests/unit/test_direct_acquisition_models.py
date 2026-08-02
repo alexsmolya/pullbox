@@ -122,6 +122,7 @@ def test_direct_domain_enum_values_are_stable() -> None:
     }
     assert "artifact_host_auth_required" in {value.value for value in DirectArtifactFailureClass}
     assert "artifact_host_challenge" in {value.value for value in DirectArtifactFailureClass}
+    assert "unsafe_route" in {value.value for value in DirectArtifactFailureClass}
 
 
 def test_direct_models_expose_required_defaults_and_indexes() -> None:

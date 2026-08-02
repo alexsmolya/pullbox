@@ -144,6 +144,35 @@ async def test_generic_https_rejects_an_html_landing_page() -> None:
     assert raised.value.intervention is True
 
 
+async def test_generic_https_classifies_cloudflare_as_a_route_challenge() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            403,
+            headers={
+                "CF-Mitigated": "challenge",
+                "Content-Type": "text/html; charset=UTF-8",
+                "Server": "cloudflare",
+            },
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ArtifactHostResolutionError) as raised:
+            await GenericHttpsAdapter(client, resolver=_resolve_public).resolve(
+                _request(
+                    DirectArtifactHostKind.GENERIC_HTTPS,
+                    "https://files.example.test/challenged.cbz",
+                    final=True,
+                ),
+                credentials={},
+            )
+
+    assert raised.value.code == "artifact_host_challenge_required"
+    assert raised.value.failure_class is DirectArtifactFailureClass.ARTIFACT_HOST_CHALLENGE
+    assert raised.value.retryable is False
+    assert raised.value.intervention is True
+    assert raised.value.http_status == 403
+
+
 @pytest.mark.parametrize("status", [404, 410])
 async def test_generic_https_classifies_a_missing_file_as_a_permanent_mirror(
     status: int,
@@ -409,7 +438,7 @@ async def test_terabox_follows_the_current_official_share_redirect() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         seen_hosts.append(request.headers["Host"])
         assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
-        if request.headers["Host"] == "1024terabox.com":
+        if request.headers["Host"] == "www.1024terabox.com":
             return httpx.Response(
                 302,
                 headers={"Location": "https://www.terabox.app/s/1fixture"},
@@ -445,7 +474,49 @@ async def test_terabox_follows_the_current_official_share_redirect() -> None:
             credentials={"session_token": TERABOX_SESSION},
         )
 
-    assert seen_hosts == ["1024terabox.com", "www.terabox.app", "www.terabox.com"]
+    assert seen_hosts == ["www.1024terabox.com", "www.terabox.app", "www.terabox.com"]
+    assert transfer.expected_size == 32768
+
+
+async def test_terabox_canonicalizes_share_aliases_before_an_insecure_redirect() -> None:
+    seen_hosts: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_hosts.append(request.headers["Host"])
+        assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
+        if request.url.path == "/s/1fixture":
+            assert request.headers["Host"] == "www.1024terabox.com"
+            return httpx.Response(
+                200,
+                text='<script>window.jsToken = "js-token";</script>',
+                headers={"Content-Type": "text/html"},
+            )
+        assert request.headers["Host"] == "www.terabox.com"
+        return httpx.Response(
+            200,
+            json={
+                "errno": 0,
+                "list": [
+                    {
+                        "isdir": 0,
+                        "server_filename": "fixture.cbz",
+                        "size": 32768,
+                        "dlink": "https://d.terabox.com/file/signed?token=secret",
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = await TeraBoxAdapter(client, resolver=_resolve_public).resolve(
+            _request(
+                DirectArtifactHostKind.TERABOX,
+                "https://teraboxapp.com/s/1fixture",
+            ),
+            credentials={"session_token": TERABOX_SESSION},
+        )
+
+    assert seen_hosts == ["www.1024terabox.com", "www.terabox.com"]
     assert transfer.expected_size == 32768
 
 

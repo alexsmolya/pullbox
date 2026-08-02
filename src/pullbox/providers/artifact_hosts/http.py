@@ -282,7 +282,7 @@ def _unsafe_url() -> ArtifactHostResolutionError:
     return ArtifactHostResolutionError(
         code="unsafe_artifact_url",
         message="The artifact URL did not pass public HTTPS safety checks.",
-        failure_class=DirectArtifactFailureClass.SAFETY,
+        failure_class=DirectArtifactFailureClass.UNSAFE_ROUTE,
         retryable=False,
         intervention=True,
     )

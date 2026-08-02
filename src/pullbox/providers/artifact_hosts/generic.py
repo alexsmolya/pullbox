@@ -75,6 +75,18 @@ class GenericHttpsAdapter:
             headers={"Accept": "application/octet-stream", "Range": "bytes=0-0"},
             read_body=False,
         )
+        if (
+            response.status_code == 403
+            and response.headers.get("cf-mitigated", "").casefold() == "challenge"
+        ):
+            raise ArtifactHostResolutionError(
+                code="artifact_host_challenge_required",
+                message="The artifact host requires browser verification.",
+                failure_class=DirectArtifactFailureClass.ARTIFACT_HOST_CHALLENGE,
+                retryable=False,
+                intervention=True,
+                http_status=response.status_code,
+            )
         if response.status_code in {404, 410}:
             raise ArtifactHostResolutionError(
                 code="artifact_file_unavailable",
