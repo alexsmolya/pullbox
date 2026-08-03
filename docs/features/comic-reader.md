@@ -57,3 +57,31 @@ Set the value back to `true` to restore the feature.
 The `issue_reader_states` migration is reversible, but downgrading it deletes private resume and
 completion records. Back up `/data` before any migration downgrade. Disabling the feature gate is
 the preferred rollback because it is non-destructive.
+
+## Performance contract and acceptance snapshot
+
+The reader indexes a source once per revision, reads or renders only the requested page, prefetches
+only the adjacent page, and keeps generated pages in the bounded disk cache. Archive decoding and
+PDF rendering never run on the event loop. The initial acceptance objectives are a cached manifest
+or page under 150 ms, a cold common CBZ page under one second, and a cold PDF page under two seconds
+on documented hardware. These are engineering objectives, not a network-inclusive release SLA.
+
+The 2026-08-03 development acceptance run used the production ARM64 container on an Apple M4 Pro
+MacBook Pro with 24 GB of memory. Each synthetic format fixture contained the same two JPEG pages;
+the CBR fixture used RAR5. Times are single-run server measurements and RSS deltas are retained
+process memory after garbage collection, so they are deliberately reported as observations rather
+than statistically significant benchmarks.
+
+| Format | Manifest | Cold first page | Repeated cache hit | RSS delta | FD/child leak |
+|---|---:|---:|---:|---:|---:|
+| CBZ | 5.5 ms | 10.6 ms | 0.13 ms | 2.4 MiB | 0 / 0 |
+| CBR | 6.2 ms | 11.6 ms | 0.14 ms | 8.1 MiB | 0 / 0 |
+| CB7 | 39.0 ms | 35.2 ms | 0.11 ms | 3.4 MiB | 0 / 0 |
+| CBT | 3.4 ms | 4.1 ms | 0.17 ms | 1.6 MiB | 0 / 0 |
+| PDF | 9.5 ms | 356.6 ms | 0.15 ms | 10.5 MiB | 0 / 0 |
+
+A real 74.3 MB, 52-page CBZ from the mounted development library produced its manifest in 5.9 ms,
+its cover in 129.5 ms, its next page in 4.0 ms, and a repeated page in 0.14 ms. The two generated
+pages occupied 1.78 MiB on disk; retained process RSS grew by 52.4 MiB after decoding the large
+source artwork. Cancellation, single-flight generation, worker saturation, cache quota/clear, and
+source-preservation behavior have dedicated regression coverage.
