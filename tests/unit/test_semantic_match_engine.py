@@ -125,6 +125,23 @@ class TestSemanticMatchEngine:
         assert decision.is_match is False
         assert "Issue type mismatch" in (decision.rejection_reason or "")
 
+    def test_type_mismatch_still_reports_exact_title_similarity(self) -> None:
+        metadata = self.extractor.from_release_title(
+            "Batman-Officer Down v01 [2001] [hybrid] [Marika-Empire]"
+        )
+        decision = SemanticMatchEngine(self.config, SearchPolicy()).match_against_issue(
+            metadata=metadata,
+            wanted_series="Batman: Officer Down",
+            wanted_issue=1.0,
+            wanted_year=2001,
+            wanted_issue_type=IssueType.ONE_SHOT,
+        )
+
+        assert decision.is_match is False
+        assert decision.match_method == "type_mismatch"
+        assert decision.match_diagnostics["series_similarity"] == 1.0
+        assert decision.match_diagnostics["match_type"] == "exact"
+
     def test_search_policy_accepts_collection_subtitle_without_number(self) -> None:
         metadata = self.extractor.from_release_title(
             "Immortal Thor All Weather Turns To Storm [2024] [Digital]"

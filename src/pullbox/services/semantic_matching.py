@@ -158,22 +158,6 @@ class SemanticMatchEngine:
         wanted_series_issue_count: int | None = None,
     ) -> IssueMatchDecision:
         """Return a workflow-aware semantic match decision for one issue target."""
-        compatibility = issue_type_compatibility(
-            parsed_type=metadata.issue_type,
-            wanted_type=wanted_issue_type,
-            policy=self._policy,
-        )
-        if not compatibility.compatible:
-            return IssueMatchDecision(
-                is_match=False,
-                confidence=MatchConfidence.LOW,
-                match_method="type_mismatch",
-                rejection_reason=(
-                    f"Issue type mismatch: {metadata.issue_type} vs {wanted_issue_type}"
-                ),
-                match_diagnostics={"type_mode": compatibility.mode},
-            )
-
         series_name = metadata.series_name or ""
         match_result = _matcher.match(
             series_name,
@@ -211,6 +195,27 @@ class SemanticMatchEngine:
                 )
                 if combined_match.similarity > match_result.similarity:
                     match_result = combined_match
+
+        compatibility = issue_type_compatibility(
+            parsed_type=metadata.issue_type,
+            wanted_type=wanted_issue_type,
+            policy=self._policy,
+        )
+        if not compatibility.compatible:
+            return IssueMatchDecision(
+                is_match=False,
+                confidence=MatchConfidence.LOW,
+                match_method="type_mismatch",
+                rejection_reason=(
+                    f"Issue type mismatch: {metadata.issue_type} vs {wanted_issue_type}"
+                ),
+                match_diagnostics={
+                    "type_mode": compatibility.mode,
+                    "series_similarity": round(match_result.similarity, 4),
+                    "match_type": match_result.match_type,
+                },
+            )
+
         single_word_collection_prefix = False
         if not match_result.is_match and _is_safe_single_word_collection_prefix(
             policy=self._policy,

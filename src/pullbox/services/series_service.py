@@ -169,7 +169,6 @@ class SeriesService:
             comicvine_url=getattr(import_series, "cv_url", None),
         )
         series = await self._metadata.upsert_series_metadata(session, cv_id, series_meta)
-        await self._metadata.classify_and_link_series(session, series)
         series.monitored = search_on_add
         series.issue_catalog_state = IssueCatalogState.HYDRATING
         series.issue_catalog_error = None
@@ -257,9 +256,6 @@ class SeriesService:
             series_meta,
         )
 
-        # Classify series type from CV title and link to parent
-        await self._metadata.classify_and_link_series(session, series)
-
         # Set monitoring — driven by search_on_add
         series.monitored = search_on_add
 
@@ -278,6 +274,7 @@ class SeriesService:
             session,
             series,
             issue_summaries,
+            infer_series_type_from_summaries=True,
         )
         await session.flush()
 

@@ -477,6 +477,9 @@ class ReleaseValidator:
                 result,
                 decision.rejection_reason or "Semantic match rejected",
                 parsed=parsed,
+                series_similarity=float(decision.match_diagnostics.get("series_similarity", 0.0)),
+                match_type=str(decision.match_diagnostics.get("match_type", "none")),
+                issue_type_match=decision.match_method != "type_mismatch",
             )
 
         year_matched: bool | None = None
@@ -558,6 +561,10 @@ class ReleaseValidator:
         result: ReleaseResult,
         reason: str,
         parsed: ParsedRelease | None = None,
+        *,
+        series_similarity: float = 0.0,
+        match_type: str = "none",
+        issue_type_match: bool = False,
     ) -> ValidationResult:
         """Create a rejection ValidationResult."""
         if parsed is None:
@@ -579,4 +586,7 @@ class ReleaseValidator:
             parsed=parsed,
             release=result,
             rejection_reason=reason,
+            series_similarity=series_similarity,
+            match_type=match_type,
+            issue_type_match=issue_type_match,
         )

@@ -470,6 +470,23 @@ class TestValidatorEdgeCases:
         assert vr.rejection_reason is not None
         assert "ignore word" in vr.rejection_reason.lower()
 
+    def test_type_rejection_preserves_title_match_diagnostics(self) -> None:
+        result = make_release("Batman-Officer Down v01 [2001] [hybrid] [Marika-Empire]")
+
+        vr = self.validator._validate_one(
+            result,
+            wanted_series="Batman: Officer Down",
+            wanted_issue=1.0,
+            wanted_year=2001,
+            wanted_issue_type=IssueType.ONE_SHOT,
+            alternate_names=None,
+        )
+
+        assert vr.is_match is False
+        assert vr.series_similarity == 1.0
+        assert vr.match_type == "exact"
+        assert vr.issue_type_match is False
+
 
 class TestIgnoreWordsConfig:
     """Tests for configurable ignore words wiring."""

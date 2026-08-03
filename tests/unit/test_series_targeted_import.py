@@ -53,7 +53,10 @@ async def _fake_upsert_issue_summaries(
     session: AsyncSession,
     series: Series,
     summaries: list[IssueSummary],
+    *,
+    infer_series_type_from_summaries: bool = False,
 ) -> list[Issue]:
+    del infer_series_type_from_summaries
     created: list[Issue] = []
     for summary in summaries:
         issue = Issue(
