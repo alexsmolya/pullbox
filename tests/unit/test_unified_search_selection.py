@@ -52,18 +52,32 @@ def _validation(release: ReleaseResult):  # type: ignore[no-untyped-def]
     return matched[0]
 
 
-def _direct_result(release: ReleaseResult) -> DirectValidatedCandidate:
+def _direct_result(
+    release: ReleaseResult,
+    *,
+    provider_identity: str = "pullbox.getcomics",
+    provider_priority: int | None = None,
+) -> DirectValidatedCandidate:
+    resolved_priority = release.ranking_priority if provider_priority is None else provider_priority
+    display_name = "Anna's Archive" if provider_identity == "pullbox.annas_archive" else "GetComics"
+    release = replace(
+        release,
+        indexer_name=display_name,
+        download_url=f"direct://candidate/{provider_identity}",
+        is_torrent=False,
+        ranking_priority=resolved_priority,
+    )
     return DirectValidatedCandidate(
         provider=DirectSearchProvider(
-            provider_config_id=7,
-            provider_identity="pullbox.getcomics",
-            display_name="GetComics",
+            provider_config_id=resolved_priority,
+            provider_identity=provider_identity,
+            display_name=display_name,
             endpoint="http://provider:8780",
             bearer_token="provider-token-with-enough-length",
-            provider_priority=10,
+            provider_priority=resolved_priority,
         ),
         candidate=DirectCandidate(
-            provider_candidate_id="candidate-1",
+            provider_candidate_id=f"candidate-{provider_identity}",
             source_reference="https://getcomics.org/post",
             display_title=release.title,
             raw_title=release.title,
@@ -229,6 +243,78 @@ def test_ranked_sources_reuse_existing_scorer_for_fallback_order() -> None:
     assert [item.source_kind for item in ranked] == ["direct", "indexer"]
     assert ranked[0].validation is direct.validation
     assert ranked[1].release is indexer
+
+
+def test_direct_provider_priority_precedes_filename_quality_for_automatic_search() -> None:
+    indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
+    getcomics = _direct_result(
+        _release("Batman 001 (2016)", "GetComics", size=100_000_000),
+        provider_identity="pullbox.getcomics",
+        provider_priority=10,
+    )
+    annas = _direct_result(
+        _release(
+            "Batman 001 (2016) (Digital).cbz",
+            "Anna's Archive",
+            size=100_000_000,
+        ),
+        provider_identity="pullbox.annas_archive",
+        provider_priority=20,
+    )
+    outcome = replace(
+        _outcome(indexer, getcomics),
+        direct_outcome=DirectSearchOutcome(
+            matched=(annas, getcomics),
+            rejected=(),
+            failures=(),
+            providers_searched=2,
+            elapsed_ms=1,
+        ),
+    )
+
+    ranked = rank_search_sources(
+        outcome,
+        {},
+        source_priority=["direct", "usenet", "torrent"],
+    )
+
+    assert [item.direct_result for item in ranked[:2]] == [getcomics, annas]
+
+
+def test_direct_semantic_confidence_precedes_provider_priority() -> None:
+    indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
+    lower_confidence_getcomics = _direct_result(
+        _release("Batman 001", "GetComics", size=100_000_000),
+        provider_identity="pullbox.getcomics",
+        provider_priority=10,
+    )
+    exact_annas = _direct_result(
+        _release(
+            "Batman 001 (2016) (Digital).cbz",
+            "Anna's Archive",
+            size=100_000_000,
+        ),
+        provider_identity="pullbox.annas_archive",
+        provider_priority=20,
+    )
+    outcome = replace(
+        _outcome(indexer, lower_confidence_getcomics),
+        direct_outcome=DirectSearchOutcome(
+            matched=(lower_confidence_getcomics, exact_annas),
+            rejected=(),
+            failures=(),
+            providers_searched=2,
+            elapsed_ms=1,
+        ),
+    )
+
+    ranked = rank_search_sources(
+        outcome,
+        {},
+        source_priority=["direct", "usenet", "torrent"],
+    )
+
+    assert ranked[0].direct_result is exact_annas
 
 
 def test_indexer_only_selection_preserves_precomputed_winner() -> None:

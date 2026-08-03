@@ -59,7 +59,7 @@ from pullbox.services.issue_service import IssueService
 from pullbox.services.release_validator import (
     ValidationResult,
 )
-from pullbox.services.search_scoring import normalize_source_priority
+from pullbox.services.search_scoring import match_confidence_rank, normalize_source_priority
 from pullbox.services.search_service import (
     DEFAULT_TYPE_THRESHOLDS,
     IssueSearchOutcome,
@@ -230,6 +230,7 @@ def build_interactive_results(
                     match_type=vr.match_type,
                 ),
                 method="Torrent" if vr.release.is_torrent else "Usenet",
+                ranking_priority=vr.release.ranking_priority,
             )
         )
 
@@ -251,6 +252,7 @@ def build_interactive_results(
                 rejection_reason=vr.rejection_reason or "unknown",
                 confidence=str(vr.confidence.value) if vr.is_match else None,
                 method="Torrent" if vr.release.is_torrent else "Usenet",
+                ranking_priority=vr.release.ranking_priority,
             )
         )
 
@@ -323,9 +325,23 @@ def sort_interactive_results_by_source_priority[
             return "direct"
         return "torrent" if item.is_torrent else "usenet"
 
-    def _rank(item: SearchResultItem | RejectedResultItem) -> tuple[int, float]:
+    def _rank(
+        item: SearchResultItem | RejectedResultItem,
+    ) -> tuple[int, int, float, int, float]:
         score = getattr(item, "quality_score", None)
-        return priority_map.get(_source(item), 0), -float(score) if score is not None else 0.0
+        source_rank = priority_map.get(_source(item), 0)
+        if item.source_kind != "direct" or normalized is None:
+            return source_rank, 0, 0.0, 0, -float(score) if score is not None else 0.0
+        similarity = (
+            item.match_details.series_similarity if isinstance(item, SearchResultItem) else 0.0
+        )
+        return (
+            source_rank,
+            match_confidence_rank(item.confidence),
+            -similarity,
+            item.ranking_priority,
+            -float(score) if score is not None else 0.0,
+        )
 
     return sorted(items, key=_rank)
 

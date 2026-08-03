@@ -9,6 +9,7 @@ from pullbox.services.search_evaluation import DEFAULT_MIN_SCORE, _select_best_v
 from pullbox.services.search_scoring import (
     DEFAULT_MAX_SIZE_MB,
     DEFAULT_MIN_SIZE_MB,
+    match_confidence_rank,
     normalize_source_priority,
 )
 
@@ -95,10 +96,9 @@ def rank_search_sources(
         priority_map = {source: index for index, source in enumerate(normalized_priority)}
         candidates.sort(key=lambda item: priority_map[item[0]])
 
-    remaining = list(candidates)
-    while remaining and (limit is None or len(ranked) < limit):
-        selected = _select_best_validation(
-            [item[1] for item in remaining],
+    def _select(validations: list[ValidationResult]) -> ValidationResult | None:
+        return _select_best_validation(
+            validations,
             min_score=eval_kwargs.get("min_score", DEFAULT_MIN_SCORE),
             confidence_blend=eval_kwargs.get("confidence_blend", 0.40),
             min_size_mb=eval_kwargs.get("min_size_mb", DEFAULT_MIN_SIZE_MB),
@@ -113,9 +113,53 @@ def rank_search_sources(
             digital_bonus=eval_kwargs.get("digital_bonus", 10),
             source_priority=normalized_priority,
         )
+
+    def _preferred_direct_candidate(
+        items: list[tuple[str, ValidationResult, DirectValidatedCandidate | None]],
+    ) -> tuple[str, ValidationResult, DirectValidatedCandidate | None] | None:
+        direct_items = [item for item in items if item[2] is not None]
+        semantic_provider_keys = sorted(
+            {
+                (
+                    match_confidence_rank(item[1].confidence),
+                    -item[1].series_similarity,
+                    item[2].provider.provider_priority,
+                )
+                for item in direct_items
+                if item[2] is not None
+            }
+        )
+        for key in semantic_provider_keys:
+            group = [
+                item
+                for item in direct_items
+                if item[2] is not None
+                and (
+                    match_confidence_rank(item[1].confidence),
+                    -item[1].series_similarity,
+                    item[2].provider.provider_priority,
+                )
+                == key
+            ]
+            selected = _select([item[1] for item in group])
+            if selected is not None:
+                return next(item for item in group if item[1] is selected)
+        return None
+
+    remaining = list(candidates)
+    while remaining and (limit is None or len(ranked) < limit):
+        selected = _select([item[1] for item in remaining])
         if selected is None:
             break
-        selected_index = next(index for index, item in enumerate(remaining) if item[1] is selected)
+        selected_item = next(item for item in remaining if item[1] is selected)
+        if selected_item[2] is not None:
+            preferred_direct = _preferred_direct_candidate(remaining)
+            if preferred_direct is not None:
+                selected_item = preferred_direct
+                selected = preferred_direct[1]
+        selected_index = next(
+            index for index, item in enumerate(remaining) if item is selected_item
+        )
         _, _, direct_result = remaining.pop(selected_index)
         ranked.append(
             SearchSourceSelection(

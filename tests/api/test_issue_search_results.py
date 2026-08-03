@@ -393,6 +393,52 @@ def test_interactive_results_respect_direct_source_priority() -> None:
     assert [item.source_kind for item in ordered] == ["direct", "indexer"]
 
 
+def test_interactive_direct_results_prefer_configured_provider_before_quality() -> None:
+    from pullbox.api.v1.issues import (
+        build_interactive_results,
+        sort_interactive_results_by_source_priority,
+    )
+
+    getcomics_release = _make_release(
+        "Batman 001 (2016)",
+        "GetComics",
+        size_bytes=None,
+        age_days=None,
+        ranking_priority=10,
+    )
+    annas_release = _make_release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Anna's Archive",
+        size_bytes=None,
+        age_days=None,
+        ranking_priority=20,
+    )
+    matched, rejected = ReleaseValidator().validate_all_results(
+        [getcomics_release, annas_release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )
+    items, _ = build_interactive_results(
+        matched,
+        rejected,
+        {},
+        source_priority=["direct", "usenet", "torrent"],
+    )
+    direct_items = [item.model_copy(update={"source_kind": "direct"}) for item in items]
+
+    # Anna's richer filename wins the generic quality score, but the user's
+    # explicit direct-provider preference must be authoritative after matching.
+    assert direct_items[0].indexer_name == "Anna's Archive"
+    ordered = sort_interactive_results_by_source_priority(
+        direct_items,
+        ["direct", "usenet", "torrent"],
+    )
+
+    assert [item.indexer_name for item in ordered] == ["GetComics", "Anna's Archive"]
+    assert "ranking_priority" not in ordered[0].model_dump()
+
+
 @pytest.mark.asyncio
 async def test_build_interactive_results_auto_grabbable_logic() -> None:
     """Interactive auto-grabbable mirrors per-type automated routing thresholds."""

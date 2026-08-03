@@ -97,6 +97,7 @@ class SearchResultItem(BaseModel):
         default=None,
         description="How Pullbox will select an artifact route",
     )
+    ranking_priority: int = Field(default=25, exclude=True, repr=False)
 
 
 class RejectedResultItem(BaseModel):
@@ -128,6 +129,7 @@ class RejectedResultItem(BaseModel):
         default=None,
         description="How Pullbox will select an artifact route",
     )
+    ranking_priority: int = Field(default=25, exclude=True, repr=False)
 
 
 class InteractiveSearchIssue(BaseModel):

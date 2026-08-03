@@ -24,7 +24,6 @@ from pullbox.models.direct_acquisition import (
     DirectProviderConfig,
     DirectProviderState,
 )
-from pullbox.models.library import MatchConfidence
 from pullbox.providers.base import ReleaseResult
 from pullbox.providers.direct.client import DirectProviderClient, DirectProviderClientError
 from pullbox.providers.direct.contract import (
@@ -35,6 +34,7 @@ from pullbox.providers.direct.contract import (
 )
 from pullbox.services.direct_provider_quota import refresh_expired_provider_quota
 from pullbox.services.release_validator import ReleaseValidator, ValidationResult
+from pullbox.services.search_scoring import match_confidence_rank
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -54,11 +54,6 @@ logger = structlog.get_logger(__name__)
 _DEFAULT_SEARCH_SECONDS = 30.0
 _DEFAULT_RESULT_LIMIT = 20
 _MAX_FANOUT = 4
-_CONFIDENCE_RANK = {
-    MatchConfidence.HIGH: 0,
-    MatchConfidence.MEDIUM: 1,
-    MatchConfidence.LOW: 2,
-}
 _COLLECTION_EDITION_QUALIFIERS = ("expanded edition",)
 
 
@@ -615,10 +610,10 @@ def _candidate_snapshot(result: DirectValidatedCandidate) -> dict[str, object]:
 
 def _matched_order_key(item: DirectValidatedCandidate) -> tuple[object, ...]:
     return (
-        _CONFIDENCE_RANK.get(item.validation.confidence, 99),
+        match_confidence_rank(item.validation.confidence),
         -item.validation.series_similarity,
-        -item.candidate.provider_confidence,
         item.provider.provider_priority,
+        -item.candidate.provider_confidence,
         item.provider.provider_identity,
         item.candidate.provider_candidate_id,
     )
@@ -627,8 +622,8 @@ def _matched_order_key(item: DirectValidatedCandidate) -> tuple[object, ...]:
 def _rejected_order_key(item: DirectValidatedCandidate) -> tuple[object, ...]:
     return (
         -item.validation.series_similarity,
-        -item.candidate.provider_confidence,
         item.provider.provider_priority,
+        -item.candidate.provider_confidence,
         item.provider.provider_identity,
         item.candidate.provider_candidate_id,
     )

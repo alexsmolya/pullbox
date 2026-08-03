@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from pullbox.models.library import MatchConfidence
+
 if TYPE_CHECKING:
     from pullbox.providers.base import ReleaseResult
     from pullbox.services.search_types import SearchEvalKwargs
@@ -22,6 +24,19 @@ _MB = 1024 * 1024
 # 7030 = Comics on most indexers (e.g. NZBgeek), 7020 = EBooks.
 _COMIC_CATEGORY_IDS = frozenset({"7030"})
 _BOOK_CATEGORY_IDS = frozenset({"7000", "7010", "7020", "7040"})
+_MATCH_CONFIDENCE_RANK = {
+    MatchConfidence.HIGH.value: 0,
+    MatchConfidence.MEDIUM.value: 1,
+    MatchConfidence.LOW.value: 2,
+    MatchConfidence.MANUAL.value: 3,
+    MatchConfidence.UNMATCHED.value: 4,
+}
+
+
+def match_confidence_rank(value: MatchConfidence | str | None) -> int:
+    """Return a stable best-first rank for semantic match confidence."""
+    normalized = value.value if isinstance(value, MatchConfidence) else value
+    return _MATCH_CONFIDENCE_RANK.get(normalized or "", 99)
 
 
 def normalize_source_priority(value: object) -> list[str] | None:
