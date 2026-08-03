@@ -231,7 +231,7 @@ class TestIssueDetailPage:
 
         issue.close_reader()
         issue.open_reader()
-        assert issue.reader_status.inner_text() == "Page 3 of 3"
+        expect(issue.reader_status).to_have_text("Page 3 of 3")
 
     def test_reader_page_jump_input_is_bounded_and_blocks_shortcuts_while_typing(
         self,
