@@ -37,7 +37,9 @@ from pullbox.providers.artifact_hosts.transfer_safety import (
     artifact_too_large_error,
     check_disk_budget,
     disk_free_bytes,
+    disk_space_insufficient_error,
     parse_checksum,
+    quarantine_write_failed_error,
     validate_expected_size,
     verify_checksum,
 )
@@ -158,6 +160,9 @@ class HttpArtifactTransport:
             if not exc.retryable:
                 remove_quarantine_file(safe_path)
             raise
+        except OSError as exc:
+            remove_quarantine_file(safe_path)
+            raise quarantine_write_failed_error() from exc
         except asyncio.CancelledError:
             # Process shutdown keeps a regular partial so restart recovery can
             # prove identity and resume or restart it safely.
@@ -596,12 +601,17 @@ class HttpArtifactTransport:
             and resolved.expected_size != expected
         ):
             raise _object_changed_error()
-        check_disk_budget(
+        free_at_start = check_disk_budget(
             self._disk_free_provider,
             quarantine_root,
             expected_size=expected,
             existing_size=resume_offset,
             policy=self._policy,
+        )
+        unknown_size_ceiling = (
+            resume_offset + max(0, free_at_start - self._policy.min_free_bytes)
+            if expected is None
+            else None
         )
 
         transferred = resume_offset
@@ -659,10 +669,21 @@ class HttpArtifactTransport:
                 )
                 if not chunk:
                     continue
-                if transferred + len(chunk) > self._policy.max_artifact_bytes:
+                next_transferred = transferred + len(chunk)
+                if next_transferred > self._policy.max_artifact_bytes:
                     raise artifact_too_large_error()
+                if unknown_size_ceiling is not None:
+                    if next_transferred > unknown_size_ceiling:
+                        raise disk_space_insufficient_error()
+                    check_disk_budget(
+                        self._disk_free_provider,
+                        quarantine_root,
+                        expected_size=next_transferred,
+                        existing_size=transferred,
+                        policy=self._policy,
+                    )
                 await asyncio.to_thread(handle.write, chunk)
-                transferred += len(chunk)
+                transferred = next_transferred
                 now = time.monotonic()
                 if (
                     now - last_progress_at >= self._policy.progress_interval_seconds

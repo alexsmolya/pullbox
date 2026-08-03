@@ -32,7 +32,7 @@ def check_disk_budget(
     expected_size: int | None,
     existing_size: int,
     policy: ArtifactTransferPolicy,
-) -> None:
+) -> int:
     """Require room for remaining bytes plus the configured safety reserve."""
     remaining = max(0, (expected_size or 0) - existing_size)
     try:
@@ -46,13 +46,8 @@ def check_disk_budget(
             intervention=True,
         ) from exc
     if free < remaining + policy.min_free_bytes:
-        raise ArtifactTransferError(
-            code="artifact_disk_space_insufficient",
-            message="The direct-download quarantine does not have enough free space.",
-            failure_class=DirectArtifactFailureClass.SAFETY,
-            retryable=False,
-            intervention=True,
-        )
+        raise disk_space_insufficient_error()
+    return free
 
 
 def parse_checksum(value: str | None) -> tuple[str, str] | None:
@@ -93,6 +88,26 @@ def artifact_too_large_error() -> ArtifactTransferError:
     return ArtifactTransferError(
         code="artifact_too_large",
         message="The artifact exceeds the configured transfer size limit.",
+        failure_class=DirectArtifactFailureClass.SAFETY,
+        retryable=False,
+        intervention=True,
+    )
+
+
+def disk_space_insufficient_error() -> ArtifactTransferError:
+    return ArtifactTransferError(
+        code="artifact_disk_space_insufficient",
+        message="The direct-download quarantine does not have enough free space.",
+        failure_class=DirectArtifactFailureClass.SAFETY,
+        retryable=False,
+        intervention=True,
+    )
+
+
+def quarantine_write_failed_error() -> ArtifactTransferError:
+    return ArtifactTransferError(
+        code="artifact_quarantine_write_failed",
+        message="Pullbox could not finish writing to its direct-download quarantine.",
         failure_class=DirectArtifactFailureClass.SAFETY,
         retryable=False,
         intervention=True,

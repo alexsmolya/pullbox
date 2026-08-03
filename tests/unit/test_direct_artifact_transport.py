@@ -1065,6 +1065,71 @@ async def test_http_transport_rejects_oversize_or_insufficient_disk(
 
 
 @pytest.mark.asyncio
+async def test_http_transport_unknown_size_preserves_disk_reserve(
+    tmp_path: Path,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_TwoChunkStream(b"abcd", b"efgh", lambda: None))
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ArtifactTransferError) as caught:
+            await HttpArtifactTransport(
+                client=client,
+                resolver=_public_resolver,
+                disk_free_provider=lambda _path: 10,
+                policy=ArtifactTransferPolicy(min_free_bytes=5),
+            ).transfer(
+                resolved=_resolved(expected_size=None),
+                destination=destination,
+                quarantine_root=root,
+            )
+
+    assert caught.value.code == "artifact_disk_space_insufficient"
+    assert not destination.exists()
+
+
+@pytest.mark.asyncio
+async def test_http_transport_write_oserror_is_classified_and_removes_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"abcdef")
+
+    root, destination = _quarantine_paths(tmp_path)
+
+    class _FailingWriter:
+        def __init__(self) -> None:
+            self._handle = destination.open("wb")
+
+        def write(self, chunk: bytes) -> int:
+            self._handle.write(chunk[:1])
+            raise OSError("synthetic disk full")
+
+        def close(self) -> None:
+            self._handle.close()
+
+    monkeypatch.setattr(
+        "pullbox.providers.artifact_hosts.transport.open_quarantine_file",
+        lambda _path, *, append: _FailingWriter(),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ArtifactTransferError) as caught:
+            await HttpArtifactTransport(
+                client=client,
+                resolver=_public_resolver,
+            ).transfer(
+                resolved=_resolved(expected_size=None),
+                destination=destination,
+                quarantine_root=root,
+            )
+
+    assert caught.value.code == "artifact_quarantine_write_failed"
+    assert not destination.exists()
+
+
+@pytest.mark.asyncio
 async def test_http_transport_revalidates_redirect_and_rejects_private_target(
     tmp_path: Path,
 ) -> None:

@@ -169,6 +169,28 @@ async def test_custom_provider_requires_explicit_confirmation_before_persistence
     assert count == 0
 
 
+async def test_self_declared_pullbox_identity_is_still_treated_as_custom(
+    db_session: AsyncSession,
+) -> None:
+    _FakeProviderClient.manifest_response = _manifest(provider_id="pullbox.getcomics")
+
+    with pytest.raises(DirectProviderRegistrationError) as exc_info:
+        await register_direct_provider(
+            db_session,
+            DirectProviderRegistrationInput(
+                endpoint="http://untrusted-provider:8780",
+                bearer_token="registration-token-with-sufficient-length",
+                allow_private_http=True,
+                confirm_custom_provider=False,
+            ),
+            client_factory=_factory,
+        )
+
+    assert exc_info.value.code == "custom_provider_confirmation_required"
+    count = await db_session.scalar(select(func.count()).select_from(DirectProviderConfig))
+    assert count == 0
+
+
 async def test_registration_persists_redacted_manifest_and_encrypted_token(
     db_session: AsyncSession,
 ) -> None:
@@ -362,6 +384,7 @@ async def test_connection_test_uses_configured_anna_domain_health(
             endpoint="http://provider:8780",
             bearer_token="registration-token-with-sufficient-length",
             allow_private_http=True,
+            confirm_custom_provider=True,
         ),
         client_factory=_factory,
     )

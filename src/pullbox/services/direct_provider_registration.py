@@ -42,14 +42,6 @@ if TYPE_CHECKING:
 
     from pullbox.providers.direct.endpoint import ValidatedProviderEndpoint
 
-_OFFICIAL_PROVIDER_IDS = frozenset(
-    {
-        "pullbox.synthetic",
-        "pullbox.getcomics",
-        "pullbox.annas_archive",
-    }
-)
-
 
 class DirectProviderRegistrationError(RuntimeError):
     """An expected, safe provider lifecycle failure."""
@@ -176,7 +168,10 @@ async def register_direct_provider(
             )
         manifest = await client.manifest()
         negotiated = _negotiate_manifest(manifest)
-        trust_level = _trust_level(manifest.provider_id)
+        # Manual registration proves endpoint reachability, not publisher identity.
+        # Reserved manifest IDs remain custom until Pullbox has an authenticated
+        # endpoint or signed-manifest binding for first-party providers.
+        trust_level = DirectProviderTrustLevel.CUSTOM
         if (
             trust_level == DirectProviderTrustLevel.CUSTOM
             and not registration.confirm_custom_provider
@@ -456,12 +451,6 @@ def _negotiate_manifest(manifest: DirectManifestResponse) -> str:
         return negotiate_direct_provider_protocol(manifest.supported_protocol_versions)
     except ValueError as exc:
         raise DirectProviderRegistrationError("provider_incompatible", str(exc)) from exc
-
-
-def _trust_level(provider_id: str) -> DirectProviderTrustLevel:
-    if provider_id in _OFFICIAL_PROVIDER_IDS:
-        return DirectProviderTrustLevel.VERIFIED_PULLBOX
-    return DirectProviderTrustLevel.CUSTOM
 
 
 def _state_from_health(
