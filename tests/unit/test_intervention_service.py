@@ -697,6 +697,109 @@ class TestApproveMatch:
         assert pending.status == PendingMatchStatus.APPROVED
 
     @pytest.mark.asyncio
+    async def test_approve_direct_resource_safety_review_reuses_quarantined_artifact(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Allow-once approval skips a second transfer and resumes post-processing."""
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock()
+        runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+        svc = InterventionService(
+            direct_planner=planner,
+            direct_runner_getter=lambda: runner,
+        )
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            attempt.failure_class = DirectArtifactFailureClass.SAFETY
+            attempt.failure_code = "artifact_resource_safety_review"
+            attempt.plan_snapshot = {
+                "safety_review": {
+                    "kind": "archive_decompressed_size",
+                    "overrideable": True,
+                }
+            }
+            artifact = DirectArtifactAttempt(
+                acquisition_attempt_id=attempt.id,
+                sequence_no=0,
+                artifact_identity="route:oversized-review",
+                route_kind=DirectArtifactRouteKind.DIRECT,
+                host_kind=DirectArtifactHostKind.DATANODES,
+                state=DirectArtifactState.INTERVENTION,
+                is_selected=True,
+                quarantine_path="/quarantine/artifact-1.cbz",
+            )
+            session.add(artifact)
+            await session.flush()
+            pending = _make_direct_pending(issue.id, attempt.id)
+            pending.match_details = {
+                **pending.match_details,
+                "failure_code": "artifact_resource_safety_review",
+                "safety_block": {
+                    "kind": "archive_decompressed_size",
+                    "overrideable": True,
+                },
+            }
+            session.add(pending)
+            await session.commit()
+
+            result = await svc.approve_match(session, pending.id)
+
+        planner.assert_not_awaited()
+        runner.dispatch.assert_awaited_once_with(
+            attempt.id,
+            artifact.id,
+            initial_source=None,
+        )
+        assert result is attempt
+        assert attempt.state is DirectAcquisitionState.POST_PROCESSING
+        assert artifact.state is DirectArtifactState.VALIDATING
+        assert pending.status == PendingMatchStatus.APPROVED
+        assert pending.match_details["safety_override_allowed_once"] is True
+        assert attempt.plan_snapshot["safety_review"]["allowed_once"] is True
+
+    @pytest.mark.asyncio
+    async def test_approve_direct_hard_safety_failure_does_not_redownload(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Hard safety failures cannot turn approval into another transfer."""
+        from pullbox.services.intervention_service import InterventionService
+
+        runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+        svc = InterventionService(direct_runner_getter=lambda: runner)
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            attempt.failure_class = DirectArtifactFailureClass.SAFETY
+            attempt.failure_code = "artifact_safety_rejected"
+            artifact = DirectArtifactAttempt(
+                acquisition_attempt_id=attempt.id,
+                sequence_no=0,
+                artifact_identity="route:unsafe-review",
+                route_kind=DirectArtifactRouteKind.DIRECT,
+                host_kind=DirectArtifactHostKind.DATANODES,
+                state=DirectArtifactState.INTERVENTION,
+                is_selected=True,
+                quarantine_path="/quarantine/artifact-1.cbz",
+            )
+            session.add(artifact)
+            await session.flush()
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+
+            with pytest.raises(ValueError, match="cannot be overridden"):
+                await svc.approve_match(session, pending.id)
+
+        runner.dispatch.assert_not_awaited()
+        assert attempt.state is DirectAcquisitionState.INTERVENTION
+        assert artifact.state is DirectArtifactState.INTERVENTION
+        assert pending.status == PendingMatchStatus.PENDING
+
+    @pytest.mark.asyncio
     async def test_approve_direct_rejects_mismatched_opaque_locator(
         self, db_factory: async_sessionmaker[AsyncSession]
     ) -> None:

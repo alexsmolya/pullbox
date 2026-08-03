@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from pullbox.core.file_safety import FileSafetyError
 from pullbox.models.direct_acquisition import DirectArtifactFailureClass
 from pullbox.services.direct_artifact_quarantine import (
     DirectArtifactQuarantine,
@@ -83,9 +84,48 @@ async def test_direct_artifact_rejects_archive_traversal_and_stays_quarantined(
         await validate_direct_artifact(session, final_path)
 
     assert caught.value.failure_class is DirectArtifactFailureClass.SAFETY
-    assert caught.value.intervention is True
+    assert caught.value.intervention is False
     assert final_path.exists()
     assert not (tmp_path / "escape.jpg").exists()
+
+
+@pytest.mark.asyncio
+async def test_direct_artifact_marks_resource_limit_as_overrideable_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quarantine = DirectArtifactQuarantine(tmp_path / "direct")
+    workspace = quarantine.prepare(acquisition_id=1, artifact_id=2)
+    _write_cbz(workspace.partial_path)
+    final_path = quarantine.finalize(workspace, filename_hint="issue.cbz")
+    session = AsyncMock()
+    session.get.return_value = None
+
+    def reject_oversized_archive(*_args: object, **_kwargs: object) -> None:
+        raise FileSafetyError(
+            "Archive decompressed size (4,248,234,210 bytes) exceeds limit (2,097,152,000 bytes)"
+        )
+
+    monkeypatch.setattr(
+        "pullbox.services.direct_artifact_quarantine.run_safety_checks",
+        reject_oversized_archive,
+    )
+
+    with pytest.raises(DirectArtifactValidationError) as caught:
+        await validate_direct_artifact(session, final_path)
+
+    assert caught.value.code == "artifact_resource_safety_review"
+    assert caught.value.intervention is True
+    assert caught.value.overrideable is True
+    assert caught.value.safety_block == {
+        "kind": "archive_decompressed_size",
+        "reason": (
+            "Archive decompressed size (4,248,234,210 bytes) exceeds limit (2,097,152,000 bytes)"
+        ),
+        "details": [],
+        "source": "file_safety",
+        "overrideable": True,
+    }
 
 
 def test_quarantine_rejects_unknown_payload_and_cleans_owned_workspace(

@@ -21,6 +21,7 @@ from pullbox.models.direct_acquisition import (
     DirectAcquisitionState,
     DirectArtifactAttempt,
     DirectArtifactFailureClass,
+    DirectArtifactState,
 )
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.services.direct_acquisition_planner_service import (
@@ -31,6 +32,7 @@ from pullbox.services.direct_acquisition_planner_service import (
 from pullbox.services.direct_acquisition_state import (
     advance_acquisition_progress,
     transition_acquisition,
+    transition_artifact,
 )
 
 if TYPE_CHECKING:
@@ -285,6 +287,9 @@ class InterventionService:
         )
         if artifact_host_kind is not None:
             details["artifact_host_kind"] = artifact_host_kind
+        safety_review = (attempt.plan_snapshot or {}).get("safety_review")
+        if isinstance(safety_review, dict):
+            details["safety_block"] = dict(safety_review)
         if pending_match is None:
             pending_match = PendingMatch(
                 issue_id=attempt.issue_id,
@@ -407,6 +412,33 @@ class InterventionService:
             if len(selected) != 1:
                 raise ValueError("Direct attempt does not have one selected artifact to resume")
             artifact = selected[0]
+
+        safety_review = (attempt.plan_snapshot or {}).get("safety_review")
+        is_safety_intervention = (
+            DirectAcquisitionState(attempt.state) is DirectAcquisitionState.INTERVENTION
+            and attempt.failure_class is DirectArtifactFailureClass.SAFETY
+        )
+        can_override_safety_once = (
+            is_safety_intervention
+            and attempt.failure_code == "artifact_resource_safety_review"
+            and isinstance(safety_review, dict)
+            and safety_review.get("overrideable") is True
+            and artifact.quarantine_path
+        )
+        if can_override_safety_once:
+            assert isinstance(safety_review, dict)
+            transition_acquisition(attempt, DirectAcquisitionState.POST_PROCESSING)
+            transition_artifact(artifact, DirectArtifactState.VALIDATING)
+            plan_snapshot = dict(attempt.plan_snapshot or {})
+            approved_review = dict(safety_review)
+            approved_review["allowed_once"] = True
+            plan_snapshot["safety_review"] = approved_review
+            attempt.plan_snapshot = plan_snapshot
+            details = dict(pending_match.match_details or {})
+            details["safety_override_allowed_once"] = True
+            pending_match.match_details = details
+        elif is_safety_intervention:
+            raise ValueError("This direct artifact safety failure cannot be overridden")
 
         pending_match.status = PendingMatchStatus.APPROVED
         pending_match.resolved_at = datetime.now(UTC)

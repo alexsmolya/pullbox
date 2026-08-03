@@ -33,10 +33,12 @@ async def test_direct_handoff_reuses_pipeline_without_client_mapping_or_cleanup(
         *,
         resolve_local_path: Any,
         cleanup_source: bool,
+        allow_resource_safety_exception: bool,
     ) -> None:
         observed["session"] = session
         observed["download"] = download
         observed["cleanup_source"] = cleanup_source
+        observed["allow_resource_safety_exception"] = allow_resource_safety_exception
         observed["resolved_path"] = await resolve_local_path(session, download)
         download.final_path = library_file.file_path
 
@@ -46,11 +48,13 @@ async def test_direct_handoff_reuses_pipeline_without_client_mapping_or_cleanup(
         issue_id=34,
         source_path=source,
         replace_existing_file=True,
+        allow_resource_safety_exception=True,
         post_processor=fake_post_processor,
     )
 
     assert observed["session"] is session
     assert observed["cleanup_source"] is False
+    assert observed["allow_resource_safety_exception"] is True
     assert observed["resolved_path"] == str(source)
     assert observed["download"].id == -12
     assert observed["download"].download_client.value == "direct"

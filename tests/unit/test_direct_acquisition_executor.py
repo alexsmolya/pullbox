@@ -1208,6 +1208,55 @@ async def test_executor_retries_post_processing_from_quarantine_without_redownlo
 
 
 @pytest.mark.asyncio
+async def test_executor_applies_approved_resource_exception_without_redownload(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    attempt.state = DirectAcquisitionState.POST_PROCESSING
+    attempt.plan_snapshot = {
+        "safety_review": {
+            "kind": "archive_decompressed_size",
+            "overrideable": True,
+            "allowed_once": True,
+        }
+    }
+    artifact = attempt.artifact_attempts[0]
+    artifact.state = DirectArtifactState.VALIDATING
+    session.add(attempt)
+    await session.commit()
+    quarantine = DirectArtifactQuarantine(tmp_path / "quarantine")
+    workspace = quarantine.prepare(acquisition_id=attempt.id, artifact_id=artifact.id)
+    final_path = workspace.directory / f"artifact-{artifact.id}.cbz"
+    final_path.write_bytes(b"completed transfer")
+    artifact.quarantine_path = str(final_path)
+    await session.commit()
+    observed: dict[str, object] = {}
+
+    async def post_processor(*_args: Any, **kwargs: Any) -> DirectPostProcessingResult:
+        observed.update(kwargs)
+        return await _successful_post_processor()
+
+    async def unexpected_source() -> HostResolutionRequest:
+        raise AssertionError("Approved safety review must not resolve or download again")
+
+    result = await _executor(
+        tmp_path,
+        transport=_UnexpectedTransport(),
+        post_processor=post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=unexpected_source,
+    )
+
+    assert result.state is DirectAcquisitionState.COMPLETED
+    assert observed["source_path"] == final_path
+    assert observed["allow_resource_safety_exception"] is True
+
+
+@pytest.mark.asyncio
 async def test_executor_recovers_inflight_transfer_from_persisted_checkpoint(
     session: AsyncSession,
     tmp_path: Path,

@@ -571,6 +571,7 @@ class DirectAcquisitionExecutor:
                 issue_id=attempt.issue_id,
                 source_path=final_path,
                 replace_existing_file=attempt.replace_existing_file,
+                allow_resource_safety_exception=_resource_safety_override_allowed(attempt),
             )
         except Exception:
             attempt.failure_class = DirectArtifactFailureClass.POST_PROCESS
@@ -642,6 +643,11 @@ class DirectAcquisitionExecutor:
         artifact.failure_class = exc.failure_class
         artifact.failure_code = exc.code
         artifact.error_message = str(exc)
+        safety_block = getattr(exc, "safety_block", None)
+        if isinstance(safety_block, dict):
+            plan_snapshot = dict(attempt.plan_snapshot or {})
+            plan_snapshot["safety_review"] = dict(safety_block)
+            attempt.plan_snapshot = plan_snapshot
         can_retry = (
             bool(exc.retryable)
             and attempt.retry_count < attempt.max_retries
@@ -1044,6 +1050,15 @@ def _recover_final_path(
     if resolved.is_symlink() or not resolved.is_file():
         raise _missing_quarantine_error()
     return resolved
+
+
+def _resource_safety_override_allowed(attempt: DirectAcquisitionAttempt) -> bool:
+    safety_review = (attempt.plan_snapshot or {}).get("safety_review")
+    return bool(
+        isinstance(safety_review, dict)
+        and safety_review.get("overrideable") is True
+        and safety_review.get("allowed_once") is True
+    )
 
 
 def _parse_last_modified(value: str | None) -> datetime | None:

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from pullbox.core.file_safety import (
     DEFAULT_ALLOWED_EXTENSIONS,
     FileSafetyError,
+    classify_resource_safety_exception,
     get_allowed_extensions,
     get_archive_size_limit_bytes,
     is_dangerous_file_blocking_enabled,
@@ -54,12 +55,15 @@ class DirectArtifactValidationError(RuntimeError):
         message: str,
         retryable: bool = False,
         intervention: bool = True,
+        safety_block: dict[str, object] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.failure_class = DirectArtifactFailureClass.SAFETY
         self.retryable = retryable
         self.intervention = intervention
+        self.safety_block = dict(safety_block) if safety_block is not None else None
+        self.overrideable = bool(self.safety_block and self.safety_block.get("overrideable"))
 
     def __repr__(self) -> str:
         return (
@@ -154,9 +158,20 @@ async def validate_direct_artifact(
             max_archive_size=max_archive_size,
         )
     except FileSafetyError as exc:
+        safety_block = classify_resource_safety_exception(exc)
+        if safety_block is not None:
+            raise DirectArtifactValidationError(
+                code="artifact_resource_safety_review",
+                message=(
+                    "The downloaded artifact exceeds configured resource safety limits "
+                    "and requires an explicit allow-once review."
+                ),
+                safety_block=safety_block.to_diagnostics(),
+            ) from exc
         raise DirectArtifactValidationError(
             code="artifact_safety_rejected",
             message="The downloaded artifact failed Pullbox file safety checks.",
+            intervention=False,
         ) from exc
 
     integrity = await check_file_integrity(path, deep=False)

@@ -27,6 +27,7 @@ class _PostProcessor(Protocol):
         *,
         resolve_local_path: Any,
         cleanup_source: bool,
+        allow_resource_safety_exception: bool,
     ) -> Awaitable[None]: ...
 
 
@@ -68,6 +69,7 @@ async def run_direct_artifact_post_processing(
     issue_id: int,
     source_path: Path,
     replace_existing_file: bool,
+    allow_resource_safety_exception: bool = False,
     post_processor: _PostProcessor | None = None,
 ) -> DirectPostProcessingResult:
     """Process one quarantined comic without client path mapping or cleanup."""
@@ -89,6 +91,7 @@ async def run_direct_artifact_post_processing(
         record,
         resolve_local_path=_resolve_direct_source,
         cleanup_source=False,
+        allow_resource_safety_exception=allow_resource_safety_exception,
     )
     await session.flush()
     result = await session.execute(select(LibraryFile).where(LibraryFile.issue_id == issue_id))

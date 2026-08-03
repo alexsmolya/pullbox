@@ -11,6 +11,7 @@ from typing import Any
 
 from pullbox.core.file_safety import (
     FileSafetyError,
+    classify_resource_safety_exception,
     get_allowed_extensions,
     get_archive_size_limit_bytes,
     is_dangerous_file_blocking_enabled,
@@ -46,6 +47,7 @@ async def resolve_and_validate_source(
     resolve_local_path: ResolveLocalPath,
     probe_source: ProbeSource,
     build_integrity_exception: BuildIntegrityException,
+    allow_resource_safety_exception: bool = False,
 ) -> SourceValidationResult:
     """Resolve the source path, probe shared storage, and validate the comic file."""
     from asyncio import get_running_loop
@@ -109,12 +111,20 @@ async def resolve_and_validate_source(
                 ),
             )
         except FileSafetyError as exc:
-            log.error(
-                "post_processing_safety_rejected",
-                reason=exc.reason,
-                details=exc.details,
-            )
-            raise RuntimeError(f"File safety: {exc.reason}") from exc
+            resource_block = classify_resource_safety_exception(exc)
+            if allow_resource_safety_exception and resource_block is not None:
+                log.warning(
+                    "post_processing_resource_safety_allowed_once",
+                    kind=resource_block.kind,
+                    reason=resource_block.reason,
+                )
+            else:
+                log.error(
+                    "post_processing_safety_rejected",
+                    reason=exc.reason,
+                    details=exc.details,
+                )
+                raise RuntimeError(f"File safety: {exc.reason}") from exc
         except NotADirectoryError:
             # Network mounts (NFS/SMB) can raise ENOTDIR during safety checks.
             # Log a warning but proceed; transfer still succeeds or fails.

@@ -402,6 +402,7 @@ async def _run_post_processing(
     *,
     resolve_local_path: ResolveLocalPath | None = None,
     cleanup_source: bool = True,
+    allow_resource_safety_exception: bool = False,
 ) -> None:
     """Transfer the downloaded file to the library and update all records.
 
@@ -452,6 +453,7 @@ async def _run_post_processing(
             resolve_local_path=resolve_local_path or _resolve_local_path,
             probe_source=_probe_post_processing_source,
             build_integrity_exception=_build_post_processing_integrity_exception,
+            allow_resource_safety_exception=allow_resource_safety_exception,
         )
         probe_root = source_validation.probe_root
         comic_file = source_validation.comic_file
