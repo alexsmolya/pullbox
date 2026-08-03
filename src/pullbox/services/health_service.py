@@ -68,7 +68,7 @@ from pullbox.services.health_types import CheckOutcome, SubCheckOutcome
 __all__ = ["CheckOutcome", "HealthService", "SubCheckOutcome"]
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Mapping
+    from collections.abc import Awaitable, Mapping, Sequence
     from datetime import datetime
     from pathlib import Path
 
@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     from pullbox.models.health import HealthIncident as HealthIncidentModel
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.base import DownloadClient, ProviderRegistry
+    from pullbox.services.direct_resolver_service import NativeResolverOption
 
 logger = structlog.get_logger(__name__)
 
@@ -374,9 +375,10 @@ class HealthService:
     async def _check_indexer_subject(
         self,
         config: IndexerConfig,
+        resolver_options: Sequence[NativeResolverOption],
     ) -> CheckOutcome:
         """Build a persisted health summary for one configured indexer."""
-        return await check_indexer_subject(config)
+        return await check_indexer_subject(config, resolver_options)
 
     async def _check_scheduler(self) -> CheckOutcome:
         """Verify the scheduler is running and tasks are executing cleanly."""

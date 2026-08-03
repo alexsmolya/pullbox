@@ -21,11 +21,12 @@ from pullbox.services.health_helpers import (
 from pullbox.services.health_types import CheckOutcome, SubCheckOutcome
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.indexer import IndexerConfig
+    from pullbox.services.direct_resolver_service import NativeResolverOption
 
 _INDEXER_LATENCY_DEGRADED_MS = 1000.0
 _INDEXER_LATENCY_UNHEALTHY_MS = 5000.0
@@ -39,14 +40,20 @@ async def check_indexers(
         Awaitable[tuple[str | None, str | None]],
     ],
     check_prowlarr_subject: Callable[..., Awaitable[CheckOutcome]],
-    check_indexer_subject: Callable[[IndexerConfig], Awaitable[CheckOutcome]],
+    check_indexer_subject: Callable[
+        [IndexerConfig, Sequence[NativeResolverOption]],
+        Awaitable[CheckOutcome],
+    ],
 ) -> list[CheckOutcome]:
     """Test Prowlarr and enabled indexers as a grouped multi-entity component."""
     from pullbox.models.indexer import IndexerConfig
 
     result = await session.execute(
         select(IndexerConfig)
-        .where(IndexerConfig.enabled.is_(True))
+        .where(
+            IndexerConfig.enabled.is_(True),
+            IndexerConfig.manager_available.is_(True),
+        )
         .order_by(func.lower(IndexerConfig.name))
     )
     indexer_configs = list(result.scalars().all())
@@ -73,6 +80,7 @@ async def check_indexers(
     proxy_count = 0
     proxy_outcome: CheckOutcome | None = None
     prowlarr_blocks_indexers = False
+    prowlarr_skipped_count = 0
 
     if prowlarr_url and prowlarr_api_key:
         proxy_count = 1
@@ -89,26 +97,38 @@ async def check_indexers(
             flagged_names.append("Prowlarr")
         prowlarr_blocks_indexers = not _prowlarr_allows_indexer_checks(proxy_outcome)
 
-    if prowlarr_blocks_indexers and proxy_outcome is not None:
-        for config in indexer_configs:
+    from pullbox.models.indexer import IndexerSource
+    from pullbox.services.direct_resolver_service import (
+        build_manual_torznab_resolver_options,
+    )
+
+    for config in indexer_configs:
+        is_prowlarr_managed = str(config.source) == IndexerSource.PROWLARR
+        if prowlarr_blocks_indexers and proxy_outcome is not None and is_prowlarr_managed:
             outcome = _skipped_indexer_subject(config, proxy_outcome)
             subject_outcomes.append(outcome)
             summary_checks.append(_serialize_indexer_summary(outcome))
-    else:
-        for config in indexer_configs:
-            outcome = await check_indexer_subject(config)
-            subject_outcomes.append(outcome)
-            summary_checks.append(_serialize_indexer_summary(outcome))
-            total_ms += outcome.response_time_ms
-            if outcome.status == HealthStatus.HEALTHY:
-                healthy_count += 1
-            else:
-                flagged_names.append(config.name)
+            prowlarr_skipped_count += 1
+            continue
+
+        resolver_options = await build_manual_torznab_resolver_options(session, config)
+        outcome = await check_indexer_subject(config, resolver_options)
+        subject_outcomes.append(outcome)
+        summary_checks.append(_serialize_indexer_summary(outcome))
+        total_ms += outcome.response_time_ms
+        if outcome.status == HealthStatus.HEALTHY:
+            healthy_count += 1
+        else:
+            flagged_names.append(config.name)
 
     total = len(subject_outcomes)
     indexer_count = len(indexer_configs)
 
-    if prowlarr_blocks_indexers and proxy_outcome is not None:
+    if (
+        prowlarr_blocks_indexers
+        and proxy_outcome is not None
+        and prowlarr_skipped_count == indexer_count
+    ):
         component_status = proxy_outcome.status
         message = f"Prowlarr unavailable; skipped {indexer_count} indexer check(s)"
         guidance = (
@@ -450,6 +470,7 @@ async def check_prowlarr_subject(
 
 async def check_indexer_subject(
     config: IndexerConfig,
+    resolver_options: Sequence[NativeResolverOption] = (),
 ) -> CheckOutcome:
     """Build a persisted health summary for one configured indexer."""
     from pullbox.core.encryption import decrypt_secret
@@ -464,6 +485,8 @@ async def check_indexer_subject(
             name=config.name,
             url=config.url,
             api_key=api_key,
+            resolver_enabled=bool(config.resolver_enabled),
+            resolver_options=resolver_options,
         )
     else:
         indexer = NewznabIndexer(

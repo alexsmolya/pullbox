@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +11,22 @@ import pytest
 from pullbox.providers.download.qbittorrent import QBittorrentClient, QBittorrentError
 
 _MAGNET_HASH = "abcdef1234567890abcdef1234567890abcdef12"
+
+
+def _torrent_descriptor(name: bytes = b"test") -> tuple[bytes, str]:
+    info = (
+        b"d6:lengthi1e4:name"
+        + str(len(name)).encode("ascii")
+        + b":"
+        + name
+        + b"12:piece lengthi16384e6:pieces20:"
+        + (b"x" * 20)
+        + b"e"
+    )
+    return (
+        b"d4:info" + info + b"e",
+        hashlib.sha1(info, usedforsecurity=False).hexdigest(),
+    )
 
 
 def _make_client(**kwargs: Any) -> QBittorrentClient:
@@ -69,6 +86,23 @@ class TestAuthenticationAndRequests:
 
         with pytest.raises(QBittorrentError, match="HTTP 500"):
             await client._request("GET", "/app/version")
+
+    async def test_request_rejects_non_allowlisted_api_endpoint(self) -> None:
+        client = _make_client()
+        client._authenticated = True
+        client._client.request = AsyncMock(return_value=_make_response(status_code=200))  # type: ignore[method-assign]
+
+        with pytest.raises(ValueError, match="qBittorrent API endpoint"):
+            await client._request("GET", "/../../admin")
+
+        client._client.request.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_constructor_validates_peer_origin_without_embedded_credentials(self) -> None:
+        with pytest.raises(ValueError, match="embedded credentials"):
+            _make_client(url="http://user:password@qbittorrent:8080")
+
+        with pytest.raises(ValueError, match="query or fragment"):
+            _make_client(url="http://qbittorrent:8080?target=http://untrusted.example")
 
     async def test_redirecting_download_url_resolves_to_magnet(self) -> None:
         client = _make_client()
@@ -146,6 +180,64 @@ class TestAddTorrent:
 
         with pytest.raises(QBittorrentError, match="Torrent was not added"):
             await client.add_torrent("https://example.com/download.torrent", "Batman 001")
+
+    async def test_add_torrent_data_uploads_descriptor_bytes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _make_client(category="comics")
+        descriptor, info_hash = _torrent_descriptor()
+        client._request = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                _make_response(json_data=[]),
+                _make_response(text="Ok."),
+                _make_response(json_data=[{"hash": info_hash, "name": "Batman 001"}]),
+            ]
+        )
+        monkeypatch.setattr("asyncio.sleep", AsyncMock())
+
+        result = await client.add_torrent_data(descriptor, "Batman 001")
+
+        assert result == info_hash
+        add_call = client._request.await_args_list[1]  # type: ignore[attr-defined]
+        assert add_call.args == ("POST", "/torrents/add")
+        assert add_call.kwargs["data"] == {"rename": "Batman 001", "category": "comics"}
+        assert add_call.kwargs["files"] == {
+            "torrents": ("Batman 001.torrent", descriptor, "application/x-bittorrent")
+        }
+
+    async def test_add_torrent_data_ignores_concurrent_unrelated_torrent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _make_client()
+        descriptor, info_hash = _torrent_descriptor(b"batman")
+        client._request = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                _make_response(json_data=[]),
+                _make_response(text="Ok."),
+                _make_response(
+                    json_data=[
+                        {"hash": "concurrent-hash", "name": "Unrelated"},
+                        {"hash": info_hash, "name": "Batman 001"},
+                    ]
+                ),
+            ]
+        )
+        monkeypatch.setattr("asyncio.sleep", AsyncMock())
+
+        result = await client.add_torrent_data(descriptor, "Batman 001")
+
+        assert result == info_hash
+
+    async def test_add_torrent_data_rejects_invalid_descriptor_before_upload(self) -> None:
+        client = _make_client()
+        client._request = AsyncMock()  # type: ignore[method-assign]
+
+        with pytest.raises(QBittorrentError, match="Invalid torrent descriptor"):
+            await client.add_torrent_data(b"not-bencoded", "Batman 001")
+
+        client._request.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

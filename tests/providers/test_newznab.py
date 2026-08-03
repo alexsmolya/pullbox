@@ -138,6 +138,24 @@ class TestSearch:
 class TestRequest:
     """Tests for Newznab request failure mapping."""
 
+    async def test_request_omits_empty_api_key(self) -> None:
+        indexer = NewznabIndexer(
+            name="Public Newznab",
+            url="https://indexer.example",
+            api_key="",
+            rate_limit_per_minute=6000,
+        )
+        indexer._client.get = AsyncMock(  # type: ignore[method-assign]
+            return_value=_make_response(text="<caps><categories /></caps>")
+        )
+
+        await indexer._request({"t": "caps"})
+
+        indexer._client.get.assert_awaited_once_with(  # type: ignore[attr-defined]
+            "https://indexer.example/api",
+            params={"t": "caps"},
+        )
+
     async def test_request_includes_api_key_and_raises_on_root_error_response(self) -> None:
         indexer = _make_indexer()
         indexer._client.get = AsyncMock(  # type: ignore[method-assign]

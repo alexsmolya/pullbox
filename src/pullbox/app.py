@@ -432,6 +432,43 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.warning("import_recovery_failed", subsystem="import_recovery", exc_info=True)
 
+    # Recover native direct-download attempts. Signed artifact URLs remain
+    # ephemeral and are reconstructed by the runner only when work resumes.
+    from pullbox.composition.services import build_direct_acquisition_runtime
+    from pullbox.tasks.direct_acquisition_task import (
+        DirectAcquisitionRunner,
+        set_direct_acquisition_runner,
+    )
+
+    direct_runner: DirectAcquisitionRunner | None = None
+    try:
+        factory = get_session_factory()
+        direct_runtime = build_direct_acquisition_runtime()
+        direct_runner = DirectAcquisitionRunner(factory, executor=direct_runtime)
+        set_direct_acquisition_runner(direct_runner)
+        direct_recovery_task = asyncio.create_task(direct_runner.recover_and_dispatch())
+        _startup_background_tasks.add(direct_recovery_task)
+
+        def _cleanup_direct_recovery_task(task: asyncio.Task[object]) -> None:
+            _startup_background_tasks.discard(task)
+            with suppress(asyncio.CancelledError):
+                exc = task.exception()
+                if exc is not None:
+                    logger.warning("direct_acquisition_recovery_failed", exc_info=exc)
+                    return
+                recovered = task.result()
+                if isinstance(recovered, int) and recovered:
+                    logger.info("direct_acquisitions_recovered_at_startup", count=recovered)
+
+        direct_recovery_task.add_done_callback(_cleanup_direct_recovery_task)
+    except Exception:
+        set_direct_acquisition_runner(None)
+        logger.warning(
+            "direct_acquisition_startup_failed",
+            subsystem="direct_acquisition",
+            exc_info=True,
+        )
+
     # Resume deferred import metadata work from imports that completed before
     # the app stopped. This is background-only so startup stays fast.
     try:
@@ -590,6 +627,12 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler.register_tasks(overrides=overrides)
     await scheduler.load_persisted_stats()
     scheduler.start()
+    try:
+        from pullbox.tasks.search_task import recover_wanted_search_sweep_schedule
+
+        await recover_wanted_search_sweep_schedule()
+    except Exception:
+        logger.warning("search_wanted_sweep_recovery_failed", exc_info=True)
 
     search_on_add_recovery_task = asyncio.create_task(recover_recent_search_on_add_misses())
     _startup_background_tasks.add(search_on_add_recovery_task)
@@ -765,6 +808,17 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         await asyncio.gather(*remaining_startup_tasks, return_exceptions=True)
 
     scheduler.shutdown()
+    if direct_runner is not None:
+        try:
+            await direct_runner.aclose()
+        except Exception:
+            logger.warning(
+                "direct_acquisition_shutdown_failed",
+                subsystem="direct_acquisition",
+                exc_info=True,
+            )
+        finally:
+            set_direct_acquisition_runner(None)
     await dispose_engine()
     logger.info("application_stopped")
 

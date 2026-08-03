@@ -235,7 +235,7 @@ read-only or runtime-managed inside Pullbox.
 
 - Comic series and issue management.
 - ComicVine metadata integration.
-- Newznab, Torznab, and Prowlarr-backed indexer support.
+- Newznab, Torznab, Prowlarr, and Jackett indexer support.
 - SABnzbd, NZBGet, qBittorrent, Transmission, and Deluge download clients.
 - Manual and automated wanted-issue search.
 - Search history, rejected results, and blocklist support.

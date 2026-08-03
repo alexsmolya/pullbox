@@ -12,6 +12,7 @@ from pullbox.services.release_validator import ReleaseValidator, ValidationResul
 from pullbox.services.search_scoring import (
     DEFAULT_MAX_SIZE_MB,
     DEFAULT_MIN_SIZE_MB,
+    normalize_source_priority,
     score_release,
 )
 
@@ -26,12 +27,24 @@ MAX_REJECTED_DIAGNOSTICS = 25
 SLOW_INDEXER_THRESHOLD_MS = 1000
 
 
+def _release_source_rank(release: ReleaseResult, source_priority: list[str] | None) -> int:
+    """Return the configured protocol lane for one already-validated result."""
+    normalized = normalize_source_priority(source_priority)
+    if normalized is None:
+        return 0
+    if release.download_url.startswith("direct://"):
+        source = "direct"
+    else:
+        source = "torrent" if release.is_torrent else "usenet"
+    return {value: index for index, value in enumerate(normalized)}[source]
+
+
 def _score_validation_result(
     validation: ValidationResult,
     *,
     confidence_blend: float,
     quality_weight: float,
-    indexer_priority: int = 25,
+    indexer_priority: int | None = None,
     min_size_mb: int = DEFAULT_MIN_SIZE_MB,
     max_size_mb: int = DEFAULT_MAX_SIZE_MB,
     preferred_format: str | None = None,
@@ -73,7 +86,7 @@ def _select_best_validation(
     *,
     min_score: float = DEFAULT_MIN_SCORE,
     confidence_blend: float = 0.40,
-    indexer_priority: int = 25,
+    indexer_priority: int | None = None,
     min_size_mb: int = DEFAULT_MIN_SIZE_MB,
     max_size_mb: int = DEFAULT_MAX_SIZE_MB,
     preferred_format: str | None = None,
@@ -84,6 +97,7 @@ def _select_best_validation(
     max_file_count: int = 5,
     preferred_language: str = "en",
     digital_bonus: int = 10,
+    source_priority: list[str] | None = None,
 ) -> ValidationResult | None:
     """Select the best validated result above the minimum score."""
 
@@ -91,7 +105,7 @@ def _select_best_validation(
         return None
 
     quality_weight = 1.0 - confidence_blend
-    scored: list[tuple[float, ValidationResult]] = []
+    scored: list[tuple[int, float, ValidationResult]] = []
     for validation in matched:
         score = _score_validation_result(
             validation,
@@ -110,13 +124,19 @@ def _select_best_validation(
             digital_bonus=digital_bonus,
         )
         if score >= min_score:
-            scored.append((score, validation))
+            scored.append(
+                (
+                    _release_source_rank(validation.release, source_priority),
+                    score,
+                    validation,
+                )
+            )
 
     if not scored:
         return None
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return scored[0][1]
+    scored.sort(key=lambda item: (item[0], -item[1]))
+    return scored[0][2]
 
 
 def release_provenance_key(release: ReleaseResult) -> str:
@@ -317,13 +337,14 @@ def log_type_detection(
 
 def evaluate_results(
     results: list[ReleaseResult],
-    indexer_priority: int,
+    indexer_priority: int | None,
     min_score: float,
     *,
     wanted_series: str | None = None,
     wanted_issue: float | None = None,
     wanted_year: int | None = None,
     wanted_issue_type: IssueType = IssueType.ISSUE,
+    wanted_issue_title: str | None = None,
     alternate_names: list[str] | None = None,
     ignore_words: list[str] | None = None,
     fuzzy_high_threshold: float | None = None,
@@ -342,6 +363,7 @@ def evaluate_results(
     max_file_count: int = 5,
     preferred_language: str = "en",
     digital_bonus: int = 10,
+    source_priority: list[str] | None = None,
     log_type_detection_func: Callable[
         [list[ValidationResult], list[ValidationResult], IssueType, str, float],
         None,
@@ -384,6 +406,7 @@ def evaluate_results(
             wanted_year=wanted_year,
             wanted_issue_type=wanted_issue_type,
             alternate_names=alternate_names,
+            wanted_issue_title=wanted_issue_title,
         )
 
         log_type_detection_func(
@@ -403,7 +426,7 @@ def evaluate_results(
             )
             return None
 
-        scored_validations: list[tuple[float, ValidationResult]] = []
+        scored_validations: list[tuple[int, float, ValidationResult]] = []
         for validation in validated:
             final = _score_validation_result(
                 validation,
@@ -421,11 +444,17 @@ def evaluate_results(
                 preferred_language=preferred_language,
                 digital_bonus=digital_bonus,
             )
-            scored_validations.append((final, validation))
+            scored_validations.append(
+                (
+                    _release_source_rank(validation.release, source_priority),
+                    final,
+                    validation,
+                )
+            )
 
-        scored_validations.sort(key=lambda item: item[0], reverse=True)
+        scored_validations.sort(key=lambda item: (item[0], -item[1]))
 
-        for rank, (score, validation) in enumerate(scored_validations[:5], 1):
+        for rank, (_, score, validation) in enumerate(scored_validations[:5], 1):
             active_logger.debug(
                 "search_score_breakdown",
                 rank=rank,
@@ -435,9 +464,11 @@ def evaluate_results(
                 above_threshold=score >= min_score,
             )
 
-        below = sum(1 for score, _ in scored_validations if score < min_score)
+        below = sum(1 for _, score, _ in scored_validations if score < min_score)
         scored_validations = [
-            (score, validation) for score, validation in scored_validations if score >= min_score
+            (source_rank, score, validation)
+            for source_rank, score, validation in scored_validations
+            if score >= min_score
         ]
         if below:
             active_logger.debug(
@@ -453,7 +484,7 @@ def evaluate_results(
             )
             return None
 
-        best_score, best_validation = scored_validations[0]
+        _, best_score, best_validation = scored_validations[0]
         best = best_validation.release
         above_threshold = len(scored_validations)
     else:
@@ -464,6 +495,7 @@ def evaluate_results(
         )
         scored_releases = [
             (
+                _release_source_rank(release, source_priority),
                 score_release(
                     release,
                     indexer_priority,
@@ -482,9 +514,11 @@ def evaluate_results(
             )
             for release in results
         ]
-        scored_releases.sort(key=lambda item: item[0], reverse=True)
+        scored_releases.sort(key=lambda item: (item[0], -item[1]))
         scored_releases = [
-            (score, release) for score, release in scored_releases if score >= min_score
+            (source_rank, score, release)
+            for source_rank, score, release in scored_releases
+            if score >= min_score
         ]
         if not scored_releases:
             active_logger.debug(
@@ -494,7 +528,7 @@ def evaluate_results(
             )
             return None
 
-        best_score, best = scored_releases[0]
+        _, best_score, best = scored_releases[0]
         above_threshold = len(scored_releases)
 
     active_logger.debug(

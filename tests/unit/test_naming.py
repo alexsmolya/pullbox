@@ -14,6 +14,7 @@ from pullbox.core.naming import (
     PREVIEW_EXAMPLES,
     classify_series_type,
     detect_issue_type,
+    detect_issue_type_from_metadata_title,
     detect_series_type_from_description,
     detect_series_type_from_issue_count,
     format_comic_file,
@@ -526,6 +527,24 @@ class TestDetectIssueType:
         assert detect_issue_type("Annual Special Edition") == "annual"
 
 
+class TestDetectIssueTypeFromMetadataTitle:
+    """Provider issue titles use narrower evidence than release filenames."""
+
+    @pytest.mark.parametrize(
+        ("title", "expected"),
+        [
+            ("Holiday Special", "special"),
+            ("Special Edition", "issue"),
+            ("HC/TPB", "volume"),
+            ("Annual Special", "annual"),
+            ("Epic Collection", "volume"),
+            ("Questions", "issue"),
+        ],
+    )
+    def test_metadata_title_detection(self, title: str, expected: str) -> None:
+        assert detect_issue_type_from_metadata_title(title) == expected
+
+
 # ── get_naming_preview ─────────────────────────────────────────────
 
 
@@ -747,8 +766,11 @@ class TestParseFilename:
 class TestDetectSeriesTypeFromDescription:
     """Tier 2: series type detection from ComicVine description text."""
 
-    def test_collects_is_tpb(self) -> None:
-        assert detect_series_type_from_description("Collects Batman #50-55") == "tpb"
+    def test_generic_collects_is_volume(self) -> None:
+        assert detect_series_type_from_description("Collects Batman #50-55") == "volume"
+
+    def test_reprints_collects_label_is_volume(self) -> None:
+        assert detect_series_type_from_description("Reprints/Collects: Batman #587-590") == "volume"
 
     def test_one_shot(self) -> None:
         assert detect_series_type_from_description("A one-shot story exploring...") == "one_shot"
@@ -806,9 +828,98 @@ class TestDetectSeriesTypeFromDescription:
             == "standard"
         )
 
-    def test_keyword_beyond_60_chars(self) -> None:
-        padding = "A" * 55
-        assert detect_series_type_from_description(f"{padding} Omnibus edition") == "standard"
+    def test_contextual_collection_signal_beyond_60_chars(self) -> None:
+        padding = "A Gotham crossover event. " * 20
+        description = (
+            f"{padding}This collection includes stories from the following comic books: "
+            "Batman #587-590."
+        )
+        assert detect_series_type_from_description(description) == "volume"
+
+    def test_signal_outside_bounded_window_is_ignored(self) -> None:
+        padding = "A" * 2050
+        assert (
+            detect_series_type_from_description(f"{padding} This omnibus collects Batman.")
+            == "standard"
+        )
+
+    def test_html_is_normalized_before_classification(self) -> None:
+        assert (
+            detect_series_type_from_description("This <strong>hardcover</strong> edition collects")
+            == "hardcover"
+        )
+
+    def test_mixed_hardcover_and_tpb_formats_are_generic_volume(self) -> None:
+        description = "Released as both a hardcover edition and a trade paperback collection."
+        assert detect_series_type_from_description(description) == "volume"
+
+    @pytest.mark.parametrize(
+        "description",
+        [
+            "Collected Editions: Batman: The Golden Age Omnibus Vol. 1",
+            "Collected in Batman: The Golden Age Omnibus Vol. 1.",
+            "Stories from Batman Annual #1 and Batman #12.",
+            "A preview of the upcoming original graphic novel.",
+            "Based on the award-winning graphic novel.",
+            "This series includes a one-shot bonus story.",
+        ],
+    )
+    def test_reference_only_collection_language_is_standard(self, description: str) -> None:
+        assert detect_series_type_from_description(description) == "standard"
+
+    @pytest.mark.parametrize(
+        ("description", "expected"),
+        [
+            ("Annual issue for the summer season.", "annual"),
+            ("A series of annuals starring Batman.", "annual"),
+            ("A promotional one-shot for convention attendees.", "one_shot"),
+            ("A one-off comic about Gotham City.", "one_shot"),
+            ("A holiday special celebrating the season.", "special"),
+            ("A special ashcan publication.", "special"),
+            ("This omnibus collects the complete run.", "omnibus"),
+            ("This compendium includes issues #1-48.", "compendium"),
+            ("An original graphic novel by the award-winning team.", "graphic_novel"),
+            ("A deluxe hardcover edition with bonus material.", "deluxe"),
+            ("A trade paperback collection of the first story arc.", "tpb"),
+            ("This hardcover edition collects the first twelve issues.", "hardcover"),
+            ("This volume gathers stories from issues #1-6.", "volume"),
+        ],
+    )
+    def test_contextual_identity_roster(self, description: str, expected: str) -> None:
+        assert detect_series_type_from_description(description) == expected
+
+    @pytest.mark.parametrize(
+        ("description", "expected"),
+        [
+            (
+                "Series of trade paperbacks collecting Immortal Thor and Thor Annual.",
+                "tpb",
+            ),
+            (
+                "Series of hardcovers/paperbacks collecting Chip Zdarsky's Batman run.",
+                "volume",
+            ),
+            ("Volume 1: Collects Alien #1-5.", "volume"),
+            ("A black and white graphic novel.", "graphic_novel"),
+            ("Graphic novella.", "graphic_novel"),
+        ],
+    )
+    def test_provider_collection_phrases(self, description: str, expected: str) -> None:
+        assert detect_series_type_from_description(description) == expected
+
+    @pytest.mark.parametrize(
+        "description",
+        [
+            "A special miniseries starring Batman.",
+            "A very special story about friendship.",
+            "A facsimile edition of Batman #1.",
+            "A director's cut with additional pages.",
+            "A collection of one-shots published elsewhere.",
+            "Following the one-shot prelude, the ongoing series begins.",
+        ],
+    )
+    def test_ambiguous_format_language_is_standard(self, description: str) -> None:
+        assert detect_series_type_from_description(description) == "standard"
 
     def test_empty_description(self) -> None:
         assert detect_series_type_from_description("") == "standard"
@@ -821,10 +932,10 @@ class TestDetectSeriesTypeFromDescription:
 
 
 class TestDetectSeriesTypeFromIssueCount:
-    """Tier 3: one-shot detection from issue count heuristic."""
+    """Issue count alone must never define semantic type."""
 
-    def test_one_issue_past_year(self) -> None:
-        assert detect_series_type_from_issue_count(1, 2021, current_year=2026) == "one_shot"
+    def test_one_issue_past_year_is_still_standard(self) -> None:
+        assert detect_series_type_from_issue_count(1, 2021, current_year=2026) == "standard"
 
     def test_one_issue_current_year(self) -> None:
         assert detect_series_type_from_issue_count(1, 2026, current_year=2026) == "standard"
@@ -846,7 +957,7 @@ class TestDetectSeriesTypeFromIssueCount:
 
 
 class TestClassifySeriesType:
-    """Orchestrator: Tier 1 → Tier 2 → Tier 3 cascade."""
+    """Orchestrator: explicit title, contextual description, then standard."""
 
     def test_tier1_wins_over_tier2(self) -> None:
         """Title keyword takes priority over description."""
@@ -865,11 +976,11 @@ class TestClassifySeriesType:
                 "afterdark",
                 description="Collects issues #1-6 of the hit series",
             )
-            == "tpb"
+            == "volume"
         )
 
-    def test_tier3_from_issue_count(self) -> None:
-        """Issue count heuristic when title and description have no keywords."""
+    def test_issue_count_does_not_create_one_shot(self) -> None:
+        """A historical singleton without semantic evidence remains standard."""
         assert (
             classify_series_type(
                 "afterdark",
@@ -877,7 +988,7 @@ class TestClassifySeriesType:
                 issue_count=1,
                 year_start=2021,
             )
-            == "one_shot"
+            == "standard"
         )
 
     def test_no_match_standard(self) -> None:
@@ -892,7 +1003,7 @@ class TestClassifySeriesType:
             == "standard"
         )
 
-    def test_no_description_falls_to_tier3(self) -> None:
+    def test_no_description_singleton_is_standard(self) -> None:
         assert (
             classify_series_type(
                 "afterdark",
@@ -900,7 +1011,68 @@ class TestClassifySeriesType:
                 issue_count=1,
                 year_start=2021,
             )
-            == "one_shot"
+            == "standard"
+        )
+
+    def test_officer_down_uses_late_collection_evidence(self) -> None:
+        description = (
+            "Officer Down crosses through the Batman family and follows the GCPD response. " * 8
+        ) + (
+            "This collection includes stories from the following comic books: "
+            "Batman #587, Robin #86, Birds of Prey #27, and Detective Comics #754."
+        )
+
+        assert (
+            classify_series_type(
+                "Batman: Officer Down",
+                description=description,
+                issue_count=1,
+                year_start=2001,
+            )
+            == "volume"
+        )
+
+    @pytest.mark.parametrize(
+        ("title", "expected"),
+        [
+            ("Batman: The Golden Age Omnibus", "omnibus"),
+            ("Batman Epic Collection", "volume"),
+            ("Batman Modern Era Epic Collection", "volume"),
+            ("Batman Complete Collection", "volume"),
+            ("Batman Ultimate Collection", "volume"),
+            ("Batman Collected Edition", "volume"),
+            ("Batman Complete Series", "volume"),
+            ("Batman Library Edition", "volume"),
+            ("Crossed: Patient Zero Ashcan", "special"),
+            ("Batman Special Edition", "standard"),
+        ],
+    )
+    def test_title_signal_roster(self, title: str, expected: str) -> None:
+        assert classify_series_type(title) == expected
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Batman Absolute Edition",
+            "Batman Archives",
+            "Batman Masterworks",
+            "Batman Gallery Edition",
+            "Batman Artist's Edition",
+            "Batman Treasury Edition",
+            "Batman Anniversary Edition",
+            "Batman Collector's Edition",
+        ],
+    )
+    def test_conditional_edition_titles_need_description_evidence(self, title: str) -> None:
+        assert classify_series_type(title) == "standard"
+
+    def test_conditional_edition_title_uses_collection_description(self) -> None:
+        assert (
+            classify_series_type(
+                "Batman Absolute Edition",
+                description="This edition collects Batman #1-12.",
+            )
+            == "volume"
         )
 
     def test_title_only_standard(self) -> None:

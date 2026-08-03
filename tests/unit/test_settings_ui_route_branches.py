@@ -12,6 +12,14 @@ import pytest
 
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import (
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+    DirectResolverConfig,
+    DirectResolverKind,
+    DirectResolverState,
+)
 from pullbox.models.download import DownloadClientType
 from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.ui import settings_routes
@@ -78,6 +86,8 @@ async def test_settings_runtime_seams_require_configuration(
 
     assert settings_routes._normalize_settings_tab("nope") == "general"
     assert settings_routes._normalize_settings_tab("search") == "search"
+    assert settings_routes._normalize_settings_tab("direct") == "direct"
+    assert settings_routes._normalize_settings_tab("resolvers") == "resolvers"
 
 
 def test_status_seed_helpers_prefer_live_state_then_cookie_cache() -> None:
@@ -192,6 +202,66 @@ async def test_load_settings_tab_covers_all_data_tabs(
                 priority=1,
                 last_failure_at=now - timedelta(minutes=1),
             ),
+            DirectProviderConfig(
+                provider_id="community.example",
+                display_name="Example Direct Provider",
+                endpoint="http://direct-provider:8780",
+                priority=25,
+                state=DirectProviderState.HEALTHY,
+                trust_level=DirectProviderTrustLevel.CUSTOM,
+                negotiated_protocol="direct-download-provider/v1",
+                encrypted_bearer_token="encrypted-token-must-not-render",
+                configuration_metadata={
+                    "allow_private_http": True,
+                    "public_values": {"result_limit": 20},
+                    "configured_secret_fields": ["account_token"],
+                },
+                manifest_snapshot={
+                    "protocol_version": "direct-download-provider/v1",
+                    "provider_id": "community.example",
+                    "display_name": "Example Direct Provider",
+                    "description": "A provider fixture.",
+                    "provider_version": "1.2.3",
+                    "supported_protocol_versions": ["direct-download-provider/v1"],
+                    "publisher": "Example Publisher",
+                    "license": "MIT",
+                    "source_domains": ["example.test"],
+                    "capabilities": {
+                        "search": True,
+                        "resolve": True,
+                        "health": True,
+                        "configuration_schema": True,
+                    },
+                    "configuration_schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "result_limit": {
+                                "type": "integer",
+                                "title": "Result limit",
+                                "minimum": 1,
+                                "maximum": 100,
+                            },
+                            "account_token": {
+                                "type": "string",
+                                "title": "Account token",
+                                "x-pullbox-secret": True,
+                            },
+                        },
+                    },
+                },
+            ),
+            DirectResolverConfig(
+                name="TRAWL",
+                resolver_kind=DirectResolverKind.TRAWL,
+                priority=10,
+                endpoint="http://trawl:8151",
+                enabled=False,
+                state=DirectResolverState.HEALTHY,
+                allow_private_http=True,
+                timeout_seconds=60,
+                max_concurrency=1,
+            ),
         ]
     )
     await db_session.flush()
@@ -216,6 +286,11 @@ async def test_load_settings_tab_covers_all_data_tabs(
 
     search = await settings_routes.load_settings_tab(_request(), db_session, "search")
     assert search["configs"]["base_url"] == "http://localhost:8585"  # type: ignore[index]
+    assert "direct_resolvers" not in search
+
+    resolvers = await settings_routes.load_settings_tab(_request(), db_session, "resolvers")
+    assert resolvers["direct_resolvers"][0].name == "TRAWL"  # type: ignore[index]
+    assert resolvers["direct_resolver_seed"][0]["resolver_kind"] == "trawl"  # type: ignore[index]
 
     clients = await settings_routes.load_settings_tab(_request(), db_session, "clients")
     assert clients["clients"][0].name == "SAB"  # type: ignore[index]
@@ -226,9 +301,16 @@ async def test_load_settings_tab_covers_all_data_tabs(
     assert indexers["indexers"][0].name == "Prowlarr"  # type: ignore[index]
     assert indexers["indexer_status_seed"][1] is False  # type: ignore[index]
     assert indexers["configs"]["prowlarr_api_key"] == ""  # type: ignore[index]
+    assert indexers["browser_resolver_available"] is True
     assert indexers["blocked_groups"] == ["bad", "worse"]
     assert indexers["blocklist_expiry_days"] == "30"
     assert indexers["blocklist_auto_add"] is False
+    assert "direct_resolvers" not in indexers
+
+    direct = await settings_routes.load_settings_tab(_request(), db_session, "direct")
+    assert direct["direct_providers"][0].display_name == "Example Direct Provider"  # type: ignore[index]
+    assert direct["direct_providers"][0].bearer_token_configured is True  # type: ignore[index]
+    assert "encrypted-token-must-not-render" not in repr(direct["direct_providers"])
 
     utilities = await settings_routes.load_settings_tab(_request(), db_session, "utilities")
     assert utilities["configs"]["utility_worker_count"] == "2"  # type: ignore[index]
@@ -262,10 +344,11 @@ async def test_settings_page_and_htmx_routes_render_expected_templates(
 
     htmx = await settings_routes.htmx_settings_tab(
         _request(),
-        "search",
+        "resolvers",
         _user(),
         db_session,
     )
     assert htmx.template_name == "partials/settings_content_bundle.html"
-    assert htmx.context["tab"] == "search"
+    assert htmx.context["tab"] == "resolvers"
+    assert "direct_resolver_seed" in htmx.context
     assert configured_settings_routes.calls[-1][0] == "partials/settings_content_bundle.html"

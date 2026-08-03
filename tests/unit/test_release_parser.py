@@ -267,6 +267,15 @@ class TestParseReleaseTitle:
         assert r.year == 2025
         assert r.scan_group == "Pyrate-DCP"
 
+    def test_scene_style_numbered_pdf_strips_narrow_release_group_prefix(self) -> None:
+        r = parse_release_title("bb-Sacrificers.No.7.pdf")
+
+        assert r is not None
+        assert r.series_name == "Sacrificers"
+        assert r.issue_number == 7.0
+        assert r.scan_group == "bb"
+        assert r.file_format == "pdf"
+
     def test_dot_separated_with_publisher(self) -> None:
         r = parse_release_title(
             "Dark.Horse-The.World.Of.Black.Hammer.Omnibus.Vol.05.2025.Retail.Comic"

@@ -1,0 +1,502 @@
+{#- Shared browser-resolver management. -#}
+{% from "components/dropdown_select.html" import dropdown_select %}
+{% from "components/settings_shell.html" import alert_banner, section_header %}
+<div class="space-y-6 pt-6">
+<section
+  id="challenge-resolvers"
+  class="section-card"
+  data-testid="settings-resolvers-card"
+  x-data='browserResolverSettings({{ direct_resolver_seed|default([], true)|tojson }}, {{ csrf_token|tojson }})'
+  @keydown.escape.window="closeModal()"
+>
+  {% call section_header(
+    title="Challenge resolvers",
+    description="Configure up to three resolver services in deterministic priority order. Lower values are tried first.",
+    eyebrow="Shared acquisition infrastructure",
+    title_style="plain"
+  ) %}
+    <button
+      type="button"
+      class="btn-primary btn-sm gap-2"
+      data-testid="settings-resolver-add"
+      :disabled="profiles.length >= 3"
+      @click="openAdd()"
+    >
+      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+      </svg>
+      Add Resolver
+    </button>
+  {% endcall %}
+
+  <div class="section-body space-y-5">
+    {% call alert_banner(
+      tone="warning",
+      icon="shield",
+      title="Bounded compatibility, not a bypass guarantee",
+      description="A compatible resolver may help with recognized browser challenges, but enabling it does not guarantee CAPTCHA success. DataNodes account login requires TRAWL. TRAWL native browser mode is used only for approved resolver flows, credentials are never sent to TRAWL, TRAWL MITM mode is not supported, and Prowlarr keeps its own resolver configuration.",
+      attrs='data-testid="settings-resolver-warning"'
+    ) %}{% endcall %}
+
+    <div class="settings-connection-list" data-testid="settings-resolver-list">
+      <template x-for="profile in profiles" :key="profile.id">
+        <article
+          @click="openEdit(profile.id)"
+          @keydown.enter.prevent="openEdit(profile.id)"
+          @keydown.space.prevent="openEdit(profile.id)"
+          role="button"
+          tabindex="0"
+          class="settings-connection-card"
+          :class="{ 'settings-connection-card-muted': !profile.enabled }"
+          :data-testid="`settings-resolver-${profile.id}`"
+        >
+          <div class="flex items-start gap-4">
+            <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-pb-info-dim text-pb-info">
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75h7.5m-7.5 5.25h7.5m-7.5 5.25h7.5M5.25 4.5h13.5a1.5 1.5 0 011.5 1.5v12a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V6a1.5 1.5 0 011.5-1.5z"/>
+              </svg>
+            </div>
+
+            <div class="min-w-0 flex-1 space-y-3">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold text-pb-text" x-text="profile.name"></p>
+                <p class="mt-1 break-all font-mono text-[11px] text-pb-text-dim" x-text="profile.endpoint || 'Endpoint not configured'"></p>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="pill pill-info" x-text="displayValue(profile.resolver_kind)"></span>
+                <span class="pill" :class="profile.enabled ? 'pill-success' : 'pill-muted'" x-text="profile.enabled ? 'Enabled' : 'Disabled'"></span>
+                <span class="pill" :class="statePill(profile.state)" x-text="displayValue(profile.state)"></span>
+                <span class="pill pill-muted" x-text="`Priority ${profile.priority}`"></span>
+              </div>
+
+              <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <dt class="text-pb-text-dim">Last connection test</dt>
+                  <dd class="mt-0.5 text-pb-text-sec" x-text="formatTimestamp(profile.last_tested_at)"></dd>
+                </div>
+                <div>
+                  <dt class="text-pb-text-dim">Last healthy response</dt>
+                  <dd class="mt-0.5 text-pb-text-sec" x-text="formatTimestamp(profile.last_health_at)"></dd>
+                </div>
+                <div>
+                  <dt class="text-pb-text-dim">Last classified error</dt>
+                  <dd class="mt-0.5 text-pb-text-sec" x-text="profile.last_error_code ? displayValue(profile.last_error_code) : 'None'"></dd>
+                </div>
+                <div>
+                  <dt class="text-pb-text-dim">Authentication headers</dt>
+                  <dd class="mt-0.5 text-pb-text-sec" x-text="profile.auth_header_names?.length ? profile.auth_header_names.join(', ') : 'None'"></dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </article>
+      </template>
+      <template x-if="profiles.length === 0">
+        <div class="rounded-lg border border-dashed border-pb-border px-5 py-8 text-center">
+          <p class="text-sm font-medium text-pb-text">No browser resolvers configured</p>
+          <p class="mt-1 text-xs text-pb-text-dim">Ordinary HTTP requests continue to work without a resolver.</p>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <div
+    x-show="showModal"
+    x-cloak
+    class="modal-shell"
+    data-testid="settings-resolver-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="resolver-modal-title"
+  >
+    <div
+      class="modal-backdrop"
+      data-testid="settings-resolver-modal-backdrop"
+      @click="closeModal()"
+    ></div>
+    <div class="modal-panel max-h-[90vh] max-w-xl">
+      <div class="modal-header">
+        <div>
+          <p class="section-eyebrow">Browser resolver</p>
+          <h2 id="resolver-modal-title" class="text-sm font-semibold text-pb-text" x-text="editingId === null ? 'Add resolver' : 'Configure resolver'"></h2>
+        </div>
+        <button type="button" class="icon-btn icon-btn-sm" aria-label="Close resolver settings" @click="closeModal()">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" d="M6 18 18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="saveProfile()">
+        <div class="modal-body" x-ref="resolverModalBody">
+          <div class="space-y-4 px-5 py-4">
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-pb-border bg-pb-surface/40 px-3 py-2.5">
+              <div>
+                <p class="text-xs font-medium text-pb-text">Resolver status</p>
+                <p class="mt-0.5 text-[11px] text-pb-text-dim">Allow eligible acquisition flows to use this resolver profile.</p>
+              </div>
+              <label class="relative inline-flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="peer toggle-input"
+                  data-testid="settings-resolver-modal-enabled"
+                  x-model="form.enabled"
+                >
+                <span class="toggle-switch"></span>
+                <span class="text-xs text-pb-text-sec" x-text="form.enabled ? 'Enabled' : 'Disabled'"></span>
+              </label>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="resolver-profile-name">Name</label>
+              <input id="resolver-profile-name" class="input-pb" type="text" maxlength="100" x-model.trim="form.name" required>
+            </div>
+            <div>
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="resolver-profile-kind-trigger">Type</label>
+              {{ dropdown_select(
+                name="resolver_kind",
+                value="flaresolverr",
+                options=[
+                  ("flaresolverr", "FlareSolverr"),
+                  ("byparr", "Byparr"),
+                  ("trawl", "TRAWL"),
+                ],
+                trigger_id="resolver-profile-kind-trigger",
+                root_testid="settings-resolver-type-select",
+                panel_testid="settings-resolver-type-panel",
+                class_name="w-full",
+                local_model="form.resolver_kind"
+              ) }}
+            </div>
+            <div class="sm:col-span-2">
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="resolver-profile-endpoint">Resolver endpoint</label>
+              <input id="resolver-profile-endpoint" data-testid="settings-resolver-endpoint" class="input-pb font-mono" type="url" maxlength="1000" placeholder="http://flaresolverr:8191" x-model.trim="form.endpoint" required>
+            </div>
+            <div>
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="resolver-profile-priority">Priority</label>
+              <input id="resolver-profile-priority" class="input-pb w-28 font-mono" type="number" min="1" max="1000" x-model.number="form.priority" required>
+              <p class="mt-1 text-[11px] text-pb-text-dim">Lower values are tried first.</p>
+            </div>
+            <div>
+              <label class="mb-1.5 block text-xs font-medium text-pb-text-sec" for="resolver-profile-timeout">Timeout</label>
+              <div class="flex items-center gap-2">
+                <input id="resolver-profile-timeout" class="input-pb w-28 font-mono" type="number" min="1" max="60" x-model.number="form.timeout_seconds" required>
+                <span class="text-xs text-pb-text-dim">seconds</span>
+              </div>
+            </div>
+          </div>
+
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-pb-border bg-pb-surface/40 px-3 py-2.5">
+              <div>
+                <p class="text-xs font-medium text-pb-text">Private-network HTTP</p>
+                <p class="mt-0.5 text-[11px] text-pb-text-dim">Allow unencrypted HTTP only on a trusted private or loopback container network.</p>
+              </div>
+              <label class="relative inline-flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="peer toggle-input"
+                  data-testid="settings-resolver-modal-private-http"
+                  x-model="form.allow_private_http"
+                >
+                <span class="toggle-switch"></span>
+                <span class="text-xs text-pb-text-sec" x-text="form.allow_private_http ? 'Allowed' : 'Blocked'"></span>
+              </label>
+            </div>
+
+            <div class="rounded-lg border border-pb-border bg-pb-bg/30 p-4">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-xs font-semibold text-pb-text">Optional authentication headers</p>
+                  <p class="mt-1 text-[11px] text-pb-text-dim">Values are encrypted at rest and never returned after save.</p>
+                </div>
+                <button type="button" class="btn-ghost btn-sm" :disabled="form.auth_headers.length >= 4" @click="addHeader()">Add Header</button>
+              </div>
+              <template x-for="(header, index) in form.auth_headers" :key="header.key">
+                <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
+                  <input class="input-pb font-mono" type="text" maxlength="64" placeholder="Authorization" aria-label="Authentication header name" x-model.trim="header.name">
+                  <input class="input-pb font-mono" type="password" maxlength="16384" autocomplete="new-password" :placeholder="header.configured ? 'Configured - leave blank to keep' : 'Header value'" aria-label="Authentication header value" x-model="header.value">
+                  <button type="button" class="btn-ghost btn-sm" aria-label="Remove authentication header" @click="removeHeader(index)">Remove</button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div x-show="error" x-cloak class="border-t border-pb-border px-5 py-3">
+            <div class="inline-alert inline-alert-danger"><p class="text-xs" x-text="error"></p></div>
+          </div>
+
+          <div x-show="testMessage" x-cloak class="border-t border-pb-border px-5 py-3">
+            <div class="inline-alert" :class="testSuccess ? 'inline-alert-success' : 'inline-alert-danger'">
+              <p class="text-xs" x-text="testMessage"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <div>
+            <template x-if="editingId !== null">
+              <button
+                type="button"
+                class="btn-ghost btn-sm gap-1.5 text-pb-error hover:border-pb-error/40 hover:text-pb-error"
+                data-testid="settings-resolver-modal-remove"
+                :disabled="saving || testing || busyId !== null"
+                @click="removeProfile(editingId)"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                </svg>
+                Remove
+              </button>
+            </template>
+          </div>
+
+          <div class="flex items-center gap-2" data-testid="settings-resolver-modal-actions">
+            <template x-if="editingId !== null">
+              <button
+                type="button"
+                class="btn-ghost btn-sm gap-1.5"
+                data-testid="settings-resolver-modal-test"
+                :disabled="saving || testing || busyId !== null"
+                @click="testProfile(editingId)"
+              >
+                <svg class="h-3.5 w-3.5" :class="testing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a4 4 0 010-5.656m5.656 0a4 4 0 010 5.656M12 12h.008v.008H12V12z"/>
+                </svg>
+                <span x-text="testing ? 'Testing...' : 'Test'"></span>
+              </button>
+            </template>
+            <button type="button" class="btn-ghost btn-sm" :disabled="saving || testing" @click="closeModal()">Cancel</button>
+            <button type="submit" class="btn-primary btn-sm" :disabled="saving || testing" x-text="saving ? 'Saving...' : 'Save Resolver'"></button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+</div>
+
+<script>
+function browserResolverSettings(initialProfiles, csrfToken) {
+  return {
+    profiles: initialProfiles,
+    showModal: false,
+    editingId: null,
+    busyId: null,
+    saving: false,
+    testing: false,
+    error: '',
+    testMessage: '',
+    testSuccess: false,
+    removedHeaders: [],
+    form: { auth_headers: [] },
+
+    blankForm() {
+      return {
+        name: '',
+        resolver_kind: 'flaresolverr',
+        priority: 10,
+        endpoint: '',
+        enabled: true,
+        allow_private_http: true,
+        timeout_seconds: 60,
+        max_concurrency: 1,
+        auth_headers: [],
+      };
+    },
+
+    displayValue(value) {
+      return String(value || '')
+        .split('_')
+        .filter(Boolean)
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+    },
+
+    statePill(state) {
+      return {
+        disabled: 'pill-muted',
+        unknown: 'pill-warning',
+        healthy: 'pill-success',
+        degraded: 'pill-warning',
+        rate_limited: 'pill-warning',
+        authentication_required: 'pill-error',
+        quota_limited: 'pill-warning',
+        incompatible: 'pill-error',
+        unavailable: 'pill-error',
+      }[state] || 'pill-muted';
+    },
+
+    formatTimestamp(value) {
+      if (!value) return 'Never';
+      const timestamp = new Date(value);
+      if (Number.isNaN(timestamp.getTime())) return 'Never';
+      return new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(timestamp);
+    },
+
+    openAdd() {
+      if (this.profiles.length >= 3) return;
+      this.editingId = null;
+      this.removedHeaders = [];
+      this.form = this.blankForm();
+      this.error = '';
+      this.testMessage = '';
+      this.testSuccess = false;
+      this.showModal = true;
+    },
+
+    openEdit(id) {
+      const profile = this.profiles.find(item => item.id === id);
+      if (!profile) return;
+      this.editingId = id;
+      this.removedHeaders = [];
+      this.form = {
+        name: profile.name,
+        resolver_kind: profile.resolver_kind,
+        priority: Number(profile.priority),
+        endpoint: profile.endpoint,
+        enabled: Boolean(profile.enabled),
+        allow_private_http: Boolean(profile.allow_private_http),
+        timeout_seconds: Math.min(60, Number(profile.timeout_seconds || 60)),
+        max_concurrency: Number(profile.max_concurrency || 1),
+        auth_headers: (profile.auth_header_names || []).map((name, index) => ({ key: `saved-${index}-${name}`, name, value: '', configured: true })),
+      };
+      this.error = '';
+      this.testMessage = '';
+      this.testSuccess = false;
+      this.showModal = true;
+    },
+
+    closeModal() {
+      if (this.saving || this.testing || this.busyId !== null) return;
+      this.showModal = false;
+      this.error = '';
+      this.testMessage = '';
+      this.testSuccess = false;
+    },
+
+    addHeader() {
+      if (this.form.auth_headers.length >= 4) return;
+      this.form.auth_headers.push({ key: `new-${Date.now()}-${this.form.auth_headers.length}`, name: '', value: '', configured: false });
+    },
+
+    removeHeader(index) {
+      const [removed] = this.form.auth_headers.splice(index, 1);
+      if (removed?.configured && removed.name) this.removedHeaders.push(removed.name);
+    },
+
+    headerUpdates() {
+      const updates = {};
+      this.removedHeaders.forEach(name => { updates[name] = null; });
+      this.form.auth_headers.forEach(header => {
+        if (header.name && header.value) updates[header.name] = header.value;
+      });
+      return updates;
+    },
+
+    payload() {
+      const authenticationHeaders = this.headerUpdates();
+      const payload = {
+        name: this.form.name,
+        resolver_kind: this.form.resolver_kind,
+        priority: Number(this.form.priority),
+        endpoint: this.form.endpoint,
+        enabled: Boolean(this.form.enabled),
+        allow_private_http: Boolean(this.form.allow_private_http),
+        timeout_seconds: Number(this.form.timeout_seconds),
+        max_concurrency: Number(this.form.max_concurrency),
+      };
+      if (Object.keys(authenticationHeaders).length) payload.authentication_headers = authenticationHeaders;
+      return payload;
+    },
+
+    async api(path, options = {}) {
+      const headers = { ...(options.headers || {}), 'X-CSRF-Token': csrfToken };
+      if (options.body) headers['Content-Type'] = 'application/json';
+      const response = await fetch(path, { ...options, headers });
+      if (response.status === 204) return null;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Resolver request failed.');
+      return data;
+    },
+
+    async reloadProfiles() {
+      this.profiles = await this.api('/api/v1/direct-resolver/profiles');
+    },
+
+    async saveProfile() {
+      if (this.saving) return;
+      this.saving = true;
+      this.error = '';
+      try {
+        const path = this.editingId === null
+          ? '/api/v1/direct-resolver/profiles'
+          : `/api/v1/direct-resolver/profiles/${this.editingId}`;
+        await this.api(path, {
+          method: this.editingId === null ? 'POST' : 'PATCH',
+          body: JSON.stringify(this.payload()),
+        });
+        await this.reloadProfiles();
+        this.showModal = false;
+        if (typeof showToast === 'function') showToast({ message: 'Browser resolver saved. Test it before relying on challenge handling.', level: 'success' });
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.saving = false;
+      }
+    },
+
+    async testProfile(id) {
+      if (this.testing || this.saving || this.busyId !== null || id === null) return;
+      this.testing = true;
+      this.error = '';
+      this.testMessage = '';
+      this.testSuccess = false;
+      try {
+        const result = await this.api(`/api/v1/direct-resolver/profiles/${id}/test`, { method: 'POST' });
+        await this.reloadProfiles();
+        this.testSuccess = Boolean(result.usable);
+        this.testMessage = result.message || (result.usable ? 'Resolver connected successfully.' : 'Resolver test failed.');
+      } catch (error) {
+        this.testMessage = error.message;
+      } finally {
+        this.testing = false;
+        this.scrollModalToResults();
+      }
+    },
+
+    scrollModalToResults() {
+      this.$nextTick(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const modalBody = this.$refs.resolverModalBody;
+            if (!modalBody) return;
+            modalBody.scrollTo({
+              top: modalBody.scrollHeight,
+              behavior: 'smooth',
+            });
+          });
+        });
+      });
+    },
+
+    async removeProfile(id) {
+      const profile = this.profiles.find(item => item.id === id);
+      if (!profile || !window.confirm(`Delete the ${profile.name} resolver profile?`)) return;
+      this.busyId = id;
+      try {
+        await this.api(`/api/v1/direct-resolver/profiles/${id}`, { method: 'DELETE' });
+        await this.reloadProfiles();
+        this.showModal = false;
+        if (typeof showToast === 'function') showToast({ message: 'Browser resolver deleted.', level: 'success' });
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.busyId = null;
+      }
+    },
+  };
+}
+</script>

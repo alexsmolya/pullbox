@@ -207,6 +207,10 @@ _PAREN_KNOWN_PUBLISHER_YEAR_RE = re.compile(
 
 # "No." or "No" issue number in dot-separated: No.01, No.02
 _DOT_NO_ISSUE_RE = re.compile(r"\bNo\.?\s*(\d+)\b", re.IGNORECASE)
+_SCENE_PREFIX_NUMBERED_RE = re.compile(
+    r"^(?P<group>[a-z][a-z0-9]{1,15})-"
+    r"(?P<title>[A-Z].*?[._\s]+(?i:No)\.?[._\s]*\d{1,5})\s*$"
+)
 
 # Minimal separator-only filenames such as ``dc_connect_72.pdf`` are common
 # enough to support, but this path stays narrower than full dot release parsing.
@@ -365,6 +369,14 @@ def parse_release_title(title: str) -> ParsedRelease | None:
 
     # Step b: Extract scan group (BEFORE normalizing separators)
     scan_group, working = _extract_scan_group(working)
+
+    # Some metadata sources retain a short lowercase scene-group prefix in
+    # otherwise explicit ``Series.No.7`` filenames. Keep the rule narrow so
+    # ordinary hyphenated series titles remain untouched.
+    scene_match = _SCENE_PREFIX_NUMBERED_RE.fullmatch(working)
+    if scene_match:
+        scan_group = scan_group or scene_match.group("group")
+        working = scene_match.group("title")
 
     # Step c: Normalize separators (dots → spaces for dot-separated format)
     is_dot_separated = _is_dot_format(working) or _is_minimal_separator_issue_format(working)

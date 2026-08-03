@@ -19,6 +19,9 @@ from pullbox.core.naming_type_detection import (
     detect_issue_type as detect_issue_type,
 )
 from pullbox.core.naming_type_detection import (
+    detect_issue_type_from_metadata_title as detect_issue_type_from_metadata_title,
+)
+from pullbox.core.naming_type_detection import (
     detect_series_type as detect_series_type,
 )
 from pullbox.core.naming_type_detection import (

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from pullbox.models.library import MatchConfidence
+
 if TYPE_CHECKING:
     from pullbox.providers.base import ReleaseResult
     from pullbox.services.search_types import SearchEvalKwargs
@@ -12,6 +14,7 @@ if TYPE_CHECKING:
 DEFAULT_MIN_SIZE_MB = 50
 DEFAULT_MAX_SIZE_MB = 2000
 PREFERRED_FORMATS: dict[str, int] = {"cbz": 100, "cbr": 80, "cb7": 60}
+DEFAULT_SOURCE_PRIORITY: tuple[str, ...] = ("usenet", "torrent", "direct")
 
 _FORMAT_RE = re.compile(r"\.(cbz|cbr|cb7|pdf|epub)\b", re.IGNORECASE)
 _TAG_RE = re.compile(r"\b(cbz|cbr|cb7)\b", re.IGNORECASE)
@@ -21,11 +24,43 @@ _MB = 1024 * 1024
 # 7030 = Comics on most indexers (e.g. NZBgeek), 7020 = EBooks.
 _COMIC_CATEGORY_IDS = frozenset({"7030"})
 _BOOK_CATEGORY_IDS = frozenset({"7000", "7010", "7020", "7040"})
+_MATCH_CONFIDENCE_RANK = {
+    MatchConfidence.HIGH.value: 0,
+    MatchConfidence.MEDIUM.value: 1,
+    MatchConfidence.LOW.value: 2,
+    MatchConfidence.MANUAL.value: 3,
+    MatchConfidence.UNMATCHED.value: 4,
+}
+
+
+def match_confidence_rank(value: MatchConfidence | str | None) -> int:
+    """Return a stable best-first rank for semantic match confidence."""
+    normalized = value.value if isinstance(value, MatchConfidence) else value
+    return _MATCH_CONFIDENCE_RANK.get(normalized or "", 99)
+
+
+def normalize_source_priority(value: object) -> list[str] | None:
+    """Return one complete, de-duplicated protocol order."""
+    if not isinstance(value, list | tuple):
+        return None
+
+    normalized: list[str] = []
+    for raw_item in value:
+        if not isinstance(raw_item, str):
+            continue
+        item = "direct" if raw_item.strip().lower() == "ddl" else raw_item.strip().lower()
+        if item in DEFAULT_SOURCE_PRIORITY and item not in normalized:
+            normalized.append(item)
+
+    if not normalized:
+        return None
+    normalized.extend(item for item in DEFAULT_SOURCE_PRIORITY if item not in normalized)
+    return normalized
 
 
 def score_release(
     release: ReleaseResult,
-    indexer_priority: int = 25,
+    indexer_priority: int | None = None,
     *,
     min_size_mb: int = DEFAULT_MIN_SIZE_MB,
     max_size_mb: int = DEFAULT_MAX_SIZE_MB,
@@ -70,7 +105,8 @@ def score_release(
         w_priority, w_age, w_size, w_format = raw_weights
         w_grabs = 0.0
 
-    priority_score = _score_indexer_priority(indexer_priority)
+    resolved_priority = release.ranking_priority if indexer_priority is None else indexer_priority
+    priority_score = _score_indexer_priority(resolved_priority)
     age_score = _score_age(release.age_days)
     size_score = _score_size(release.size_bytes, min_size_mb, max_size_mb)
     format_score = _score_format(release.title, preferred_format=preferred_format)
@@ -328,11 +364,17 @@ def _sort_by_source_priority(
     priority: list[str],
 ) -> list[ReleaseResult]:
     """Stable sort results by source protocol priority."""
-    priority_map = {proto: idx for idx, proto in enumerate(priority)}
-    default_rank = len(priority)
+    normalized = normalize_source_priority(priority)
+    if normalized is None:
+        return list(results)
+    priority_map = {proto: idx for idx, proto in enumerate(normalized)}
+    default_rank = len(normalized)
 
     def _rank(result: ReleaseResult) -> int:
-        proto = "torrent" if result.is_torrent else "usenet"
+        if result.download_url.startswith("direct://"):
+            proto = "direct"
+        else:
+            proto = "torrent" if result.is_torrent else "usenet"
         return priority_map.get(proto, default_rank)
 
     return sorted(results, key=_rank)

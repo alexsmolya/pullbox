@@ -191,7 +191,10 @@ async def build_indexer_registry_rows(
         (
             await session.execute(
                 select(IndexerConfig)
-                .where(IndexerConfig.enabled.is_(True))
+                .where(
+                    IndexerConfig.enabled.is_(True),
+                    IndexerConfig.manager_available.is_(True),
+                )
                 .order_by(func.lower(IndexerConfig.name))
             )
         )

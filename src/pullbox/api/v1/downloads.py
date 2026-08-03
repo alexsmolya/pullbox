@@ -3,18 +3,33 @@
 import structlog
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
 from pullbox.core.exceptions import NotFoundError
 from pullbox.models.blocklist import BlocklistReason
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.providers.download.qbittorrent import QBittorrentError
+from pullbox.providers.indexer.newznab import NewznabError
 from pullbox.schemas.blocklist import BlocklistEntryResponse
-from pullbox.schemas.download import DownloadHistoryItem, DownloadQueueItem
+from pullbox.schemas.download import (
+    DirectSourceAlternative,
+    DirectSourceCurrent,
+    DirectSourceOptionsResponse,
+    DirectSourceSwitchRequest,
+    DirectSourceSwitchResponse,
+    DownloadHistoryItem,
+    DownloadQueueItem,
+)
 from pullbox.schemas.pagination import PaginatedResponse
 from pullbox.services.blocklist_service import BlocklistService
+from pullbox.services.direct_acquisition_switch import (
+    DirectSourceSwitchError,
+    direct_source_host_label,
+    list_source_switch_options,
+)
 from pullbox.services.download_history_classification import (
     download_history_clause,
     post_processing_history_clause,
@@ -203,6 +218,29 @@ async def _cancel_on_client(download: DownloadHistory, session: DbSession) -> No
     and calls ``remove_download``. Failures are logged but never raised —
     the user's intent is to remove the download regardless of client state.
     """
+    if download.download_client is DownloadClientType.DIRECT:
+        attempt_id = _direct_attempt_id(download.external_id)
+        if attempt_id is None:
+            logger.warning(
+                "cancel_direct_reference_invalid",
+                download_id=download.id,
+            )
+            return
+        from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
+
+        try:
+            runner = get_direct_acquisition_runner()
+            cancelled = await runner.cancel(attempt_id)
+        except RuntimeError:
+            cancelled = False
+        logger.info(
+            "direct_download_cancel_requested",
+            download_id=download.id,
+            acquisition_id=attempt_id,
+            active=cancelled,
+        )
+        return
+
     if not download.external_id:
         return
 
@@ -234,6 +272,115 @@ async def _cancel_on_client(download: DownloadHistory, session: DbSession) -> No
             )
     except Exception:
         logger.exception("cancel_client_error", download_id=download.id)
+
+
+def _direct_attempt_id(external_id: str | None) -> int | None:
+    prefix = "direct:"
+    if not external_id or not external_id.startswith(prefix):
+        return None
+    raw_id = external_id.removeprefix(prefix)
+    return int(raw_id) if raw_id.isdigit() and int(raw_id) > 0 else None
+
+
+async def _direct_attempt_for_download(
+    session: DbSession,
+    download_id: int,
+) -> tuple[DownloadHistory, DirectAcquisitionAttempt]:
+    download = await session.get(DownloadHistory, download_id)
+    if download is None:
+        raise NotFoundError("Download", download_id)
+    if download.download_client is not DownloadClientType.DIRECT:
+        raise HTTPException(status_code=409, detail="Only direct downloads can change sources.")
+    attempt_id = _direct_attempt_id(download.external_id)
+    if attempt_id is None:
+        raise HTTPException(status_code=409, detail="The direct download reference is invalid.")
+    attempt = (
+        await session.execute(
+            select(DirectAcquisitionAttempt)
+            .options(selectinload(DirectAcquisitionAttempt.artifact_attempts))
+            .where(DirectAcquisitionAttempt.id == attempt_id)
+        )
+    ).scalar_one_or_none()
+    if attempt is None:
+        raise HTTPException(status_code=409, detail="The direct download plan is unavailable.")
+    return download, attempt
+
+
+@router.get("/{download_id}/sources", response_model=DirectSourceOptionsResponse)
+async def direct_download_sources(
+    download_id: int,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> DirectSourceOptionsResponse:
+    """List available and unblocked equivalent artifact routes."""
+    _download, attempt = await _direct_attempt_for_download(session, download_id)
+    selected = [artifact for artifact in attempt.artifact_attempts if artifact.is_selected]
+    if len(selected) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="This direct download does not have one active artifact source.",
+        )
+    current = selected[0]
+    options = await list_source_switch_options(session, attempt)
+    return DirectSourceOptionsResponse(
+        download_id=download_id,
+        current=DirectSourceCurrent(
+            artifact_identity=current.artifact_identity,
+            host_kind=current.host_kind,
+            host_label=direct_source_host_label(current.host_kind),
+            bytes_transferred=current.bytes_transferred,
+        ),
+        alternatives=[
+            DirectSourceAlternative(
+                artifact_identity=option.artifact_identity,
+                host_kind=option.host_kind,
+                host_label=direct_source_host_label(option.host_kind),
+                expected_size=option.expected_size,
+                is_next=index == 0,
+            )
+            for index, option in enumerate(options)
+        ],
+    )
+
+
+@router.post("/{download_id}/switch-source", response_model=DirectSourceSwitchResponse)
+async def switch_direct_download_source(
+    download_id: int,
+    body: DirectSourceSwitchRequest,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> DirectSourceSwitchResponse:
+    """Stop one direct transfer and restart it through an equivalent route."""
+    _download, attempt = await _direct_attempt_for_download(session, download_id)
+    from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
+
+    try:
+        runner = get_direct_acquisition_runner()
+        outcome = await runner.switch_source(
+            attempt.id,
+            target_artifact_identity=body.artifact_identity,
+            block_current=body.block_current,
+        )
+    except DirectSourceSwitchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Direct download source switching is not available right now.",
+        ) from exc
+    logger.info(
+        "direct_download_source_switch_requested",
+        download_id=download_id,
+        acquisition_id=attempt.id,
+        previous_host=outcome.previous_host.value,
+        selected_host=outcome.selected.host_kind.value,
+        current_route_blocklisted=outcome.current_route_blocklisted,
+    )
+    return DirectSourceSwitchResponse(
+        previous_host=direct_source_host_label(outcome.previous_host),
+        selected_host=direct_source_host_label(outcome.selected.host_kind),
+        current_route_blocklisted=outcome.current_route_blocklisted,
+    )
 
 
 @router.post("/{download_id}/retry-processing", status_code=200)
@@ -345,7 +492,8 @@ async def retry_download(
     """
     from datetime import UTC, datetime
 
-    from pullbox.composition.providers import register_download_clients
+    from pullbox.composition.providers import register_download_clients, register_indexers
+    from pullbox.composition.services import build_download_service
     from pullbox.providers.base import ProviderRegistry
 
     download = await session.get(DownloadHistory, download_id)
@@ -362,9 +510,42 @@ async def retry_download(
             detail="Use retry-processing for post-processing failures.",
         )
 
+    if download.download_client is DownloadClientType.DIRECT:
+        attempt_id = _direct_attempt_id(download.external_id)
+        if attempt_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The direct download reference is invalid.",
+            )
+        from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
+
+        try:
+            queued = await get_direct_acquisition_runner().retry(attempt_id)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Direct download recovery is not available right now.",
+            ) from exc
+        if not queued:
+            raise HTTPException(
+                status_code=409,
+                detail="This direct download cannot be retried from its current state.",
+            )
+        issue = await session.get(Issue, download.issue_id)
+        if issue and issue.status in (IssueStatus.WANTED, IssueStatus.OWNED):
+            issue.status = IssueStatus.DOWNLOADING
+        await session.flush()
+        logger.info(
+            "direct_download_retry_queued",
+            download_id=download.id,
+            acquisition_id=attempt_id,
+        )
+        return {"status": "sent"}
+
     # Build provider registry and get the right client
     registry = ProviderRegistry()
     await register_download_clients(session, registry)
+    await register_indexers(session, registry)
 
     client = registry.get_client_for_type(str(download.download_client))
     if not client:
@@ -377,10 +558,16 @@ async def retry_download(
     dl_type = DownloadClientType(str(download.download_client))
     try:
         if dl_type.is_torrent:
-            external_id = await client.add_torrent(download.download_url, download.title)
+            external_id = await build_download_service(registry).add_torrent_to_client(
+                client,
+                url=download.download_url,
+                title=download.title,
+                indexer_id=download.indexer_id,
+                download_id=download.id,
+            )
         else:
             external_id = await client.add_nzb(download.download_url, download.title)
-    except QBittorrentError as exc:
+    except (NewznabError, QBittorrentError) as exc:
         logger.warning(
             "download_retry_client_rejected",
             download_id=download.id,

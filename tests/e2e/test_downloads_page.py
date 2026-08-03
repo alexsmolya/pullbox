@@ -532,6 +532,55 @@ class TestDownloadsPage:
         assert authed_page.locator("[data-testid='downloads-queue-panel']").count() == 1
         assert downloads.footer_dock.is_visible()
 
+    @pytest.mark.parametrize("response_changed", [False, True], ids=["unchanged", "changed"])
+    def test_downloads_queue_cancel_remains_interactive_after_poll(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+        response_changed: bool,
+    ) -> None:
+        downloads = DownloadsPage(authed_page, seeded_server)
+        downloads.goto()
+
+        refreshed_html = downloads.content.evaluate(
+            """(node, responseChanged) => {
+                const refreshed = node.cloneNode(true);
+                if (responseChanged) {
+                    refreshed.dataset.pollRevision = "changed";
+                }
+                return refreshed.outerHTML;
+            }""",
+            response_changed,
+        )
+
+        authed_page.route(
+            "**/htmx/downloads/queue",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=refreshed_html,
+            ),
+            times=1,
+        )
+        run_htmx_ajax_and_wait(authed_page, "/htmx/downloads/queue", "#downloads-content")
+        authed_page.wait_for_function(
+            """() => {
+                const button = document.querySelector(
+                    "[data-testid^='downloads-queue-cancel-']"
+                );
+                return Boolean(button && button._x_marker);
+            }""",
+            timeout=5000,
+        )
+
+        authed_page.locator("[data-testid^='downloads-queue-cancel-']").first.click()
+
+        confirm_dialog = authed_page.locator("#pb-confirm-dialog")
+        expect(confirm_dialog.locator("#pb-confirm-title")).to_have_text("Cancel Download")
+        expect(confirm_dialog.locator("[x-show='visible']").first).to_be_visible()
+        confirm_dialog.get_by_role("button", name="Cancel", exact=True).click()
+        expect(confirm_dialog.locator("[x-show='visible']").first).to_be_hidden()
+
     def test_downloads_history_filters_and_queue_poll_keep_shell_stable(
         self,
         authed_page,

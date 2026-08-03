@@ -185,6 +185,33 @@ class TestSeriesDetailPage:
         assert authed_page.locator("[data-testid='series-page']").first.is_visible()
         assert authed_page.locator("[data-testid='page-footer-dock']").first.is_visible()
 
+    def test_delete_returns_to_originating_series_page_and_sort(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series_list = SeriesListPage(authed_page, seeded_server)
+        series_list.goto("sort=-year&per_page=2&page=2")
+        series_list.open_first_series()
+
+        back_link = authed_page.locator("[data-testid='series-detail-back-link']").first
+        assert back_link.get_attribute("href") == "/series?sort=-year&per_page=2&page=2"
+
+        authed_page.route(
+            "**/htmx/series/*/delete",
+            lambda route: route.fulfill(status=204),
+        )
+        detail = SeriesDetailPage(authed_page, seeded_server)
+        detail.open_delete_modal()
+        authed_page.locator("[data-testid='series-delete-submit']").first.click()
+
+        authed_page.wait_for_url("**/series?sort=-year&per_page=2&page=2", timeout=5000)
+        series_list.wait_until_ready()
+
+        assert series_list.query_param("sort") == "-year"
+        assert series_list.query_param("per_page") == "2"
+        assert series_list.query_param("page") == "2"
+
     def test_back_link_returns_to_pull_list_when_opened_from_pull_list(
         self,
         authed_page,

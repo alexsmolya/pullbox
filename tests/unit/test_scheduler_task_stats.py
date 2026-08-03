@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import pullbox.tasks  # noqa: F401
 from pullbox.core.scheduler import (
     PullboxScheduler,
+    TaskExecutionResult,
     TaskStats,
     _task_registry,
     get_current_task_run_id,
@@ -140,6 +141,52 @@ async def test_cancelled_run_updates_scheduler_task_state(monkeypatch) -> None:
     assert stats.last_execution is not None
     assert stats.last_duration_seconds is not None
     assert stats.running_since is None
+
+
+@pytest.mark.asyncio
+async def test_task_can_report_waiting_without_being_marked_completed(monkeypatch) -> None:
+    """A bounded batch may finish while its durable logical task remains active."""
+    monkeypatch.setattr(
+        "pullbox.core.scheduler.has_active_import_scheduler_protection",
+        AsyncMock(return_value=False),
+    )
+    scheduler = PullboxScheduler()
+    scheduler._persist_task_stat = AsyncMock()  # type: ignore[method-assign]
+
+    async def _waiting_task() -> TaskExecutionResult:
+        return TaskExecutionResult(status="waiting")
+
+    await scheduler._wrap_task(_waiting_task, "test_waiting_task")()
+
+    stats = scheduler._task_stats["test_waiting_task"]
+    assert stats.last_status == "waiting"
+    scheduler._persist_task_stat.assert_awaited_once()
+    assert scheduler._persist_task_stat.await_args.kwargs["reason"] == "waiting"
+
+
+def test_scheduler_continuation_is_internal_and_restartable() -> None:
+    """Continuation jobs share task stats but never add a duplicate Tasks row."""
+    _task_registry.clear()
+
+    @scheduled_task(
+        task_id="test_sweep",
+        trigger="interval",
+        display_name="Test Sweep",
+        hours=6,
+    )
+    async def _sweep() -> None:
+        return None
+
+    scheduler = PullboxScheduler()
+    scheduler.register_tasks()
+    run_at = datetime(2026, 7, 31, 13, 0, tzinfo=UTC)
+
+    assert scheduler.schedule_task_continuation("test_sweep", run_at=run_at) is True
+    assert scheduler._scheduler.get_job("test_sweep__continuation") is not None
+    assert [task["task_id"] for task in scheduler.get_scheduled_tasks()] == ["test_sweep"]
+
+    scheduler.clear_task_continuation("test_sweep")
+    assert scheduler._scheduler.get_job("test_sweep__continuation") is None
 
 
 @pytest.mark.asyncio

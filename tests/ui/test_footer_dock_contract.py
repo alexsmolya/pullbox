@@ -73,7 +73,11 @@ def test_page_shells_do_not_add_competing_footer_clearance() -> None:
     assert "pb-4" not in page
     assert "padding: 0 0 var(--pb-page-footer-clearance);" in downloads
     assert "5rem" not in downloads
-    assert ".admin-workspace-content .space-y-6 > .section-card:last-of-type" in css
+    last_card_selector = (
+        ".admin-workspace-content .space-y-6 > .section-card:not(:has(~ .section-card))"
+    )
+    assert last_card_selector in css
+    assert ".section-card:last-of-type" not in css
 
     for selector in [
         ".admin-workspace-body",

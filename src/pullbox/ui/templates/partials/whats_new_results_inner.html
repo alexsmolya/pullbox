@@ -2,14 +2,56 @@
 
 {% set current_payload = current_week.payload if current_week else none %}
 {% set upcoming_payload = upcoming.payload if upcoming else none %}
+{% set current_cache_stale = true if current_week and current_week.cache.stale else false %}
+{% set upcoming_cache_stale = true if upcoming and upcoming.cache.stale else false %}
 
 {% if current_week or upcoming %}
-  {% if (current_week and current_week.cache.stale) or (upcoming and upcoming.cache.stale) %}
-    <div data-testid="whats-new-stale-banner" class="whats-new-stale-banner">
-      <p class="font-semibold text-pb-warning">Cached release data</p>
-      <p class="mt-1 text-pb-text-sec">
-        Showing cached release data while Pullbox waits for the next refresh.
-      </p>
+  {% if current_cache_stale or upcoming_cache_stale %}
+    <div
+      data-testid="whats-new-stale-banner"
+      class="whats-new-stale-banner"
+      x-data='whatsNewRefreshControl({
+        csrfToken: {{ csrf_token|tojson }},
+        currentStale: {{ current_cache_stale|tojson }},
+        upcomingStale: {{ upcoming_cache_stale|tojson }}
+      })'
+    >
+      <div class="whats-new-stale-copy">
+        <p class="font-semibold text-pb-warning">Cached release data</p>
+        <p class="mt-1 text-pb-text-sec">
+          Showing cached release data while Pullbox waits for the next refresh.
+        </p>
+      </div>
+      <div class="whats-new-stale-actions">
+        <button
+          type="button"
+          class="btn-primary gap-2 shrink-0"
+          data-testid="whats-new-refresh-now"
+          :disabled="refreshing"
+          @click="refreshNow()"
+        >
+          <svg
+            class="h-4 w-4"
+            :class="refreshing && 'animate-spin'"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182"/>
+          </svg>
+          <span x-text="refreshing ? 'Refreshing...' : 'Refresh now'">Refresh now</span>
+        </button>
+        <p
+          x-show="refreshMessage"
+          x-cloak
+          class="whats-new-stale-message"
+          data-testid="whats-new-refresh-message"
+          x-text="refreshMessage"
+        ></p>
+      </div>
     </div>
   {% endif %}
   <div class="whats-new-results-stack">

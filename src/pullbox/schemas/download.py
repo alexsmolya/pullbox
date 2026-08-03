@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pullbox.models.direct_acquisition import DirectArtifactHostKind
 from pullbox.models.download import DownloadClientType, DownloadState
 
 
@@ -50,3 +51,51 @@ class DownloadHistoryItem(BaseModel):
     series_title: str | None = Field(None, description="Parent series title")
     issue_number: float | None = Field(None, description="Issue number")
     created_at: datetime
+
+
+class DirectSourceSwitchRequest(BaseModel):
+    """Select an equivalent artifact route for one active direct download."""
+
+    artifact_identity: str | None = Field(
+        None,
+        min_length=7,
+        max_length=100,
+        pattern=r"^route:[a-z0-9:]+$",
+    )
+    block_current: bool = False
+
+
+class DirectSourceCurrent(BaseModel):
+    """Current artifact route being replaced."""
+
+    artifact_identity: str
+    host_kind: DirectArtifactHostKind
+    host_label: str
+    bytes_transferred: int = Field(ge=0)
+
+
+class DirectSourceAlternative(BaseModel):
+    """One safe untried source option from the durable acquisition plan."""
+
+    artifact_identity: str
+    host_kind: DirectArtifactHostKind
+    host_label: str
+    expected_size: int | None = Field(None, ge=0)
+    is_next: bool
+
+
+class DirectSourceOptionsResponse(BaseModel):
+    """Current source and safe alternatives for a direct download."""
+
+    download_id: int
+    current: DirectSourceCurrent
+    alternatives: list[DirectSourceAlternative]
+
+
+class DirectSourceSwitchResponse(BaseModel):
+    """Result of an atomic user-directed source switch."""
+
+    status: str = "queued"
+    previous_host: str
+    selected_host: str
+    current_route_blocklisted: bool

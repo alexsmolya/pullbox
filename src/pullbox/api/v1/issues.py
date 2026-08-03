@@ -1,6 +1,7 @@
 """Issue API routes — detail, status updates, search, download, and file import."""
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,9 +12,10 @@ from sqlalchemy import inspect, select
 from sqlalchemy.orm import joinedload
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
-from pullbox.core.exceptions import ConfigurationError, NotFoundError
+from pullbox.core.exceptions import ConfigurationError, NotFoundError, ValidationError
 from pullbox.core.file_ops import register_library_file
 from pullbox.core.file_safety import classify_resource_safety_exception
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
 from pullbox.models.download import DownloadState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import LibraryFile, MatchConfidence
@@ -27,6 +29,8 @@ from pullbox.schemas.issue import (
     ManualFileImportResponse,
 )
 from pullbox.schemas.search import (
+    DirectGrabRequest,
+    DirectGrabResponse,
     GrabReleaseRequest,
     GrabReleaseResponse,
     InteractiveSearchIssue,
@@ -34,6 +38,14 @@ from pullbox.schemas.search import (
     MatchDetails,
     RejectedResultItem,
     SearchResultItem,
+)
+from pullbox.services.direct_acquisition_planner_service import (
+    DirectAcquisitionPlanningError,
+    plan_direct_acquisition,
+)
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchDiscovery,
+    persist_direct_search_discoveries,
 )
 from pullbox.services.issue_file_service import (
     delete_issue_library_file,
@@ -47,6 +59,7 @@ from pullbox.services.issue_service import IssueService
 from pullbox.services.release_validator import (
     ValidationResult,
 )
+from pullbox.services.search_scoring import match_confidence_rank, normalize_source_priority
 from pullbox.services.search_service import (
     DEFAULT_TYPE_THRESHOLDS,
     IssueSearchOutcome,
@@ -60,6 +73,7 @@ from pullbox.services.search_service import (
     summarize_search_pass,
 )
 from pullbox.services.search_types import SearchEvalKwargs
+from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
 from pullbox.tasks.issue_import_task import (
     cancel_issue_import_run,
     get_issue_import_progress_state,
@@ -191,6 +205,7 @@ def build_interactive_results(
             SearchResultItem(
                 title=vr.release.title,
                 indexer_name=vr.release.indexer_name,
+                indexer_id=vr.release.indexer_id,
                 download_url=vr.release.download_url,
                 info_url=vr.release.info_url,
                 size_bytes=vr.release.size_bytes,
@@ -214,6 +229,8 @@ def build_interactive_results(
                     series_similarity=round(vr.series_similarity, 3),
                     match_type=vr.match_type,
                 ),
+                method="Torrent" if vr.release.is_torrent else "Usenet",
+                ranking_priority=vr.release.ranking_priority,
             )
         )
 
@@ -223,6 +240,7 @@ def build_interactive_results(
             RejectedResultItem(
                 title=vr.release.title,
                 indexer_name=vr.release.indexer_name,
+                indexer_id=vr.release.indexer_id,
                 download_url=vr.release.download_url,
                 info_url=vr.release.info_url,
                 size_bytes=vr.release.size_bytes,
@@ -233,21 +251,99 @@ def build_interactive_results(
                 category=vr.release.category,
                 rejection_reason=vr.rejection_reason or "unknown",
                 confidence=str(vr.confidence.value) if vr.is_match else None,
+                method="Torrent" if vr.release.is_torrent else "Usenet",
+                ranking_priority=vr.release.ranking_priority,
             )
         )
 
-    # Sort matched results by source priority (stable — preserves score order within protocol)
-    if source_priority:
-        priority_map = {proto: idx for idx, proto in enumerate(source_priority)}
-        default_rank = len(source_priority)
-        matched_items.sort(
-            key=lambda item: priority_map.get(
-                "torrent" if item.is_torrent else "usenet",
-                default_rank,
-            )
-        )
+    matched_items = sort_interactive_results_by_source_priority(
+        matched_items,
+        source_priority,
+    )
 
     return matched_items, rejected_items
+
+
+def build_direct_interactive_results(
+    discoveries: Sequence[DirectSearchDiscovery],
+    *,
+    eval_kwargs: SearchEvalKwargs,
+    issue_type: IssueType,
+    type_thresholds: dict[str, str] | None = None,
+) -> tuple[list[SearchResultItem], list[RejectedResultItem]]:
+    """Build direct rows around server identities without exposing artifact URLs."""
+    matched_items: list[SearchResultItem] = []
+    rejected_items: list[RejectedResultItem] = []
+    for discovery in discoveries:
+        result = discovery.result
+        candidate = result.candidate
+        common = {
+            "download_url": None,
+            "source_kind": "direct",
+            "method": "Direct",
+            "direct_attempt_id": discovery.attempt_id,
+            "coverage": list(candidate.parsed.issue_numbers),
+            "format": candidate.parsed.format,
+            "quality": candidate.parsed.quality,
+            "preferred_route": "Automatic",
+        }
+        if result.validation.is_match:
+            direct_matched, _ = build_interactive_results(
+                [result.validation],
+                [],
+                eval_kwargs,
+                issue_type=issue_type,
+                type_thresholds=type_thresholds,
+            )
+            matched_items.append(direct_matched[0].model_copy(update=common))
+        else:
+            _, direct_rejected = build_interactive_results(
+                [],
+                [result.validation],
+                eval_kwargs,
+                issue_type=issue_type,
+                type_thresholds=type_thresholds,
+            )
+            rejected_items.append(direct_rejected[0].model_copy(update=common))
+    return matched_items, rejected_items
+
+
+def sort_interactive_results_by_source_priority[
+    InteractiveResultT: (SearchResultItem, RejectedResultItem),
+](
+    items: Sequence[InteractiveResultT],
+    source_priority: list[str] | None,
+) -> list[InteractiveResultT]:
+    """Stable-sort combined indexer and direct rows by protocol preference."""
+    normalized = normalize_source_priority(source_priority)
+    priority_map = (
+        {source: index for index, source in enumerate(normalized)} if normalized is not None else {}
+    )
+
+    def _source(item: SearchResultItem | RejectedResultItem) -> str:
+        if item.source_kind == "direct":
+            return "direct"
+        return "torrent" if item.is_torrent else "usenet"
+
+    def _rank(
+        item: SearchResultItem | RejectedResultItem,
+    ) -> tuple[int, int, float, int, float]:
+        score = getattr(item, "quality_score", None)
+        source_rank = priority_map.get(_source(item), 0)
+        if item.source_kind != "direct" or normalized is None:
+            return source_rank, 0, 0.0, 0, -float(score) if score is not None else 0.0
+        similarity = (
+            item.match_details.series_similarity if isinstance(item, SearchResultItem) else 0.0
+        )
+        return (
+            source_rank,
+            match_confidence_rank(item.confidence),
+            -similarity,
+            item.ranking_priority,
+            -float(score) if score is not None else 0.0,
+        )
+
+    return sorted(items, key=_rank)
 
 
 def _build_issue_context(target: IssueSearchTarget) -> InteractiveSearchIssue:
@@ -301,6 +397,7 @@ async def _run_issue_search(
     runtime = await build_search_runtime(
         session,
         include_download_clients=include_download_clients,
+        include_direct_providers=True,
     )
     # Release the read transaction before slow indexer/network work. Search log
     # persistence happens later in a short write transaction owned by the caller.
@@ -320,6 +417,7 @@ async def _run_issue_search(
         registry=runtime.registry,
         failure_threshold=runtime.failure_threshold,
         ignore_indexer_backoff=True,
+        direct_providers=runtime.direct_providers,
     )
     outcome = await search_svc.search_issue_target(
         session,
@@ -333,7 +431,8 @@ async def _run_issue_search(
     # Blocklist filtering/config reads can open a transaction after the indexer
     # call. Release it before any deep fallback work or UI response building.
     await session.commit()
-    if outcome.matched or not runtime.two_pass_enabled:
+    has_direct_match = bool(outcome.direct_outcome and outcome.direct_outcome.matched)
+    if outcome.matched or has_direct_match or not runtime.two_pass_enabled:
         outcome.search_details["search_strategy"] = (
             "quick_first" if outcome.matched else "quick_first_single_pass"
         )
@@ -374,6 +473,40 @@ async def _run_issue_search(
     )
 
 
+async def _persist_direct_bundle_results(
+    session: DbSession,
+    bundle: _IssueSearchBundle,
+    *,
+    search_log_id: int,
+) -> None:
+    """Persist direct discoveries and append URL-free rows to one bundle."""
+    if bundle.outcome is None or bundle.outcome.direct_outcome is None:
+        return
+    discoveries = await persist_direct_search_discoveries(
+        session,
+        bundle.target,
+        bundle.outcome.direct_outcome,
+        search_log_id=search_log_id,
+    )
+    direct_matched, direct_rejected = build_direct_interactive_results(
+        discoveries,
+        eval_kwargs=bundle.runtime.eval_kwargs if bundle.runtime else {},
+        issue_type=bundle.target.issue_type,
+        type_thresholds=bundle.runtime.type_thresholds if bundle.runtime else None,
+    )
+    bundle.matched_items.extend(direct_matched)
+    bundle.rejected_items.extend(direct_rejected)
+    source_priority = bundle.runtime.source_priority if bundle.runtime else None
+    bundle.matched_items[:] = sort_interactive_results_by_source_priority(
+        bundle.matched_items,
+        source_priority,
+    )
+    bundle.rejected_items[:] = sort_interactive_results_by_source_priority(
+        bundle.rejected_items,
+        source_priority,
+    )
+
+
 def _build_issue_search_log(
     bundle: _IssueSearchBundle,
     *,
@@ -393,12 +526,32 @@ def _build_issue_search_log(
         best_confidence = None
     else:
         details = dict(outcome.search_details)
-        details["validated_count"] = len(bundle.matched_items)
-        results_found = len(outcome.raw_results)
+        direct_outcome = outcome.direct_outcome
+        direct_matched = len(direct_outcome.matched) if direct_outcome else 0
+        direct_rejected = len(direct_outcome.rejected) if direct_outcome else 0
+        details["validated_count"] = len(bundle.matched_items) + direct_matched
+        details["direct_results_count"] = direct_matched + direct_rejected
+        details["direct_providers_searched"] = (
+            direct_outcome.providers_searched if direct_outcome else 0
+        )
+        if direct_outcome and direct_outcome.failures:
+            details["direct_provider_failures"] = [
+                {
+                    "provider": failure.provider_identity,
+                    "code": failure.code,
+                    "retryable": failure.retryable,
+                }
+                for failure in direct_outcome.failures
+            ]
+        results_found = len(outcome.raw_results) + direct_matched + direct_rejected
         best_confidence = (
             outcome.best_validation.confidence.value
             if outcome.best_validation is not None
-            else None
+            else (
+                direct_outcome.matched[0].validation.confidence.value
+                if direct_outcome and direct_outcome.matched
+                else None
+            )
         )
 
     details["run_state"] = run_state
@@ -406,7 +559,12 @@ def _build_issue_search_log(
     if action_status:
         details["action_status"] = action_status
     if results_rejected is None:
-        results_rejected = len(bundle.rejected_items)
+        direct_rejected = (
+            len(bundle.outcome.direct_outcome.rejected)
+            if bundle.outcome and bundle.outcome.direct_outcome
+            else 0
+        )
+        results_rejected = len(bundle.rejected_items) + direct_rejected
 
     return SearchLog(
         issue_id=bundle.target.issue_id,
@@ -473,7 +631,10 @@ async def search_issue(
     if bundle.runtime is None:
         return {"issue_id": issue_id, "results": [], "error": "no indexers configured"}
 
-    session.add(_build_issue_search_log(bundle))
+    search_log = _build_issue_search_log(bundle)
+    session.add(search_log)
+    await session.flush()
+    await _persist_direct_bundle_results(session, bundle, search_log_id=search_log.id)
     await session.commit()
 
     logger.info("issue_manual_search", issue_id=issue_id, results=len(bundle.matched_items))
@@ -521,6 +682,8 @@ async def get_search_results(
 
     search_log = _build_issue_search_log(bundle)
     session.add(search_log)
+    await session.flush()
+    await _persist_direct_bundle_results(session, bundle, search_log_id=search_log.id)
     await session.commit()
 
     logger.info(
@@ -568,7 +731,11 @@ async def grab_release(
 
         raise ProviderError("download", "No download clients configured")
 
-    download_svc, _indexer_configs = built
+    download_svc, indexer_configs = built
+    if body.indexer_id is not None and body.indexer_id not in indexer_configs:
+        raise ValidationError(
+            "The originating indexer is no longer available. Run the search again."
+        )
 
     download = await download_svc.grab_release(
         session,
@@ -576,6 +743,7 @@ async def grab_release(
         download_url=body.download_url,
         title=body.title,
         indexer_name=body.indexer_name,
+        indexer_id=body.indexer_id,
         is_torrent=body.is_torrent,
         file_size=body.file_size,
         replace_existing_file=replace_existing_file,
@@ -614,6 +782,70 @@ async def grab_release(
         download_id=download.id,
         title=body.title,
         status=str(download.state.value),
+    )
+
+
+@router.post(
+    "/{issue_id}/direct-grab",
+    status_code=201,
+    response_model=DirectGrabResponse,
+)
+async def grab_direct_release(
+    issue_id: int,
+    body: DirectGrabRequest,
+    _user: AuthenticatedUser,
+    session: DbSession,
+) -> DirectGrabResponse:
+    """Plan and queue one URL-free direct discovery selected by the user."""
+    attempt = await session.get(DirectAcquisitionAttempt, body.direct_attempt_id)
+    if attempt is None or attempt.issue_id != issue_id:
+        raise NotFoundError("Direct acquisition", body.direct_attempt_id)
+
+    issue_result = await session.execute(
+        select(Issue).options(joinedload(Issue.library_file)).where(Issue.id == issue_id)
+    )
+    issue = issue_result.unique().scalar_one_or_none()
+    if issue is None:
+        raise NotFoundError("Issue", issue_id)
+    attempt.replace_existing_file = issue.library_file is not None
+
+    try:
+        planned = await plan_direct_acquisition(
+            session,
+            acquisition_id=attempt.id,
+            pinned_route_identity=body.pinned_route_identity,
+        )
+    except DirectAcquisitionPlanningError as exc:
+        await session.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    await _increment_search_log_grabbed(
+        session,
+        issue_id=issue_id,
+        search_log_id=attempt.search_log_id,
+    )
+    await session.commit()
+
+    runner = get_direct_acquisition_runner()
+    await runner.dispatch(
+        attempt.id,
+        planned.selected_artifact.id,
+        initial_source=planned.initial_source,
+    )
+    title = str(attempt.candidate_snapshot.get("display_title") or "Direct download")
+    logger.info(
+        "issue_manual_direct_grab",
+        issue_id=issue_id,
+        acquisition_id=attempt.id,
+        artifact_id=planned.selected_artifact.id,
+        provider_id=attempt.provider_identity,
+    )
+    return DirectGrabResponse(
+        issue_id=issue_id,
+        acquisition_id=attempt.id,
+        artifact_id=planned.selected_artifact.id,
+        title=title,
+        status="queued",
     )
 
 

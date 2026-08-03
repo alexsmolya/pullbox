@@ -13,7 +13,16 @@ from pullbox.config import get_settings
 from pullbox.core.encryption import encrypt_secret
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import (
+    DirectArtifactHostKind,
+    DirectHostAccountState,
+    DirectHostConfig,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.download import DownloadClientType
+from pullbox.models.indexer import IndexerConfig, IndexerType
 from pullbox.utilities.settings import resolve_utility_directory
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -27,6 +36,36 @@ def _script_block(html: str, start_marker: str, end_marker: str) -> str:
     start = html.index(start_marker)
     end = html.index(end_marker, start)
     return html[start:end]
+
+
+def _direct_manifest(
+    provider_id: str,
+    *,
+    artifact_hosts: list[str],
+) -> dict[str, object]:
+    return {
+        "protocol_version": "direct-download-provider/v1",
+        "provider_id": provider_id,
+        "display_name": "Direct Provider",
+        "description": "A direct provider fixture.",
+        "provider_version": "1.0.0",
+        "supported_protocol_versions": ["direct-download-provider/v1"],
+        "publisher": "Pullbox",
+        "license": "GPL-3.0-or-later",
+        "source_domains": ["provider.example"],
+        "artifact_host_patterns": artifact_hosts,
+        "capabilities": {
+            "search": True,
+            "resolve": True,
+            "health": True,
+            "configuration_schema": True,
+        },
+        "configuration_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -137,7 +176,7 @@ class TestSettingsRouteContracts:
         assert "Weekly refresh is a practical default" not in response.text
         assert "Lower values are safer" not in response.text
 
-    async def test_settings_indexers_prowlarr_api_key_matches_metadata_treatment(
+    async def test_settings_indexer_manager_api_keys_match_metadata_treatment(
         self,
         authenticated_client,
         sec_db,
@@ -149,6 +188,12 @@ class TestSettingsRouteContracts:
                     SystemConfig(
                         key="prowlarr_api_key",
                         value=encrypt_secret("1234567890abcde"),
+                        value_type="secret",
+                    ),
+                    SystemConfig(key="jackett_url", value="http://localhost:9117"),
+                    SystemConfig(
+                        key="jackett_api_key",
+                        value=encrypt_secret("abcdefghij12345"),
                         value_type="secret",
                     ),
                 ]
@@ -167,7 +212,80 @@ class TestSettingsRouteContracts:
         assert "(set — leave blank to keep)" in response.text
         assert "Current stored key:" in response.text
         assert "••••••••••abcde" in response.text
+        assert "`${data.removed} retired`" in response.text
+        assert "`${data.removed} removed`" not in response.text
+        assert 'data-testid="settings-indexers-jackett-form"' in response.text
+        assert '@submit.prevent="saveJackettAndSync()"' in response.text
+        assert 'name="jackett_username"' in response.text
+        assert 'data-testid="settings-indexers-jackett-api-key"' in response.text
+        assert r"\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u202212345" in response.text
+        assert (
+            "Jackett owns tracker challenge resolution. Configure FlareSolverr in Jackett "
+            "when a tracker requires it."
+        ) not in response.text
         assert "pbFormatDurationMs(data.response_time_ms)" in response.text
+
+    async def test_settings_indexers_show_jackett_source_and_retired_state(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                IndexerConfig(
+                    name="1337x (Jackett)",
+                    indexer_type=IndexerType.TORZNAB,
+                    url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+                    api_key=encrypt_secret("jackett-key"),
+                    source="jackett",
+                    manager_indexer_id="1337x",
+                    manager_available=False,
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert "1337x (Jackett)" in response.text
+        assert '<span class="pill pill-purple">Jackett</span>' in response.text
+        assert "Unavailable in Jackett" in response.text
+        assert "Jackett owns tracker challenge resolution" in response.text
+
+    async def test_settings_indexers_warn_when_managers_sync_the_same_tracker(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add_all(
+                [
+                    IndexerConfig(
+                        name="1337x (Prowlarr)",
+                        indexer_type=IndexerType.TORZNAB,
+                        url="http://prowlarr:9696/7",
+                        api_key=encrypt_secret("prowlarr-key"),
+                        source="prowlarr",
+                        prowlarr_indexer_id=7,
+                        manager_indexer_id="7",
+                    ),
+                    IndexerConfig(
+                        name="1337x (Jackett)",
+                        indexer_type=IndexerType.TORZNAB,
+                        url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+                        api_key=encrypt_secret("jackett-key"),
+                        source="jackett",
+                        manager_indexer_id="1337x",
+                    ),
+                ]
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-indexers-manager-duplicates"' in response.text
+        assert "1337x is synchronized by both Prowlarr and Jackett" in response.text
 
     async def test_settings_indexers_source_priority_is_json_escaped(
         self,
@@ -184,6 +302,18 @@ class TestSettingsRouteContracts:
         assert response.status_code == 200
         assert "const stored = '" not in response.text
         assert "\\u0027; window.__pullboxXss = true; //" in response.text
+
+    async def test_settings_indexers_source_priority_includes_active_direct_downloads(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert "Direct Downloads" in response.text
+        assert "Coming soon" not in response.text
+        assert "item === 'direct'" in response.text
+        assert "JSON.stringify(this.order)" in response.text
 
     async def test_settings_indexer_bulk_tests_are_serialized_to_avoid_write_storm(
         self,
@@ -213,6 +343,50 @@ class TestSettingsRouteContracts:
 
         assert response.status_code == 200
         assert "_silentTestAll" not in response.text
+
+    async def test_settings_indexer_modal_formats_structured_api_errors(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        block = _script_block(
+            response.text,
+            "function indexersSettings() {",
+            "</script>",
+        )
+        assert "formatApiError(payload, fallback)" in block
+        assert "Array.isArray(detail)" in block
+        assert "this.formatApiError(data, 'Failed to save.')" in block
+        assert "this.formatApiError(data, 'Test request failed.')" in block
+        assert "new Error(d?.detail || 'Failed to save.')" not in block
+
+    async def test_settings_indexer_modal_scrolls_to_test_and_save_status(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=indexers")
+
+        assert response.status_code == 200
+        assert 'x-ref="indexerModalBody"' in response.text
+        block = _script_block(
+            response.text,
+            "function indexersSettings() {",
+            "</script>",
+        )
+        save_block = _script_block(block, "    saveIndexer() {", "    async deleteIndexer() {")
+        test_block = _script_block(
+            block,
+            "    testModal() {",
+            "    async testIndexerConnection(indexerId) {",
+        )
+        assert "scrollIndexerModalToStatus()" in block
+        assert "this.scrollIndexerModalToStatus();" in save_block
+        assert "this.scrollIndexerModalToStatus();" in test_block
+        assert "top: modalBody.scrollHeight" in block
+        assert ".catch(err => {" in test_block
+        assert "this.testMessage = err.message ||" in test_block
 
     async def test_settings_media_naming_preview_escapes_template_values_and_results(
         self,
@@ -284,6 +458,8 @@ class TestSettingsRouteContracts:
         assert 'data-testid="settings-footer-dock"' in response.text
         assert 'data-testid="page-dock-inner"' in response.text
         assert 'data-testid="settings-tab-general"' in response.text
+        assert 'data-testid="settings-tab-resolvers"' in response.text
+        assert "Challenge Resolvers" in response.text
         assert 'data-testid="settings-panel-general"' in response.text
 
     async def test_general_settings_exposes_usage_stats_toggle(
@@ -297,6 +473,521 @@ class TestSettingsRouteContracts:
         assert "Share anonymous usage stats" in response.text
         assert 'data-testid="settings-general-usage-stats-toggle"' in response.text
         assert "install and version information" in response.text
+
+    async def test_direct_download_settings_render_native_secret_free_provider_controls(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="community.example",
+                    display_name="Example Direct Provider",
+                    endpoint="http://direct-provider:8780",
+                    enabled=True,
+                    priority=25,
+                    state=DirectProviderState.HEALTHY,
+                    trust_level=DirectProviderTrustLevel.CUSTOM,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-token-must-not-render",
+                    encrypted_configuration={
+                        "account_token": "encrypted-account-token-must-not-render"
+                    },
+                    configuration_metadata={
+                        "allow_private_http": True,
+                        "automatic_quota_reserve": 5,
+                        "quota_status": {
+                            "remaining": 22,
+                            "limit": 25,
+                            "window_seconds": 64_800,
+                            "reset_at": "2026-08-01T06:00:00+00:00",
+                            "observed_at": "2026-07-31T12:00:00+00:00",
+                        },
+                        "public_values": {
+                            "result_limit": 20,
+                            "source_url": "https://annas-archive.gl",
+                        },
+                        "configured_secret_fields": ["account_token"],
+                    },
+                    manifest_snapshot={
+                        "protocol_version": "direct-download-provider/v1",
+                        "provider_id": "community.example",
+                        "display_name": "Example Direct Provider",
+                        "description": "A provider fixture.",
+                        "provider_version": "1.2.3",
+                        "supported_protocol_versions": ["direct-download-provider/v1"],
+                        "publisher": "Example Publisher",
+                        "license": "MIT",
+                        "source_domains": ["example.test"],
+                        "artifact_host_patterns": ["generic_https", "pixeldrain"],
+                        "capabilities": {
+                            "search": True,
+                            "resolve": True,
+                            "health": True,
+                            "quota": True,
+                            "configuration_schema": True,
+                        },
+                        "configuration_schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "result_limit": {
+                                    "type": "integer",
+                                    "title": "Result limit",
+                                    "minimum": 1,
+                                    "maximum": 100,
+                                },
+                                "account_token": {
+                                    "type": "string",
+                                    "title": "Account token",
+                                    "x-pullbox-secret": True,
+                                },
+                                "source_url": {
+                                    "type": "string",
+                                    "title": "Official URL",
+                                    "format": "uri",
+                                    "enum": [
+                                        "https://annas-archive.gl",
+                                        "https://annas-archive.pk",
+                                        "https://annas-archive.gd",
+                                    ],
+                                    "default": "https://annas-archive.gd",
+                                },
+                            },
+                        },
+                    },
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-tab-direct"' in response.text
+        assert 'data-testid="settings-panel-direct"' in response.text
+        assert 'data-testid="settings-direct-add-provider"' in response.text
+        assert 'data-testid="settings-direct-provider-1"' in response.text
+        assert 'data-testid="settings-direct-resolver-summary"' not in response.text
+        provider_card_position = response.text.index('data-testid="settings-direct-registry-card"')
+        host_card_position = response.text.index('data-testid="settings-direct-hosts-card"')
+        assert provider_card_position < host_card_position
+        assert "Example Direct Provider" in response.text
+        assert "http://direct-provider:8780" in response.text
+        assert "Result limit" in response.text
+        assert "Account token" in response.text
+        assert "Official URL" in response.text
+        assert "https://annas-archive.gl" in response.text
+        assert "control.input_format === 'uri'" in response.text
+        assert "toggleConfigurationChoices(control.name)" in response.text
+        assert "selectConfigurationChoice(control.name, choice)" in response.text
+        assert "settings-direct-provider-control-${control.name}-toggle" in response.text
+        assert "settings-direct-provider-control-${control.name}-options" in response.text
+        assert 'role="listbox"' in response.text
+        assert "<datalist" not in response.text
+        assert "Configured" in response.text
+        assert "22 of 25 remaining" in response.text
+        assert "Automatic reserve" in response.text
+        assert "Automatic retry after" in response.text
+        assert 'data-testid="settings-direct-provider-modal-quota-reserve"' in response.text
+        assert 'x-model="form.automatic_quota_reserve"' in response.text
+        assert "automatic_quota_reserve: Number(this.form.automatic_quota_reserve)" in response.text
+        assert "identity does not verify the running image" in response.text
+        assert '@click="openConfigure(1)"' in response.text
+        assert '@keydown.enter.prevent="openConfigure(1)"' in response.text
+        assert 'role="button"' in response.text
+        assert 'tabindex="0"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-enabled"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-resolver-enabled"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-test"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-remove"' in response.text
+        assert 'data-testid="settings-direct-provider-modal-actions"' in response.text
+        assert 'x-ref="providerModalBody"' in response.text
+        assert 'x-model="form.enabled"' in response.text
+        assert 'class="flex items-center gap-2"' in response.text
+        assert "scrollProviderModalToResults()" in response.text
+        assert "modalBody.scrollTo({" in response.text
+        assert "top: modalBody.scrollHeight" in response.text
+        assert response.text.count("requestAnimationFrame(() => {") >= 2
+        resolver_toggle_position = response.text.index(
+            'data-testid="settings-direct-provider-modal-resolver-enabled"'
+        )
+        bearer_token_position = response.text.index("Replace bearer token")
+        resolver_toggle_markup = response.text[
+            resolver_toggle_position - 300 : resolver_toggle_position + 500
+        ]
+        assert resolver_toggle_position < bearer_token_position
+        assert 'class="peer toggle-input"' in resolver_toggle_markup
+        assert 'class="toggle-switch"' in resolver_toggle_markup
+        assert 'data-testid="settings-direct-provider-test-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-configure-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-enable-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-disable-1"' not in response.text
+        assert 'data-testid="settings-direct-provider-remove-1"' not in response.text
+        assert ">Provider configuration</summary>" not in response.text
+        assert "encrypted-token-must-not-render" not in response.text
+        assert "encrypted-account-token-must-not-render" not in response.text
+
+    async def test_direct_download_settings_hide_hosts_until_provider_is_registered(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-registry-card"' in response.text
+        assert 'data-testid="settings-direct-empty-state"' in response.text
+        assert 'data-testid="settings-direct-resolver-summary"' not in response.text
+        assert 'data-testid="settings-direct-hosts-card"' not in response.text
+        assert 'data-testid="settings-direct-host-modal"' not in response.text
+
+    async def test_direct_download_settings_hide_hosts_for_generic_only_provider(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="pullbox.annas_archive",
+                    display_name="Anna's Archive",
+                    endpoint="http://annas-archive:8780",
+                    enabled=True,
+                    state=DirectProviderState.HEALTHY,
+                    trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-provider-token",
+                    manifest_snapshot=_direct_manifest(
+                        "pullbox.annas_archive",
+                        artifact_hosts=["generic_https"],
+                    ),
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-provider-1"' in response.text
+        assert 'data-testid="settings-direct-hosts-card"' not in response.text
+        assert 'data-testid="settings-direct-host-modal"' not in response.text
+
+    async def test_direct_download_settings_show_declared_hosts_for_degraded_provider(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="pullbox.getcomics",
+                    display_name="GetComics",
+                    endpoint="http://getcomics:8780",
+                    enabled=True,
+                    state=DirectProviderState.DEGRADED,
+                    trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-provider-token",
+                    manifest_snapshot=_direct_manifest(
+                        "pullbox.getcomics",
+                        artifact_hosts=["generic_https", "pixeldrain"],
+                    ),
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-hosts-card"' in response.text
+        assert 'data-testid="settings-direct-host-generic_https"' in response.text
+        assert 'data-testid="settings-direct-host-pixeldrain"' in response.text
+        assert 'data-testid="settings-direct-host-mega"' not in response.text
+
+    async def test_direct_download_settings_hide_hosts_for_disabled_named_host_provider(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add(
+                DirectProviderConfig(
+                    provider_id="pullbox.getcomics",
+                    display_name="GetComics",
+                    endpoint="http://getcomics:8780",
+                    enabled=False,
+                    state=DirectProviderState.DISABLED,
+                    trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+                    negotiated_protocol="direct-download-provider/v1",
+                    encrypted_bearer_token="encrypted-provider-token",
+                    manifest_snapshot=_direct_manifest(
+                        "pullbox.getcomics",
+                        artifact_hosts=["generic_https", "pixeldrain"],
+                    ),
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-hosts-card"' not in response.text
+
+    async def test_challenge_resolver_settings_render_ranked_browser_resolver_controls(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.direct_acquisition import (
+            DirectResolverConfig,
+            DirectResolverKind,
+            DirectResolverState,
+        )
+
+        async with sec_db() as session:
+            session.add_all(
+                [
+                    DirectResolverConfig(
+                        name="TRAWL",
+                        resolver_kind=DirectResolverKind.TRAWL,
+                        priority=10,
+                        endpoint="http://trawl:8151",
+                        enabled=True,
+                        state=DirectResolverState.HEALTHY,
+                        allow_private_http=True,
+                        timeout_seconds=60,
+                        max_concurrency=1,
+                        encrypted_auth_headers={
+                            "Authorization": "encrypted-resolver-secret-must-not-render"
+                        },
+                        auth_metadata={"configured_header_names": ["Authorization"]},
+                    ),
+                    DirectResolverConfig(
+                        name="FlareSolverr",
+                        resolver_kind=DirectResolverKind.FLARESOLVERR,
+                        priority=20,
+                        endpoint="http://flaresolverr:8191",
+                        enabled=False,
+                        state=DirectResolverState.DISABLED,
+                        allow_private_http=True,
+                        timeout_seconds=60,
+                        max_concurrency=1,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=resolvers")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-tab-resolvers"' in response.text
+        assert 'data-testid="settings-panel-resolvers"' in response.text
+        assert 'data-testid="settings-resolvers-card"' in response.text
+        assert "settings-resolver-${profile.id}" in response.text
+        assert 'data-testid="settings-resolver-add"' in response.text
+        assert '@click="openEdit(profile.id)"' in response.text
+        assert '@keydown.enter.prevent="openEdit(profile.id)"' in response.text
+        assert '@keydown.space.prevent="openEdit(profile.id)"' in response.text
+        assert 'data-testid="settings-resolver-modal"' in response.text
+        assert 'data-testid="settings-resolver-modal-backdrop"' in response.text
+        assert 'data-testid="settings-resolver-modal-enabled"' in response.text
+        assert 'data-testid="settings-resolver-modal-private-http"' in response.text
+        assert 'data-testid="settings-resolver-type-select"' in response.text
+        assert 'data-testid="settings-resolver-type-panel"' in response.text
+        assert 'data-dropdown-select-contract="v1"' in response.text
+        assert 'data-dropdown-select-mode="local"' in response.text
+        assert 'local_model="form.resolver_kind"' not in response.text
+        assert '<select id="resolver-profile-kind"' not in response.text
+        assert 'data-testid="settings-resolver-modal-test"' in response.text
+        assert 'data-testid="settings-resolver-modal-remove"' in response.text
+        assert 'data-testid="settings-resolver-modal-actions"' in response.text
+        assert "settings-resolver-test-${profile.id}" not in response.text
+        assert '<template x-for="profile in profiles"' in response.text
+        assert "Challenge resolvers" in response.text
+        assert "Shared acquisition infrastructure" in response.text
+        assert "Lower values are tried first" in response.text
+        assert "does not guarantee CAPTCHA" in response.text
+        assert "DataNodes account login requires TRAWL" in response.text
+        assert "TRAWL native browser mode is used only for approved resolver flows" in response.text
+        assert "credentials are never sent to TRAWL" in response.text
+        assert "TRAWL MITM mode is not supported" in response.text
+        assert "Prowlarr keeps its own resolver configuration" in response.text
+        assert "Last connection test" in response.text
+        assert "Last healthy response" in response.text
+        assert "Last classified error" in response.text
+        assert "Authorization" in response.text
+        assert "encrypted-resolver-secret-must-not-render" not in response.text
+        assert "const authenticationHeaders = this.headerUpdates();" in response.text
+        assert (
+            "if (Object.keys(authenticationHeaders).length) "
+            "payload.authentication_headers = authenticationHeaders;"
+        ) in response.text
+        assert "form: {}," not in response.text
+        assert "form: { auth_headers: [] }," in response.text
+
+    async def test_search_and_indexer_settings_do_not_duplicate_resolver_management(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        direct = await authenticated_client.get("/settings?tab=direct")
+        indexers = await authenticated_client.get("/settings?tab=indexers")
+        search = await authenticated_client.get("/settings?tab=search")
+
+        assert direct.status_code == 200
+        assert indexers.status_code == 200
+        assert search.status_code == 200
+        assert 'data-testid="settings-direct-resolver-summary"' not in direct.text
+        assert 'data-testid="settings-indexers-resolver-summary"' not in indexers.text
+        assert 'data-testid="settings-resolvers-card"' not in indexers.text
+        assert 'data-testid="settings-resolvers-card"' not in search.text
+        assert indexers.text.count('href="/settings?tab=resolvers"') == 1
+        assert 'href="/settings?tab=search#browser-resolvers"' not in indexers.text
+        assert "Manage in Search" not in indexers.text
+        assert 'data-testid="settings-indexers-manual-torznab-resolver"' in indexers.text
+        assert "Ranked browser resolver chain" in indexers.text
+        assert (
+            "Only available for manually added torznab providers. Pullbox tries ordinary HTTP "
+            "first and never sends the API key or search query to a resolver."
+        ) in indexers.text
+        assert 'class="peer toggle-input"' in indexers.text
+        assert ':disabled="!resolverChainAvailable"' in indexers.text
+        assert "resolverChainAvailable: false" in indexers.text
+        assert "Try the ranked browser resolver chain" not in indexers.text
+        assert "Manual Torznab only" not in indexers.text
+        assert 'data-testid="settings-resolver-endpoint"' not in direct.text
+        assert 'data-testid="settings-resolver-endpoint"' not in indexers.text
+        assert 'data-testid="settings-resolver-endpoint"' not in search.text
+
+    async def test_direct_download_settings_render_native_host_registry_without_secrets(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        async with sec_db() as session:
+            session.add_all(
+                [
+                    DirectProviderConfig(
+                        provider_id="community.host-test",
+                        display_name="Host Test Provider",
+                        endpoint="http://host-test-provider:8780",
+                        enabled=True,
+                        state=DirectProviderState.HEALTHY,
+                        trust_level=DirectProviderTrustLevel.CUSTOM,
+                        negotiated_protocol="direct-download-provider/v1",
+                        encrypted_bearer_token="encrypted-provider-token",
+                        manifest_snapshot=_direct_manifest(
+                            "community.host-test",
+                            artifact_hosts=[
+                                "generic_https",
+                                "pixeldrain",
+                                "mega",
+                                "rootz",
+                                "mediafire",
+                                "terabox",
+                                "datanodes",
+                            ],
+                        ),
+                    ),
+                    DirectHostConfig(
+                        host_kind=DirectArtifactHostKind.PIXELDRAIN,
+                        enabled=True,
+                        preference=10,
+                        account_state=DirectHostAccountState.HEALTHY,
+                        encrypted_credentials={
+                            "api_key": encrypt_secret("pixeldrain-secret-must-not-render")
+                        },
+                        account_metadata={"configured_credential_fields": ["api_key"]},
+                    ),
+                ]
+            )
+            await session.commit()
+
+        response = await authenticated_client.get("/settings?tab=direct")
+
+        assert response.status_code == 200
+        assert 'data-testid="settings-direct-hosts-card"' in response.text
+        assert 'data-testid="settings-direct-host-pixeldrain"' in response.text
+        assert "@click=\"openHostConfigure('pixeldrain')\"" in response.text
+        assert "@keydown.enter.prevent=\"openHostConfigure('pixeldrain')\"" in response.text
+        assert "@keydown.space.prevent=\"openHostConfigure('pixeldrain')\"" in response.text
+        assert 'data-testid="settings-direct-host-configure-pixeldrain"' not in response.text
+        assert 'data-testid="settings-direct-host-toggle-pixeldrain"' not in response.text
+        assert 'data-testid="settings-direct-host-modal-enabled"' in response.text
+        assert 'data-testid="settings-direct-host-modal-actions"' in response.text
+        assert 'data-testid="settings-direct-host-modal-test"' in response.text
+        assert "Last reachable" in response.text
+        assert "Last operational use" in response.text
+        assert "Not Checked" in response.text
+        assert "Last account check" not in response.text
+        assert "testHost()" in response.text
+        assert "const shouldRefreshHostStatus = Boolean(this.hostTestState);" in response.text
+        assert "if (shouldRefreshHostStatus) this.refresh();" in response.text
+        assert "refresh() {" in response.text
+        assert "window.location.reload();" in response.text
+        assert 'x-model="hostForm.enabled"' in response.text
+        assert "hostForm.clearCredentials" not in response.text
+        assert "clearCredentials:" not in response.text
+        assert "Clear the saved" not in response.text
+        assert "setHostEnabled(" not in response.text
+        host_card_position = response.text.index('data-testid="settings-direct-host-pixeldrain"')
+        host_card_markup = response.text[host_card_position - 500 : host_card_position + 300]
+        assert 'role="button"' in host_card_markup
+        assert 'tabindex="0"' in host_card_markup
+        host_toggle_position = response.text.index(
+            'data-testid="settings-direct-host-modal-enabled"'
+        )
+        host_toggle_markup = response.text[host_toggle_position - 300 : host_toggle_position + 500]
+        assert 'class="peer toggle-input"' in host_toggle_markup
+        assert 'class="toggle-switch"' in host_toggle_markup
+        host_actions_position = response.text.index(
+            'data-testid="settings-direct-host-modal-actions"'
+        )
+        host_actions_markup = response.text[
+            host_actions_position - 100 : host_actions_position + 500
+        ]
+        assert 'class="flex items-center gap-2"' in host_actions_markup
+        generic_host_position = response.text.index(
+            'data-testid="settings-direct-host-generic_https"'
+        )
+        pixeldrain_host_position = response.text.index(
+            'data-testid="settings-direct-host-pixeldrain"'
+        )
+        generic_host_end = response.text.index("</article>", generic_host_position)
+        generic_host_markup = response.text[generic_host_position:generic_host_end]
+        assert "None required" in generic_host_markup
+        assert "Not Configured" not in generic_host_markup
+        assert pixeldrain_host_position < generic_host_position
+        tied_default_host_positions = [
+            response.text.index(f'data-testid="settings-direct-host-{host_kind}"')
+            for host_kind in (
+                "datanodes",
+                "generic_https",
+                "mediafire",
+                "mega",
+                "rootz",
+                "terabox",
+            )
+        ]
+        assert tied_default_host_positions == sorted(tied_default_host_positions)
+        assert 'x-if="activeHost.allowed_credential_fields.length > 0"' in response.text
+        assert "Artifact hosts" in response.text
+        assert "PixelDrain" in response.text
+        assert "MEGA" in response.text
+        assert "TeraBox" in response.text
+        assert "API key" in response.text
+        assert (
+            "Public links work anonymously. Account-backed access uses a revocable session."
+            in response.text
+        )
+        assert "developer application key" not in response.text
+        assert (
+            "Requires a free registered or Premium account plus a healthy TRAWL resolver. "
+            "Anonymous downloads are not supported." in response.text
+        )
+        assert "Username" in response.text
+        assert "Password" in response.text
+        assert "Account required" in response.text
+        assert "pixeldrain-secret-must-not-render" not in response.text
 
     async def test_general_settings_renders_https_controls(
         self,
@@ -432,11 +1123,16 @@ class TestSettingsRouteContracts:
             (
                 "search",
                 [
+                    "settings-search-preferred-language-select",
                     "settings-search-threshold-issue-select",
                     "settings-search-threshold-tpb-select",
                     "settings-search-threshold-compendium-select",
                 ],
-                ['<select x-model="thresholds.issue"', '<select x-model="thresholds.tpb"'],
+                [
+                    '<select name="preferred_language"',
+                    '<select x-model="thresholds.issue"',
+                    '<select x-model="thresholds.tpb"',
+                ],
             ),
         ],
     )
@@ -551,6 +1247,12 @@ class TestSettingsRouteContracts:
             assert 'data-testid="settings-indexers-prowlarr-api-key"' in response.text
             assert 'data-testid="settings-indexers-prowlarr-test"' in response.text
             assert 'data-testid="settings-indexers-prowlarr-save-sync"' in response.text
+            assert 'data-testid="settings-indexers-jackett-card"' in response.text
+            assert 'data-testid="settings-indexers-jackett-sync"' in response.text
+            assert 'data-testid="settings-indexers-jackett-url"' in response.text
+            assert 'data-testid="settings-indexers-jackett-api-key"' in response.text
+            assert 'data-testid="settings-indexers-jackett-test"' in response.text
+            assert 'data-testid="settings-indexers-jackett-save-sync"' in response.text
             assert 'data-testid="settings-indexers-registry-card"' in response.text
             assert 'data-testid="settings-indexers-test-all"' in response.text
             assert 'data-testid="settings-indexers-add-indexer"' in response.text
@@ -570,8 +1272,14 @@ class TestSettingsRouteContracts:
             assert "Save & Sync" in response.text
             assert "Save priority" in response.text
             assert "Save Changes" in response.text
-            assert 'placeholder="NZBgeek"' in response.text
-            assert 'placeholder="https://api.nzbgeek.info"' in response.text
+            assert (
+                ":placeholder=\"form.indexer_type === 'torznab' ? 'Torznab' : 'NZBgeek'\""
+                in response.text
+            )
+            assert (
+                ":placeholder=\"form.indexer_type === 'torznab' ? "
+                "'https://api.torznab.com' : 'https://api.nzbgeek.info'\"" in response.text
+            )
             assert 'autocomplete="nickname"' in response.text
             assert 'autocomplete="url"' in response.text
             assert response.text.count('@click="reset()"') >= 2

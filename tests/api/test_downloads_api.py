@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,11 +17,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from pullbox.api.v1 import downloads as downloads_api
 from pullbox.core.exceptions import NotFoundError
 from pullbox.models import Base
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectArtifactAttempt,
+    DirectArtifactHostKind,
+    DirectArtifactRouteKind,
+    DirectArtifactState,
+)
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
+from pullbox.models.indexer import IndexerConfig, IndexerSource, IndexerType
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series
 from pullbox.models.user import APIKey, User
 from pullbox.providers.download.qbittorrent import QBittorrentError
+from pullbox.providers.indexer.newznab import NewznabError
 from pullbox.services.auth_service import AuthService
 
 if TYPE_CHECKING:
@@ -119,6 +130,7 @@ async def _seed_download(
     downloaded_path: str | None = None,
     error_message: str | None = "Download failed",
     completed_at: datetime | None = None,
+    indexer_id: int | None = None,
 ) -> int:
     async with factory() as session:
         download = DownloadHistory(
@@ -131,12 +143,95 @@ async def _seed_download(
             downloaded_path=downloaded_path,
             error_message=error_message,
             completed_at=completed_at,
+            indexer_id=indexer_id,
         )
         session.add(download)
         await session.flush()
         download_id = download.id
         await session.commit()
         return download_id
+
+
+async def _seed_direct_download_with_routes(
+    factory: async_sessionmaker[AsyncSession],
+    issue_id: int,
+) -> tuple[int, int]:
+    async with factory() as session:
+        attempt = DirectAcquisitionAttempt(
+            request_key=f"download-source-switch:{issue_id}",
+            issue_id=issue_id,
+            provider_identity="pullbox.getcomics",
+            provider_candidate_id="candidate-switch",
+            state=DirectAcquisitionState.DOWNLOADING,
+            plan_revision=1,
+            plan_snapshot={
+                "schema_version": 1,
+                "selected_artifact_identity": "route:current",
+                "artifacts": [
+                    {
+                        "artifact_identity": "route:current",
+                        "content_identity": "artifact:primary",
+                        "route_kind": "direct",
+                        "host_kind": "generic_https",
+                        "eligible": True,
+                        "eligibility_code": "eligible",
+                        "expected_size": 1_000,
+                    },
+                    {
+                        "artifact_identity": "route:pixel",
+                        "content_identity": "artifact:primary",
+                        "route_kind": "direct",
+                        "host_kind": "pixeldrain",
+                        "eligible": True,
+                        "eligibility_code": "eligible",
+                        "expected_size": 1_000,
+                    },
+                    {
+                        "artifact_identity": "route:other",
+                        "content_identity": "artifact:other",
+                        "route_kind": "direct",
+                        "host_kind": "mediafire",
+                        "eligible": True,
+                        "eligibility_code": "eligible",
+                    },
+                ],
+            },
+            progress_revision=1,
+            progress_snapshot={
+                "schema_version": 1,
+                "stage": "downloading",
+                "host_kind": "generic_https",
+                "bytes_transferred": 512,
+            },
+            candidate_snapshot={"display_title": "Batman 004 (2025)"},
+        )
+        attempt.artifact_attempts = [
+            DirectArtifactAttempt(
+                sequence_no=0,
+                artifact_identity="route:current",
+                route_kind=DirectArtifactRouteKind.DIRECT,
+                host_kind=DirectArtifactHostKind.GENERIC_HTTPS,
+                state=DirectArtifactState.TRANSFERRING,
+                is_selected=True,
+                expected_size=1_000,
+                bytes_transferred=512,
+            )
+        ]
+        session.add(attempt)
+        await session.flush()
+        download = DownloadHistory(
+            issue_id=issue_id,
+            title="Batman 004 (2025)",
+            state=DownloadState.DOWNLOADING,
+            download_client=DownloadClientType.DIRECT,
+            download_url=f"pullbox-direct://attempt/{attempt.id}",
+            external_id=f"direct:{attempt.id}",
+        )
+        session.add(download)
+        await session.flush()
+        ids = (download.id, attempt.id)
+        await session.commit()
+        return ids
 
 
 async def _get_download(
@@ -265,6 +360,64 @@ class TestDownloadPostProcessingRetry:
 
 
 class TestDownloadRetry:
+    @pytest.mark.asyncio
+    async def test_retry_failed_direct_download_uses_native_runner(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.WANTED)
+        async with db_factory() as session:
+            attempt = DirectAcquisitionAttempt(
+                request_key="downloads-api-direct-retry",
+                issue_id=issue_id,
+                provider_identity="community.test",
+                provider_candidate_id="candidate-1",
+                state=DirectAcquisitionState.FAILED,
+                requested_coverage={"issue_numbers": ["4"]},
+                candidate_snapshot={"display_title": "Batman 004 (2025)"},
+                plan_snapshot={"schema_version": 1},
+                plan_revision=1,
+                progress_snapshot={"stage": "failed"},
+            )
+            attempt.artifact_attempts = [
+                DirectArtifactAttempt(
+                    sequence_no=0,
+                    artifact_identity="route:one",
+                    route_kind=DirectArtifactRouteKind.DIRECT,
+                    host_kind=DirectArtifactHostKind.GENERIC_HTTPS,
+                    state=DirectArtifactState.FAILED,
+                    is_selected=True,
+                )
+            ]
+            session.add(attempt)
+            await session.flush()
+            attempt_id = attempt.id
+            await session.commit()
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            client_type=DownloadClientType.DIRECT,
+            download_url=f"pullbox-direct://attempt/{attempt_id}",
+            external_id=f"direct:{attempt_id}",
+            downloaded_path=None,
+            error_message="Direct transfer failed",
+        )
+        runner = AsyncMock()
+        runner.retry.return_value = True
+
+        with patch(
+            "pullbox.tasks.direct_acquisition_task.get_direct_acquisition_runner",
+            return_value=runner,
+        ):
+            response = await client.post(f"/api/v1/downloads/{download_id}/retry")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "sent"}
+        runner.retry.assert_awaited_once_with(attempt_id)
+        issue = await _get_issue(db_factory, issue_id)
+        assert issue.status is IssueStatus.DOWNLOADING
+
     @pytest.mark.asyncio
     async def test_retry_failed_usenet_download_resends_to_configured_client(
         self,
@@ -641,6 +794,71 @@ class TestDownloadRouteFunctions:
         )
 
     @pytest.mark.asyncio
+    async def test_retry_download_reports_torznab_descriptor_failure(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory)
+        async with db_factory() as session:
+            config = IndexerConfig(
+                name="Challenged Torznab",
+                indexer_type=IndexerType.TORZNAB,
+                source=IndexerSource.MANUAL,
+                url="https://indexer.example",
+                api_key="encrypted",
+                enabled=True,
+                resolver_enabled=True,
+            )
+            session.add(config)
+            await session.flush()
+            indexer_id = config.id
+            await session.commit()
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            client_type=DownloadClientType.QBITTORRENT,
+            download_url="https://indexer.example/api?t=get&id=7&apikey=secret",
+            downloaded_path=None,
+            error_message="Descriptor failed",
+            indexer_id=indexer_id,
+        )
+        mock_client = AsyncMock()
+        mock_client.client_type = "qbittorrent"
+        mock_indexer = AsyncMock()
+        mock_indexer.browser_resolver_enabled = True
+        mock_indexer.fetch_torrent_descriptor = AsyncMock(
+            side_effect=NewznabError("The Torznab descriptor is unavailable."),
+        )
+
+        with (
+            patch(
+                "pullbox.composition.providers.register_download_clients",
+                new_callable=AsyncMock,
+            ) as mock_register_clients,
+            patch(
+                "pullbox.composition.providers.register_indexers",
+                new_callable=AsyncMock,
+            ) as mock_register_indexers,
+        ):
+
+            async def _register_clients(_session: object, registry: object) -> None:
+                registry.register_download_client(1, mock_client)  # type: ignore[union-attr]
+
+            async def _register_indexers(_session: object, registry: object) -> None:
+                registry.register_indexer(indexer_id, mock_indexer)  # type: ignore[union-attr]
+
+            mock_register_clients.side_effect = _register_clients
+            mock_register_indexers.side_effect = _register_indexers
+            response = await client.post(f"/api/v1/downloads/{download_id}/retry")
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == "The Torznab descriptor is unavailable."
+        download = await _get_download(db_factory, download_id)
+        assert download.state == DownloadState.FAILED
+        assert download.error_message == "Descriptor failed"
+
+    @pytest.mark.asyncio
     async def test_cancel_download_route_cancels_active_and_deletes_terminal_rows(
         self,
         db_factory: async_sessionmaker[AsyncSession],
@@ -690,6 +908,144 @@ class TestDownloadRouteFunctions:
         async with db_factory() as session:
             deleted = await session.get(DownloadHistory, terminal_id)
         assert deleted is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_download_routes_direct_rows_to_native_runner(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.DOWNLOADING)
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            state=DownloadState.DOWNLOADING,
+            client_type=DownloadClientType.DIRECT,
+            download_url="pullbox-direct://attempt/81",
+            external_id="direct:81",
+            error_message=None,
+        )
+        runner = MagicMock(cancel=AsyncMock(return_value=True))
+
+        async with db_factory() as session:
+            with (
+                patch(
+                    "pullbox.tasks.direct_acquisition_task.get_direct_acquisition_runner",
+                    return_value=runner,
+                ),
+                patch(
+                    "pullbox.composition.providers.register_download_clients",
+                    new_callable=AsyncMock,
+                ) as register_clients,
+                patch("pullbox.tasks.download_task._clear_progress"),
+            ):
+                await downloads_api.cancel_download(download_id, object(), session)  # type: ignore[arg-type]
+            await session.commit()
+
+        runner.cancel.assert_awaited_once_with(81)
+        register_clients.assert_not_awaited()
+        download = await _get_download(db_factory, download_id)
+        assert download.state is DownloadState.FAILED
+        assert download.error_message == "Cancelled by user"
+
+    @pytest.mark.asyncio
+    async def test_direct_download_sources_list_only_verified_equivalent_routes(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.DOWNLOADING)
+        download_id, _attempt_id = await _seed_direct_download_with_routes(
+            db_factory,
+            issue_id,
+        )
+
+        response = await client.get(f"/api/v1/downloads/{download_id}/sources")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "download_id": download_id,
+            "current": {
+                "artifact_identity": "route:current",
+                "host_kind": "generic_https",
+                "host_label": "HTTPS",
+                "bytes_transferred": 512,
+            },
+            "alternatives": [
+                {
+                    "artifact_identity": "route:pixel",
+                    "host_kind": "pixeldrain",
+                    "host_label": "PixelDrain",
+                    "expected_size": 1_000,
+                    "is_next": True,
+                }
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_direct_download_source_switch_delegates_atomic_runner_action(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.DOWNLOADING)
+        download_id, attempt_id = await _seed_direct_download_with_routes(
+            db_factory,
+            issue_id,
+        )
+        runner = MagicMock()
+        runner.switch_source = AsyncMock(
+            return_value=SimpleNamespace(
+                previous_host=DirectArtifactHostKind.GENERIC_HTTPS,
+                selected=SimpleNamespace(host_kind=DirectArtifactHostKind.PIXELDRAIN),
+                current_route_blocklisted=True,
+            )
+        )
+
+        with patch(
+            "pullbox.tasks.direct_acquisition_task.get_direct_acquisition_runner",
+            return_value=runner,
+        ):
+            response = await client.post(
+                f"/api/v1/downloads/{download_id}/switch-source",
+                json={
+                    "artifact_identity": "route:pixel",
+                    "block_current": True,
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "queued",
+            "previous_host": "HTTPS",
+            "selected_host": "PixelDrain",
+            "current_route_blocklisted": True,
+        }
+        runner.switch_source.assert_awaited_once_with(
+            attempt_id,
+            target_artifact_identity="route:pixel",
+            block_current=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_source_switch_rejects_non_direct_download(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory)
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            state=DownloadState.DOWNLOADING,
+        )
+
+        response = await client.post(
+            f"/api/v1/downloads/{download_id}/switch-source",
+            json={"artifact_identity": None, "block_current": False},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Only direct downloads can change sources."
 
     @pytest.mark.asyncio
     async def test_route_error_branches_raise_expected_http_errors(

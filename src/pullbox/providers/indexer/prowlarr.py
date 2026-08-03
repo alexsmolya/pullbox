@@ -53,10 +53,12 @@ class ProwlarrIndexer:
         api_key: str,
         *,
         indexer_ids: list[int] | None = None,
+        indexer_rankings: dict[int, tuple[int, int]] | None = None,
     ) -> None:
         self._base_url = url.rstrip("/")
         self._api_key = api_key
         self._indexer_ids = indexer_ids
+        self._indexer_rankings = indexer_rankings or {}
         self._client = httpx.AsyncClient(timeout=_REQUEST_TIMEOUT)
         # Reuse Newznab XML parsing via a lightweight instance
         self._xml_parser = NewznabIndexer(name="prowlarr", url=url, api_key=api_key)
@@ -160,7 +162,7 @@ class ProwlarrIndexer:
 
         data = await self._api_request("/search", params, timeout=_SEARCH_TIMEOUT)
 
-        results = self._parse_api_results(data)
+        results = self._parse_api_results(data, self._indexer_rankings)
         log.debug("prowlarr_search_results", count=len(results))
         return results
 
@@ -234,9 +236,13 @@ class ProwlarrIndexer:
     # -- result parsing -----------------------------------------------------
 
     @staticmethod
-    def _parse_api_results(data: list[dict[str, Any]]) -> list[ReleaseResult]:
+    def _parse_api_results(
+        data: list[dict[str, Any]],
+        indexer_rankings: dict[int, tuple[int, int]] | None = None,
+    ) -> list[ReleaseResult]:
         """Parse Prowlarr REST API search results into ReleaseResult DTOs."""
         results: list[ReleaseResult] = []
+        rankings = indexer_rankings or {}
         for item in data:
             indexer_name = item.get("indexer", "Unknown")
             is_torrent = item.get("protocol", "").lower() == "torrent"
@@ -250,6 +256,18 @@ class ProwlarrIndexer:
             if not info_url:
                 guid = item.get("guid", "")
                 info_url = guid if guid.startswith("http") else None
+
+            raw_indexer_id = item.get("indexerId")
+            try:
+                remote_indexer_id = int(raw_indexer_id) if raw_indexer_id is not None else None
+            except (TypeError, ValueError):
+                remote_indexer_id = None
+            local_indexer_id: int | None = None
+            ranking_priority = 25
+            if remote_indexer_id is not None:
+                ranking = rankings.get(remote_indexer_id)
+                if ranking is not None:
+                    local_indexer_id, ranking_priority = ranking
 
             results.append(
                 ReleaseResult(
@@ -265,6 +283,8 @@ class ProwlarrIndexer:
                     category=_join_categories(item.get("categories", [])),
                     published_at=published_at,
                     info_url=info_url,
+                    indexer_id=local_indexer_id,
+                    ranking_priority=ranking_priority,
                 )
             )
         return results

@@ -42,6 +42,7 @@ from pullbox.models.import_job import (
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.series import Series
+from pullbox.performance.baseline import current_process_peak_rss_bytes
 from pullbox.services.import_service import ImportService
 
 
@@ -410,6 +411,7 @@ async def main() -> None:
                 "library_file_names": [library_file.file_name for library_file in library_files],
                 "library_format_counts": dict(sorted(library_format_counts.items())),
                 "source_format_counts": dict(sorted(source_format_counts.items())),
+                "peak_rss_bytes": current_process_peak_rss_bytes(),
                 "final_status": job.status.value,
                 "series_imported": job.series_imported,
                 "series_failed": job.series_failed,

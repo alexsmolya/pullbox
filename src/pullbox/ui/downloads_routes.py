@@ -17,6 +17,7 @@ from starlette.responses import Response
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
 from pullbox.models.client import DownloadClientConfig
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt, DirectArtifactAttempt
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue
 from pullbox.models.series import Series
@@ -25,6 +26,7 @@ from pullbox.services.download_history_classification import (
     post_processing_failure_clause,
     post_processing_history_clause,
 )
+from pullbox.ui.formatters import format_filesize
 
 logger = structlog.get_logger(__name__)
 
@@ -67,9 +69,11 @@ class DownloadQueueRowView:
     client_label: str
     primary_phase: str
     status_pill: str
+    status_detail: str | None
     progress_pct: float
     progress_label: str
     progress_tone: str
+    progress_indeterminate: bool
     speed_bytes: int | None
     eta_text: str | None
     is_active: bool
@@ -266,6 +270,7 @@ def download_client_type_label(client_type: str) -> str:
         DownloadClientType.QBITTORRENT.value: "qBittorrent",
         DownloadClientType.TRANSMISSION.value: "Transmission",
         DownloadClientType.DELUGE.value: "Deluge",
+        DownloadClientType.DIRECT.value: "Direct Download",
     }
     return labels.get(client_type, client_type.replace("_", " ").title())
 
@@ -359,6 +364,13 @@ def build_download_queue_row_view(
 ) -> DownloadQueueRowView:
     """Convert queue state plus live progress into a stable UI row model."""
     client_label = download_client_type_label(download.download_client.value)
+    raw_source_label = snapshot_value(progress, "source_label")
+    if (
+        download.download_client is DownloadClientType.DIRECT
+        and isinstance(raw_source_label, str)
+        and raw_source_label
+    ):
+        client_label = raw_source_label
     raw_client_state = snapshot_value(progress, "client_state")
     client_state = normalize_download_queue_client_state(
         raw_client_state if isinstance(raw_client_state, str) else None
@@ -368,9 +380,13 @@ def build_download_queue_row_view(
     progress_pct = round(progress_fraction * 100, 1)
     speed_bytes = snapshot_value(progress, "speed_bytes")
     eta_seconds = snapshot_value(progress, "eta_seconds")
+    bytes_transferred = snapshot_value(progress, "bytes_transferred")
+    progress_indeterminate = bool(snapshot_value(progress, "is_indeterminate"))
+    source_slow = bool(snapshot_value(progress, "source_slow"))
 
     primary_phase = "Queued"
     status_pill = "pill-info"
+    status_detail: str | None = None
     progress_tone = "is-blue"
     progress_label = "—"
     eta_text: str | None = None
@@ -386,10 +402,19 @@ def build_download_queue_row_view(
         primary_phase = "Retry pending"
         status_pill = "pill-warning"
         progress_tone = "is-amber"
+        detail_parts: list[str] = []
+        if download.error_message:
+            detail_parts.append(download.error_message.rstrip("."))
+        max_retries = download.max_retries or 0
+        retry_count = download.retry_count or 0
+        if max_retries > 0:
+            detail_parts.append(f"Retry {retry_count} of {max_retries}")
+        if detail_parts:
+            status_detail = ". ".join(detail_parts) + "."
         if progress_pct > 0:
             progress_label = f"{round(progress_pct):.0f}%"
     elif download.state == DownloadState.QUEUED:
-        primary_phase = "Queued"
+        primary_phase = client_state or "Queued"
         status_pill = "pill-info"
     elif download.state in {
         DownloadState.SENT,
@@ -407,12 +432,28 @@ def build_download_queue_row_view(
             speed_bytes = None
             eta_seconds = None
         else:
-            primary_phase = "Downloading"
+            primary_phase = client_state or "Downloading"
             status_pill = "pill-info"
             progress_tone = "is-blue"
-            progress_label = f"{round(progress_pct):.0f}%"
-            if isinstance(eta_seconds, int) and eta_seconds > 0:
+            if progress_indeterminate:
+                progress_label = (
+                    f"{format_filesize(bytes_transferred)} received"
+                    if isinstance(bytes_transferred, int) and bytes_transferred > 0
+                    else "Receiving..."
+                )
+                eta_seconds = None
+            else:
+                progress_label = f"{round(progress_pct):.0f}%"
+            if not progress_indeterminate and isinstance(eta_seconds, int) and eta_seconds > 0:
                 eta_text = _eta(eta_seconds)
+            if download.download_client is DownloadClientType.DIRECT and source_slow:
+                primary_phase = "Source responding slowly"
+                status_pill = "pill-warning"
+                status_detail = (
+                    "The source is still transferring data below 500 kbps. "
+                    "Pullbox will keep downloading."
+                )
+                progress_tone = "is-amber"
 
     return DownloadQueueRowView(
         download=download,
@@ -420,9 +461,11 @@ def build_download_queue_row_view(
         client_label=client_label,
         primary_phase=primary_phase,
         status_pill=status_pill,
+        status_detail=status_detail,
         progress_pct=progress_pct,
         progress_label=progress_label,
         progress_tone=progress_tone,
+        progress_indeterminate=progress_indeterminate,
         speed_bytes=speed_bytes if isinstance(speed_bytes, int) else None,
         eta_text=eta_text,
         is_active=is_active,
@@ -476,9 +519,7 @@ async def load_download_queue_context(session: AsyncSession) -> dict[str, object
         1 for row in waiting_rows if row.primary_phase in {"Queued", "Retry pending"}
     )
     paused_count = sum(1 for row in waiting_rows if row.primary_phase == "Paused")
-    combined_speed = sum(
-        row.speed_bytes or 0 for row in active_rows if row.primary_phase == "Downloading"
-    )
+    combined_speed = sum(row.speed_bytes or 0 for row in active_rows)
 
     return {
         "queue_items": queue_items,
@@ -508,12 +549,64 @@ async def load_download_progress_map(
     queue page polls often enough that we prefer a direct client status check
     for active downloads so the UI does not appear hung between scheduler ticks.
     """
+    from pullbox.tasks.download_task import ProgressSnapshot
+
     progress_map = dict(fallback_progress)
     start = time.monotonic()
+    direct_items: dict[int, int] = {}
+    for item in queue_items:
+        if item.download_client is not DownloadClientType.DIRECT or not item.external_id:
+            continue
+        prefix, separator, raw_id = item.external_id.partition(":")
+        if prefix == "direct" and separator and raw_id.isdigit():
+            direct_items[item.id] = int(raw_id)
+
+    if direct_items:
+        attempts = (
+            await session.execute(
+                select(DirectAcquisitionAttempt).where(
+                    DirectAcquisitionAttempt.id.in_(direct_items.values())
+                )
+            )
+        ).scalars()
+        attempts_by_id = {attempt.id: attempt for attempt in attempts}
+        for download_id, attempt_id in direct_items.items():
+            attempt = attempts_by_id.get(attempt_id)
+            if attempt is None:
+                continue
+            snapshot = attempt.progress_snapshot or {}
+            raw_percent = snapshot.get("percent")
+            percent = float(raw_percent) if isinstance(raw_percent, int | float) else 0.0
+            speed = snapshot.get("bytes_per_second")
+            eta = snapshot.get("eta_seconds")
+            total = snapshot.get("total_bytes")
+            transferred = snapshot.get("bytes_transferred")
+            stage = snapshot.get("stage")
+            host_kind = snapshot.get("host_kind")
+            progress_map[download_id] = ProgressSnapshot(
+                progress=max(0.0, min(percent / 100, 1.0)),
+                speed_bytes=int(speed) if isinstance(speed, int | float) else None,
+                eta_seconds=int(eta) if isinstance(eta, int | float) else None,
+                size_bytes=int(total) if isinstance(total, int | float) else None,
+                updated_at=time.monotonic(),
+                client_state=_direct_progress_label(snapshot),
+                source_label=_direct_source_label(attempt.provider_identity, host_kind),
+                bytes_transferred=(
+                    int(transferred) if isinstance(transferred, int | float) else None
+                ),
+                is_indeterminate=(
+                    stage == "downloading"
+                    and not isinstance(raw_percent, int | float)
+                    and not isinstance(total, int | float)
+                ),
+                source_slow=snapshot.get("source_slow") is True,
+            )
     pollable_items = [
         item
         for item in queue_items
-        if is_download_queue_pollable_state(item.state) and item.external_id
+        if item.download_client is not DownloadClientType.DIRECT
+        and is_download_queue_pollable_state(item.state)
+        and item.external_id
     ]
     if not pollable_items:
         return progress_map
@@ -608,6 +701,109 @@ async def load_download_progress_map(
     )
 
     return progress_map
+
+
+def _direct_progress_label(snapshot: Mapping[str, object]) -> str:
+    stage = snapshot.get("stage")
+    host_kind = snapshot.get("host_kind")
+    stage_value = str(stage) if isinstance(stage, str) and stage else "direct"
+    host_label = _direct_host_label(host_kind)
+
+    if stage_value == "resolver":
+        resolver_name = snapshot.get("resolver_name")
+        resolver_kind = snapshot.get("resolver_kind")
+        resolver_scope = snapshot.get("resolver_scope")
+        attempt = snapshot.get("resolver_attempt")
+        total = snapshot.get("resolver_total")
+        label = (
+            resolver_name.strip()
+            if isinstance(resolver_name, str) and resolver_name.strip()
+            else "browser resolver"
+        )
+        if resolver_kind == "trawl" and resolver_scope == "datanodes":
+            return "Using TRAWL (required by DataNodes)"
+        if isinstance(attempt, int) and isinstance(total, int) and total > 0:
+            return f"Trying {label} (resolver {attempt} of {total})"
+        return f"Trying {label}"
+    if stage_value == "fallback_queued" and host_label:
+        return f"Trying {host_label}"
+    if stage_value == "resolving" and host_label:
+        return f"Resolving {host_label}"
+    if stage_value == "downloading" and host_label:
+        return f"Downloading from {host_label}"
+    if stage_value == "validating" and host_label:
+        return f"Validating {host_label} download"
+    return stage_value.replace("_", " ").capitalize()
+
+
+def _direct_host_label(host_kind: object) -> str:
+    host_value = str(host_kind) if isinstance(host_kind, str) and host_kind else ""
+    host_labels = {
+        "mega": "MEGA",
+        "pixeldrain": "PixelDrain",
+        "rootz": "Rootz",
+        "mediafire": "MediaFire",
+        "terabox": "TeraBox",
+        "datanodes": "DataNodes",
+        "generic_https": "HTTPS",
+    }
+    return host_labels.get(host_value, host_value.replace("_", " ").title())
+
+
+def _direct_source_label(provider_identity: str, host_kind: object) -> str:
+    provider_labels = {
+        "pullbox.getcomics": "GetComics",
+        "pullbox.annas_archive": "Anna's Archive",
+    }
+    provider_label = provider_labels.get(
+        provider_identity,
+        provider_identity.removeprefix("pullbox.").replace("_", " ").title(),
+    )
+    host_label = _direct_host_label(host_kind)
+    return f"{provider_label} via {host_label}" if host_label else provider_label
+
+
+async def build_download_history_client_labels(
+    session: AsyncSession,
+    history_items: Sequence[DownloadHistory],
+) -> dict[int, str]:
+    """Return client labels enriched with durable direct artifact hosts."""
+    labels = {
+        download.id: download_client_type_label(download.download_client.value)
+        for download in history_items
+    }
+    attempt_ids_by_download: dict[int, int] = {}
+    for download in history_items:
+        if download.download_client is not DownloadClientType.DIRECT or not download.external_id:
+            continue
+        prefix, separator, raw_attempt_id = download.external_id.partition(":")
+        if prefix == "direct" and separator and raw_attempt_id.isdigit():
+            attempt_ids_by_download[download.id] = int(raw_attempt_id)
+
+    if not attempt_ids_by_download:
+        return labels
+
+    artifact_rows = await session.execute(
+        select(
+            DirectArtifactAttempt.acquisition_attempt_id,
+            DirectArtifactAttempt.host_kind,
+        )
+        .where(DirectArtifactAttempt.acquisition_attempt_id.in_(attempt_ids_by_download.values()))
+        .order_by(
+            DirectArtifactAttempt.acquisition_attempt_id,
+            DirectArtifactAttempt.is_selected.desc(),
+            DirectArtifactAttempt.sequence_no.desc(),
+        )
+    )
+    host_by_attempt: dict[int, object] = {}
+    for attempt_id, host_kind in artifact_rows:
+        host_by_attempt.setdefault(attempt_id, host_kind)
+
+    direct_label = download_client_type_label(DownloadClientType.DIRECT.value)
+    for download_id, attempt_id in attempt_ids_by_download.items():
+        host_label = _direct_host_label(host_by_attempt.get(attempt_id))
+        labels[download_id] = f"{direct_label} · {host_label}" if host_label else direct_label
+    return labels
 
 
 async def load_download_history_context(
@@ -726,9 +922,11 @@ async def load_download_history_context(
         .offset(offset)
     )
     history_items = list(history_result.unique().scalars().all())
+    history_client_labels = await build_download_history_client_labels(session, history_items)
 
     return {
         "history_items": history_items,
+        "history_client_labels": history_client_labels,
         "history_total": history_total,
         "history_completed_count": int(history_completed_count or 0),
         "history_failed_count": int(history_failed_count or 0),

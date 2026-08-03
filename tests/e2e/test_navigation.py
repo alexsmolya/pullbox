@@ -524,6 +524,43 @@ class TestSidebarNavigation:
 class TestShellLayoutContract:
     """Verify shared app-shell spacing contracts across page families."""
 
+    def test_semantic_interactive_controls_use_shared_cursor_affordances(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.goto(f"{seeded_server}/series")
+        authed_page.locator("[data-testid='series-page']").wait_for(
+            state="visible",
+            timeout=5000,
+        )
+
+        cursors = authed_page.evaluate(
+            """() => {
+                const fixture = document.createElement("div");
+                fixture.innerHTML = `
+                    <a data-cursor-test="link" href="#cursor-test">Link</a>
+                    <button data-cursor-test="button" type="button">Button</button>
+                    <div data-cursor-test="role-button" role="button" tabindex="0">Action</div>
+                    <button data-cursor-test="disabled" type="button" disabled>Disabled</button>
+                `;
+                document.body.appendChild(fixture);
+                return Object.fromEntries(
+                    [...fixture.querySelectorAll("[data-cursor-test]")].map((node) => [
+                        node.dataset.cursorTest,
+                        getComputedStyle(node).cursor,
+                    ]),
+                );
+            }"""
+        )
+
+        assert cursors == {
+            "link": "pointer",
+            "button": "pointer",
+            "role-button": "pointer",
+            "disabled": "not-allowed",
+        }
+
     @pytest.mark.parametrize(
         ("path", "ready_selector"),
         [

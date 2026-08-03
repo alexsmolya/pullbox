@@ -32,6 +32,7 @@ def test_login_page_has_no_wcag_aa_violations(
     [
         ("/", "[data-testid='dashboard-page']"),
         ("/settings?tab=general", "[data-testid='settings-page']"),
+        ("/settings?tab=resolvers", "[data-testid='settings-resolvers-card']"),
         ("/security?tab=authentication", "[data-testid='security-page']"),
         ("/system?tab=tasks", "[data-testid='system-page']"),
         ("/health", "[data-testid='health-page']"),

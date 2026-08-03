@@ -59,6 +59,7 @@ from pullbox.tasks.download_post_processing_destination import (
 )
 from pullbox.tasks.download_post_processing_runtime import PostProcessingRuntime
 from pullbox.tasks.download_post_processing_source_validation import (
+    ResolveLocalPath,
     resolve_and_validate_source,
 )
 from pullbox.tasks.download_post_processing_transfer import transfer_and_register_library_file
@@ -122,6 +123,7 @@ _load_monitor_poll_items = _download_monitor_read.load_monitor_poll_items
 _poll_download_clients = _download_monitor_poll.poll_download_clients
 _record_download_progress = _download_progress.record_download_progress
 _STALE_DOWNLOAD_TIMEOUT = _download_recovery._STALE_DOWNLOAD_TIMEOUT
+_process_direct_retry_pending = _download_recovery._process_direct_retry_pending
 _process_retry_pending = _download_recovery._process_retry_pending
 _recover_orphaned_downloads = _download_recovery._recover_orphaned_downloads
 _POST_PROCESSING_SOURCE_RETRY_DELAYS = _download_sources._POST_PROCESSING_SOURCE_RETRY_DELAYS
@@ -274,6 +276,11 @@ async def monitor_downloads() -> None:
 
     start = time.monotonic()
     factory = get_session_factory()
+    recovery_checked_at = time.monotonic()
+    recovery_due = recovery_checked_at - _last_recovery_check >= _RECOVERY_CHECK_INTERVAL
+    direct_retried = 0
+    if recovery_due:
+        direct_retried = await _process_direct_retry_pending()
 
     # ── Phase 1: Read — load active downloads and build registry ──
     async with factory() as session:
@@ -283,6 +290,18 @@ async def monitor_downloads() -> None:
                 build_download_registry=_build_download_registry,
             )
             if read_result is None:
+                if recovery_due:
+                    _last_recovery_check = recovery_checked_at
+                if direct_retried:
+                    logger.info(
+                        "monitor_downloads_complete",
+                        checked=0,
+                        completed=0,
+                        failed=0,
+                        retried=direct_retried,
+                        recovered=0,
+                        duration_ms=round((time.monotonic() - start) * 1000, 1),
+                    )
                 return
             registry = read_result.registry
             poll_items = read_result.poll_items
@@ -297,7 +316,7 @@ async def monitor_downloads() -> None:
     checked = len(poll_items)
     completed = 0
     failed = 0
-    retried = 0
+    retried = direct_retried
     recovered = 0
     updates = []
 
@@ -328,11 +347,10 @@ async def monitor_downloads() -> None:
                 failed = apply_result.failed
 
             # Throttle expensive recovery checks to ~every 30s
-            now_mono = time.monotonic()
-            if now_mono - _last_recovery_check >= _RECOVERY_CHECK_INTERVAL:
-                retried = await _process_retry_pending(factory, download_svc)
+            if recovery_due:
+                retried += await _process_retry_pending(factory, download_svc)
                 recovered = await _recover_orphaned_downloads(session)
-                _last_recovery_check = now_mono
+                _last_recovery_check = recovery_checked_at
 
             await session.commit()
         except Exception:
@@ -381,6 +399,10 @@ async def process_completed() -> None:
 async def _run_post_processing(
     session: AsyncSession,
     download: DownloadHistory,
+    *,
+    resolve_local_path: ResolveLocalPath | None = None,
+    cleanup_source: bool = True,
+    allow_resource_safety_exception: bool = False,
 ) -> None:
     """Transfer the downloaded file to the library and update all records.
 
@@ -428,9 +450,10 @@ async def _run_post_processing(
             trace=trace,
             runtime=runtime,
             log=log,
-            resolve_local_path=_resolve_local_path,
+            resolve_local_path=resolve_local_path or _resolve_local_path,
             probe_source=_probe_post_processing_source,
             build_integrity_exception=_build_post_processing_integrity_exception,
+            allow_resource_safety_exception=allow_resource_safety_exception,
         )
         probe_root = source_validation.probe_root
         comic_file = source_validation.comic_file
@@ -567,7 +590,7 @@ async def _run_post_processing(
         # 5b. Clean up empty source directory for usenet downloads (SABnzbd/NZBGet).
         # Torrent clients manage their own files (seeding), so we never touch those.
         # Only clean up when using "move" — copy/hardlink/symlink should preserve.
-        if should_cleanup_source_dir(method, download.download_client):
+        if cleanup_source and should_cleanup_source_dir(method, download.download_client):
             cleanup_start = _time.monotonic()
             cleanup_root = await _resolve_local_download_root(session, download)
             cleanup_dir = probe_root if probe_root != comic_file else comic_file.parent

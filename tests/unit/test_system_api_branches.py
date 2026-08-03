@@ -16,6 +16,10 @@ from pullbox.core.exceptions import NotFoundError, ValidationError
 from pullbox.models.config import SystemConfig
 from pullbox.services.backup_service import BackupInfo
 from pullbox.services.update_check import UpdateCheckResult, UpdateCheckService
+from pullbox.services.wanted_search_sweep import (
+    WantedSearchSweepState,
+    save_wanted_search_sweep,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -328,6 +332,58 @@ async def test_task_routes_cover_statuses(
         await system_api.run_task("metadata", object())
     assert exc_info.value.status_code == 409
     assert "disabled until the active import finishes" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_task_routes_include_durable_search_wanted_progress(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Scheduler:
+        async def load_persisted_stats(self, _session: AsyncSession) -> None:
+            return None
+
+        def get_scheduled_tasks(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "task_id": "search_wanted",
+                    "name": "Search Wanted",
+                    "last_status": "waiting",
+                }
+            ]
+
+    sweep = WantedSearchSweepState(
+        state="waiting",
+        trigger_type="manual",
+        started_at=datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
+        total_targets=4503,
+        pending_issue_ids=[51, 52],
+        attempted_count=50,
+        batch_number=1,
+        next_batch_at=datetime(2026, 7, 31, 14, 0, tzinfo=UTC),
+        message="Paused between batches",
+    )
+    await save_wanted_search_sweep(db_session, sweep)
+    await db_session.commit()
+    monkeypatch.setattr("pullbox.core.scheduler.get_scheduler", Scheduler)
+    monkeypatch.setattr(
+        system_api,
+        "has_active_import_scheduler_protection",
+        AsyncMock(return_value=False),
+    )
+
+    listed = await system_api.list_tasks(object(), db_session)
+
+    progress = listed["scheduled"][0]["sweep_progress"]
+    assert progress == {
+        "state": "waiting",
+        "attempted": 50,
+        "total": 4503,
+        "remaining": 2,
+        "batch_number": 1,
+        "next_batch_at": "2026-07-31T14:00:00+00:00",
+        "message": "Paused between batches",
+    }
 
 
 @pytest.mark.asyncio

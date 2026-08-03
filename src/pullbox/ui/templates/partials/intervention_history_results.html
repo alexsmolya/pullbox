@@ -65,7 +65,10 @@
             {% elif pm.status == "rejected" %}
               {% set outcome_pill = "pill-error" %}
             {% endif %}
-            <tbody x-data="{ expanded: false }">
+            <tbody
+              x-data="{ expanded: false, detailRowId: 'intervention-history-detail-row-{{ pm.id }}' }"
+              @pb-lazy-table-detail-state.window="if ($event.detail.rowId === detailRowId) expanded = $event.detail.expanded"
+            >
               <tr id="intervention-history-item-{{ pm.id }}" data-testid="intervention-history-item-{{ pm.id }}">
                 <td>
                   <span class="downloads-release-name tooltip-wrap" data-tooltip-auto data-tip-size="wide">
@@ -101,16 +104,21 @@
                     <button
                       type="button"
                       data-testid="intervention-history-details-toggle-{{ pm.id }}"
-                      @click="expanded = window.pbToggleLazyTableDetail($el, 'intervention-history-detail-row-{{ pm.id }}')"
+                      @click="expanded = window.pbToggleLazyTableDetail($el, detailRowId, 'pullbox-intervention-history-detail-{{ pm.id }}')"
                       hx-get="/htmx/intervention/history/{{ pm.id }}/detail"
+                      hx-trigger="pullbox-intervention-history-detail-{{ pm.id }} from:body"
                       hx-target="#intervention-history-item-{{ pm.id }}"
                       hx-swap="afterend"
-                      hx-on::before-request="window.pbCancelSkippedLazyDetailFetch(event)"
+                      hx-on::after-request="window.pbLazyTableDetailAfterRequest(this, 'intervention-history-detail-row-{{ pm.id }}')"
+                      hx-on::send-error="window.pbLazyTableDetailSettled(this, 'intervention-history-detail-row-{{ pm.id }}')"
+                      hx-on::response-error="window.pbLazyTableDetailSettled(this, 'intervention-history-detail-row-{{ pm.id }}')"
+                      hx-on::swap-error="window.pbLazyTableDetailSettled(this, 'intervention-history-detail-row-{{ pm.id }}')"
                       class="downloads-action-btn"
                       data-tip="Details"
                       data-tip-pos="left"
                       aria-label="Toggle details"
-                      :aria-expanded="expanded ? 'true' : 'false'"
+                      aria-expanded="false"
+                      x-bind:aria-expanded="expanded ? 'true' : 'false'"
                     >
                       <svg class="transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>

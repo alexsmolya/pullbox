@@ -90,6 +90,21 @@ class TestBugRegressions:
         assert validated[0].confidence == MatchConfidence.HIGH
 
     @pytest.mark.regression
+    def test_scene_style_numbered_pdf_is_auto_grabbable_match(self) -> None:
+        results = [make_release("bb-Sacrificers.No.7.pdf")]
+
+        validated = self.validator.validate_results(
+            results,
+            wanted_series="The Sacrificers",
+            wanted_issue=7.0,
+            wanted_year=2023,
+        )
+
+        assert len(validated) == 1
+        assert validated[0].parsed.series_name == "Sacrificers"
+        assert validated[0].confidence == MatchConfidence.MEDIUM
+
+    @pytest.mark.regression
     def test_publisher_prefixed_volume_subtitle_release_is_accepted(self) -> None:
         """Publisher-prefixed NZBGeek volumes should not fail series matching."""
         results = [
@@ -231,6 +246,75 @@ class TestConfidenceGradation:
             wanted_year=2024,
             wanted_issue_type=IssueType.TPB,
         )
+        assert len(validated) == 1
+        assert validated[0].is_match is True
+
+    @pytest.mark.regression
+    def test_explicit_single_issue_tpb_without_number_is_high_confidence(self) -> None:
+        validated = self.validator.validate_results(
+            [
+                make_release(
+                    "John Carpenter\u2019s Tales of Science Fiction \u2013 THE ENVOY (TPB) (2023)"
+                )
+            ],
+            wanted_series="John Carpenter's Tales of Science Fiction: The Envoy",
+            wanted_issue=1.0,
+            wanted_year=2023,
+            wanted_issue_type=IssueType.TPB,
+            wanted_issue_title="TPB",
+            wanted_series_issue_count=1,
+        )
+
+        assert len(validated) == 1
+        assert validated[0].confidence == MatchConfidence.HIGH
+
+    @pytest.mark.regression
+    def test_numbered_standard_issue_is_rejected_for_single_issue_tpb(self) -> None:
+        matched, rejected = self.validator.validate_all_results(
+            [
+                make_release(
+                    "John Carpenter's Tales of Science Fiction - The Envoy 01 (of 03) "
+                    "(2023) (digital) (Leifman-Empire).cbz"
+                )
+            ],
+            wanted_series="John Carpenter's Tales of Science Fiction: The Envoy",
+            wanted_issue=1.0,
+            wanted_year=2023,
+            wanted_issue_type=IssueType.TPB,
+            wanted_issue_title="TPB",
+            wanted_series_issue_count=1,
+        )
+
+        assert matched == []
+        assert len(rejected) == 1
+        assert "standard issue" in (rejected[0].rejection_reason or "").lower()
+
+    @pytest.mark.regression
+    def test_standard_issue_does_not_satisfy_named_collection_volume(self) -> None:
+        matched, rejected = self.validator.validate_all_results(
+            [make_release("Immortal Thor 003 (2023) (Digital-HD) (Shan-Empire)")],
+            wanted_series="Immortal Thor",
+            wanted_issue=3.0,
+            wanted_year=2024,
+            wanted_issue_type=IssueType.VOLUME,
+            wanted_issue_title="Vol. 3: The End of All Songs",
+        )
+
+        assert matched == []
+        assert len(rejected) == 1
+        assert "Ambiguous issue-vs-volume" in (rejected[0].rejection_reason or "")
+
+    @pytest.mark.regression
+    def test_named_collection_volume_accepts_matching_subtitle(self) -> None:
+        validated = self.validator.validate_results(
+            [make_release("Immortal Thor Vol. 3 - The End Of All Songs (TPB) (2025)")],
+            wanted_series="Immortal Thor",
+            wanted_issue=3.0,
+            wanted_year=2024,
+            wanted_issue_type=IssueType.VOLUME,
+            wanted_issue_title="Vol. 3: The End of All Songs",
+        )
+
         assert len(validated) == 1
         assert validated[0].is_match is True
 
@@ -385,6 +469,23 @@ class TestValidatorEdgeCases:
         assert vr.is_match is False
         assert vr.rejection_reason is not None
         assert "ignore word" in vr.rejection_reason.lower()
+
+    def test_type_rejection_preserves_title_match_diagnostics(self) -> None:
+        result = make_release("Batman-Officer Down v01 [2001] [hybrid] [Marika-Empire]")
+
+        vr = self.validator._validate_one(
+            result,
+            wanted_series="Batman: Officer Down",
+            wanted_issue=1.0,
+            wanted_year=2001,
+            wanted_issue_type=IssueType.ONE_SHOT,
+            alternate_names=None,
+        )
+
+        assert vr.is_match is False
+        assert vr.series_similarity == 1.0
+        assert vr.match_type == "exact"
+        assert vr.issue_type_match is False
 
 
 class TestIgnoreWordsConfig:

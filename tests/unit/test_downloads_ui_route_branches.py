@@ -190,6 +190,27 @@ def test_downloads_normalizers_and_filter_helpers_cover_edge_values() -> None:
     assert len(downloads_routes.get_download_history_filters("failed", None)) == 4
 
 
+def test_manual_torznab_resolver_stage_is_visible_for_queued_torrent() -> None:
+    download = DownloadHistory(
+        issue_id=1,
+        title="Ubuntu fixture",
+        download_url="https://indexer.example/api?t=get&id=1",
+        download_client=DownloadClientType.QBITTORRENT,
+        state=DownloadState.QUEUED,
+    )
+    progress = SimpleNamespace(
+        progress=0.0,
+        speed_bytes=None,
+        eta_seconds=None,
+        client_state="Trying Byparr (resolver 2 of 3)",
+        is_indeterminate=True,
+    )
+
+    row = downloads_routes.build_download_queue_row_view(download, progress, None)
+
+    assert row.primary_phase == "Trying Byparr (resolver 2 of 3)"
+
+
 @pytest.mark.asyncio
 async def test_download_queue_counts_and_context_rollups(
     configured_downloads_routes: RecordingTemplates,

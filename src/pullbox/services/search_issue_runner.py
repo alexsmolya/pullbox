@@ -149,9 +149,11 @@ async def search_issue_target(
         filtered_results,
         wanted_series=target.series_title,
         wanted_issue=target.issue_number,
-        wanted_year=target.series_year,
+        wanted_year=target.search_year,
         wanted_issue_type=target.issue_type,
         alternate_names=target.alternate_names,
+        wanted_issue_title=target.issue_title,
+        wanted_series_issue_count=target.series_issue_count,
     )
     log_type_detection_func(
         matched,
@@ -175,6 +177,7 @@ async def search_issue_target(
         max_file_count=resolved_eval_kwargs.get("max_file_count", 5),
         preferred_language=resolved_eval_kwargs.get("preferred_language", "en"),
         digital_bonus=resolved_eval_kwargs.get("digital_bonus", 10),
+        source_priority=source_priority,
     )
     best_release = best_validation.release if best_validation is not None else None
 

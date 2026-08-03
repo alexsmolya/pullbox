@@ -64,6 +64,36 @@ class _FakeImportRunner:
         return self.recovered
 
 
+class _FakeDirectRuntime:
+    instances: ClassVar[list[_FakeDirectRuntime]] = []
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _FakeDirectRunner:
+    instances: ClassVar[list[_FakeDirectRunner]] = []
+    registered: ClassVar[list[_FakeDirectRunner | None]] = []
+
+    def __init__(self, factory: object, *, executor: _FakeDirectRuntime) -> None:
+        self.factory = factory
+        self.executor = executor
+        self.recovered = 6
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    async def recover_and_dispatch(self) -> int:
+        return self.recovered
+
+    async def aclose(self) -> None:
+        self.closed = True
+        await self.executor.aclose()
+
+
 class _FakeQueueManager:
     instances: ClassVar[list[_FakeQueueManager]] = []
 
@@ -128,6 +158,9 @@ def patched_lifespan(monkeypatch: pytest.MonkeyPatch, tmp_path):
     import pullbox.app as app
 
     _FakeImportRunner.instances.clear()
+    _FakeDirectRuntime.instances.clear()
+    _FakeDirectRunner.instances.clear()
+    _FakeDirectRunner.registered.clear()
     _FakeQueueManager.instances.clear()
     _FakeUpdateCheckService.instances.clear()
     app._startup_background_tasks.clear()
@@ -210,6 +243,18 @@ def patched_lifespan(monkeypatch: pytest.MonkeyPatch, tmp_path):
     )
     monkeypatch.setattr("pullbox.tasks.import_task.ImportRunner", _FakeImportRunner)
     monkeypatch.setattr("pullbox.tasks.import_task.set_import_runner", lambda _runner: None)
+    monkeypatch.setattr(
+        "pullbox.composition.services.build_direct_acquisition_runtime",
+        _FakeDirectRuntime,
+    )
+    monkeypatch.setattr(
+        "pullbox.tasks.direct_acquisition_task.DirectAcquisitionRunner",
+        _FakeDirectRunner,
+    )
+    monkeypatch.setattr(
+        "pullbox.tasks.direct_acquisition_task.set_direct_acquisition_runner",
+        _FakeDirectRunner.registered.append,
+    )
     monkeypatch.setattr("pullbox.composition.services.build_import_service", build_import_service)
     monkeypatch.setattr(
         "pullbox.services.restore_recovery_service.has_pending_restore_recovery",
@@ -253,6 +298,8 @@ async def test_lifespan_starts_background_services_and_shuts_down_cleanly(
         assert patched_lifespan.scheduler.overrides is not None
         assert patched_lifespan.scheduler.overrides["process_completed"] == {"seconds": 300}
         assert _FakeImportRunner.instances
+        assert _FakeDirectRunner.instances
+        assert _FakeDirectRunner.registered[-1] is _FakeDirectRunner.instances[-1]
         assert _FakeQueueManager.instances
         assert set(_FakeQueueManager.instances[-1].executors) == {
             "db_check_cleanup",
@@ -267,6 +314,9 @@ async def test_lifespan_starts_background_services_and_shuts_down_cleanly(
         assert app_module.get_update_check_service() is _FakeUpdateCheckService.instances[-1]
 
     assert patched_lifespan.scheduler.shutdown_called is True
+    assert _FakeDirectRunner.instances[-1].closed is True
+    assert _FakeDirectRuntime.instances[-1].closed is True
+    assert _FakeDirectRunner.registered[-1] is None
 
 
 @pytest.mark.asyncio

@@ -8,23 +8,99 @@ operations for pending matches.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
 from sqlalchemy import func, select, update
+from sqlalchemy.orm import selectinload
 
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectArtifactAttempt,
+    DirectArtifactFailureClass,
+    DirectArtifactState,
+)
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
+from pullbox.services.direct_acquisition_planner_service import (
+    DirectAcquisitionPlanningError,
+    DirectAcquisitionPlanningResult,
+    plan_direct_acquisition,
+)
+from pullbox.services.direct_acquisition_state import (
+    advance_acquisition_progress,
+    transition_acquisition,
+    transition_artifact,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from pullbox.models.download import DownloadHistory
+    from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
     from pullbox.providers.base import ReleaseResult
+    from pullbox.services.direct_search_coordinator import DirectValidatedCandidate
     from pullbox.services.download_service import DownloadService
     from pullbox.services.release_validator import ValidationResult
 
 logger = structlog.get_logger(__name__)
+
+
+class DirectRunnerLike(Protocol):
+    async def dispatch(
+        self,
+        acquisition_id: int,
+        artifact_id: int,
+        *,
+        initial_source: HostResolutionRequest | None = None,
+    ) -> bool: ...
+
+
+DirectPlanner = Callable[..., Awaitable[DirectAcquisitionPlanningResult]]
+DirectRunnerGetter = Callable[[], DirectRunnerLike]
+
+
+def _direct_candidate_match_details(snapshot: dict[str, object]) -> dict[str, object]:
+    """Extract redacted parsed evidence from a durable direct candidate snapshot."""
+    parsed = snapshot.get("parsed")
+    if not isinstance(parsed, dict):
+        return {}
+
+    details: dict[str, object] = {}
+    series_title = parsed.get("series_title")
+    if isinstance(series_title, str) and series_title.strip():
+        details["parsed_series"] = series_title.strip()
+
+    issue_numbers = parsed.get("issue_numbers")
+    if isinstance(issue_numbers, list) and issue_numbers:
+        issue_number = issue_numbers[0]
+        if isinstance(issue_number, str | int | float) and not isinstance(issue_number, bool):
+            details["parsed_issue"] = issue_number
+
+    year = parsed.get("year")
+    if isinstance(year, int) and not isinstance(year, bool):
+        details["parsed_year"] = year
+    return details
+
+
+async def _direct_artifact_host_kind(
+    session: AsyncSession,
+    attempt_id: int,
+) -> str | None:
+    """Return the selected artifact host, falling back to the latest attempted route."""
+    result = await session.execute(
+        select(DirectArtifactAttempt.host_kind)
+        .where(DirectArtifactAttempt.acquisition_attempt_id == attempt_id)
+        .order_by(
+            DirectArtifactAttempt.is_selected.desc(),
+            DirectArtifactAttempt.sequence_no.desc(),
+        )
+        .limit(1)
+    )
+    host_kind = result.scalar_one_or_none()
+    return host_kind.value if host_kind is not None else None
 
 
 class InterventionService:
@@ -33,8 +109,13 @@ class InterventionService:
     def __init__(
         self,
         download_service: DownloadService | None = None,
+        *,
+        direct_planner: DirectPlanner = plan_direct_acquisition,
+        direct_runner_getter: DirectRunnerGetter | None = None,
     ) -> None:
         self._download_service = download_service
+        self._direct_planner = direct_planner
+        self._direct_runner_getter = direct_runner_getter
 
     async def create_pending_match(
         self,
@@ -86,7 +167,7 @@ class InterventionService:
             issue_id=issue_id,
             release_title=release.title,
             download_url=release.download_url,
-            indexer_id=indexer_id,
+            indexer_id=indexer_id if indexer_id is not None else release.indexer_id,
             is_torrent=release.is_torrent,
             file_size=release.size_bytes,
             confidence=validation.confidence.value,
@@ -104,11 +185,143 @@ class InterventionService:
         )
         return pm
 
+    async def create_direct_pending_match(
+        self,
+        session: AsyncSession,
+        issue_id: int,
+        attempt_id: int,
+        result: DirectValidatedCandidate,
+    ) -> PendingMatch | None:
+        """Adapt one direct candidate into the existing intervention contract."""
+        locator = f"pullbox-direct://attempt/{attempt_id}"
+        existing = await session.execute(
+            select(PendingMatch).where(
+                PendingMatch.issue_id == issue_id,
+                PendingMatch.download_url == locator,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            logger.debug(
+                "direct_pending_match_duplicate_skipped",
+                issue_id=issue_id,
+                attempt_id=attempt_id,
+            )
+            return None
+
+        validation = result.validation
+        parsed = result.candidate.parsed
+        pending_match = PendingMatch(
+            issue_id=issue_id,
+            release_title=result.candidate.display_title,
+            download_url=locator,
+            indexer_id=None,
+            is_torrent=False,
+            file_size=None,
+            confidence=validation.confidence.value,
+            match_details={
+                "source_kind": "direct",
+                "direct_attempt_id": attempt_id,
+                "provider_identity": result.provider.provider_identity,
+                "provider_name": result.provider.display_name,
+                "parsed_series": parsed.series_title,
+                "parsed_issue": parsed.issue_numbers[0] if parsed.issue_numbers else None,
+                "parsed_year": parsed.year,
+                "parsed_type": parsed.edition,
+                "format": parsed.format,
+                "quality": parsed.quality,
+                "provider_confidence": result.candidate.provider_confidence,
+                "series_similarity": validation.series_similarity,
+                "series_match_type": ("exact" if validation.series_similarity >= 0.95 else "fuzzy"),
+                "issue_match": validation.issue_match,
+                "year_match": validation.year_match,
+                "type_match": validation.issue_type_match,
+                "rejection_flags": [],
+                "size_warning": None,
+            },
+        )
+        session.add(pending_match)
+        await session.flush()
+        logger.info(
+            "direct_pending_match_created",
+            pending_id=pending_match.id,
+            issue_id=issue_id,
+            attempt_id=attempt_id,
+            confidence=validation.confidence.value,
+        )
+        return pending_match
+
+    async def create_direct_attempt_intervention(
+        self,
+        session: AsyncSession,
+        attempt: DirectAcquisitionAttempt,
+    ) -> PendingMatch:
+        """Create or reopen an intervention row for a failed direct attempt."""
+        locator = f"pullbox-direct://attempt/{attempt.id}"
+        pending_match = (
+            await session.execute(
+                select(PendingMatch).where(
+                    PendingMatch.issue_id == attempt.issue_id,
+                    PendingMatch.download_url == locator,
+                )
+            )
+        ).scalar_one_or_none()
+        snapshot = attempt.candidate_snapshot or {}
+        semantic = snapshot.get("semantic_decision")
+        semantic_details = semantic if isinstance(semantic, dict) else {}
+        details = dict(pending_match.match_details or {}) if pending_match is not None else {}
+        details.update(_direct_candidate_match_details(snapshot))
+        artifact_host_kind = await _direct_artifact_host_kind(session, attempt.id)
+        details.update(
+            {
+                "source_kind": "direct",
+                "direct_attempt_id": attempt.id,
+                "provider_identity": attempt.provider_identity,
+                "provider_name": attempt.provider_identity,
+                "series_similarity": semantic_details.get("series_similarity"),
+                "series_match_type": semantic_details.get("match_type") or "exact",
+                "failure_class": (
+                    attempt.failure_class.value if attempt.failure_class is not None else None
+                ),
+                "failure_code": attempt.failure_code,
+            }
+        )
+        if artifact_host_kind is not None:
+            details["artifact_host_kind"] = artifact_host_kind
+        safety_review = (attempt.plan_snapshot or {}).get("safety_review")
+        if isinstance(safety_review, dict):
+            details["safety_block"] = dict(safety_review)
+        if pending_match is None:
+            pending_match = PendingMatch(
+                issue_id=attempt.issue_id,
+                release_title=str(snapshot.get("display_title") or attempt.provider_candidate_id),
+                download_url=locator,
+                indexer_id=None,
+                is_torrent=False,
+                file_size=None,
+                confidence=str(semantic_details.get("confidence") or "low"),
+                match_details=details,
+            )
+            session.add(pending_match)
+        else:
+            pending_match.status = PendingMatchStatus.PENDING
+            pending_match.resolved_at = None
+            pending_match.resolved_by = None
+            pending_match.match_details = details
+        await session.flush()
+        logger.info(
+            "direct_attempt_intervention_created",
+            pending_id=pending_match.id,
+            issue_id=attempt.issue_id,
+            attempt_id=attempt.id,
+            failure_code=attempt.failure_code,
+        )
+        return pending_match
+
     async def approve_match(
         self,
         session: AsyncSession,
         pending_id: int,
-    ) -> DownloadHistory:
+    ) -> DownloadHistory | DirectAcquisitionAttempt:
         """Approve a pending match and send it to the download client.
 
         Raises:
@@ -119,6 +332,10 @@ class InterventionService:
             raise ValueError(f"Pending match {pending_id} not found")
         if pm.status != PendingMatchStatus.PENDING:
             raise ValueError(f"Pending match {pending_id} is not pending (status={pm.status})")
+
+        direct_attempt_id = _direct_attempt_id(pm)
+        if direct_attempt_id is not None:
+            return await self._approve_direct_match(session, pm, direct_attempt_id)
 
         if self._download_service is None:
             raise RuntimeError("No download service configured")
@@ -138,6 +355,7 @@ class InterventionService:
             is_torrent=pm.is_torrent,
             category=None,
             published_at=None,
+            indexer_id=pm.indexer_id,
         )
 
         download = await self._download_service.send_to_client(
@@ -156,13 +374,101 @@ class InterventionService:
         )
         return download
 
+    async def _approve_direct_match(
+        self,
+        session: AsyncSession,
+        pending_match: PendingMatch,
+        attempt_id: int,
+    ) -> DirectAcquisitionAttempt:
+        attempt = (
+            await session.execute(
+                select(DirectAcquisitionAttempt)
+                .options(selectinload(DirectAcquisitionAttempt.artifact_attempts))
+                .where(DirectAcquisitionAttempt.id == attempt_id)
+            )
+        ).scalar_one_or_none()
+        if attempt is None or attempt.issue_id != pending_match.issue_id:
+            raise ValueError("Pending match has an invalid direct attempt reference")
+
+        initial_source = None
+        if not attempt.artifact_attempts:
+            try:
+                planned = await self._direct_planner(session, acquisition_id=attempt_id)
+            except DirectAcquisitionPlanningError as exc:
+                if exc.code == "candidate_not_found":
+                    pending_match.status = PendingMatchStatus.EXPIRED
+                    pending_match.resolved_at = datetime.now(UTC)
+                    pending_match.resolved_by = "system"
+                    details = dict(pending_match.match_details or {})
+                    details["resolution_reason"] = exc.code
+                    pending_match.match_details = details
+                    await session.commit()
+                raise
+            attempt = planned.attempt
+            artifact = planned.selected_artifact
+            initial_source = planned.initial_source
+        else:
+            selected = [artifact for artifact in attempt.artifact_attempts if artifact.is_selected]
+            if len(selected) != 1:
+                raise ValueError("Direct attempt does not have one selected artifact to resume")
+            artifact = selected[0]
+
+        safety_review = (attempt.plan_snapshot or {}).get("safety_review")
+        is_safety_intervention = (
+            DirectAcquisitionState(attempt.state) is DirectAcquisitionState.INTERVENTION
+            and attempt.failure_class is DirectArtifactFailureClass.SAFETY
+        )
+        can_override_safety_once = (
+            is_safety_intervention
+            and attempt.failure_code == "artifact_resource_safety_review"
+            and isinstance(safety_review, dict)
+            and safety_review.get("overrideable") is True
+            and artifact.quarantine_path
+        )
+        if can_override_safety_once:
+            assert isinstance(safety_review, dict)
+            transition_acquisition(attempt, DirectAcquisitionState.POST_PROCESSING)
+            transition_artifact(artifact, DirectArtifactState.VALIDATING)
+            plan_snapshot = dict(attempt.plan_snapshot or {})
+            approved_review = dict(safety_review)
+            approved_review["allowed_once"] = True
+            plan_snapshot["safety_review"] = approved_review
+            attempt.plan_snapshot = plan_snapshot
+            details = dict(pending_match.match_details or {})
+            details["safety_override_allowed_once"] = True
+            pending_match.match_details = details
+        elif is_safety_intervention:
+            raise ValueError("This direct artifact safety failure cannot be overridden")
+
+        pending_match.status = PendingMatchStatus.APPROVED
+        pending_match.resolved_at = datetime.now(UTC)
+        pending_match.resolved_by = "user"
+        await session.commit()
+
+        runner_getter = self._direct_runner_getter or _get_direct_runner
+        runner = runner_getter()
+        await runner.dispatch(
+            attempt.id,
+            artifact.id,
+            initial_source=initial_source,
+        )
+        logger.info(
+            "direct_pending_match_approved",
+            pending_id=pending_match.id,
+            issue_id=pending_match.issue_id,
+            attempt_id=attempt.id,
+        )
+        return attempt
+
     async def reject_match(
         self,
         session: AsyncSession,
         pending_id: int,
         reason: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Reject a pending match.
+
+        Returns whether the rejected release is now covered by the blocklist.
 
         Raises:
             ValueError: If pending match not found or not in PENDING status.
@@ -172,6 +478,34 @@ class InterventionService:
             raise ValueError(f"Pending match {pending_id} not found")
         if pm.status != PendingMatchStatus.PENDING:
             raise ValueError(f"Pending match {pending_id} is not pending (status={pm.status})")
+
+        direct_attempt_id = _direct_attempt_id(pm)
+        should_blocklist_release = True
+        if direct_attempt_id is not None:
+            attempt = await session.get(DirectAcquisitionAttempt, direct_attempt_id)
+            if attempt is None or attempt.issue_id != pm.issue_id:
+                raise ValueError("Pending match has an invalid direct attempt reference")
+            attempt_state = DirectAcquisitionState(attempt.state)
+            if attempt_state in {
+                DirectAcquisitionState.COMPLETED,
+                DirectAcquisitionState.CANCELLED,
+                DirectAcquisitionState.FAILED,
+            }:
+                should_blocklist_release = False
+            else:
+                transition_acquisition(attempt, DirectAcquisitionState.CANCELLED)
+                attempt.failure_class = DirectArtifactFailureClass.USER_ACTION
+                attempt.failure_code = "user_rejected"
+                attempt.error_message = "The direct result was rejected by the user."
+                advance_acquisition_progress(
+                    attempt,
+                    revision=attempt.progress_revision + 1,
+                    snapshot={
+                        "schema_version": 1,
+                        "stage": "cancelled",
+                        "failure_code": "user_rejected",
+                    },
+                )
 
         pm.status = PendingMatchStatus.REJECTED
         pm.resolved_at = datetime.now(UTC)
@@ -189,29 +523,32 @@ class InterventionService:
             reason=reason,
         )
 
-        # Add to blocklist so this release is not grabbed again
-        try:
-            from pullbox.core.release_parser import parse_release_title
-            from pullbox.models.blocklist import BlocklistReason
-            from pullbox.services.blocklist_service import BlocklistService
+        blocklist_applied = False
+        if should_blocklist_release:
+            try:
+                from pullbox.core.release_parser import parse_release_title
+                from pullbox.models.blocklist import BlocklistReason
+                from pullbox.services.blocklist_service import BlocklistService
 
-            parsed = parse_release_title(pm.release_title)
-            release_group = parsed.scan_group if parsed else None
+                parsed = parse_release_title(pm.release_title)
+                release_group = parsed.scan_group if parsed else None
 
-            await BlocklistService.add_entry(
-                session,
-                pm.release_title,
-                BlocklistReason.REJECTED,
-                download_url=pm.download_url,
-                issue_id=pm.issue_id,
-                indexer_id=pm.indexer_id,
-                release_group=release_group,
-            )
-        except Exception:
-            logger.debug(
-                "blocklist_reject_add_failed",
-                pending_id=pending_id,
-            )
+                await BlocklistService.add_entry(
+                    session,
+                    pm.release_title,
+                    BlocklistReason.REJECTED,
+                    download_url=None if direct_attempt_id is not None else pm.download_url,
+                    issue_id=pm.issue_id,
+                    indexer_id=pm.indexer_id,
+                    release_group=release_group,
+                )
+                blocklist_applied = True
+            except Exception:
+                logger.debug(
+                    "blocklist_reject_add_failed",
+                    pending_id=pending_id,
+                )
+        return blocklist_applied
 
     async def get_pending(
         self,
@@ -314,3 +651,26 @@ class InterventionService:
             )
         )
         return result.scalar_one() > 0
+
+
+def _direct_attempt_id(pending_match: PendingMatch) -> int | None:
+    details = pending_match.match_details or {}
+    if details.get("source_kind") != "direct":
+        return None
+    attempt_id = details.get("direct_attempt_id")
+    if isinstance(attempt_id, bool) or not isinstance(attempt_id, int) or attempt_id <= 0:
+        raise ValueError("Pending match has an invalid direct attempt reference")
+    if pending_match.download_url != f"pullbox-direct://attempt/{attempt_id}":
+        raise ValueError("Pending match has an invalid direct attempt reference")
+    return attempt_id
+
+
+def is_direct_pending_match(pending_match: PendingMatch) -> bool:
+    """Return whether a PendingMatch is the explicit direct-acquisition adapter."""
+    return (pending_match.match_details or {}).get("source_kind") == "direct"
+
+
+def _get_direct_runner() -> DirectRunnerLike:
+    from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
+
+    return get_direct_acquisition_runner()

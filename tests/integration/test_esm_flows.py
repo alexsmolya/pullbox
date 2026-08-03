@@ -260,7 +260,10 @@ class TestSearchSeriesIssues:
             mock_isvc.create_pending_match = AsyncMock()
 
             # Override should_auto_grab to return False (medium confidence)
-            with patch("pullbox.tasks.search_task.should_auto_grab", return_value=False):
+            with patch(
+                "pullbox.services.search_acquisition_router.should_auto_grab",
+                return_value=False,
+            ):
                 from pullbox.tasks.search_task import search_series_issues
 
                 stats = await search_series_issues(series_id)
@@ -401,7 +404,10 @@ class TestSearchSeriesIssues:
             patch("pullbox.tasks.search_task.SearchService") as mock_ss_cls,
             patch("pullbox.tasks.search_task.DownloadService"),
             patch("pullbox.tasks.search_task.InterventionService") as mock_isvc_cls,
-            patch("pullbox.tasks.search_task.should_auto_grab", return_value=False),
+            patch(
+                "pullbox.services.search_acquisition_router.should_auto_grab",
+                return_value=False,
+            ),
         ):
             mock_svc = AsyncMock()
             mock_ss_cls.return_value = mock_svc
@@ -439,7 +445,10 @@ class TestSearchSeriesIssues:
             patch("pullbox.tasks.search_task.SearchService") as mock_ss_cls,
             patch("pullbox.tasks.search_task.DownloadService"),
             patch("pullbox.tasks.search_task.InterventionService") as mock_isvc_cls,
-            patch("pullbox.tasks.search_task.should_auto_grab", return_value=False),
+            patch(
+                "pullbox.services.search_acquisition_router.should_auto_grab",
+                return_value=False,
+            ),
         ):
             mock_svc = AsyncMock()
             mock_ss_cls.return_value = mock_svc
@@ -576,7 +585,10 @@ class TestSearchWanted:
             patch("pullbox.tasks.search_task.SearchService") as mock_ss_cls,
             patch("pullbox.tasks.search_task.DownloadService") as mock_dl_cls,
             patch("pullbox.tasks.search_task.InterventionService") as mock_isvc_cls,
-            patch("pullbox.tasks.search_task.should_auto_grab", return_value=True),
+            patch(
+                "pullbox.services.search_acquisition_router.should_auto_grab",
+                return_value=True,
+            ),
         ):
             mock_svc = AsyncMock()
             mock_ss_cls.return_value = mock_svc
@@ -624,7 +636,10 @@ class TestSearchWanted:
             patch("pullbox.tasks.search_task.SearchService") as mock_ss_cls,
             patch("pullbox.tasks.search_task.DownloadService") as mock_dl_cls,
             patch("pullbox.tasks.search_task.InterventionService") as mock_isvc_cls,
-            patch("pullbox.tasks.search_task.should_auto_grab", return_value=False),
+            patch(
+                "pullbox.services.search_acquisition_router.should_auto_grab",
+                return_value=False,
+            ),
         ):
             mock_svc = AsyncMock()
             mock_ss_cls.return_value = mock_svc
@@ -704,7 +719,10 @@ class TestSearchWanted:
             patch("pullbox.tasks.search_task.SearchService") as mock_ss_cls,
             patch("pullbox.tasks.search_task.DownloadService") as mock_dl_cls,
             patch("pullbox.tasks.search_task.InterventionService"),
-            patch("pullbox.tasks.search_task.should_auto_grab", return_value=True),
+            patch(
+                "pullbox.services.search_acquisition_router.should_auto_grab",
+                return_value=True,
+            ),
         ):
             mock_svc = AsyncMock()
             mock_ss_cls.return_value = mock_svc
@@ -771,7 +789,10 @@ class TestSearchWanted:
             patch("pullbox.tasks.search_task.SearchService") as mock_ss_cls,
             patch("pullbox.tasks.search_task.DownloadService") as mock_dl_cls,
             patch("pullbox.tasks.search_task.InterventionService") as mock_isvc_cls,
-            patch("pullbox.tasks.search_task.should_auto_grab", return_value=True),
+            patch(
+                "pullbox.services.search_acquisition_router.should_auto_grab",
+                return_value=True,
+            ),
         ):
             mock_svc = AsyncMock()
             mock_ss_cls.return_value = mock_svc

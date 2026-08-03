@@ -1,3 +1,73 @@
+FROM dhi.io/python:3.14-debian13-dev AS mega-builder
+
+ARG MEGA_SDK_SOURCE_URL="https://github.com/meganz/sdk/archive/e11a1a4648bdee70dac67ecb2200c1507e4de53c.tar.gz"
+ARG MEGA_SDK_SOURCE_SHA256="fd4d37848ed3c3cf799695e3aa47cb69c2f5938e6efe530a718d3f1fbf7c46e8"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        cmake \
+        curl \
+        g++ \
+        git \
+        gzip \
+        libcrypto++-dev \
+        libcurl4-openssl-dev \
+        libicu-dev \
+        libsodium-dev \
+        libsqlite3-dev \
+        libssl-dev \
+        ninja-build \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    curl -fsSL "${MEGA_SDK_SOURCE_URL}" -o /tmp/mega-sdk.tar.gz; \
+    echo "${MEGA_SDK_SOURCE_SHA256}  /tmp/mega-sdk.tar.gz" | sha256sum -c -; \
+    mkdir -p /tmp/mega-sdk; \
+    tar -xzf /tmp/mega-sdk.tar.gz -C /tmp/mega-sdk --strip-components=1; \
+    rm /tmp/mega-sdk.tar.gz
+
+COPY native/mega_bridge/ /tmp/pullbox-mega-bridge/
+
+RUN cmake \
+        -S /tmp/pullbox-mega-bridge \
+        -B /tmp/pullbox-mega-bridge-build \
+        -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DMEGA_SDK_SOURCE_DIR=/tmp/mega-sdk \
+    && cmake --build /tmp/pullbox-mega-bridge-build --target pullbox-mega-bridge \
+    && install -m 0755 \
+        /tmp/pullbox-mega-bridge-build/pullbox-mega-bridge \
+        /usr/bin/pullbox-mega-bridge
+
+RUN set -eu; \
+    mkdir -p /mega-runtime/usr/bin /mega-runtime/usr/lib /mega-runtime/usr/share/licenses/mega-sdk; \
+    copy_path() { \
+        src="$1"; \
+        case "${src}" in \
+            /lib64/*) return 0 ;; \
+            /lib/*) dest="/mega-runtime/usr/lib/${src#/lib/}" ;; \
+            *) dest="/mega-runtime${src}" ;; \
+        esac; \
+        mkdir -p "$(dirname "${dest}")"; \
+        cp -aL "${src}" "${dest}"; \
+    }; \
+    copy_binary() { \
+        binary="$1"; \
+        copy_path "${binary}"; \
+        ldd "${binary}" \
+            | while read -r left arrow path _rest; do \
+                if [ "${arrow}" = "=>" ] && [ -f "${path}" ]; then \
+                    copy_path "${path}"; \
+                elif [ -f "${left}" ]; then \
+                    copy_path "${left}"; \
+                fi; \
+            done; \
+    }; \
+    copy_binary /usr/bin/pullbox-mega-bridge; \
+    cp /tmp/mega-sdk/LICENSE /mega-runtime/usr/share/licenses/mega-sdk/LICENSE
+
 FROM dhi.io/python:3.14-debian13-dev AS builder
 
 ARG UNRAR_SOURCE_URL="https://www.rarlab.com/rar/unrarsrc-7.2.6.tar.gz"
@@ -92,6 +162,7 @@ ENV VIRTUAL_ENV=/opt/venv \
 WORKDIR /app
 
 COPY --from=builder /runtime-root/ /
+COPY --from=mega-builder /mega-runtime/ /
 COPY --from=builder --chown=65532:65532 /runtime-dirs/data /data
 COPY --from=builder --chown=65532:65532 /runtime-dirs/comics /comics
 COPY --from=builder --chown=65532:65532 /runtime-dirs/downloads /downloads

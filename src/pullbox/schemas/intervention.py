@@ -59,10 +59,12 @@ class RejectRequest(BaseModel):
 class ApproveResponse(BaseModel):
     """Response after approving a pending match."""
 
-    download_id: int
+    download_id: int | None = None
+    acquisition_id: int | None = None
     issue_id: int
     title: str
     status: str
+    source_kind: str = "indexer"
 
 
 class BulkActionRequest(BaseModel):

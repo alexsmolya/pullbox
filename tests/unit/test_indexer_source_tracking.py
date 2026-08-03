@@ -52,8 +52,11 @@ class TestIndexerSourceEnum:
     def test_prowlarr_value(self) -> None:
         assert IndexerSource.PROWLARR == "prowlarr"
 
-    def test_exactly_two_members(self) -> None:
-        assert len(list(IndexerSource)) == 2
+    def test_jackett_value(self) -> None:
+        assert IndexerSource.JACKETT == "jackett"
+
+    def test_exactly_three_members(self) -> None:
+        assert len(list(IndexerSource)) == 3
 
 
 @pytest.mark.asyncio
@@ -107,6 +110,42 @@ class TestProwlarrIndexerSource:
 
         assert config.source == "prowlarr"
         assert config.prowlarr_indexer_id == 1
+
+
+@pytest.mark.asyncio
+class TestManagedIndexerState:
+    """Manager identity and availability remain independent of local settings."""
+
+    async def test_jackett_manager_fields_persist(self, session: AsyncSession) -> None:
+        config = IndexerConfig(
+            name="1337x (Jackett)",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+            api_key="jackett-key",
+            source="jackett",
+            manager_indexer_id="1337x",
+            manager_available=False,
+        )
+        session.add(config)
+        await session.flush()
+        await session.refresh(config)
+
+        assert config.source == "jackett"
+        assert config.manager_indexer_id == "1337x"
+        assert config.manager_available is False
+
+    async def test_manual_indexer_defaults_to_available(self, session: AsyncSession) -> None:
+        config = IndexerConfig(
+            name="Manual",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://indexer.example",
+            api_key="key",
+        )
+        session.add(config)
+        await session.flush()
+        await session.refresh(config)
+
+        assert config.manager_available is True
 
 
 @pytest.mark.asyncio

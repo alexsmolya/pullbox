@@ -195,21 +195,27 @@
         {% endcall %}
 
         {% call settings_row(label="Preferred Language", help="Other languages are penalized, not rejected.") %}
-          <select name="preferred_language" class="input-pb w-full max-w-sm">
-            {% set lang = configs.get('preferred_language', 'en') %}
-            <option value="en" {{ 'selected' if lang == 'en' }}>English</option>
-            <option value="fr" {{ 'selected' if lang == 'fr' }}>French</option>
-            <option value="de" {{ 'selected' if lang == 'de' }}>German</option>
-            <option value="es" {{ 'selected' if lang == 'es' }}>Spanish</option>
-            <option value="it" {{ 'selected' if lang == 'it' }}>Italian</option>
-            <option value="pt" {{ 'selected' if lang == 'pt' }}>Portuguese</option>
-            <option value="ja" {{ 'selected' if lang == 'ja' }}>Japanese</option>
-            <option value="zh" {{ 'selected' if lang == 'zh' }}>Chinese</option>
-            <option value="ko" {{ 'selected' if lang == 'ko' }}>Korean</option>
-            <option value="nl" {{ 'selected' if lang == 'nl' }}>Dutch</option>
-            <option value="pl" {{ 'selected' if lang == 'pl' }}>Polish</option>
-            <option value="ru" {{ 'selected' if lang == 'ru' }}>Russian</option>
-          </select>
+          {% set lang = configs.get('preferred_language', 'en') %}
+          {{ dropdown_select(
+            name="preferred_language",
+            value=lang,
+            options=[
+              ("en", "English"),
+              ("fr", "French"),
+              ("de", "German"),
+              ("es", "Spanish"),
+              ("it", "Italian"),
+              ("pt", "Portuguese"),
+              ("ja", "Japanese"),
+              ("zh", "Chinese"),
+              ("ko", "Korean"),
+              ("nl", "Dutch"),
+              ("pl", "Polish"),
+              ("ru", "Russian"),
+            ],
+            root_testid="settings-search-preferred-language-select",
+            class_name="w-full max-w-sm"
+          ) }}
         {% endcall %}
       </div>
 
@@ -222,7 +228,8 @@
               f.querySelector('[name=score_penalty_pack]').value = '-20';
               f.querySelector('[name=score_bonus_digital]').value = '10';
               f.querySelector('[name=max_file_count]').value = '5';
-              f.querySelector('[name=preferred_language]').value = 'en';
+              const languageDropdown = f.querySelector('[data-testid=settings-search-preferred-language-select]');
+              window.Alpine.$data(languageDropdown).syncExternalValue('en');
               saveConfig(f).then(() => markClean());
             "
             class="btn-ghost"

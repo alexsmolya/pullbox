@@ -25,6 +25,7 @@ def test_intervention_filter_normalizers_keep_invalid_values_safe() -> None:
     assert normalize_intervention_reason_filter("size_warning") == "size_warning"
     assert normalize_intervention_reason_filter("needs_review") == ""
     assert normalize_intervention_protocol_filter("TORRENT") == "torrent"
+    assert normalize_intervention_protocol_filter("DIRECT") == "direct"
     assert normalize_intervention_protocol_filter("magnet") == ""
     assert normalize_intervention_outcome_filter("APPROVED") == "approved"
     assert normalize_intervention_outcome_filter("pending") == ""
@@ -118,3 +119,26 @@ def test_build_intervention_item_meta_falls_back_to_match_details_source() -> No
     assert meta["match_type_label"] == "Fuzzy series match"
     assert meta["source_label"] == "NZBgeek"
     assert meta["review_reason_summary"] == "Fuzzy series match · Issue mismatch"
+
+
+def test_build_intervention_item_meta_labels_direct_provider() -> None:
+    """Direct adapter rows identify their provider and selected artifact host."""
+    from pullbox.ui.intervention_filter_helpers import build_intervention_item_meta
+
+    pending_match = SimpleNamespace(
+        is_torrent=False,
+        status="pending",
+        indexer=None,
+        match_details={
+            "source_kind": "direct",
+            "provider_name": "pullbox.getcomics",
+            "provider_identity": "pullbox.getcomics",
+            "artifact_host_kind": "datanodes",
+            "series_match_type": "exact",
+        },
+    )
+
+    meta = build_intervention_item_meta(pending_match)
+
+    assert meta["protocol_label"] == "Direct"
+    assert meta["source_label"] == "GetComics via DataNodes"

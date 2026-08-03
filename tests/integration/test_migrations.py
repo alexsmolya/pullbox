@@ -11,12 +11,13 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import MetaData, Table, create_engine, func, inspect, select, text
 
 from alembic import command
 
 # Path to the alembic directory (relative to this test file)
 _ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"
+_DIRECT_ACQUISITION_PARENT_REVISION = "d9f0a1b2c345"
 
 
 @pytest.fixture
@@ -65,6 +66,46 @@ class TestMigrationChain:
             assert "issues" in tables
             assert "library_roots" in tables
             assert "system_config" in tables
+        finally:
+            engine.dispose()
+
+    def test_indexer_manager_migration_backfills_prowlarr_identity(
+        self,
+        alembic_cfg,
+    ) -> None:
+        """Generic manager identity preserves existing Prowlarr rows."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "i4e5f6g70829")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO indexer_configs "
+                        "(name, indexer_type, url, api_key, enabled, priority, "
+                        "failure_count, source, prowlarr_indexer_id) "
+                        "VALUES ('1337x (Prowlarr)', 'TORZNAB', 'http://prowlarr/7', "
+                        "'encrypted', 1, 50, 0, 'prowlarr', 7)"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        columns = _get_columns(sync_url, "indexer_configs")
+        assert {"manager_indexer_id", "manager_available"}.issubset(columns)
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT manager_indexer_id, manager_available "
+                        "FROM indexer_configs WHERE source = 'prowlarr'"
+                    )
+                ).one()
+            assert tuple(row) == ("7", 1)
         finally:
             engine.dispose()
 
@@ -362,3 +403,263 @@ class TestMigrationChain:
 
         assert rows[0][1] == 2014
         assert rows[1][1] == 2020
+
+    def test_direct_acquisition_tables_are_created_empty_with_recovery_indexes(
+        self, alembic_cfg
+    ) -> None:
+        """Direct acquisition persistence is dormant, indexed, and empty after upgrade."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        expected_indexes = {
+            "direct_resolver_configs": set(),
+            "direct_provider_configs": {
+                "ix_direct_provider_configs_state",
+                "ix_direct_provider_configs_enabled_priority",
+            },
+            "direct_host_configs": {
+                "ix_direct_host_configs_account_state",
+                "ix_direct_host_configs_enabled_preference",
+            },
+            "direct_acquisition_attempts": {
+                "ix_direct_acquisition_attempts_state_retry",
+                "ix_direct_acquisition_attempts_issue_created",
+                "ix_direct_acquisition_attempts_provider_state",
+            },
+            "direct_artifact_attempts": {
+                "ix_direct_artifact_attempts_acquisition_sequence",
+                "ix_direct_artifact_attempts_state_retry",
+                "ix_direct_artifact_attempts_host_state",
+            },
+        }
+
+        engine = create_engine(sync_url)
+        try:
+            inspector = inspect(engine)
+            tables = set(inspector.get_table_names())
+            assert set(expected_indexes).issubset(tables)
+
+            with engine.connect() as conn:
+                metadata = MetaData()
+                for table, required_indexes in expected_indexes.items():
+                    indexes = {index["name"] for index in inspector.get_indexes(table)}
+                    assert required_indexes.issubset(indexes)
+                    reflected = Table(table, metadata, autoload_with=conn)
+                    count = conn.execute(select(func.count()).select_from(reflected)).scalar_one()
+                    assert count == 0
+        finally:
+            engine.dispose()
+
+    def test_direct_failure_constraints_include_route_safety(self, alembic_cfg) -> None:
+        """Unsafe routes persist separately from hard-stop content safety failures."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            inspector = inspect(engine)
+            for table in ("direct_acquisition_attempts", "direct_artifact_attempts"):
+                constraints = {
+                    item["name"]: item["sqltext"] for item in inspector.get_check_constraints(table)
+                }
+                assert "unsafe_route" in constraints["directartifactfailureclass"]
+        finally:
+            engine.dispose()
+
+    def test_direct_route_safety_migration_reclassifies_known_url_failures(
+        self,
+        alembic_cfg,
+    ) -> None:
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "l7m8n9o0p123")
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO series "
+                        "(id, title, sort_title, status, issue_count, monitored) "
+                        "VALUES (9901, 'Route Safety', 'Route Safety', 'continuing', 1, 1)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO issues (id, series_id, issue_number, status) "
+                        "VALUES (9901, 9901, '1', 'wanted')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO direct_acquisition_attempts "
+                        "(id, request_key, issue_id, provider_identity, provider_candidate_id, "
+                        "failure_class, failure_code) VALUES "
+                        "(9901, 'route-safety-migration', 9901, 'test', 'candidate', "
+                        "'safety', 'unsafe_artifact_url')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO direct_artifact_attempts "
+                        "(id, acquisition_attempt_id, sequence_no, artifact_identity, "
+                        "route_kind, host_kind, failure_class, failure_code) VALUES "
+                        "(9901, 9901, 0, 'route:test', 'direct', 'generic_https', "
+                        "'safety', 'unsafe_artifact_url')"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                acquisition = conn.execute(
+                    text("SELECT failure_class FROM direct_acquisition_attempts WHERE id = 9901")
+                ).scalar_one()
+                artifact = conn.execute(
+                    text("SELECT failure_class FROM direct_artifact_attempts WHERE id = 9901")
+                ).scalar_one()
+            assert acquisition == "unsafe_route"
+            assert artifact == "unsafe_route"
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "l7m8n9o0p123")
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                acquisition = conn.execute(
+                    text("SELECT failure_class FROM direct_acquisition_attempts WHERE id = 9901")
+                ).scalar_one()
+                artifact = conn.execute(
+                    text("SELECT failure_class FROM direct_artifact_attempts WHERE id = 9901")
+                ).scalar_one()
+            assert acquisition == "safety"
+            assert artifact == "safety"
+        finally:
+            engine.dispose()
+
+    def test_direct_host_reachability_migration_backfills_existing_status(
+        self,
+        alembic_cfg,
+    ) -> None:
+        """Existing account checks become conservative reachability history."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "j5f6g7h81930")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO direct_host_configs "
+                        "(host_kind, account_state, last_tested_at) VALUES "
+                        "('pixeldrain', 'healthy', '2026-07-30 12:00:00'), "
+                        "('terabox', 'authentication_required', '2026-07-30 13:00:00')"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        columns = _get_columns(sync_url, "direct_host_configs")
+        assert {
+            "reachability_state",
+            "last_reachable_at",
+            "last_operational_result",
+            "last_operational_at",
+        }.issubset(columns)
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT host_kind, reachability_state, last_reachable_at, "
+                        "last_operational_result, last_operational_at "
+                        "FROM direct_host_configs ORDER BY host_kind"
+                    )
+                ).fetchall()
+        finally:
+            engine.dispose()
+
+        assert tuple(rows[0]) == (
+            "pixeldrain",
+            "reachable",
+            "2026-07-30 12:00:00",
+            None,
+            None,
+        )
+        assert tuple(rows[1]) == (
+            "terabox",
+            "authentication_required",
+            None,
+            None,
+            None,
+        )
+
+    def test_direct_acquisition_migration_downgrades_and_reapplies(self, alembic_cfg) -> None:
+        """The dormant direct-download schema can be removed and recreated safely."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, _DIRECT_ACQUISITION_PARENT_REVISION)
+
+        engine = create_engine(sync_url)
+        try:
+            tables = set(inspect(engine).get_table_names())
+        finally:
+            engine.dispose()
+
+        assert "direct_provider_configs" not in tables
+        assert "direct_host_configs" not in tables
+        assert "direct_acquisition_attempts" not in tables
+        assert "direct_artifact_attempts" not in tables
+
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            tables = set(inspect(engine).get_table_names())
+        finally:
+            engine.dispose()
+
+        assert {
+            "direct_resolver_configs",
+            "direct_provider_configs",
+            "direct_host_configs",
+            "direct_acquisition_attempts",
+            "direct_artifact_attempts",
+        }.issubset(tables)
+
+    def test_direct_resolver_migration_has_bounded_secret_configuration(self, alembic_cfg) -> None:
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            inspector = inspect(engine)
+            columns = {
+                item["name"]: item for item in inspector.get_columns("direct_resolver_configs")
+            }
+            unique_constraints = {
+                item["name"] for item in inspector.get_unique_constraints("direct_resolver_configs")
+            }
+            check_constraints = {
+                item["name"] for item in inspector.get_check_constraints("direct_resolver_configs")
+            }
+        finally:
+            engine.dispose()
+
+        assert columns["encrypted_auth_headers"]["nullable"] is False
+        assert columns["resolver_kind"]["nullable"] is False
+        assert columns["priority"]["nullable"] is False
+        assert columns["timeout_seconds"]["nullable"] is False
+        assert columns["max_concurrency"]["nullable"] is False
+        assert "uq_direct_resolver_name" in unique_constraints
+        assert "uq_direct_resolver_kind" in unique_constraints
+        assert {
+            "ck_direct_resolver_priority",
+            "ck_direct_resolver_timeout",
+            "ck_direct_resolver_concurrency",
+        }.issubset(check_constraints)

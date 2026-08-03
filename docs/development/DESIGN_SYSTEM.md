@@ -811,6 +811,27 @@ Shared option vocabulary:
 - If a page needs a repeated structure not covered here, add or refine a component instead of copying markup.
 - Component variants must stay semantic. Do not create palette-specific component APIs.
 
+### 8.5 Cursor Affordance Contract
+
+Every enabled semantic interactive control must display the pointer cursor so
+clickability is consistent across the application. The global contract covers
+links with destinations, buttons, button-like inputs, selects, disclosure
+summaries, toggle/file labels, and elements with `role="button"` or
+`role="link"`.
+
+Rules:
+
+- disabled native controls and controls with `aria-disabled="true"` use the
+  `not-allowed` cursor
+- active request states may override the pointer with a wait/progress cursor
+- custom clickable surfaces must use the correct semantic element whenever
+  possible; otherwise they require the appropriate role, keyboard behavior,
+  focus treatment, and accessible name
+- background HTMX polling, Alpine outside-click listeners, and modal backdrops
+  are not interactive controls and must not receive a pointer automatically
+- page-specific cursor classes are allowed only for a meaningful state
+  override, not to repair a missing shared affordance
+
 ---
 
 ## 9. UX Contracts

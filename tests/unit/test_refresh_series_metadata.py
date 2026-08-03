@@ -143,6 +143,35 @@ async def test_metadata_fetch_wrappers_return_provider_results() -> None:
 
 
 @pytest.mark.asyncio
+async def test_full_and_recent_issue_fetches_use_different_consensus_policies(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+    service.get_issue_summaries_for_series = AsyncMock(return_value=[])
+    service.get_recent_issue_summaries_for_series = AsyncMock(return_value=[])
+    service.upsert_issue_summaries = AsyncMock(return_value=[])
+
+    async with db_factory() as session:
+        series = Series(
+            title="Spawn",
+            sort_title="Spawn",
+            comicvine_id=12345,
+            status=SeriesStatus.CONTINUING,
+            series_type=SeriesType.STANDARD,
+        )
+        session.add(series)
+        await session.flush()
+
+        await service.fetch_issues_for_series(session, series.id)
+        full_call = service.upsert_issue_summaries.await_args
+        await service.fetch_recent_issues_for_series(session, series.id)
+        recent_call = service.upsert_issue_summaries.await_args
+
+    assert full_call.kwargs == {"infer_series_type_from_summaries": True}
+    assert recent_call.kwargs == {"infer_series_type_from_summaries": False}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "args"),
     [
@@ -247,6 +276,50 @@ class TestRefreshSeries:
             assert updated.metadata_source == "comicvine"
 
     @pytest.mark.asyncio
+    async def test_partial_upsert_preserves_existing_classification_evidence(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=22222,
+                title="Batman: Officer Down",
+                sort_title="Batman: Officer Down",
+                year_start=2001,
+                status=SeriesStatus.ENDED,
+                series_type=SeriesType.VOLUME,
+                issue_count=1,
+                description="This collection includes stories from Batman #587-590.",
+                metadata_source="comicvine",
+            )
+            session.add(series)
+            await session.flush()
+
+            updated = await service.upsert_series_metadata(
+                session,
+                22222,
+                SeriesMetadata(
+                    provider_id="22222",
+                    title="Batman: Officer Down",
+                    sort_title="Batman: Officer Down",
+                    year_start=2001,
+                    year_end=None,
+                    status=None,
+                    publisher=None,
+                    description=None,
+                    cover_url=None,
+                    issue_count=None,
+                    comicvine_url=None,
+                ),
+            )
+
+            assert updated.description == ("This collection includes stories from Batman #587-590.")
+            assert updated.issue_count == 1
+            assert updated.series_type == SeriesType.VOLUME
+
+    @pytest.mark.asyncio
     async def test_upsert_preserves_manual_status_override(
         self,
         db_factory: async_sessionmaker[AsyncSession],
@@ -287,6 +360,233 @@ class TestRefreshSeries:
 
             assert updated.status == SeriesStatus.ENDED
             assert updated.status_override == SeriesStatusOverride.ENDED
+
+    @pytest.mark.asyncio
+    async def test_upsert_reclassifies_series_and_repairs_only_inherited_issue_types(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=12345,
+                title="Spawn",
+                sort_title="Spawn",
+                year_start=1992,
+                status=SeriesStatus.ENDED,
+                series_type=SeriesType.SPECIAL,
+                issue_count=2,
+                description="An ongoing series about Al Simmons.",
+                metadata_source="comicvine",
+            )
+            session.add(series)
+            await session.flush()
+            ordinary = Issue(
+                series_id=series.id,
+                comicvine_id=1001,
+                issue_number=1.0,
+                title="Questions",
+                issue_type=IssueType.SPECIAL,
+                status=IssueStatus.SKIPPED,
+                metadata_source="comicvine",
+            )
+            actual_special = Issue(
+                series_id=series.id,
+                comicvine_id=1002,
+                issue_number=2.0,
+                title="Holiday Special",
+                issue_type=IssueType.SPECIAL,
+                status=IssueStatus.SKIPPED,
+                metadata_source="comicvine",
+            )
+            session.add_all([ordinary, actual_special])
+            await session.flush()
+
+            updated = await service.upsert_series_metadata(
+                session,
+                12345,
+                SeriesMetadata(
+                    provider_id="12345",
+                    title="Spawn",
+                    sort_title="Spawn",
+                    year_start=1992,
+                    year_end=2026,
+                    status=SeriesStatus.ENDED.value,
+                    publisher=None,
+                    description="An ongoing series about Al Simmons.",
+                    cover_url=None,
+                    issue_count=2,
+                    comicvine_url="https://comicvine.gamespot.com/spawn/4050-12345/",
+                ),
+            )
+
+            assert updated.series_type == SeriesType.STANDARD
+            assert ordinary.issue_type == IssueType.ISSUE
+            assert actual_special.issue_type == IssueType.SPECIAL
+
+    @pytest.mark.asyncio
+    async def test_upsert_preserves_explicit_provisional_issue_type_during_reclassification(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=54321,
+                title="Imported Collection",
+                sort_title="Imported Collection",
+                year_start=2020,
+                status=SeriesStatus.ENDED,
+                series_type=SeriesType.ONE_SHOT,
+                issue_count=1,
+                metadata_source="comicvine_partial",
+            )
+            session.add(series)
+            await session.flush()
+            provisional = Issue(
+                series_id=series.id,
+                issue_number=1.0,
+                title=None,
+                issue_type=IssueType.TPB,
+                status=IssueStatus.OWNED,
+                metadata_source="provisional_import",
+            )
+            session.add(provisional)
+            await session.flush()
+
+            await service.upsert_series_metadata(
+                session,
+                54321,
+                SeriesMetadata(
+                    provider_id="54321",
+                    title="Imported Collection",
+                    sort_title="Imported Collection",
+                    year_start=2020,
+                    year_end=2020,
+                    status=SeriesStatus.ENDED.value,
+                    publisher=None,
+                    description="A story without format metadata.",
+                    cover_url=None,
+                    issue_count=1,
+                    comicvine_url=None,
+                ),
+            )
+
+            assert series.series_type == SeriesType.STANDARD
+            assert provisional.issue_type == IssueType.TPB
+            assert provisional.metadata_source == "provisional_import"
+
+    @pytest.mark.asyncio
+    async def test_upsert_preserves_credible_collection_type_without_new_evidence(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=88888,
+                title="The Chair",
+                sort_title="The Chair",
+                status=SeriesStatus.ENDED,
+                series_type=SeriesType.GRAPHIC_NOVEL,
+                issue_count=1,
+                metadata_source="comicvine",
+            )
+            session.add(series)
+            await session.flush()
+            issue = Issue(
+                series_id=series.id,
+                comicvine_id=99999,
+                issue_number=1.0,
+                title=None,
+                issue_type=IssueType.GN,
+                status=IssueStatus.SKIPPED,
+                metadata_source="comicvine",
+            )
+            session.add(issue)
+            await session.flush()
+
+            await service.upsert_series_metadata(
+                session,
+                88888,
+                SeriesMetadata(
+                    provider_id="88888",
+                    title="The Chair",
+                    sort_title="The Chair",
+                    year_start=2008,
+                    year_end=2008,
+                    status=SeriesStatus.ENDED.value,
+                    publisher=None,
+                    description=None,
+                    cover_url=None,
+                    issue_count=1,
+                    comicvine_url=None,
+                ),
+            )
+
+            assert series.series_type == SeriesType.GRAPHIC_NOVEL
+            assert issue.issue_type == IssueType.GN
+
+    @pytest.mark.asyncio
+    async def test_upsert_uses_complete_existing_issue_title_consensus(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                comicvine_id=77777,
+                title="Collected Stories",
+                sort_title="Collected Stories",
+                status=SeriesStatus.ENDED,
+                series_type=SeriesType.TPB,
+                issue_count=2,
+                metadata_source="comicvine",
+            )
+            session.add(series)
+            await session.flush()
+            issues = [
+                Issue(
+                    series_id=series.id,
+                    comicvine_id=70000 + number,
+                    issue_number=float(number),
+                    title=f"Volume {number}",
+                    issue_type=IssueType.TPB,
+                    status=IssueStatus.SKIPPED,
+                    metadata_source="comicvine",
+                )
+                for number in (1, 2)
+            ]
+            session.add_all(issues)
+            await session.flush()
+
+            await service.upsert_series_metadata(
+                session,
+                77777,
+                SeriesMetadata(
+                    provider_id="77777",
+                    title="Collected Stories",
+                    sort_title="Collected Stories",
+                    year_start=2020,
+                    year_end=2021,
+                    status=SeriesStatus.ENDED.value,
+                    publisher=None,
+                    description=None,
+                    cover_url=None,
+                    issue_count=2,
+                    comicvine_url=None,
+                ),
+            )
+
+            assert series.series_type == SeriesType.VOLUME
+            assert [issue.issue_type for issue in issues] == [
+                IssueType.VOLUME,
+                IssueType.VOLUME,
+            ]
 
     @pytest.mark.asyncio
     async def test_upsert_continuing_override_rejects_provider_end_year(
@@ -743,6 +1043,133 @@ class TestUpsertIssueSummaries:
 
             assert len(created) == 1
             assert created[0].issue_type == IssueType.VOLUME
+
+    @pytest.mark.asyncio
+    async def test_full_catalog_mixed_standard_and_special_does_not_retype_series(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                title="MAD Magazine",
+                sort_title="MAD Magazine",
+                comicvine_id=9318,
+                status=SeriesStatus.ENDED,
+                series_type=SeriesType.STANDARD,
+            )
+            session.add(series)
+            await session.flush()
+
+            created = await service.upsert_issue_summaries(
+                session,
+                series,
+                [
+                    IssueSummary(
+                        provider_id="1",
+                        issue_number=1.0,
+                        title="Issue One",
+                        release_date=None,
+                        cover_url=None,
+                        issue_type="issue",
+                    ),
+                    IssueSummary(
+                        provider_id="2",
+                        issue_number=2.0,
+                        title="Anniversary Special",
+                        release_date=None,
+                        cover_url=None,
+                        issue_type="issue",
+                    ),
+                ],
+                infer_series_type_from_summaries=True,
+            )
+
+            assert series.series_type == SeriesType.STANDARD
+            assert [issue.issue_type for issue in created] == [
+                IssueType.ISSUE,
+                IssueType.SPECIAL,
+            ]
+
+    @pytest.mark.asyncio
+    async def test_full_catalog_mixed_collection_bindings_infers_generic_volume(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                title="Collected Stories",
+                sort_title="Collected Stories",
+                comicvine_id=76543,
+                status=SeriesStatus.ENDED,
+                series_type=SeriesType.STANDARD,
+            )
+            session.add(series)
+            await session.flush()
+
+            await service.upsert_issue_summaries(
+                session,
+                series,
+                [
+                    IssueSummary(
+                        provider_id="11",
+                        issue_number=1.0,
+                        title="TPB",
+                        release_date=None,
+                        cover_url=None,
+                        issue_type=IssueType.TPB.value,
+                    ),
+                    IssueSummary(
+                        provider_id="12",
+                        issue_number=2.0,
+                        title="HC",
+                        release_date=None,
+                        cover_url=None,
+                        issue_type=IssueType.HC.value,
+                    ),
+                ],
+                infer_series_type_from_summaries=True,
+            )
+
+            assert series.series_type == SeriesType.VOLUME
+
+    @pytest.mark.asyncio
+    async def test_partial_summary_subset_cannot_retype_series(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        service = MetadataService(provider=MagicMock(), covers_dir=MagicMock())
+
+        async with db_factory() as session:
+            series = Series(
+                title="Spawn",
+                sort_title="Spawn",
+                comicvine_id=12345,
+                status=SeriesStatus.CONTINUING,
+                series_type=SeriesType.STANDARD,
+            )
+            session.add(series)
+            await session.flush()
+
+            await service.upsert_issue_summaries(
+                session,
+                series,
+                [
+                    IssueSummary(
+                        provider_id="99",
+                        issue_number=100.0,
+                        title="Anniversary Special",
+                        release_date=None,
+                        cover_url=None,
+                        issue_type="issue",
+                    )
+                ],
+            )
+
+            assert series.series_type == SeriesType.STANDARD
 
     @pytest.mark.asyncio
     async def test_upsert_issue_summaries_reconciles_existing_provider_id_issue_number(
