@@ -370,7 +370,7 @@ class TestDownloadsRouteContracts:
         assert "Active" in response.text
         assert "Queued" in response.text
         assert 'class="downloads-release-name tooltip-wrap"' in response.text
-        assert 'class="downloads-issue-link"' in response.text
+        assert response.text.count('hx-boost="false" class="downloads-issue-link"') == 2
         assert "No linked issue" not in response.text
         assert "SABnzbd" in response.text
         assert "Details" not in response.text
