@@ -158,6 +158,13 @@ class TestIssueDetailRouteContracts:
         assert "Manage <span>issue</span>" in response.text
         assert "Manage <span>this issue</span>" not in response.text
         assert 'data-testid="issue-action-download"' in response.text
+        assert 'data-testid="issue-action-read"' in response.text
+        assert '@click="openReader($event)"' in response.text
+        assert 'data-testid="comic-reader-dialog"' in response.text
+        assert 'data-testid="comic-reader-viewport"' in response.text
+        assert 'data-testid="comic-reader-page"' in response.text
+        assert 'data-testid="comic-reader-close"' in response.text
+        assert "readerManifestUrl:" in response.text
         assert 'data-testid="issue-action-import"' in response.text
         assert 'data-testid="issue-action-manual-search"' in response.text
         assert 'data-testid="issue-action-delete-file"' in response.text
@@ -222,6 +229,7 @@ class TestIssueDetailRouteContracts:
         assert 'data-testid="file-browser-modal"' in response.text
         assert 'data-testid="file-browser-title"' in response.text
         assert 'data-testid="issue-action-search"' in response.text
+        assert 'data-testid="issue-action-read"' not in response.text
         assert 'data-testid="issue-library-file-section"' not in response.text
 
     async def test_missing_issue_metadata_uses_persistent_comicvine_cache(

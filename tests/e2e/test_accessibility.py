@@ -6,6 +6,7 @@ import pytest
 
 from tests.e2e.accessibility import assert_no_axe_violations
 from tests.e2e.conftest import wait_for_htmx
+from tests.e2e.pages.issue_detail import IssueDetailPage
 
 pytestmark = [pytest.mark.e2e, pytest.mark.accessibility]
 
@@ -152,6 +153,29 @@ def test_donation_modal_has_no_wcag_aa_violations(
 
     authed_page.keyboard.press("Escape")
     modal.wait_for(state="hidden", timeout=5000)
+
+
+def test_comic_reader_dialog_has_no_wcag_aa_violations_and_contains_focus(
+    authed_page,
+    seeded_server: str,  # type: ignore[no-untyped-def]
+) -> None:
+    issue = IssueDetailPage(authed_page, seeded_server)
+    issue.goto(1)
+    issue.open_reader()
+
+    assert issue.reader_dialog.get_attribute("aria-labelledby") == "comic-reader-title"
+    assert issue.reader_page.get_attribute("alt") == "Page 1 of 3"
+    assert issue.reader_dialog.evaluate("dialog => dialog.matches(':modal')") is True
+    assert issue.reader_dialog.evaluate("dialog => dialog.contains(document.activeElement)") is True
+
+    assert_no_axe_violations(
+        authed_page,
+        name="comic reader dialog",
+        include=["[data-testid='comic-reader-dialog']"],
+    )
+
+    issue.close_reader()
+    assert issue.read_button.evaluate("element => element === document.activeElement") is True
 
 
 def test_settings_library_permissions_card_has_no_wcag_aa_violations(

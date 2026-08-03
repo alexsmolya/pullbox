@@ -14642,10 +14642,733 @@ function orphanedRecoveryModal(config) {
   };
 }
 
+function readerMixin(config) {
+  var cfg = config || {};
+  var zoomSteps = [50, 67, 80, 100, 125, 150, 200, 300];
+
+  function clampPage(index, count) {
+    if (!count) return 0;
+    return Math.max(0, Math.min(count - 1, index));
+  }
+
+  function isTypingTarget(target) {
+    if (!target) return false;
+    var tagName = String(target.tagName || "").toLowerCase();
+    return (
+      tagName === "input" ||
+      tagName === "select" ||
+      tagName === "textarea" ||
+      target.isContentEditable
+    );
+  }
+
+  function responseMessage(response, fallback) {
+    return response
+      .json()
+      .catch(function () {
+        return {};
+      })
+      .then(function (data) {
+        if (typeof data.detail === "string") return data.detail;
+        if (data.detail && typeof data.detail.message === "string") {
+          return data.detail.message;
+        }
+        return fallback;
+      });
+  }
+
+  return {
+    readerOpen: false,
+    readerLoading: false,
+    readerPageLoading: false,
+    readerFatalError: false,
+    readerErrorTitle: "Pullbox could not open this comic.",
+    readerErrorMessage: "",
+    readerManifest: null,
+    readerTitle: "",
+    readerIssueLabel: "",
+    readerPageIndex: 0,
+    readerPageCount: 0,
+    readerPageDraft: "1",
+    readerPageInputError: "",
+    readerImageUrl: "",
+    readerImageNaturalWidth: 0,
+    readerImageNaturalHeight: 0,
+    readerFitMode: "page",
+    readerZoomPercent: 100,
+    readerDirection: "ltr",
+    readerControlsVisible: true,
+    readerHelpVisible: false,
+    readerFullscreenAvailable: false,
+    readerFullscreenActive: false,
+    readerProgressSaveFailed: false,
+    readerLastSettledPage: null,
+    readerLastSettledCompletion: false,
+    readerLastSavedSignature: "",
+    readerCurrentUserInitiated: false,
+    readerFailedPageIndex: null,
+    readerOpener: null,
+    readerSavedScrollX: 0,
+    readerSavedScrollY: 0,
+    readerManifestController: null,
+    readerProgressController: null,
+    readerLoadGeneration: 0,
+    readerSettledTimer: null,
+    readerControlsTimer: null,
+    readerPrefetchTimer: null,
+    readerPrefetchIdleHandle: null,
+    readerPrefetchImages: [],
+    readerPointer: null,
+    readerVisibilityHandler: null,
+
+    init: function () {
+      var self = this;
+      self.readerVisibilityHandler = function () {
+        if (!self.readerOpen) return;
+        if (document.visibilityState === "hidden") {
+          self.clearReaderTimer("readerSettledTimer");
+          self.saveReaderProgress(true);
+          return;
+        }
+        if (!self.readerPageLoading && !self.readerFatalError && self.readerPageCount) {
+          self.scheduleReaderSettled(
+            self.readerPageIndex,
+            self.readerCurrentUserInitiated
+          );
+        }
+      };
+      document.addEventListener("visibilitychange", self.readerVisibilityHandler);
+    },
+
+    destroy: function () {
+      if (this.readerVisibilityHandler) {
+        document.removeEventListener("visibilitychange", this.readerVisibilityHandler);
+      }
+      this.clearReaderWork();
+    },
+
+    openReader: function (event) {
+      var self = this;
+      var dialog = self.$refs.readerDialog;
+      if (!dialog || !cfg.readerManifestUrl || self.readerOpen) return;
+
+      self.readerOpener = event && event.currentTarget ? event.currentTarget : document.activeElement;
+      self.readerSavedScrollX = window.scrollX;
+      self.readerSavedScrollY = window.scrollY;
+      self.resetReaderSession();
+      self.readerOpen = true;
+      self.readerLoading = true;
+      self.readerFullscreenAvailable = typeof dialog.requestFullscreen === "function";
+      dialog.showModal();
+      self.showReaderControls();
+
+      if (typeof self.$nextTick === "function") {
+        self.$nextTick(function () {
+          if (self.$refs.readerViewport) self.$refs.readerViewport.focus();
+        });
+      }
+
+      self.readerManifestController = new AbortController();
+      fetch(cfg.readerManifestUrl, {
+        method: "GET",
+        signal: self.readerManifestController.signal,
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            return responseMessage(response, "The comic could not be prepared.").then(
+              function (message) {
+                throw new Error(message);
+              }
+            );
+          }
+          return response.json();
+        })
+        .then(function (manifest) {
+          if (!self.readerOpen) return;
+          var pageCount = Number(manifest.page_count);
+          if (!Number.isInteger(pageCount) || pageCount < 1 || !manifest.page_url_template) {
+            throw new Error("This comic does not contain any readable pages.");
+          }
+          self.readerManifest = manifest;
+          self.readerTitle = String(manifest.title || cfg.seriesTitle || "Comic reader");
+          self.readerIssueLabel = String(manifest.issue_label || cfg.issueLabel || "");
+          self.readerPageCount = pageCount;
+          var initialPage = clampPage(Number(manifest.initial_page_index) || 0, pageCount);
+          return self.loadReaderPage(initialPage, false);
+        })
+        .catch(function (error) {
+          if (error && error.name === "AbortError") return;
+          self.readerLoading = false;
+          self.readerPageLoading = false;
+          self.readerFatalError = true;
+          self.readerErrorMessage =
+            (error && error.message) || "The comic could not be prepared.";
+          self.showReaderControls();
+        });
+    },
+
+    resetReaderSession: function () {
+      this.clearReaderWork();
+      this.readerLoading = false;
+      this.readerPageLoading = false;
+      this.readerFatalError = false;
+      this.readerErrorTitle = "Pullbox could not open this comic.";
+      this.readerErrorMessage = "";
+      this.readerManifest = null;
+      this.readerTitle = "";
+      this.readerIssueLabel = "";
+      this.readerPageIndex = 0;
+      this.readerPageCount = 0;
+      this.readerPageDraft = "1";
+      this.readerPageInputError = "";
+      this.readerImageUrl = "";
+      this.readerImageNaturalWidth = 0;
+      this.readerImageNaturalHeight = 0;
+      this.readerFitMode = "page";
+      this.readerZoomPercent = 100;
+      this.readerDirection = "ltr";
+      this.readerControlsVisible = true;
+      this.readerHelpVisible = false;
+      this.readerProgressSaveFailed = false;
+      this.readerLastSettledPage = null;
+      this.readerLastSettledCompletion = false;
+      this.readerLastSavedSignature = "";
+      this.readerCurrentUserInitiated = false;
+      this.readerFailedPageIndex = null;
+      this.readerPointer = null;
+    },
+
+    clearReaderWork: function () {
+      if (this.readerManifestController) {
+        this.readerManifestController.abort();
+        this.readerManifestController = null;
+      }
+      if (this.readerProgressController) {
+        this.readerProgressController.abort();
+        this.readerProgressController = null;
+      }
+      this.readerLoadGeneration += 1;
+      this.clearReaderTimer("readerSettledTimer");
+      this.clearReaderTimer("readerControlsTimer");
+      this.clearReaderTimer("readerPrefetchTimer");
+      if (
+        this.readerPrefetchIdleHandle !== null &&
+        typeof window.cancelIdleCallback === "function"
+      ) {
+        window.cancelIdleCallback(this.readerPrefetchIdleHandle);
+      }
+      this.readerPrefetchIdleHandle = null;
+      this.readerPrefetchImages = [];
+    },
+
+    clearReaderTimer: function (name) {
+      if (this[name]) {
+        window.clearTimeout(this[name]);
+        this[name] = null;
+      }
+    },
+
+    closeReader: function () {
+      var self = this;
+      if (!self.readerOpen) return;
+
+      if (document.fullscreenElement) {
+        Promise.resolve(document.exitFullscreen())
+          .catch(function () {
+            return null;
+          })
+          .then(function () {
+            self.closeReaderDialog();
+          });
+        return;
+      }
+      self.closeReaderDialog();
+    },
+
+    closeReaderDialog: function () {
+      var dialog = this.$refs.readerDialog;
+      this.saveReaderProgress(true);
+      this.readerOpen = false;
+      this.clearReaderWork();
+      if (dialog && dialog.open) dialog.close();
+    },
+
+    finishReaderClose: function () {
+      var opener = this.readerOpener;
+      var scrollX = this.readerSavedScrollX;
+      var scrollY = this.readerSavedScrollY;
+      this.readerOpen = false;
+      window.requestAnimationFrame(function () {
+        window.scrollTo(scrollX, scrollY);
+        if (opener && document.contains(opener) && typeof opener.focus === "function") {
+          opener.focus({ preventScroll: true });
+        }
+      });
+    },
+
+    retryReader: function () {
+      var opener = this.readerOpener;
+      this.closeReaderDialog();
+      var self = this;
+      window.setTimeout(function () {
+        self.openReader({ currentTarget: opener });
+      }, 0);
+    },
+
+    readerPageUrl: function (pageIndex) {
+      if (!this.readerManifest) return "";
+      return String(this.readerManifest.page_url_template).replace(
+        "{page_index}",
+        encodeURIComponent(String(pageIndex))
+      );
+    },
+
+    loadReaderPage: function (pageIndex, userInitiated) {
+      var self = this;
+      if (!self.readerManifest || !self.readerOpen) return Promise.resolve(false);
+      var nextIndex = clampPage(Number(pageIndex), self.readerPageCount);
+      if (!Number.isInteger(nextIndex)) return Promise.resolve(false);
+
+      self.clearReaderTimer("readerSettledTimer");
+      self.readerLastSettledCompletion = false;
+      self.readerPageLoading = true;
+      self.readerFatalError = false;
+      self.showReaderControls();
+      var generation = self.readerLoadGeneration + 1;
+      self.readerLoadGeneration = generation;
+      var pageUrl = self.readerPageUrl(nextIndex);
+
+      return new Promise(function (resolve) {
+        var image = new Image();
+        var settleLoadedImage = function () {
+          if (generation !== self.readerLoadGeneration || !self.readerOpen) {
+            resolve(false);
+            return;
+          }
+          self.readerImageNaturalWidth = image.naturalWidth || 0;
+          self.readerImageNaturalHeight = image.naturalHeight || 0;
+          self.readerImageUrl = pageUrl;
+          self.readerPageIndex = nextIndex;
+          self.readerPageDraft = String(nextIndex + 1);
+          self.readerPageLoading = false;
+          self.readerLoading = false;
+          self.readerFatalError = false;
+          self.readerFailedPageIndex = null;
+          self.readerCurrentUserInitiated = Boolean(userInitiated);
+          if (self.$refs.readerViewport) {
+            self.$refs.readerViewport.scrollTop = 0;
+            self.$refs.readerViewport.scrollLeft = 0;
+          }
+          self.scheduleReaderSettled(nextIndex, Boolean(userInitiated));
+          self.prefetchReaderNeighbors(nextIndex);
+          self.scheduleReaderControlsHide();
+          resolve(true);
+        };
+
+        image.onload = function () {
+          if (typeof image.decode === "function") {
+            image.decode().catch(function () {
+              return null;
+            }).then(settleLoadedImage);
+            return;
+          }
+          settleLoadedImage();
+        };
+        image.onerror = function () {
+          if (generation !== self.readerLoadGeneration || !self.readerOpen) {
+            resolve(false);
+            return;
+          }
+          self.readerLoading = false;
+          self.readerPageLoading = false;
+          self.readerFatalError = true;
+          self.readerFailedPageIndex = nextIndex;
+          self.readerErrorTitle = "Page " + (nextIndex + 1) + " could not be displayed.";
+          self.readerErrorMessage =
+            "Try this page again, navigate to another page, or download the original comic.";
+          self.showReaderControls();
+          resolve(false);
+        };
+        image.src = pageUrl;
+      });
+    },
+
+    scheduleReaderSettled: function (pageIndex, userInitiated) {
+      var self = this;
+      self.clearReaderTimer("readerSettledTimer");
+      self.readerSettledTimer = window.setTimeout(function () {
+        self.readerSettledTimer = null;
+        if (
+          !self.readerOpen ||
+          document.visibilityState !== "visible" ||
+          self.readerPageIndex !== pageIndex ||
+          self.readerPageLoading
+        ) {
+          return;
+        }
+        self.readerLastSettledPage = pageIndex;
+        self.readerLastSettledCompletion =
+          Boolean(userInitiated) && pageIndex === self.readerPageCount - 1;
+        self.saveReaderProgress(false);
+      }, 750);
+    },
+
+    saveReaderProgress: function (keepalive) {
+      var self = this;
+      var manifest = self.readerManifest;
+      if (
+        !manifest ||
+        self.readerLastSettledPage === null ||
+        !manifest.progress_url ||
+        !manifest.revision
+      ) {
+        return;
+      }
+      var payload = {
+        revision: String(manifest.revision),
+        page_index: self.readerLastSettledPage,
+        page_count: self.readerPageCount,
+        completion_candidate: Boolean(self.readerLastSettledCompletion),
+      };
+      var signature = JSON.stringify(payload);
+      if (!self.readerProgressSaveFailed && signature === self.readerLastSavedSignature) {
+        return;
+      }
+
+      if (!keepalive && self.readerProgressController) {
+        self.readerProgressController.abort();
+      }
+      var controller = keepalive ? null : new AbortController();
+      self.readerProgressController = controller;
+      fetch(manifest.progress_url, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": self.csrfToken(),
+        },
+        body: signature,
+        keepalive: Boolean(keepalive),
+        signal: controller ? controller.signal : undefined,
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("Reading position was not saved.");
+          self.readerLastSavedSignature = signature;
+          self.readerProgressSaveFailed = false;
+        })
+        .catch(function (error) {
+          if (error && error.name === "AbortError") return;
+          self.readerProgressSaveFailed = true;
+        })
+        .finally(function () {
+          if (self.readerProgressController === controller) {
+            self.readerProgressController = null;
+          }
+        });
+    },
+
+    prefetchReaderNeighbors: function (pageIndex) {
+      var self = this;
+      self.clearReaderTimer("readerPrefetchTimer");
+      if (
+        self.readerPrefetchIdleHandle !== null &&
+        typeof window.cancelIdleCallback === "function"
+      ) {
+        window.cancelIdleCallback(self.readerPrefetchIdleHandle);
+      }
+      self.readerPrefetchIdleHandle = null;
+      self.readerPrefetchImages = [];
+
+      var candidates = [];
+      if (pageIndex + 1 < self.readerPageCount) candidates.push(pageIndex + 1);
+      if (pageIndex - 1 >= 0) candidates.push(pageIndex - 1);
+      if (!candidates.length) return;
+
+      var first = new Image();
+      first.decoding = "async";
+      first.src = self.readerPageUrl(candidates[0]);
+      self.readerPrefetchImages.push(first);
+
+      if (candidates.length > 1) {
+        var loadOtherNeighbor = function () {
+          self.readerPrefetchIdleHandle = null;
+          if (!self.readerOpen || self.readerPageIndex !== pageIndex) return;
+          var second = new Image();
+          second.decoding = "async";
+          second.src = self.readerPageUrl(candidates[1]);
+          self.readerPrefetchImages.push(second);
+        };
+        if (typeof window.requestIdleCallback === "function") {
+          self.readerPrefetchIdleHandle = window.requestIdleCallback(loadOtherNeighbor, {
+            timeout: 900,
+          });
+        } else {
+          self.readerPrefetchTimer = window.setTimeout(loadOtherNeighbor, 350);
+        }
+      }
+    },
+
+    readerPrevious: function () {
+      if (this.readerPageLoading || this.readerPageIndex <= 0) return;
+      this.loadReaderPage(this.readerPageIndex - 1, true);
+    },
+
+    readerNext: function () {
+      if (this.readerPageLoading || this.readerPageIndex >= this.readerPageCount - 1) return;
+      this.loadReaderPage(this.readerPageIndex + 1, true);
+    },
+
+    readerTapZone: function (side) {
+      if (side === "left") {
+        if (this.readerDirection === "rtl") this.readerNext();
+        else this.readerPrevious();
+        return;
+      }
+      if (this.readerDirection === "rtl") this.readerPrevious();
+      else this.readerNext();
+    },
+
+    restoreReaderPageDraft: function () {
+      this.readerPageDraft = String(this.readerPageIndex + 1);
+    },
+
+    commitReaderPageJump: function () {
+      var pageNumber = Number.parseInt(String(this.readerPageDraft), 10);
+      if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > this.readerPageCount) {
+        this.readerPageInputError =
+          "Enter a page from 1 to " + String(this.readerPageCount) + ".";
+        this.restoreReaderPageDraft();
+        return;
+      }
+      this.readerPageInputError = "";
+      this.loadReaderPage(pageNumber - 1, true);
+      if (this.$refs.readerViewport) this.$refs.readerViewport.focus();
+    },
+
+    toggleReaderDirection: function () {
+      this.readerDirection = this.readerDirection === "ltr" ? "rtl" : "ltr";
+      this.showReaderControls();
+    },
+
+    setReaderFit: function (mode) {
+      if (["page", "width", "height", "actual"].indexOf(mode) === -1) return;
+      this.readerFitMode = mode;
+      if (mode !== "actual") this.readerZoomPercent = 100;
+      this.showReaderControls();
+    },
+
+    readerImageClass: function () {
+      return "comic-reader__page--" + this.readerFitMode;
+    },
+
+    readerImageStyle: function () {
+      if (this.readerFitMode !== "actual" || !this.readerImageNaturalWidth) return "";
+      return "width: " + Math.round(
+        this.readerImageNaturalWidth * (this.readerZoomPercent / 100)
+      ) + "px; height: auto;";
+    },
+
+    readerZoomIn: function () {
+      var current = this.readerFitMode === "actual" ? this.readerZoomPercent : 100;
+      this.readerFitMode = "actual";
+      for (var i = 0; i < zoomSteps.length; i += 1) {
+        if (zoomSteps[i] > current) {
+          this.readerZoomPercent = zoomSteps[i];
+          this.showReaderControls();
+          return;
+        }
+      }
+      this.readerZoomPercent = zoomSteps[zoomSteps.length - 1];
+    },
+
+    readerZoomOut: function () {
+      var current = this.readerFitMode === "actual" ? this.readerZoomPercent : 100;
+      this.readerFitMode = "actual";
+      for (var i = zoomSteps.length - 1; i >= 0; i -= 1) {
+        if (zoomSteps[i] < current) {
+          this.readerZoomPercent = zoomSteps[i];
+          this.showReaderControls();
+          return;
+        }
+      }
+      this.readerZoomPercent = zoomSteps[0];
+    },
+
+    resetReaderZoom: function () {
+      this.readerFitMode = "actual";
+      this.readerZoomPercent = 100;
+      this.showReaderControls();
+    },
+
+    resetReaderSizing: function () {
+      this.readerFitMode = "page";
+      this.readerZoomPercent = 100;
+      this.showReaderControls();
+    },
+
+    readerPageAlt: function () {
+      if (!this.readerPageCount) return "Comic page";
+      return "Page " + (this.readerPageIndex + 1) + " of " + this.readerPageCount;
+    },
+
+    readerPageStatus: function () {
+      if (!this.readerPageCount) return "Preparing pages";
+      return "Page " + (this.readerPageIndex + 1) + " of " + this.readerPageCount;
+    },
+
+    showReaderControls: function () {
+      this.readerControlsVisible = true;
+      this.scheduleReaderControlsHide();
+    },
+
+    toggleReaderControls: function () {
+      this.readerControlsVisible = !this.readerControlsVisible;
+      if (this.readerControlsVisible) this.scheduleReaderControlsHide();
+      else this.clearReaderTimer("readerControlsTimer");
+    },
+
+    scheduleReaderControlsHide: function () {
+      var self = this;
+      self.clearReaderTimer("readerControlsTimer");
+      if (
+        !self.readerOpen ||
+        self.readerLoading ||
+        self.readerPageLoading ||
+        self.readerFatalError ||
+        self.readerHelpVisible ||
+        (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      ) {
+        return;
+      }
+      self.readerControlsTimer = window.setTimeout(function () {
+        var active = document.activeElement;
+        var focusedControl = active && active.closest
+          ? active.closest("[data-reader-controls]")
+          : null;
+        if (focusedControl) {
+          self.scheduleReaderControlsHide();
+          return;
+        }
+        self.readerControlsVisible = false;
+      }, 3000);
+    },
+
+    handleReaderKeydown: function (event) {
+      if (!this.readerOpen || !event || event.defaultPrevented) return;
+      if (isTypingTarget(event.target)) {
+        if (event.key === "Escape") {
+          event.target.blur();
+          event.preventDefault();
+        }
+        return;
+      }
+
+      var key = event.key;
+      var handled = true;
+      if (key === "ArrowLeft") this.readerTapZone("left");
+      else if (key === "ArrowRight") this.readerTapZone("right");
+      else if (key === "PageUp" || (key === " " && event.shiftKey)) this.readerPrevious();
+      else if (key === "PageDown" || key === " ") this.readerNext();
+      else if (key === "Home") this.loadReaderPage(0, true);
+      else if (key === "End") this.loadReaderPage(this.readerPageCount - 1, true);
+      else if (key === "g" || key === "G") {
+        var input = this.$refs.readerDialog
+          ? this.$refs.readerDialog.querySelector(".comic-reader__page-jump input")
+          : null;
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      } else if (key === "w" || key === "W") this.setReaderFit("width");
+      else if (key === "h" || key === "H") this.setReaderFit("height");
+      else if (key === "0") this.resetReaderSizing();
+      else if (key === "+" || key === "=") this.readerZoomIn();
+      else if (key === "-" || key === "_") this.readerZoomOut();
+      else if (key === "f" || key === "F") this.toggleReaderFullscreen();
+      else if (key === "r" || key === "R") this.toggleReaderDirection();
+      else if (key === "?") {
+        this.readerHelpVisible = !this.readerHelpVisible;
+        this.showReaderControls();
+      } else if (key === "Escape") {
+        if (this.readerHelpVisible) this.readerHelpVisible = false;
+        else if (document.fullscreenElement) this.toggleReaderFullscreen();
+        else this.closeReader();
+      } else handled = false;
+
+      if (handled) {
+        event.preventDefault();
+        this.showReaderControls();
+      }
+    },
+
+    beginReaderPointer: function (event) {
+      if (
+        !event ||
+        event.pointerType !== "touch" ||
+        !event.isPrimary ||
+        this.readerFitMode === "actual"
+      ) {
+        this.readerPointer = null;
+        return;
+      }
+      this.readerPointer = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        time: Date.now(),
+      };
+    },
+
+    endReaderPointer: function (event) {
+      var pointer = this.readerPointer;
+      this.readerPointer = null;
+      if (!pointer || !event || pointer.id !== event.pointerId) return;
+      var deltaX = event.clientX - pointer.x;
+      var deltaY = event.clientY - pointer.y;
+      var elapsed = Date.now() - pointer.time;
+      if (elapsed > 700 || Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) {
+        return;
+      }
+      this.readerTapZone(deltaX < 0 ? "right" : "left");
+    },
+
+    cancelReaderPointer: function () {
+      this.readerPointer = null;
+    },
+
+    toggleReaderFullscreen: function () {
+      var dialog = this.$refs.readerDialog;
+      if (!dialog) return;
+      if (document.fullscreenElement) {
+        Promise.resolve(document.exitFullscreen()).catch(function () {
+          return null;
+        });
+        return;
+      }
+      if (typeof dialog.requestFullscreen === "function") {
+        Promise.resolve(dialog.requestFullscreen()).catch(function () {
+          return null;
+        });
+      }
+    },
+
+    syncReaderFullscreen: function () {
+      this.readerFullscreenActive = document.fullscreenElement === this.$refs.readerDialog;
+    },
+
+    retryReaderPage: function () {
+      if (this.readerManifest && this.readerFailedPageIndex !== null) {
+        this.loadReaderPage(this.readerFailedPageIndex, true);
+        return;
+      }
+      this.retryReader();
+    },
+  };
+}
+
 function issueDetailPage(config) {
   var cfg = config || {};
 
-  return Object.assign(fileBrowserMixin(cfg), {
+  return Object.assign(fileBrowserMixin(cfg), readerMixin(cfg), {
     coverModalOpen: false,
     coverModalUrl: "",
     searching: false,

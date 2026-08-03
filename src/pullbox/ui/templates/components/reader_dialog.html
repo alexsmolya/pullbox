@@ -1,0 +1,234 @@
+<dialog
+  x-ref="readerDialog"
+  data-testid="comic-reader-dialog"
+  class="comic-reader"
+  aria-labelledby="comic-reader-title"
+  @cancel.prevent="closeReader()"
+  @close="finishReaderClose()"
+  @pointermove="showReaderControls()"
+  @focusin="showReaderControls()"
+  @fullscreenchange.document="syncReaderFullscreen()"
+  @keydown="handleReaderKeydown($event)"
+>
+  <div class="comic-reader__shell" :class="{ 'is-controls-hidden': !readerControlsVisible }">
+    <header class="comic-reader__topbar" data-reader-controls>
+      <button
+        type="button"
+        data-testid="comic-reader-close"
+        class="comic-reader__button comic-reader__button--prominent"
+        @click="closeReader()"
+        aria-label="Close reader"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+      <div class="comic-reader__identity">
+        <h2 id="comic-reader-title" x-text="readerTitle || 'Comic reader'">Comic reader</h2>
+        <p x-text="readerIssueLabel"></p>
+      </div>
+      <div class="comic-reader__top-actions">
+        <button
+          type="button"
+          data-testid="comic-reader-direction"
+          class="comic-reader__button"
+          @click="toggleReaderDirection()"
+          :aria-label="readerDirection === 'ltr' ? 'Switch to right-to-left reading' : 'Switch to left-to-right reading'"
+          :aria-pressed="readerDirection === 'rtl'"
+        >
+          <span x-text="readerDirection.toUpperCase()">LTR</span>
+        </button>
+        <button
+          type="button"
+          class="comic-reader__button comic-reader__desktop-action"
+          @click="toggleReaderFullscreen()"
+          x-show="readerFullscreenAvailable"
+          :aria-label="readerFullscreenActive ? 'Exit fullscreen' : 'Enter fullscreen'"
+          :aria-pressed="readerFullscreenActive"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main
+      x-ref="readerViewport"
+      data-testid="comic-reader-viewport"
+      class="comic-reader__viewport"
+      :class="{ 'is-pannable': readerFitMode === 'actual' }"
+      tabindex="0"
+      aria-label="Comic page viewport"
+      :aria-busy="readerPageLoading"
+      @pointerdown="beginReaderPointer($event)"
+      @pointerup="endReaderPointer($event)"
+      @pointercancel="cancelReaderPointer()"
+    >
+      <div class="comic-reader__page-stage">
+        <img
+          x-show="readerImageUrl"
+          x-ref="readerImage"
+          data-testid="comic-reader-page"
+          class="comic-reader__page"
+          :class="readerImageClass()"
+          :style="readerImageStyle()"
+          :src="readerImageUrl"
+          :alt="readerPageAlt()"
+          :data-fit-mode="readerFitMode"
+          draggable="false"
+        >
+      </div>
+
+      <div x-show="readerLoading" class="comic-reader__state" role="status">
+        <span class="comic-reader__spinner" aria-hidden="true"></span>
+        <strong>Preparing pages…</strong>
+        <span>Pullbox is opening this comic.</span>
+      </div>
+      <div x-show="readerPageLoading && !readerLoading && !readerFatalError" class="comic-reader__page-busy" role="status">
+        Loading page…
+      </div>
+      <div x-show="readerFatalError" x-cloak data-testid="comic-reader-error" class="comic-reader__state comic-reader__state--error" role="alert">
+        <strong x-text="readerErrorTitle">Pullbox could not open this comic.</strong>
+        <span x-text="readerErrorMessage"></span>
+        <div class="comic-reader__state-actions">
+          <button type="button" data-testid="comic-reader-retry" class="comic-reader__button" @click="retryReaderPage()">Retry</button>
+          <a href="/api/v1/issues/{{ issue.id }}/download-file" download class="comic-reader__button">Download</a>
+          <button type="button" class="comic-reader__button" @click="closeReader()">Close</button>
+        </div>
+      </div>
+      <aside
+        x-show="readerHelpVisible"
+        x-cloak
+        class="comic-reader__help"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="comic-reader-help-title"
+      >
+        <div class="comic-reader__help-heading">
+          <h3 id="comic-reader-help-title">Reader shortcuts</h3>
+          <button type="button" class="comic-reader__button" @click="readerHelpVisible = false; showReaderControls()" aria-label="Close shortcuts">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+        <dl>
+          <div><dt>← / →</dt><dd>Previous or next by reading direction</dd></div>
+          <div><dt>Space / Page Down</dt><dd>Next page</dd></div>
+          <div><dt>Shift+Space / Page Up</dt><dd>Previous page</dd></div>
+          <div><dt>Home / End</dt><dd>First or last page</dd></div>
+          <div><dt>G</dt><dd>Jump to a page</dd></div>
+          <div><dt>W / H / 0</dt><dd>Fit width, height, or page</dd></div>
+          <div><dt>+ / −</dt><dd>Zoom</dd></div>
+          <div><dt>R / F / ?</dt><dd>Direction, fullscreen, or shortcuts</dd></div>
+          <div><dt>Escape</dt><dd>Exit fullscreen, shortcuts, or reader</dd></div>
+        </dl>
+      </aside>
+
+      <button
+        type="button"
+        class="comic-reader__tap-zone comic-reader__tap-zone--left"
+        @click="readerTapZone('left')"
+        tabindex="-1"
+        aria-hidden="true"
+      ></button>
+      <button
+        type="button"
+        class="comic-reader__tap-zone comic-reader__tap-zone--center"
+        @click="toggleReaderControls()"
+        tabindex="-1"
+        aria-hidden="true"
+      ></button>
+      <button
+        type="button"
+        class="comic-reader__tap-zone comic-reader__tap-zone--right"
+        @click="readerTapZone('right')"
+        tabindex="-1"
+        aria-hidden="true"
+      ></button>
+    </main>
+
+    <footer class="comic-reader__controls" data-reader-controls>
+      <div class="comic-reader__navigation">
+        <button
+          type="button"
+          data-testid="comic-reader-previous"
+          class="comic-reader__button"
+          @click="readerPrevious()"
+          :disabled="readerPageIndex <= 0 || readerLoading"
+          aria-label="Previous page"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+        </button>
+        <label class="comic-reader__page-jump">
+          <span class="sr-only">Jump to page</span>
+          <input
+            x-model="readerPageDraft"
+            x-ref="readerPageInput"
+            @input="readerPageInputError = ''"
+            @keydown.enter.prevent="commitReaderPageJump()"
+            @blur="restoreReaderPageDraft()"
+            :aria-invalid="readerPageInputError ? 'true' : 'false'"
+            aria-describedby="comic-reader-page-input-error"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            :max="readerPageCount"
+            min="1"
+            aria-label="Current page"
+          >
+          <span aria-hidden="true">/</span>
+          <span x-text="readerPageCount || '—'"></span>
+        </label>
+        <span
+          id="comic-reader-page-input-error"
+          x-show="readerPageInputError"
+          x-cloak
+          class="comic-reader__input-error"
+          role="alert"
+          x-text="readerPageInputError"
+        ></span>
+        <button
+          type="button"
+          data-testid="comic-reader-next"
+          class="comic-reader__button"
+          @click="readerNext()"
+          :disabled="readerPageIndex >= readerPageCount - 1 || readerLoading"
+          aria-label="Next page"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+        </button>
+      </div>
+
+      <div class="comic-reader__sizing">
+        <button type="button" class="comic-reader__button comic-reader__fit-page" @click="setReaderFit('page')" :aria-pressed="readerFitMode === 'page'">Fit page</button>
+        <button type="button" data-testid="comic-reader-fit-width" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('width')" :aria-pressed="readerFitMode === 'width'">Fit width</button>
+        <button type="button" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('height')" :aria-pressed="readerFitMode === 'height'">Fit height</button>
+        <button type="button" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('actual')" :aria-pressed="readerFitMode === 'actual'">Actual</button>
+        <select
+          class="comic-reader__fit-select"
+          :value="readerFitMode"
+          @change="setReaderFit($event.target.value)"
+          aria-label="Page sizing"
+        >
+          <option value="page">Fit page</option>
+          <option value="width">Fit width</option>
+          <option value="height">Fit height</option>
+          <option value="actual">Actual size</option>
+        </select>
+        <button type="button" class="comic-reader__button" @click="readerZoomOut()" :disabled="readerZoomPercent <= 50" aria-label="Zoom out">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
+        </button>
+        <button type="button" class="comic-reader__zoom-label" @click="resetReaderZoom()" :aria-label="'Reset zoom, currently ' + readerZoomPercent + ' percent'" x-text="readerZoomPercent + '%'">100%</button>
+        <button type="button" data-testid="comic-reader-zoom-in" class="comic-reader__button" @click="readerZoomIn()" :disabled="readerZoomPercent >= 300" aria-label="Zoom in">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+        </button>
+      </div>
+    </footer>
+
+    <p
+      data-testid="comic-reader-page-status"
+      class="sr-only"
+      aria-live="polite"
+      aria-atomic="true"
+      x-text="readerPageStatus()"
+    ></p>
+    <p x-show="readerProgressSaveFailed" class="comic-reader__save-status" role="status">
+      Reading position not saved yet. Pullbox will retry.
+    </p>
+  </div>
+</dialog>

@@ -21,6 +21,7 @@
     importStartUrl: {{ ('/api/v1/issues/' ~ issue.id ~ '/import-file/start')|tojson|forceescape }},
     importCancelUrl: {{ ('/api/v1/issues/' ~ issue.id ~ '/import-file/cancel')|tojson|forceescape }},
     importProgressUrl: {{ ('/api/v1/issues/' ~ issue.id ~ '/import-file/progress')|tojson|forceescape }},
+    readerManifestUrl: {{ ('/api/v1/reader/issues/' ~ issue.id ~ '/manifest')|tojson|forceescape }},
     toggleUrl: {{ ('/htmx/issues/' ~ issue.id ~ '/toggle')|tojson|forceescape }}
   })"
 >
@@ -49,6 +50,9 @@
   {% include "partials/issue_import_progress_modal.html" %}
   {% include "partials/issue_search_modal.html" %}
   {% include "components/cover_modal.html" %}
+  {% if issue.status.value == "owned" and issue.library_file and issue.library_file.file_format.value in ["cbz", "cbr", "cb7", "cbt", "pdf"] %}
+    {% include "components/reader_dialog.html" %}
+  {% endif %}
 </div>
 {% endblock %}
 

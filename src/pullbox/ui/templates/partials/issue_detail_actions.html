@@ -19,6 +19,19 @@
   </button>
   {% endif %}
   {% if issue.status.value == "owned" and issue.library_file %}
+  {% if issue.library_file.file_format.value in ["cbz", "cbr", "cb7", "cbt", "pdf"] %}
+  <button
+    type="button"
+    data-testid="issue-action-read"
+    @click="openReader($event)"
+    class="{{ primary_action_classes }}"
+  >
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 5.25A2.25 2.25 0 014.5 3h5.25A2.25 2.25 0 0112 5.25V21a2.25 2.25 0 00-2.25-2.25H4.5A2.25 2.25 0 012.25 16.5V5.25zM21.75 5.25A2.25 2.25 0 0019.5 3h-5.25A2.25 2.25 0 0012 5.25V21a2.25 2.25 0 012.25-2.25h5.25a2.25 2.25 0 002.25-2.25V5.25z" />
+    </svg>
+    Read
+  </button>
+  {% endif %}
   <a
     href="/api/v1/issues/{{ issue.id }}/download-file"
     hx-boost="false"
