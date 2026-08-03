@@ -6,6 +6,7 @@ import io
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
+import structlog
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from pullbox.core.archive import (
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from pullbox.models.library import FileFormat
+
+
+logger = structlog.get_logger(__name__)
 
 
 class ArchivePageSource:
@@ -212,6 +216,7 @@ def _validate_archive_members(
 ) -> list[str]:
     """Apply format-neutral metadata budgets before extraction or decode."""
     regular_names: list[str] = []
+    ratio_candidates: list[tuple[str, int, int | None]] = []
     total_size = 0
     for member in members:
         name = member.name
@@ -234,15 +239,8 @@ def _validate_archive_members(
             continue
         size = max(0, member.size)
         total_size += size
-        compressed_size = member.compressed_size
-        if size > 0 and compressed_size is not None:
-            compressed = max(1, int(compressed_size))
-            if size / compressed > limits.max_compression_ratio:
-                raise PageSourceError(
-                    PageSourceErrorCode.RESOURCE_LIMIT,
-                    "This comic exceeds the configured compression-ratio limit.",
-                )
         regular_names.append(name)
+        ratio_candidates.append((normalized, size, member.compressed_size))
     if total_size > limits.max_total_uncompressed_bytes:
         raise PageSourceError(
             PageSourceErrorCode.RESOURCE_LIMIT,
@@ -254,4 +252,28 @@ def _validate_archive_members(
             PageSourceErrorCode.RESOURCE_LIMIT,
             "This comic contains too many image pages to open safely.",
         )
+    page_names = set(pages)
+    for name, size, compressed_size in ratio_candidates:
+        if (
+            name not in page_names
+            or size < limits.compression_ratio_min_bytes
+            or compressed_size is None
+        ):
+            continue
+        compressed = max(1, int(compressed_size))
+        ratio = size / compressed
+        if ratio > limits.max_compression_ratio:
+            logger.warning(
+                "reader_archive_compression_ratio_rejected",
+                expanded_bytes=size,
+                compressed_bytes=compressed,
+                compression_ratio=round(ratio, 2),
+                max_compression_ratio=limits.max_compression_ratio,
+                ratio_check_min_bytes=limits.compression_ratio_min_bytes,
+            )
+            raise PageSourceError(
+                PageSourceErrorCode.RESOURCE_LIMIT,
+                "This comic contains a large, unusually compressed page that "
+                "Pullbox will not open safely.",
+            )
     return pages

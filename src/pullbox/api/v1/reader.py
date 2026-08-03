@@ -62,6 +62,7 @@ def _content_service(request: Request) -> ReaderContentService:
             max_page_bytes=settings.reader_max_page_mb * 1024 * 1024,
             max_total_uncompressed_bytes=settings.reader_max_expanded_mb * 1024 * 1024,
             max_compression_ratio=settings.reader_max_compression_ratio,
+            compression_ratio_min_bytes=(settings.reader_compression_ratio_min_mb * 1024 * 1024),
             max_image_pixels=settings.reader_max_image_pixels,
             max_image_entries=settings.reader_max_image_entries,
             max_member_path_chars=settings.reader_max_member_path_chars,

@@ -26,3 +26,12 @@ def test_reader_has_default_on_emergency_environment_gate(tmp_path, monkeypatch)
 
     monkeypatch.setenv("PULLBOX_READER_ENABLED", "false")
     assert PullboxSettings().reader_enabled is False
+
+
+def test_reader_compression_ratio_minimum_is_configurable(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PULLBOX_READER_COMPRESSION_RATIO_MIN_MB", raising=False)
+    assert PullboxSettings().reader_compression_ratio_min_mb == 4
+
+    monkeypatch.setenv("PULLBOX_READER_COMPRESSION_RATIO_MIN_MB", "8")
+    assert PullboxSettings().reader_compression_ratio_min_mb == 8

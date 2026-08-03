@@ -49,6 +49,12 @@ latency because they are rebuilt from source comics. The authenticated, CSRF-pro
 symlinks or touch the comic library. Normal deployments use a 512 MiB quota, two expensive workers,
 and a short bounded worker wait.
 
+Archive reads retain hard entry, expanded-size, page-size, page-count, path, pixel, and concurrency
+budgets. The 250:1 compression-ratio guard applies only to readable page entries that expand to at
+least 4 MiB, so small solid-color pages are not mistaken for archive bombs. Operators can adjust the
+floor with `PULLBOX_READER_COMPRESSION_RATIO_MIN_MB`; large high-ratio pages still fail before
+extraction, with path-free structured diagnostics.
+
 For an immediate feature rollback, set `PULLBOX_READER_ENABLED=false` in the Pullbox service
 environment and recreate/restart that service. This hides Read and makes the private reader routes
 return not found while preserving source comics, generated cache files, and private resume state.

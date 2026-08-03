@@ -83,6 +83,7 @@ class PullboxSettings(BaseSettings):
     reader_max_page_mb: int = 128
     reader_max_expanded_mb: int = 4096
     reader_max_compression_ratio: int = 250
+    reader_compression_ratio_min_mb: int = 4
     reader_max_image_pixels: int = 80_000_000
     reader_max_image_entries: int = 5_000
     reader_max_member_path_chars: int = 1_024

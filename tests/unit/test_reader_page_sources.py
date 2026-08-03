@@ -12,6 +12,7 @@ from unittest.mock import patch
 import py7zr
 import pytest
 from PIL import Image
+from structlog.testing import capture_logs
 
 from pullbox.core.page_sources import (
     PageSourceError,
@@ -49,6 +50,13 @@ def _animated_gif() -> bytes:
     finally:
         for frame in frames:
             frame.close()
+    return output.getvalue()
+
+
+def _solid_jpeg() -> bytes:
+    output = io.BytesIO()
+    with Image.new("RGB", (2800, 4300), color=(35, 31, 32)) as image:
+        image.save(output, format="JPEG", quality=85, optimize=True)
     return output.getvalue()
 
 
@@ -265,6 +273,70 @@ def test_page_source_enforces_entry_and_page_byte_budgets(tmp_path: Path) -> Non
     with pytest.raises(PageSourceError) as page_error:
         page_source.read_page(0)
     assert page_error.value.code is PageSourceErrorCode.RESOURCE_LIMIT
+
+
+def test_archive_accepts_small_high_ratio_solid_jpeg(tmp_path: Path) -> None:
+    source = tmp_path / "solid-page.cbz"
+    _write_cbz(source, {"001.jpg": _solid_jpeg()})
+    with zipfile.ZipFile(source) as archive:
+        page_info = archive.getinfo("001.jpg")
+
+    assert page_info.file_size < 4 * 1024 * 1024
+    assert page_info.file_size / page_info.compress_size > 250
+
+    page_source = open_page_source(source, declared_format=FileFormat.CBZ)
+
+    assert [page.name for page in page_source.pages] == ["001.jpg"]
+
+
+def test_archive_rejects_large_high_ratio_page_with_safe_diagnostics(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "high-ratio.cbz"
+    payload = b"not-a-real-image" + b"\x00" * 4096
+    _write_cbz(source, {"001.jpg": payload})
+    limits = ReaderResourceLimits(
+        max_compression_ratio=5,
+        compression_ratio_min_bytes=1024,
+    )
+
+    with capture_logs() as logs, pytest.raises(PageSourceError) as exc_info:
+        open_page_source(source, declared_format=FileFormat.CBZ, limits=limits)
+
+    assert exc_info.value.code is PageSourceErrorCode.RESOURCE_LIMIT
+    assert str(exc_info.value) == (
+        "This comic contains a large, unusually compressed page that Pullbox will not open safely."
+    )
+    rejection = next(
+        event for event in logs if event.get("event") == "reader_archive_compression_ratio_rejected"
+    )
+    assert rejection["expanded_bytes"] == len(payload)
+    assert rejection["max_compression_ratio"] == 5
+    assert rejection["ratio_check_min_bytes"] == 1024
+    assert "member" not in rejection
+    assert "path" not in rejection
+
+
+def test_high_ratio_non_page_entry_does_not_block_reader(tmp_path: Path) -> None:
+    source = tmp_path / "unused-payload.cbz"
+    _write_cbz(
+        source,
+        {
+            "001.gif": _GIF,
+            "unused.bin": b"\x00" * 4096,
+        },
+    )
+
+    page_source = open_page_source(
+        source,
+        declared_format=FileFormat.CBZ,
+        limits=ReaderResourceLimits(
+            max_compression_ratio=5,
+            compression_ratio_min_bytes=1024,
+        ),
+    )
+
+    assert [page.name for page in page_source.pages] == ["001.gif"]
 
 
 @pytest.mark.parametrize("format_name", ["cbz", "cb7", "cbt"])
