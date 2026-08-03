@@ -1,0 +1,204 @@
+"""TDD coverage for reader source resolution, revisions, and bounded page caching."""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import zipfile
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import pytest
+from PIL import Image
+
+from pullbox.core.page_sources import PageSourceError, PageSourceErrorCode
+from pullbox.models.issue import Issue, IssueStatus
+from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
+from pullbox.models.series import Series, SeriesStatus, SeriesType
+from pullbox.services.reader_content_service import (
+    ReaderContentService,
+    ReaderSourceRecord,
+    StaleReaderRevisionError,
+    load_reader_source_record,
+    resolve_reader_source,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _write_cbz(path: Path, page_count: int = 3) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for index in range(page_count):
+            output = io.BytesIO()
+            with Image.new("P", (1, 1), color=index) as image:
+                image.save(output, format="GIF")
+            archive.writestr(f"page-{index + 1}.gif", output.getvalue() + bytes([index]))
+
+
+def _record(source: Path, root: Path) -> ReaderSourceRecord:
+    return ReaderSourceRecord(
+        issue_id=7,
+        issue_title="A Reader Issue",
+        issue_number="1",
+        series_title="Reader Series",
+        library_file_id=11,
+        file_path=str(source),
+        root_path=str(root),
+        file_format=FileFormat.CBZ,
+        stored_file_hash=None,
+    )
+
+
+async def _seed_issue(
+    session: AsyncSession,
+    *,
+    root_path: Path,
+    file_path: Path,
+) -> int:
+    series = Series(
+        comicvine_id=700_001,
+        title="Reader Series",
+        sort_title="reader series",
+        year_start=2026,
+        status=SeriesStatus.CONTINUING,
+        series_type=SeriesType.STANDARD,
+        monitored=True,
+        issue_count=1,
+    )
+    session.add(series)
+    await session.flush()
+    issue = Issue(
+        series_id=series.id,
+        comicvine_id=700_002,
+        issue_number=1,
+        title="A Reader Issue",
+        status=IssueStatus.OWNED,
+    )
+    session.add(issue)
+    await session.flush()
+    root = LibraryRoot(name="reader", path=str(root_path))
+    session.add(root)
+    await session.flush()
+    source_stat = file_path.stat()
+    session.add(
+        LibraryFile(
+            file_path=str(file_path),
+            file_name=file_path.name,
+            file_size=source_stat.st_size,
+            file_format=FileFormat.CBZ,
+            file_modified_at=datetime.fromtimestamp(source_stat.st_mtime, tz=UTC),
+            issue_id=issue.id,
+            match_confidence=MatchConfidence.HIGH,
+            library_root_id=root.id,
+        )
+    )
+    await session.flush()
+    return issue.id
+
+
+@pytest.mark.asyncio
+async def test_load_record_is_database_only_and_resolution_enforces_root(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    outside = tmp_path / "outside.cbz"
+    _write_cbz(outside)
+    issue_id = await _seed_issue(
+        db_session,
+        root_path=root,
+        file_path=outside,
+    )
+
+    record = await load_reader_source_record(db_session, issue_id)
+
+    with pytest.raises(PageSourceError) as exc_info:
+        resolve_reader_source(record)
+    assert exc_info.value.code is PageSourceErrorCode.MISSING_FILE
+
+
+@pytest.mark.asyncio
+async def test_manifest_and_page_cache_use_revisioned_files(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "book.cbz"
+    _write_cbz(source)
+    service = ReaderContentService(cache_dir=tmp_path / "cache")
+    resolved = resolve_reader_source(_record(source, root))
+
+    manifest = await service.get_manifest(resolved)
+    page = await service.get_page(resolved, page_index=1, revision=resolved.revision)
+    cached = await service.get_page(resolved, page_index=1, revision=resolved.revision)
+
+    assert manifest.page_count == 3
+    assert manifest.revision == resolved.revision
+    assert manifest.format is FileFormat.CBZ
+    assert page.path == cached.path
+    assert page.path.is_file()
+    assert page.path.read_bytes().endswith(b"\x01")
+    assert page.media_type == "image/gif"
+    assert page.etag == f'"reader-{resolved.revision}-1"'
+
+
+@pytest.mark.asyncio
+async def test_stale_revision_is_rejected_before_page_work(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "book.cbz"
+    _write_cbz(source)
+    service = ReaderContentService(cache_dir=tmp_path / "cache")
+    resolved = resolve_reader_source(_record(source, root))
+
+    with pytest.raises(StaleReaderRevisionError):
+        await service.get_page(resolved, page_index=0, revision="stale")
+
+
+@pytest.mark.asyncio
+async def test_identical_cold_requests_are_single_flight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "book.cbz"
+    _write_cbz(source)
+    service = ReaderContentService(cache_dir=tmp_path / "cache")
+    resolved = resolve_reader_source(_record(source, root))
+    page_source = await service.get_page_source(resolved)
+    original_read = page_source.read_page
+    read_count = 0
+
+    def _counted_read(index: int):  # type: ignore[no-untyped-def]
+        nonlocal read_count
+        read_count += 1
+        return original_read(index)
+
+    monkeypatch.setattr(page_source, "read_page", _counted_read)
+
+    pages = await asyncio.gather(
+        service.get_page(resolved, page_index=0, revision=resolved.revision),
+        service.get_page(resolved, page_index=0, revision=resolved.revision),
+        service.get_page(resolved, page_index=0, revision=resolved.revision),
+    )
+
+    assert read_count == 1
+    assert len({page.path for page in pages}) == 1
+
+
+def test_content_revision_changes_when_source_changes(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "book.cbz"
+    _write_cbz(source, page_count=1)
+    record = _record(source, root)
+
+    first = resolve_reader_source(record)
+    with source.open("ab") as handle:
+        handle.write(b"revision-change")
+    second = resolve_reader_source(record)
+
+    assert first.revision != second.revision

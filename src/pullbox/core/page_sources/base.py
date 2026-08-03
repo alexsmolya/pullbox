@@ -53,6 +53,7 @@ class ReaderResourceLimits:
     max_page_bytes: int = 128 * 1024 * 1024
     max_total_uncompressed_bytes: int = 4 * 1024 * 1024 * 1024
     max_compression_ratio: int = 250
+    max_image_pixels: int = 80_000_000
     pdf_dpi: int = 160
 
 

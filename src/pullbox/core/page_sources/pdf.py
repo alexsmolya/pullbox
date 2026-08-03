@@ -74,6 +74,8 @@ class PdfPageSource:
                 last_page=page_number,
                 fmt="jpeg",
                 thread_count=1,
+                size=4096,
+                timeout=30,
             )
         except (OSError, RuntimeError) as exc:
             raise PageSourceError(
@@ -88,6 +90,12 @@ class PdfPageSource:
         image = rendered[0]
         output = io.BytesIO()
         try:
+            width, height = image.size
+            if width * height > self._limits.max_image_pixels:
+                raise PageSourceError(
+                    PageSourceErrorCode.RESOURCE_LIMIT,
+                    "This rendered PDF page has too many pixels to open safely.",
+                )
             image.save(output, format="JPEG", quality=88, optimize=True)
         finally:
             image.close()

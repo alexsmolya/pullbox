@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import zipfile
 from typing import TYPE_CHECKING
+
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from pullbox.core.archive import ArchiveError, ArchiveReader
 from pullbox.core.page_sources.base import (
@@ -56,7 +59,7 @@ class ArchivePageSource:
                 "Pullbox could not find readable pages in this file.",
             )
         self.pages = tuple(
-            PageDescriptor(index=index, name=name, media_type=media_type_for_name(name) or "")
+            PageDescriptor(index=index, name=name, media_type=_delivery_media_type(name))
             for index, name in enumerate(names)
         )
 
@@ -75,7 +78,67 @@ class ArchivePageSource:
                 PageSourceErrorCode.RESOURCE_LIMIT,
                 "This comic page is too large to open safely.",
             )
-        return PagePayload(index=index, media_type=descriptor.media_type, data=data)
+        return _prepare_image_payload(
+            index=index,
+            name=descriptor.name,
+            data=data,
+            limits=self._limits,
+        )
+
+
+def _delivery_media_type(name: str) -> str:
+    media_type = media_type_for_name(name) or "application/octet-stream"
+    if media_type in {"image/bmp", "image/tiff"}:
+        return "image/jpeg"
+    return media_type
+
+
+def _prepare_image_payload(
+    *,
+    index: int,
+    name: str,
+    data: bytes,
+    limits: ReaderResourceLimits,
+) -> PagePayload:
+    """Validate image dimensions and normalize non-baseline browser formats."""
+    source_media_type = media_type_for_name(name) or "application/octet-stream"
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            if width * height > limits.max_image_pixels:
+                raise PageSourceError(
+                    PageSourceErrorCode.RESOURCE_LIMIT,
+                    "This comic page has too many pixels to open safely.",
+                )
+            if source_media_type not in {"image/bmp", "image/tiff"}:
+                image.verify()
+                return PagePayload(index=index, media_type=source_media_type, data=data)
+
+            normalized = ImageOps.exif_transpose(image).convert("RGB")
+            try:
+                output = io.BytesIO()
+                normalized.save(output, format="JPEG", quality=88, optimize=True)
+                normalized_data = output.getvalue()
+            finally:
+                normalized.close()
+    except PageSourceError:
+        raise
+    except Image.DecompressionBombError as exc:
+        raise PageSourceError(
+            PageSourceErrorCode.RESOURCE_LIMIT,
+            "This comic page has too many pixels to open safely.",
+        ) from exc
+    except (OSError, UnidentifiedImageError) as exc:
+        raise PageSourceError(
+            PageSourceErrorCode.CORRUPT_SOURCE,
+            "Pullbox could not decode this comic page.",
+        ) from exc
+    if len(normalized_data) > limits.max_page_bytes:
+        raise PageSourceError(
+            PageSourceErrorCode.RESOURCE_LIMIT,
+            "This normalized comic page is too large to open safely.",
+        )
+    return PagePayload(index=index, media_type="image/jpeg", data=normalized_data)
 
 
 def _validate_zip_budgets(path: Path, limits: ReaderResourceLimits) -> None:

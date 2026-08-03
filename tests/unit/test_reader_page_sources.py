@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import py7zr
 import pytest
+from PIL import Image
 
 from pullbox.core.page_sources import (
     PageSourceError,
@@ -21,7 +22,15 @@ from pullbox.core.page_sources import (
 )
 from pullbox.models.library import FileFormat
 
-_GIF = b"GIF89a" + b"\x00" * 32
+
+def _tiny_gif() -> bytes:
+    output = io.BytesIO()
+    with Image.new("P", (1, 1), color=0) as image:
+        image.save(output, format="GIF")
+    return output.getvalue()
+
+
+_GIF = _tiny_gif()
 
 
 def _write_cbz(path: Path, members: dict[str, bytes]) -> None:
@@ -210,12 +219,52 @@ def test_page_source_enforces_entry_and_page_byte_budgets(tmp_path: Path) -> Non
     assert page_error.value.code is PageSourceErrorCode.RESOURCE_LIMIT
 
 
+@pytest.mark.parametrize(("suffix", "source_format"), [("bmp", "BMP"), ("tiff", "TIFF")])
+def test_non_browser_baseline_images_are_normalized_to_jpeg(
+    tmp_path: Path,
+    suffix: str,
+    source_format: str,
+) -> None:
+    image_bytes = io.BytesIO()
+    with Image.new("RGB", (2, 3), color="purple") as image:
+        image.save(image_bytes, format=source_format)
+    source = tmp_path / "book.cbz"
+    _write_cbz(source, {f"001.{suffix}": image_bytes.getvalue()})
+
+    page_source = open_page_source(source, declared_format=FileFormat.CBZ)
+    page = page_source.read_page(0)
+
+    assert page_source.pages[0].media_type == "image/jpeg"
+    assert page.media_type == "image/jpeg"
+    assert page.data.startswith(b"\xff\xd8\xff")
+
+
+def test_image_pixel_budget_is_enforced_before_full_decode(tmp_path: Path) -> None:
+    image_bytes = io.BytesIO()
+    with Image.new("RGB", (10, 10), color="black") as image:
+        image.save(image_bytes, format="PNG")
+    source = tmp_path / "book.cbz"
+    _write_cbz(source, {"001.png": image_bytes.getvalue()})
+    page_source = open_page_source(
+        source,
+        declared_format=FileFormat.CBZ,
+        limits=ReaderResourceLimits(max_image_pixels=99),
+    )
+
+    with pytest.raises(PageSourceError) as exc_info:
+        page_source.read_page(0)
+
+    assert exc_info.value.code is PageSourceErrorCode.RESOURCE_LIMIT
+
+
 def test_pdf_page_source_renders_only_requested_page(tmp_path: Path) -> None:
     source = tmp_path / "book.pdf"
     source.write_bytes(b"%PDF-1.7\n")
     render_calls: list[tuple[int, int]] = []
 
     class _RenderedPage:
+        size = (100, 200)
+
         def save(self, output: io.BytesIO, *, format: str, quality: int, optimize: bool) -> None:
             assert format == "JPEG"
             assert quality == 88

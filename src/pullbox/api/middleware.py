@@ -423,10 +423,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         is_cover_path = (
             path.startswith("/api/v1/series/") or path.startswith("/api/v1/issues/")
         ) and path.endswith("/cover")
+        is_reader_page_path = path.startswith("/api/v1/reader/issues/") and "/pages/" in path
         # Prevent browser from caching authenticated HTML pages so the back
         # button cannot display stale content after logout. Cover endpoints
         # are exempt so the browser can reuse already-fetched artwork.
-        if not path.startswith(("/static/", "/favicon.ico")) and not is_cover_path:
+        if (
+            not path.startswith(("/static/", "/favicon.ico"))
+            and not is_cover_path
+            and not is_reader_page_path
+        ):
             response.headers["Cache-Control"] = "no-store, no-cache, max-age=0, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
