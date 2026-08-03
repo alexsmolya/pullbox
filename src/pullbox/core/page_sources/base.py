@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import tarfile
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -54,7 +55,13 @@ class ReaderResourceLimits:
     max_total_uncompressed_bytes: int = 4 * 1024 * 1024 * 1024
     max_compression_ratio: int = 250
     max_image_pixels: int = 80_000_000
+    max_image_entries: int = 5_000
+    max_member_path_chars: int = 1_024
+    max_member_depth: int = 32
+    max_rendition_width: int = 2_560
+    max_rendition_height: int = 4_096
     pdf_dpi: int = 160
+    render_timeout_seconds: int = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +118,8 @@ def canonical_page_names(names: list[str]) -> list[str]:
 
 def _natural_path_key(value: str) -> tuple[tuple[int, int | str, int], ...]:
     parts: list[tuple[int, int | str, int]] = []
-    for part in _NATURAL_PARTS.split(value.casefold()):
+    normalized = unicodedata.normalize("NFC", value).casefold()
+    for part in _NATURAL_PARTS.split(normalized):
         if not part:
             continue
         if part.isdigit():

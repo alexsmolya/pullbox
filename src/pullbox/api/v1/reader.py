@@ -11,13 +11,19 @@ from fastapi.responses import FileResponse, JSONResponse
 from pullbox.api.deps import AuthenticatedStreamUser, get_request_session_factory
 from pullbox.config import get_settings
 from pullbox.core.page_sources import PageSourceError, PageSourceErrorCode, ReaderResourceLimits
+from pullbox.core.page_sources.capabilities import inspect_reader_capabilities
 from pullbox.schemas.reader import (
+    ReaderCacheClearResponse,
+    ReaderCacheDiagnosticsResponse,
+    ReaderCapabilitiesResponse,
+    ReaderFormatCapabilityResponse,
     ReaderManifestResponse,
     ReaderProgressResponse,
     ReaderProgressUpdate,
 )
 from pullbox.services.reader_content_service import (
     ReaderContentService,
+    ReaderWorkerBusyError,
     ResolvedReaderSource,
     StaleReaderRevisionError,
     load_reader_source_record,
@@ -57,13 +63,26 @@ def _content_service(request: Request) -> ReaderContentService:
             max_total_uncompressed_bytes=settings.reader_max_expanded_mb * 1024 * 1024,
             max_compression_ratio=settings.reader_max_compression_ratio,
             max_image_pixels=settings.reader_max_image_pixels,
+            max_image_entries=settings.reader_max_image_entries,
+            max_member_path_chars=settings.reader_max_member_path_chars,
+            max_member_depth=settings.reader_max_member_depth,
+            max_rendition_width=settings.reader_max_rendition_width,
+            max_rendition_height=settings.reader_max_rendition_height,
             pdf_dpi=settings.reader_pdf_dpi,
+            render_timeout_seconds=settings.reader_render_timeout_seconds,
         ),
         max_open_sources=settings.reader_open_source_cache_size,
         max_cache_bytes=settings.reader_cache_max_mb * 1024 * 1024,
+        max_workers=settings.reader_worker_count,
+        worker_wait_seconds=settings.reader_worker_wait_seconds,
     )
     app.state.reader_content_service = service
     return service
+
+
+def _require_reader_enabled() -> None:
+    if not get_settings().reader_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 async def _resolved_source(request: Request, issue_id: int) -> ResolvedReaderSource:
@@ -90,9 +109,12 @@ async def reader_manifest(
     _user: AuthenticatedStreamUser,
 ) -> JSONResponse:
     """Return a side-effect-free reader manifest after closing the DB session."""
+    _require_reader_enabled()
     source = await _resolved_source(request, issue_id)
     try:
         manifest = await _content_service(request).get_manifest(source)
+    except ReaderWorkerBusyError as exc:
+        _raise_reader_busy(exc)
     except PageSourceError as exc:
         _raise_http_error(exc)
     factory = get_request_session_factory(request)
@@ -133,6 +155,7 @@ async def reader_page(
     revision: Annotated[str, Query(min_length=1, max_length=64)],
 ) -> Response:
     """Stream one immutable cached page without a request-scoped DB session."""
+    _require_reader_enabled()
     source = await _resolved_source(request, issue_id)
     try:
         page = await _content_service(request).get_page(
@@ -140,6 +163,8 @@ async def reader_page(
             page_index=page_index,
             revision=revision,
         )
+    except ReaderWorkerBusyError as exc:
+        _raise_reader_busy(exc)
     except StaleReaderRevisionError as exc:
         raise HTTPException(
             status_code=409,
@@ -151,6 +176,8 @@ async def reader_page(
     headers = {
         "Cache-Control": "private, max-age=3600, immutable",
         "ETag": page.etag,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f'inline; filename="page-{page_index + 1}{page.path.suffix}"',
     }
     if request.headers.get("if-none-match") == page.etag:
         return Response(status_code=304, headers=headers)
@@ -168,9 +195,12 @@ async def reader_progress(
     user: AuthenticatedStreamUser,
 ) -> ReaderProgressResponse:
     """Persist an explicit settled page without coupling state to page GETs."""
+    _require_reader_enabled()
     source = await _resolved_source(request, issue_id)
     try:
         manifest = await _content_service(request).get_manifest(source)
+    except ReaderWorkerBusyError as exc:
+        _raise_reader_busy(exc)
     except PageSourceError as exc:
         _raise_http_error(exc)
     factory = get_request_session_factory(request)
@@ -200,4 +230,56 @@ async def reader_progress(
         revision=snapshot.content_revision,
         completed_at=snapshot.completed_at,
         updated_at=snapshot.updated_at,
+    )
+
+
+def _raise_reader_busy(exc: ReaderWorkerBusyError) -> Never:
+    raise HTTPException(
+        status_code=503,
+        detail={"code": "reader_busy", "message": "The comic reader is busy. Try again shortly."},
+        headers={"Retry-After": "1"},
+    ) from exc
+
+
+@router.get("/capabilities", response_model=ReaderCapabilitiesResponse)
+async def reader_capabilities(
+    request: Request,
+    _user: AuthenticatedStreamUser,
+) -> ReaderCapabilitiesResponse:
+    """Return private runtime support and bounded cache diagnostics."""
+    _require_reader_enabled()
+    capabilities = await anyio.to_thread.run_sync(inspect_reader_capabilities)
+    diagnostics = await _content_service(request).get_diagnostics()
+    return ReaderCapabilitiesResponse(
+        enabled=True,
+        formats=[
+            ReaderFormatCapabilityResponse(
+                format=item.format,
+                available=item.available,
+                detail=item.detail,
+            )
+            for item in capabilities
+        ],
+        cache=ReaderCacheDiagnosticsResponse(
+            cache_file_count=diagnostics.cache_file_count,
+            cache_bytes=diagnostics.cache_bytes,
+            max_cache_bytes=diagnostics.max_cache_bytes,
+            open_source_count=diagnostics.open_source_count,
+            max_open_sources=diagnostics.max_open_sources,
+            max_workers=diagnostics.max_workers,
+        ),
+    )
+
+
+@router.delete("/cache", response_model=ReaderCacheClearResponse)
+async def clear_reader_cache(
+    request: Request,
+    _user: AuthenticatedStreamUser,
+) -> ReaderCacheClearResponse:
+    """Clear generated reader pages; source comic files are never targeted."""
+    _require_reader_enabled()
+    result = await _content_service(request).clear_cache()
+    return ReaderCacheClearResponse(
+        files_removed=result.files_removed,
+        bytes_removed=result.bytes_removed,
     )

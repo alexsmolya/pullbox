@@ -19,7 +19,7 @@
   </button>
   {% endif %}
   {% if issue.status.value == "owned" and issue.library_file %}
-  {% if issue.library_file.file_format.value in ["cbz", "cbr", "cb7", "cbt", "pdf"] %}
+  {% if reader_enabled and issue.library_file.file_format.value in ["cbz", "cbr", "cb7", "cbt", "pdf"] %}
   <button
     type="button"
     data-testid="issue-action-read"

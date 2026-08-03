@@ -6,6 +6,7 @@ import io
 import zipfile
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
@@ -14,7 +15,7 @@ from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.services.auth_service import SESSION_COOKIE_NAME, AuthService
-from pullbox.services.reader_content_service import ReaderContentService
+from pullbox.services.reader_content_service import ReaderContentService, ReaderWorkerBusyError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -118,6 +119,8 @@ async def test_manifest_and_page_are_private_authenticated_resources(
     assert page_response.content.endswith(b"-page-two")
     assert page_response.headers["content-type"].startswith("image/gif")
     assert page_response.headers["cache-control"] == "private, max-age=3600, immutable"
+    assert page_response.headers["x-content-type-options"] == "nosniff"
+    assert page_response.headers["content-disposition"] == 'inline; filename="page-2.gif"'
 
     not_modified = await authenticated_client.get(
         manifest["page_url_template"].replace("{page_index}", "1"),
@@ -211,3 +214,90 @@ async def test_page_get_and_manifest_do_not_create_progress_state(
     async with sec_db() as session:
         rows = list((await session.execute(select(IssueReaderState))).scalars().all())
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_reader_worker_saturation_is_retryable_without_internal_details(
+    authenticated_client: AsyncClient,
+    sec_db: async_sessionmaker[AsyncSession],
+    sec_app: object,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "book.cbz"
+    _write_cbz(source)
+    issue_id = await _seed_reader_issue(sec_db, source)
+    service = ReaderContentService(cache_dir=tmp_path / "cache")
+    service.get_manifest = AsyncMock(  # type: ignore[method-assign]
+        side_effect=ReaderWorkerBusyError
+    )
+    sec_app.state.reader_content_service = service
+
+    response = await authenticated_client.get(f"/api/v1/reader/issues/{issue_id}/manifest")
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.json()["detail"]["code"] == "reader_busy"
+
+
+@pytest.mark.asyncio
+async def test_reader_can_be_emergency_disabled_without_exposing_routes(
+    authenticated_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from pullbox.api.v1 import reader as reader_api
+
+    monkeypatch.setattr(
+        reader_api,
+        "get_settings",
+        lambda: SimpleNamespace(reader_enabled=False),
+    )
+
+    response = await authenticated_client.get("/api/v1/reader/issues/1/manifest")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reader_capabilities_and_safe_cache_clear_are_private(
+    authenticated_client: AsyncClient,
+    unauthenticated_client: AsyncClient,
+    sec_db: async_sessionmaker[AsyncSession],
+    sec_app: object,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "book.cbz"
+    _write_cbz(source)
+    issue_id = await _seed_reader_issue(sec_db, source)
+    service = ReaderContentService(cache_dir=tmp_path / "cache")
+    sec_app.state.reader_content_service = service
+    manifest = (await authenticated_client.get(f"/api/v1/reader/issues/{issue_id}/manifest")).json()
+    await authenticated_client.get(manifest["page_url_template"].replace("{page_index}", "0"))
+
+    denied = await unauthenticated_client.get("/api/v1/reader/capabilities")
+    capabilities = await authenticated_client.get("/api/v1/reader/capabilities")
+    csrf_denied = await authenticated_client.delete("/api/v1/reader/cache")
+    session_token = authenticated_client.cookies.get(SESSION_COOKIE_NAME) or ""
+    csrf = AuthService.get_csrf_token_from_session(session_token) or ""
+    cleared = await authenticated_client.delete(
+        "/api/v1/reader/cache",
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert denied.status_code == 401
+    assert capabilities.status_code == 200
+    payload = capabilities.json()
+    assert {item["format"] for item in payload["formats"]} == {
+        "cbz",
+        "cbr",
+        "cb7",
+        "cbt",
+        "pdf",
+    }
+    assert all(isinstance(item["available"], bool) for item in payload["formats"])
+    assert payload["cache"]["cache_file_count"] == 1
+    assert str(tmp_path) not in capabilities.text
+    assert csrf_denied.status_code == 403
+    assert cleared.status_code == 200
+    assert cleared.json()["files_removed"] == 1

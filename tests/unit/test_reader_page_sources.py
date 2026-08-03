@@ -6,6 +6,7 @@ import io
 import tarfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import py7zr
@@ -31,6 +32,24 @@ def _tiny_gif() -> bytes:
 
 
 _GIF = _tiny_gif()
+
+
+def _animated_gif() -> bytes:
+    output = io.BytesIO()
+    frames = [Image.new("P", (4, 4), color=index) for index in range(2)]
+    try:
+        frames[0].save(
+            output,
+            format="GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=50,
+            loop=0,
+        )
+    finally:
+        for frame in frames:
+            frame.close()
+    return output.getvalue()
 
 
 def _write_cbz(path: Path, members: dict[str, bytes]) -> None:
@@ -71,12 +90,18 @@ def test_canonical_page_names_filter_and_naturally_order() -> None:
         "/absolute.jpg",
         "pages/readme.txt",
     ]
-
     assert canonical_page_names(names) == [
         "pages/1.webp",
         "pages/2.jpg",
         "pages/02.JPG",
         "pages/10.jpg",
+    ]
+
+
+def test_canonical_page_names_use_unicode_normalization_for_sorting() -> None:
+    assert canonical_page_names(["e\u0301-10.jpg", "é-2.jpg"]) == [
+        "é-2.jpg",
+        "e\u0301-10.jpg",
     ]
 
 
@@ -164,8 +189,23 @@ def test_cbr_page_source_uses_the_same_canonical_contract(
         def namelist(self) -> list[str]:
             return ["10.gif", "2.gif", "1.gif", "ComicInfo.xml"]
 
+        def infolist(self) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(
+                    filename=name,
+                    file_size=len(_GIF) + len(name),
+                    compress_size=len(_GIF),
+                    is_file=lambda: True,
+                    is_symlink=lambda: False,
+                )
+                for name in self.namelist()
+            ]
+
         def read(self, name: str) -> bytes:
             return _GIF + name.encode()
+
+        def open(self, name: str, _mode: str = "r") -> io.BytesIO:
+            return io.BytesIO(self.read(name))
 
     monkeypatch.setattr(archive_module, "configure_rarfile_backend", lambda: None)
     monkeypatch.setattr(rarfile, "RarFile", _FakeRarFile)
@@ -174,6 +214,14 @@ def test_cbr_page_source_uses_the_same_canonical_contract(
 
     assert [page.name for page in page_source.pages] == ["1.gif", "2.gif", "10.gif"]
     assert page_source.read_page(1).data.endswith(b"2.gif")
+
+    with pytest.raises(PageSourceError) as budget_error:
+        open_page_source(
+            source,
+            declared_format=FileFormat.CBR,
+            limits=ReaderResourceLimits(max_total_uncompressed_bytes=1),
+        )
+    assert budget_error.value.code is PageSourceErrorCode.RESOURCE_LIMIT
 
 
 def test_page_source_rejects_mislabeled_content(tmp_path: Path) -> None:
@@ -219,6 +267,49 @@ def test_page_source_enforces_entry_and_page_byte_budgets(tmp_path: Path) -> Non
     assert page_error.value.code is PageSourceErrorCode.RESOURCE_LIMIT
 
 
+@pytest.mark.parametrize("format_name", ["cbz", "cb7", "cbt"])
+def test_every_archive_format_enforces_total_expanded_budget(
+    tmp_path: Path,
+    format_name: str,
+) -> None:
+    source = tmp_path / f"oversized.{format_name}"
+    writer = {"cbz": _write_cbz, "cb7": _write_cb7, "cbt": _write_cbt}[format_name]
+    writer(source, {"001.gif": _GIF, "002.gif": _GIF})
+
+    with pytest.raises(PageSourceError) as exc_info:
+        open_page_source(
+            source,
+            declared_format=FileFormat(format_name),
+            limits=ReaderResourceLimits(max_total_uncompressed_bytes=len(_GIF)),
+        )
+
+    assert exc_info.value.code is PageSourceErrorCode.RESOURCE_LIMIT
+
+
+def test_cbt_rejects_link_members_from_the_page_index(tmp_path: Path) -> None:
+    source = tmp_path / "linked.cbt"
+    with tarfile.open(source, "w") as archive:
+        page = tarfile.TarInfo("001.gif")
+        page.type = tarfile.SYMTYPE
+        page.linkname = "../../outside.gif"
+        archive.addfile(page)
+
+    with pytest.raises(PageSourceError) as exc_info:
+        open_page_source(source, declared_format=FileFormat.CBT)
+
+    assert exc_info.value.code is PageSourceErrorCode.EMPTY_SOURCE
+
+
+def test_archive_rejects_unsafe_member_depth_before_page_read(tmp_path: Path) -> None:
+    source = tmp_path / "deep.cbz"
+    _write_cbz(source, {"/".join(["nested"] * 33) + "/001.gif": _GIF})
+
+    with pytest.raises(PageSourceError) as exc_info:
+        open_page_source(source, declared_format=FileFormat.CBZ)
+
+    assert exc_info.value.code is PageSourceErrorCode.RESOURCE_LIMIT
+
+
 @pytest.mark.parametrize(("suffix", "source_format"), [("bmp", "BMP"), ("tiff", "TIFF")])
 def test_non_browser_baseline_images_are_normalized_to_jpeg(
     tmp_path: Path,
@@ -237,6 +328,36 @@ def test_non_browser_baseline_images_are_normalized_to_jpeg(
     assert page_source.pages[0].media_type == "image/jpeg"
     assert page.media_type == "image/jpeg"
     assert page.data.startswith(b"\xff\xd8\xff")
+
+
+def test_large_page_is_downsampled_to_the_browser_memory_budget(tmp_path: Path) -> None:
+    image_bytes = io.BytesIO()
+    with Image.new("RGB", (400, 800), color="purple") as image:
+        image.save(image_bytes, format="PNG")
+    source = tmp_path / "large.cbz"
+    _write_cbz(source, {"001.png": image_bytes.getvalue()})
+
+    page_source = open_page_source(
+        source,
+        declared_format=FileFormat.CBZ,
+        limits=ReaderResourceLimits(max_rendition_width=100, max_rendition_height=200),
+    )
+    page = page_source.read_page(0)
+
+    with Image.open(io.BytesIO(page.data)) as rendered:
+        assert rendered.size == (100, 200)
+    assert page.media_type == "image/png"
+
+
+def test_animated_gif_is_normalized_to_one_static_frame(tmp_path: Path) -> None:
+    source = tmp_path / "animated.cbz"
+    _write_cbz(source, {"001.gif": _animated_gif()})
+
+    page = open_page_source(source, declared_format=FileFormat.CBZ).read_page(0)
+
+    with Image.open(io.BytesIO(page.data)) as rendered:
+        assert getattr(rendered, "n_frames", 1) == 1
+    assert page.media_type == "image/gif"
 
 
 def test_image_pixel_budget_is_enforced_before_full_decode(tmp_path: Path) -> None:
@@ -289,3 +410,34 @@ def test_pdf_page_source_renders_only_requested_page(tmp_path: Path) -> None:
     assert page.data == b"jpeg-page"
     assert page.media_type == "image/jpeg"
     assert render_calls == [(3, 3)]
+
+
+def test_pdf_renderer_unavailable_and_timeout_have_stable_errors(tmp_path: Path) -> None:
+    from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPopplerTimeoutError
+
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"%PDF-1.7\n")
+
+    with (
+        patch(
+            "pdf2image.pdfinfo_from_path",
+            side_effect=PDFInfoNotInstalledError("missing binary /private/path"),
+        ),
+        pytest.raises(PageSourceError) as unavailable,
+    ):
+        open_page_source(source, declared_format=FileFormat.PDF)
+    assert unavailable.value.code is PageSourceErrorCode.RENDERER_UNAVAILABLE
+    assert "/private/path" not in str(unavailable.value)
+
+    with (
+        patch("pdf2image.pdfinfo_from_path", return_value={"Pages": 1}),
+        patch(
+            "pdf2image.convert_from_path",
+            side_effect=PDFPopplerTimeoutError("timed out /private/path"),
+        ),
+    ):
+        page_source = open_page_source(source, declared_format=FileFormat.PDF)
+        with pytest.raises(PageSourceError) as timeout:
+            page_source.read_page(0)
+    assert timeout.value.code is PageSourceErrorCode.RESOURCE_LIMIT
+    assert "/private/path" not in str(timeout.value)

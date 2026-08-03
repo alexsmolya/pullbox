@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from starlette.responses import Response
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
+from pullbox.config import get_settings
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile
 from pullbox.models.series import Series
@@ -248,7 +249,12 @@ async def issue_detail(
     return _templates().TemplateResponse(
         request,
         "pages/issue_detail.html",
-        _ctx(request, user, issue=issue),
+        _ctx(
+            request,
+            user,
+            issue=issue,
+            reader_enabled=get_settings().reader_enabled,
+        ),
     )
 
 

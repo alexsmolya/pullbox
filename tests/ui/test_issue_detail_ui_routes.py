@@ -232,6 +232,30 @@ class TestIssueDetailRouteContracts:
         assert 'data-testid="issue-action-read"' not in response.text
         assert 'data-testid="issue-library-file-section"' not in response.text
 
+    async def test_emergency_reader_gate_hides_the_entry_point(
+        self,
+        authenticated_client,
+        seeded_issue_detail_ui_data,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from types import SimpleNamespace
+
+        from pullbox.ui import series_detail_routes
+
+        monkeypatch.setattr(
+            series_detail_routes,
+            "get_settings",
+            lambda: SimpleNamespace(reader_enabled=False),
+        )
+
+        response = await authenticated_client.get(
+            f"/issues/{seeded_issue_detail_ui_data['owned_issue_id']}"
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="issue-action-read"' not in response.text
+        assert 'data-testid="comic-reader-dialog"' not in response.text
+
     async def test_missing_issue_metadata_uses_persistent_comicvine_cache(
         self,
         authenticated_client,

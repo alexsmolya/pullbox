@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
+import threading
+import time
 import zipfile
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -18,6 +21,7 @@ from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.services.reader_content_service import (
     ReaderContentService,
     ReaderSourceRecord,
+    ReaderWorkerBusyError,
     StaleReaderRevisionError,
     load_reader_source_record,
     resolve_reader_source,
@@ -187,6 +191,130 @@ async def test_identical_cold_requests_are_single_flight(
 
     assert read_count == 1
     assert len({page.path for page in pages}) == 1
+
+
+@pytest.mark.asyncio
+async def test_expensive_reader_workers_are_globally_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pullbox.services import reader_content_service as content_module
+
+    root = tmp_path / "library"
+    root.mkdir()
+    first_source = root / "first.cbz"
+    second_source = root / "second.cbz"
+    _write_cbz(first_source)
+    _write_cbz(second_source)
+    first = resolve_reader_source(_record(first_source, root))
+    second = resolve_reader_source(
+        dataclasses.replace(_record(second_source, root), library_file_id=12)
+    )
+    original_open = content_module.open_page_source
+    active = 0
+    maximum_active = 0
+    lock = threading.Lock()
+
+    def _tracked_open(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            time.sleep(0.08)
+            return original_open(*args, **kwargs)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(content_module, "open_page_source", _tracked_open)
+    service = ReaderContentService(cache_dir=tmp_path / "cache", max_workers=1)
+
+    await asyncio.gather(service.get_manifest(first), service.get_manifest(second))
+
+    assert maximum_active == 1
+
+
+@pytest.mark.asyncio
+async def test_new_cache_page_is_not_evicted_before_it_is_returned(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "book.cbz"
+    _write_cbz(source)
+    service = ReaderContentService(cache_dir=tmp_path / "cache", max_cache_bytes=1)
+    resolved = resolve_reader_source(_record(source, root))
+
+    page = await service.get_page(resolved, page_index=0, revision=resolved.revision)
+
+    assert page.path.is_file()
+
+
+@pytest.mark.asyncio
+async def test_worker_saturation_fails_with_a_bounded_retryable_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pullbox.services import reader_content_service as content_module
+
+    root = tmp_path / "library"
+    root.mkdir()
+    first_source = root / "first.cbz"
+    second_source = root / "second.cbz"
+    _write_cbz(first_source)
+    _write_cbz(second_source)
+    first = resolve_reader_source(_record(first_source, root))
+    second = resolve_reader_source(
+        dataclasses.replace(_record(second_source, root), library_file_id=12)
+    )
+    original_open = content_module.open_page_source
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_open(path, **kwargs):  # type: ignore[no-untyped-def]
+        if path == first_source:
+            started.set()
+            release.wait(timeout=2)
+        return original_open(path, **kwargs)
+
+    monkeypatch.setattr(content_module, "open_page_source", _blocked_open)
+    service = ReaderContentService(
+        cache_dir=tmp_path / "cache",
+        max_workers=1,
+        worker_wait_seconds=0.02,
+    )
+    first_request = asyncio.create_task(service.get_manifest(first))
+    await asyncio.to_thread(started.wait, 1)
+
+    with pytest.raises(ReaderWorkerBusyError):
+        await service.get_manifest(second)
+
+    release.set()
+    await first_request
+
+
+@pytest.mark.asyncio
+async def test_cache_diagnostics_and_clear_are_bounded_to_generated_reader_files(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "book.cbz"
+    _write_cbz(source)
+    service = ReaderContentService(cache_dir=tmp_path / "cache")
+    resolved = resolve_reader_source(_record(source, root))
+    page = await service.get_page(resolved, page_index=0, revision=resolved.revision)
+    page_size = page.path.stat().st_size
+
+    before = await service.get_diagnostics()
+    cleared = await service.clear_cache()
+    after = await service.get_diagnostics()
+
+    assert before.cache_file_count == 1
+    assert before.cache_bytes == page_size
+    assert before.max_cache_bytes == 512 * 1024 * 1024
+    assert cleared.files_removed == 1
+    assert after.cache_file_count == 0
+    assert source.is_file()
 
 
 def test_content_revision_changes_when_source_changes(tmp_path: Path) -> None:

@@ -11,7 +11,9 @@ from __future__ import annotations
 import tarfile
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from stat import S_ISLNK
 
 import structlog
 
@@ -24,6 +26,21 @@ _ARCHIVE_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", "
 
 class ArchiveError(Exception):
     """Raised when an archive cannot be read or is corrupt."""
+
+
+class ArchiveResourceLimitError(ArchiveError):
+    """Raised when a bounded member read exceeds its declared safety limit."""
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveMember:
+    """Format-neutral archive metadata used for pre-extraction safety budgets."""
+
+    name: str
+    size: int
+    compressed_size: int | None
+    is_regular_file: bool
+    is_link: bool = False
 
 
 class ArchiveReader:
@@ -68,20 +85,37 @@ class ArchiveReader:
 
         raise ArchiveError(f"Unsupported format: {self._extension}")
 
-    def read_file(self, name: str) -> bytes:
+    def list_members(self) -> list[ArchiveMember]:
+        """List bounded-validation metadata without extracting member payloads."""
+        try:
+            if self._extension == ".cbz":
+                return self._members_zip()
+            if self._extension == ".cbr":
+                return self._members_rar()
+            if self._extension == ".cb7":
+                return self._members_7z()
+            if self._extension == ".cbt":
+                return self._members_tar()
+        except ArchiveError:
+            raise
+        except Exception as exc:
+            raise ArchiveError("Failed to inspect comic archive members.") from exc
+        raise ArchiveError(f"Unsupported format: {self._extension}")
+
+    def read_file(self, name: str, *, max_bytes: int | None = None) -> bytes:
         """Read a specific file from the archive by name."""
         log = logger.bind(path=str(self._path), file=name)
         log.debug("archive_read_file")
 
         try:
             if self._extension == ".cbz":
-                return self._read_zip(name)
+                return self._read_zip(name, max_bytes=max_bytes)
             if self._extension == ".cbr":
-                return self._read_rar(name)
+                return self._read_rar(name, max_bytes=max_bytes)
             if self._extension == ".cb7":
-                return self._read_7z(name)
+                return self._read_7z(name, max_bytes=max_bytes)
             if self._extension == ".cbt":
-                return self._read_tar(name)
+                return self._read_tar(name, max_bytes=max_bytes)
         except ArchiveError:
             raise
         except Exception as exc:
@@ -119,10 +153,26 @@ class ArchiveReader:
         except zipfile.BadZipFile as exc:
             raise ArchiveError(f"Corrupt CBZ file: {exc}") from exc
 
-    def _read_zip(self, name: str) -> bytes:
+    def _members_zip(self) -> list[ArchiveMember]:
         try:
-            with zipfile.ZipFile(self._path, "r") as zf:
-                return zf.read(name)
+            with zipfile.ZipFile(self._path, "r") as archive:
+                return [
+                    ArchiveMember(
+                        name=info.filename,
+                        size=max(0, info.file_size),
+                        compressed_size=max(0, info.compress_size),
+                        is_regular_file=not info.is_dir() and not S_ISLNK(info.external_attr >> 16),
+                        is_link=S_ISLNK(info.external_attr >> 16),
+                    )
+                    for info in archive.infolist()
+                ]
+        except zipfile.BadZipFile as exc:
+            raise ArchiveError(f"Corrupt CBZ file: {exc}") from exc
+
+    def _read_zip(self, name: str, *, max_bytes: int | None) -> bytes:
+        try:
+            with zipfile.ZipFile(self._path, "r") as zf, zf.open(name, "r") as member:
+                return _read_bounded(member, max_bytes)
         except zipfile.BadZipFile as exc:
             raise ArchiveError(f"Corrupt CBZ file: {exc}") from exc
         except KeyError:
@@ -145,7 +195,7 @@ class ArchiveReader:
         except rarfile.BadRarFile as exc:
             raise ArchiveError(f"Corrupt CBR file: {exc}") from exc
 
-    def _read_rar(self, name: str) -> bytes:
+    def _members_rar(self) -> list[ArchiveMember]:
         try:
             import rarfile
         except ImportError:
@@ -153,8 +203,32 @@ class ArchiveReader:
 
         try:
             configure_rarfile_backend()
-            with rarfile.RarFile(self._path, "r") as rf:
-                return bytes(rf.read(name))
+            with rarfile.RarFile(self._path, "r") as archive:
+                return [
+                    ArchiveMember(
+                        name=info.filename,
+                        size=max(0, int(info.file_size)),
+                        compressed_size=max(0, int(info.compress_size)),
+                        is_regular_file=bool(info.is_file()) and not bool(info.is_symlink()),
+                        is_link=bool(info.is_symlink()),
+                    )
+                    for info in archive.infolist()
+                ]
+        except RarBackendUnavailableError as exc:
+            raise ArchiveError(str(exc)) from exc
+        except rarfile.BadRarFile as exc:
+            raise ArchiveError(f"Corrupt CBR file: {exc}") from exc
+
+    def _read_rar(self, name: str, *, max_bytes: int | None) -> bytes:
+        try:
+            import rarfile
+        except ImportError:
+            raise ArchiveError("rarfile package required for CBR support") from None
+
+        try:
+            configure_rarfile_backend()
+            with rarfile.RarFile(self._path, "r") as rf, rf.open(name, "r") as member:
+                return _read_bounded(member, max_bytes)
         except RarBackendUnavailableError as exc:
             raise ArchiveError(str(exc)) from exc
         except rarfile.BadRarFile as exc:
@@ -176,7 +250,30 @@ class ArchiveReader:
         except py7zr.Bad7zFile as exc:
             raise ArchiveError(f"Corrupt CB7 file: {exc}") from exc
 
-    def _read_7z(self, name: str) -> bytes:
+    def _members_7z(self) -> list[ArchiveMember]:
+        try:
+            import py7zr
+        except ImportError:
+            raise ArchiveError("py7zr package required for CB7 support") from None
+
+        try:
+            with py7zr.SevenZipFile(self._path, "r") as archive:
+                return [
+                    ArchiveMember(
+                        name=info.filename,
+                        size=max(0, int(info.uncompressed or 0)),
+                        compressed_size=(
+                            max(0, int(info.compressed)) if info.compressed is not None else None
+                        ),
+                        is_regular_file=bool(info.is_file) and not bool(info.is_symlink),
+                        is_link=bool(info.is_symlink),
+                    )
+                    for info in archive.list()
+                ]
+        except py7zr.Bad7zFile as exc:
+            raise ArchiveError(f"Corrupt CB7 file: {exc}") from exc
+
+    def _read_7z(self, name: str, *, max_bytes: int | None) -> bytes:
         try:
             import py7zr
         except ImportError:
@@ -191,7 +288,8 @@ class ArchiveReader:
                 extracted = (temp_root / Path(name)).resolve(strict=False)
                 if not extracted.is_relative_to(temp_root.resolve()) or not extracted.is_file():
                     raise ArchiveError(f"File not found in archive: {name}")
-                return extracted.read_bytes()
+                with extracted.open("rb") as member:
+                    return _read_bounded(member, max_bytes)
         except py7zr.Bad7zFile as exc:
             raise ArchiveError(f"Corrupt CB7 file: {exc}") from exc
 
@@ -204,7 +302,23 @@ class ArchiveReader:
         except tarfile.TarError as exc:
             raise ArchiveError(f"Corrupt CBT file: {exc}") from exc
 
-    def _read_tar(self, name: str) -> bytes:
+    def _members_tar(self) -> list[ArchiveMember]:
+        try:
+            with tarfile.open(self._path, "r:*") as archive:
+                return [
+                    ArchiveMember(
+                        name=member.name,
+                        size=max(0, member.size),
+                        compressed_size=None,
+                        is_regular_file=member.isfile(),
+                        is_link=member.issym() or member.islnk(),
+                    )
+                    for member in archive.getmembers()
+                ]
+        except tarfile.TarError as exc:
+            raise ArchiveError(f"Corrupt CBT file: {exc}") from exc
+
+    def _read_tar(self, name: str, *, max_bytes: int | None) -> bytes:
         _validate_archive_member_name(name)
         try:
             with tarfile.open(self._path, "r:*") as archive:
@@ -214,7 +328,7 @@ class ArchiveReader:
                 extracted = archive.extractfile(member)
                 if extracted is None:
                     raise ArchiveError(f"File not found in archive: {name}")
-                return extracted.read()
+                return _read_bounded(extracted, max_bytes)
         except KeyError:
             raise ArchiveError(f"File not found in archive: {name}") from None
         except tarfile.TarError as exc:
@@ -227,6 +341,17 @@ def _validate_archive_member_name(name: str) -> None:
     member = PurePosixPath(normalized)
     if member.is_absolute() or not member.parts or ".." in member.parts:
         raise ArchiveError("Unsafe archive member path")
+
+
+def _read_bounded(member: object, max_bytes: int | None) -> bytes:
+    """Read at most one byte beyond the configured member budget."""
+    reader = getattr(member, "read", None)
+    if not callable(reader):
+        raise ArchiveError("Archive member could not be read")
+    data = bytes(reader() if max_bytes is None else reader(max_bytes + 1))
+    if max_bytes is not None and len(data) > max_bytes:
+        raise ArchiveResourceLimitError("Archive member exceeds the configured size limit")
+    return data
 
 
 def inspect_archive_page_count(path: Path) -> int | None:

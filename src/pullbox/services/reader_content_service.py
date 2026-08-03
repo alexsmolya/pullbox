@@ -9,7 +9,7 @@ import tempfile
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import anyio
 from sqlalchemy import select
@@ -27,6 +27,8 @@ from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 _READABLE_FORMATS = frozenset(
@@ -40,10 +42,35 @@ _MEDIA_SUFFIXES = {
     "image/bmp": ".bmp",
     "image/tiff": ".tiff",
 }
+_T = TypeVar("_T")
 
 
 class StaleReaderRevisionError(Exception):
     """Raised when a page URL references a replaced source revision."""
+
+
+class ReaderWorkerBusyError(Exception):
+    """Raised when bounded reader workers remain saturated past the wait budget."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReaderCacheDiagnostics:
+    """Path-free cache and worker facts safe for private diagnostics."""
+
+    cache_file_count: int
+    cache_bytes: int
+    max_cache_bytes: int
+    open_source_count: int
+    max_open_sources: int
+    max_workers: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReaderCacheClearResult:
+    """Result of deleting generated cache files without touching source comics."""
+
+    files_removed: int
+    bytes_removed: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,14 +199,41 @@ class ReaderContentService:
         limits: ReaderResourceLimits | None = None,
         max_open_sources: int = 8,
         max_cache_bytes: int = 512 * 1024 * 1024,
+        max_workers: int = 2,
+        worker_wait_seconds: float = 2.0,
     ) -> None:
         self._cache_dir = cache_dir
         self._limits = limits or ReaderResourceLimits()
         self._max_open_sources = max(1, max_open_sources)
         self._max_cache_bytes = max(1, max_cache_bytes)
+        self._worker_slots = asyncio.Semaphore(max(1, max_workers))
+        self._max_workers = max(1, max_workers)
+        self._worker_wait_seconds = max(0.001, worker_wait_seconds)
         self._sources: OrderedDict[str, PageSource] = OrderedDict()
         self._source_locks: dict[str, asyncio.Lock] = {}
         self._coordination_lock = asyncio.Lock()
+
+    async def get_diagnostics(self) -> ReaderCacheDiagnostics:
+        """Return cache usage and configured bounds without filesystem paths."""
+        async with self._coordination_lock:
+            open_source_count = len(self._sources)
+        file_count, cache_bytes = await anyio.to_thread.run_sync(self._cache_usage)
+        return ReaderCacheDiagnostics(
+            cache_file_count=file_count,
+            cache_bytes=cache_bytes,
+            max_cache_bytes=self._max_cache_bytes,
+            open_source_count=open_source_count,
+            max_open_sources=self._max_open_sources,
+            max_workers=self._max_workers,
+        )
+
+    async def clear_cache(self) -> ReaderCacheClearResult:
+        """Delete only generated reader cache entries without following symlinks."""
+        files_removed, bytes_removed = await anyio.to_thread.run_sync(self._clear_cache_files)
+        return ReaderCacheClearResult(
+            files_removed=files_removed,
+            bytes_removed=bytes_removed,
+        )
 
     async def get_manifest(self, source: ResolvedReaderSource) -> ReaderManifest:
         """Build a warm-cache-friendly manifest without retaining a DB session."""
@@ -203,13 +257,15 @@ class ReaderContentService:
                 if cached is not None:
                     self._sources.move_to_end(source.revision)
                     return cached
-            opened = await anyio.to_thread.run_sync(
-                lambda: open_page_source(
-                    source.path,
-                    declared_format=source.file_format,
-                    limits=self._limits,
-                ),
-                abandon_on_cancel=True,
+            opened = await self._run_worker(
+                lambda: anyio.to_thread.run_sync(
+                    lambda: open_page_source(
+                        source.path,
+                        declared_format=source.file_format,
+                        limits=self._limits,
+                    ),
+                    abandon_on_cancel=False,
+                )
             )
             async with self._coordination_lock:
                 self._sources[source.revision] = opened
@@ -250,18 +306,30 @@ class ReaderContentService:
         async with lock:
             if await anyio.to_thread.run_sync(target.is_file):
                 return ReaderPageFile(path=target, media_type=descriptor.media_type, etag=etag)
-            payload = await anyio.to_thread.run_sync(
-                page_source.read_page,
-                page_index,
-                abandon_on_cancel=True,
+            payload = await self._run_worker(
+                lambda: anyio.to_thread.run_sync(
+                    page_source.read_page, page_index, abandon_on_cancel=False
+                )
             )
-            await anyio.to_thread.run_sync(
-                self._write_cache_file,
-                target,
-                payload.data,
-                abandon_on_cancel=True,
+            await self._run_worker(
+                lambda: anyio.to_thread.run_sync(
+                    self._write_cache_file, target, payload.data, abandon_on_cancel=False
+                )
             )
         return ReaderPageFile(path=target, media_type=payload.media_type, etag=etag)
+
+    async def _run_worker(self, operation: Callable[[], Awaitable[_T]]) -> _T:
+        try:
+            await asyncio.wait_for(
+                self._worker_slots.acquire(),
+                timeout=self._worker_wait_seconds,
+            )
+        except TimeoutError as exc:
+            raise ReaderWorkerBusyError from exc
+        try:
+            return await operation()
+        finally:
+            self._worker_slots.release()
 
     async def _source_lock(self, revision: str) -> asyncio.Lock:
         async with self._coordination_lock:
@@ -287,9 +355,9 @@ class ReaderContentService:
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
-        self._enforce_cache_budget()
+        self._enforce_cache_budget(protected=target)
 
-    def _enforce_cache_budget(self) -> None:
+    def _enforce_cache_budget(self, *, protected: Path | None = None) -> None:
         files: list[tuple[float, int, Path]] = []
         total = 0
         if not self._cache_dir.exists():
@@ -306,6 +374,8 @@ class ReaderContentService:
         if total <= self._max_cache_bytes:
             return
         for _mtime, size, path in sorted(files):
+            if protected is not None and path == protected:
+                continue
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -313,3 +383,45 @@ class ReaderContentService:
             total -= size
             if total <= self._max_cache_bytes:
                 break
+
+    def _cache_usage(self) -> tuple[int, int]:
+        file_count = 0
+        cache_bytes = 0
+        if not self._cache_dir.exists():
+            return file_count, cache_bytes
+        for path in self._cache_dir.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            file_count += 1
+            cache_bytes += size
+        return file_count, cache_bytes
+
+    def _clear_cache_files(self) -> tuple[int, int]:
+        files_removed = 0
+        bytes_removed = 0
+        if not self._cache_dir.exists():
+            return files_removed, bytes_removed
+        paths = sorted(
+            self._cache_dir.rglob("*"),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        for path in paths:
+            try:
+                if path.is_symlink():
+                    path.unlink(missing_ok=True)
+                    continue
+                if path.is_file():
+                    size = path.stat().st_size
+                    path.unlink(missing_ok=True)
+                    files_removed += 1
+                    bytes_removed += size
+                elif path.is_dir():
+                    path.rmdir()
+            except OSError:
+                continue
+        return files_removed, bytes_removed

@@ -38,3 +38,37 @@ class ReaderProgressResponse(BaseModel):
     revision: str
     completed_at: datetime | None
     updated_at: datetime
+
+
+class ReaderFormatCapabilityResponse(BaseModel):
+    """Runtime readiness for one supported reader format."""
+
+    format: FileFormat
+    available: bool
+    detail: str
+
+
+class ReaderCacheDiagnosticsResponse(BaseModel):
+    """Path-free bounded reader cache diagnostics."""
+
+    cache_file_count: int
+    cache_bytes: int
+    max_cache_bytes: int
+    open_source_count: int
+    max_open_sources: int
+    max_workers: int
+
+
+class ReaderCapabilitiesResponse(BaseModel):
+    """Private reader capability and cache report."""
+
+    enabled: bool
+    formats: list[ReaderFormatCapabilityResponse]
+    cache: ReaderCacheDiagnosticsResponse
+
+
+class ReaderCacheClearResponse(BaseModel):
+    """Generated cache cleanup result."""
+
+    files_removed: int
+    bytes_removed: int

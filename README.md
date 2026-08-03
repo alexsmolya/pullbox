@@ -199,6 +199,13 @@ read-only or runtime-managed inside Pullbox.
 | `PULLBOX_LOG_BACKUP_COUNT` | `5` | Number of rotated startup logs to keep. |
 | `PULLBOX_DEBUG` | `false` | Enables debug behavior and more detailed error output. |
 | `PULLBOX_STARTUP_UPDATE_CHECK_ENABLED` | `true` | Enables the startup update check. |
+| `PULLBOX_READER_ENABLED` | `true` | Default-on emergency gate for the embedded comic reader. `false` hides Read and disables its private APIs without deleting comics or resume state. |
+| `PULLBOX_READER_CACHE_MAX_MB` | `512` | Maximum generated reader-page cache size. |
+| `PULLBOX_READER_OPEN_SOURCE_CACHE_SIZE` | `8` | Maximum in-process archive indexes retained for reuse. |
+| `PULLBOX_READER_WORKER_COUNT` | `2` | Maximum concurrent archive/image/PDF worker operations. |
+| `PULLBOX_READER_WORKER_WAIT_SECONDS` | `2.0` | Maximum wait for a reader worker before returning a retryable busy response. |
+| `PULLBOX_READER_MAX_RENDITION_WIDTH` | `2560` | Maximum delivered image width used to bound browser decode memory. |
+| `PULLBOX_READER_MAX_RENDITION_HEIGHT` | `4096` | Maximum delivered image height used to bound browser decode memory. |
 | `PULLBOX_RATE_LIMIT_ENABLED` | `true` | Enables request rate limiting. |
 | `PULLBOX_RATE_LIMIT_TIER1` | `60` | Expensive-operation requests per minute per IP. |
 | `PULLBOX_RATE_LIMIT_TIER2` | `120` | Write-operation requests per minute per IP. |
@@ -241,6 +248,7 @@ read-only or runtime-managed inside Pullbox.
 - Search history, rejected results, and blocklist support.
 - Post-processing for completed downloads.
 - Library scanning, matching, renaming, conversion, and integrity utilities.
+- Responsive single-page comic reader for CBZ, CBR, CB7, CBT, and PDF files.
 - Intervention queue for ambiguous matches.
 - Health checks, diagnostics, logs, backups, and audit trail.
 - Server-rendered UI with HTMX, Alpine.js, and Tailwind CSS.
@@ -258,6 +266,7 @@ live in the repo docs:
 - `docs/development/SECURITY_STANDARDS.md`
 - `docs/development/INFRASTRUCTURE.md`
 - `docs/development/DESIGN_SYSTEM.md`
+- `docs/features/comic-reader.md`
 
 
 ## Security

@@ -17,3 +17,12 @@ def test_settings_ignore_unprefixed_dotenv_entries(tmp_path, monkeypatch) -> Non
 
     assert settings.port == 9999
     assert settings.secret_key == "from-dotenv"
+
+
+def test_reader_has_default_on_emergency_environment_gate(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PULLBOX_READER_ENABLED", raising=False)
+    assert PullboxSettings().reader_enabled is True
+
+    monkeypatch.setenv("PULLBOX_READER_ENABLED", "false")
+    assert PullboxSettings().reader_enabled is False
