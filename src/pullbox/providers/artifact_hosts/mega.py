@@ -484,7 +484,7 @@ def _remove_partial(destination: Path) -> None:
 
 
 def _bridge_environment() -> dict[str, str]:
-    allowed = ("PATH", "SSL_CERT_DIR", "SSL_CERT_FILE", "TZ")
+    allowed = ("PATH", "LD_LIBRARY_PATH", "SSL_CERT_DIR", "SSL_CERT_FILE", "TZ")
     return {name: os.environ[name] for name in allowed if name in os.environ}
 
 

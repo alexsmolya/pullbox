@@ -22,6 +22,7 @@ from pullbox.providers.artifact_hosts.mega import (
     MegaBridgePausedError,
     MegaBridgeRunner,
     MegaBridgeTransferError,
+    _bridge_environment,
     _send_request,
 )
 from pullbox.providers.artifact_hosts.transport_contract import (
@@ -88,6 +89,18 @@ async def test_mega_request_accepts_peer_close_after_payload_was_drained(
 
     assert writer.payload.startswith(b"PULLBOX_MEGA_BRIDGE 1\nDOWNLOAD ")
     assert writer.closed is True
+
+
+def test_mega_bridge_environment_keeps_runtime_loader_path_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/runtime/python/lib")
+    monkeypatch.setenv("PULLBOX_SECRET_KEY", "must-not-cross-process-boundary")
+
+    environment = _bridge_environment()
+
+    assert environment["LD_LIBRARY_PATH"] == "/runtime/python/lib"
+    assert "PULLBOX_SECRET_KEY" not in environment
 
 
 @pytest.mark.asyncio
