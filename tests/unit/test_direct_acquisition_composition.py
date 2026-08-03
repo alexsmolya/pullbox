@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from pullbox.models.direct_acquisition import DirectArtifactHostKind
+from pullbox.models.direct_acquisition import (
+    DirectArtifactFailureClass,
+    DirectArtifactHostKind,
+)
+from pullbox.services.direct_resolver_service import DirectResolverServiceError
 from pullbox.tasks.direct_acquisition_task import DirectAcquisitionRunner
 
 
@@ -71,3 +75,22 @@ async def test_composition_registers_every_closed_host_and_closes_http_client(
     assert runner is not None
     await runtime.aclose()
     assert runtime.closed is True
+
+
+def test_datanodes_pool_exhaustion_is_a_retryable_resolver_failure() -> None:
+    from pullbox.composition import services
+
+    failure = services._datanodes_login_failure(
+        DirectResolverServiceError(
+            "resolver_chain_exhausted",
+            "Every compatible browser resolver failed this request.",
+            retryable=True,
+            cause_code="resolver_pool_exhausted",
+        )
+    )
+
+    assert failure.code == "artifact_host_resolver_unavailable"
+    assert failure.failure_class is DirectArtifactFailureClass.RESOLVER
+    assert failure.retryable is True
+    assert failure.intervention is False
+    assert "TRAWL browser pool" in failure.message

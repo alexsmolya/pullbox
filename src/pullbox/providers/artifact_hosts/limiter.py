@@ -7,6 +7,9 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from pullbox.models.direct_acquisition import DirectArtifactHostKind
+from pullbox.providers.artifact_hosts.transport_contract import (
+    ArtifactTransferCancelledError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
@@ -37,16 +40,55 @@ class ArtifactTransferLimiter:
         }
 
     @asynccontextmanager
-    async def slot(self, host_kind: DirectArtifactHostKind) -> AsyncIterator[None]:
+    async def slot(
+        self,
+        host_kind: DirectArtifactHostKind,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[None]:
         """Acquire the host permit first so its queue cannot starve other hosts."""
         host = self._hosts[host_kind]
-        await host.acquire()
+        await _acquire_with_cancel(host, cancel_event)
         global_acquired = False
         try:
-            await self._global.acquire()
+            await _acquire_with_cancel(self._global, cancel_event)
             global_acquired = True
             yield
         finally:
             if global_acquired:
                 self._global.release()
             host.release()
+
+
+async def _acquire_with_cancel(
+    semaphore: asyncio.Semaphore,
+    cancel_event: asyncio.Event | None,
+) -> None:
+    if cancel_event is None:
+        await semaphore.acquire()
+        return
+    if cancel_event.is_set():
+        raise ArtifactTransferCancelledError
+
+    acquire_task = asyncio.create_task(semaphore.acquire())
+    cancel_task = asyncio.create_task(cancel_event.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {acquire_task, cancel_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        acquire_task.cancel()
+        cancel_task.cancel()
+        await asyncio.gather(acquire_task, cancel_task, return_exceptions=True)
+        raise
+    if cancel_task in done:
+        if acquire_task in done and acquire_task.result():
+            semaphore.release()
+        else:
+            acquire_task.cancel()
+        await asyncio.gather(acquire_task, return_exceptions=True)
+        raise ArtifactTransferCancelledError
+
+    cancel_task.cancel()
+    await asyncio.gather(cancel_task, return_exceptions=True)

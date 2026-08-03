@@ -154,6 +154,61 @@ async def test_resolver_posts_trawl_native_scrape_request_and_returns_solution()
     assert COOKIE_SECRET not in repr(result)
 
 
+async def test_trawl_native_classifies_pool_exhaustion_without_opening_circuit() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/scrape"
+        return httpx.Response(
+            429,
+            json={
+                "status": "error",
+                "message": "Browser pool saturated, retry shortly",
+            },
+        )
+
+    breaker = ResolverCircuitBreaker(failure_threshold=1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = DirectResolverClient(
+            endpoint="http://trawl:8191",
+            allow_private_http=True,
+            endpoint_resolver=_resolve_private,
+            target_resolver=_resolve_public,
+            http_client=http_client,
+            circuit_breaker=breaker,
+        )
+        with pytest.raises(DirectResolverError) as exc_info:
+            await client.solve_trawl_native(
+                "https://source.example/login",
+                declared_domains=("source.example",),
+                challenge_category="artifact_host_login",
+            )
+
+    assert exc_info.value.code == "resolver_pool_exhausted"
+    assert exc_info.value.retryable is True
+    assert "browser pool" in str(exc_info.value).lower()
+    assert breaker.state == "closed"
+
+
+async def test_standard_resolver_preserves_generic_rate_limit_classification() -> None:
+    transport = httpx.MockTransport(lambda _request: httpx.Response(429))
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = DirectResolverClient(
+            endpoint="http://resolver:8191",
+            allow_private_http=True,
+            endpoint_resolver=_resolve_private,
+            target_resolver=_resolve_public,
+            http_client=http_client,
+        )
+        with pytest.raises(DirectResolverError) as exc_info:
+            await client.solve(
+                "https://source.example/comics",
+                declared_domains=("source.example",),
+                challenge_category="cloudflare",
+            )
+
+    assert exc_info.value.code == "resolver_rate_limited"
+    assert exc_info.value.retryable is True
+
+
 async def test_trawl_native_revalidates_returned_domain() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(

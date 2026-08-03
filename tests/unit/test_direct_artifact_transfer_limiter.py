@@ -6,6 +6,9 @@ import pytest
 
 from pullbox.models.direct_acquisition import DirectArtifactHostKind
 from pullbox.providers.artifact_hosts.limiter import ArtifactTransferLimiter
+from pullbox.providers.artifact_hosts.transport_contract import (
+    ArtifactTransferCancelledError,
+)
 
 
 @pytest.mark.asyncio
@@ -69,6 +72,45 @@ async def test_limiter_honors_host_override_and_global_bound() -> None:
     assert maximum == 2
     release.set()
     await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_host_waiter_does_not_wait_for_active_transfer() -> None:
+    limiter = ArtifactTransferLimiter(global_limit=2, per_host_limit=1)
+    owner_started = asyncio.Event()
+    release_owner = asyncio.Event()
+    cancel_waiter = asyncio.Event()
+    waiter_entered = False
+
+    async def run_owner() -> None:
+        async with limiter.slot(DirectArtifactHostKind.PIXELDRAIN):
+            owner_started.set()
+            await release_owner.wait()
+
+    async def run_waiter() -> None:
+        nonlocal waiter_entered
+        async with limiter.slot(
+            DirectArtifactHostKind.PIXELDRAIN,
+            cancel_event=cancel_waiter,
+        ):
+            waiter_entered = True
+
+    owner = asyncio.create_task(run_owner())
+    await owner_started.wait()
+    waiter = asyncio.create_task(run_waiter())
+    await asyncio.sleep(0)
+
+    cancel_waiter.set()
+    with pytest.raises(ArtifactTransferCancelledError):
+        await asyncio.wait_for(waiter, timeout=0.25)
+    assert waiter_entered is False
+
+    release_owner.set()
+    await owner
+
+    # Cancellation must not leak the host permit.
+    async with limiter.slot(DirectArtifactHostKind.PIXELDRAIN):
+        pass
 
 
 def test_limiter_rejects_invalid_bounds() -> None:

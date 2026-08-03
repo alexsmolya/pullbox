@@ -962,6 +962,72 @@ async def test_http_transport_cancel_removes_partial_and_pause_preserves_it(
 
 
 @pytest.mark.asyncio
+async def test_http_transport_cancel_interrupts_stalled_chunk_read(
+    tmp_path: Path,
+) -> None:
+    cancel_event = asyncio.Event()
+    read_started = asyncio.Event()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_SignalledStalledStream(read_started))
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = asyncio.create_task(
+            HttpArtifactTransport(
+                client=client,
+                resolver=_public_resolver,
+                policy=ArtifactTransferPolicy(idle_timeout_seconds=30),
+            ).transfer(
+                resolved=_resolved(expected_size=6),
+                destination=destination,
+                quarantine_root=root,
+                cancel_event=cancel_event,
+            )
+        )
+        await asyncio.wait_for(read_started.wait(), timeout=1)
+        cancel_event.set()
+        with pytest.raises(ArtifactTransferCancelledError):
+            await asyncio.wait_for(transfer, timeout=0.25)
+
+    assert not destination.exists()
+
+
+@pytest.mark.asyncio
+async def test_http_transport_cancel_interrupts_stalled_response_open(
+    tmp_path: Path,
+) -> None:
+    cancel_event = asyncio.Event()
+    request_started = asyncio.Event()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        request_started.set()
+        await asyncio.sleep(30)
+        return httpx.Response(200, content=b"never")
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transfer = asyncio.create_task(
+            HttpArtifactTransport(
+                client=client,
+                resolver=_public_resolver,
+                policy=ArtifactTransferPolicy(idle_timeout_seconds=30),
+            ).transfer(
+                resolved=_resolved(expected_size=5),
+                destination=destination,
+                quarantine_root=root,
+                cancel_event=cancel_event,
+            )
+        )
+        await asyncio.wait_for(request_started.wait(), timeout=1)
+        cancel_event.set()
+        with pytest.raises(ArtifactTransferCancelledError):
+            await asyncio.wait_for(transfer, timeout=0.25)
+
+    assert not destination.exists()
+
+
+@pytest.mark.asyncio
 async def test_http_transport_rejects_oversize_or_insufficient_disk(
     tmp_path: Path,
 ) -> None:
@@ -1143,6 +1209,16 @@ class _TwoChunkStream(httpx.AsyncByteStream):
 
 class _StalledStream(httpx.AsyncByteStream):
     async def __aiter__(self):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(30)
+        yield b"never"
+
+
+class _SignalledStalledStream(httpx.AsyncByteStream):
+    def __init__(self, started: asyncio.Event) -> None:
+        self._started = started
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def]
+        self._started.set()
         await asyncio.sleep(30)
         yield b"never"
 

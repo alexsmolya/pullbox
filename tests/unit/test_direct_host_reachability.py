@@ -12,6 +12,7 @@ from pullbox.models import Base
 from pullbox.models.direct_acquisition import (
     DirectArtifactFailureClass,
     DirectArtifactHostKind,
+    DirectHostAccountState,
     DirectHostConfig,
     DirectHostOperationalResult,
     DirectHostReachabilityState,
@@ -220,3 +221,41 @@ async def test_auth_failure_records_actionable_state_and_failed_operation(
     assert config.reachability_state is DirectHostReachabilityState.AUTHENTICATION_REQUIRED
     assert config.last_reachable_at == NOW
     assert config.last_error_code == "artifact_host_auth_required"
+
+
+@pytest.mark.asyncio
+async def test_resolver_failure_preserves_datanodes_account_health(
+    session: AsyncSession,
+) -> None:
+    previous = NOW - timedelta(hours=1)
+    config = DirectHostConfig(
+        host_kind=DirectArtifactHostKind.DATANODES,
+        enabled=True,
+        reachability_state=DirectHostReachabilityState.REACHABLE,
+        account_state=DirectHostAccountState.HEALTHY,
+        last_reachable_at=previous,
+    )
+    session.add(config)
+    await session.commit()
+    error = ArtifactHostResolutionError(
+        code="artifact_host_resolver_unavailable",
+        message="The TRAWL browser pool is temporarily busy or unavailable.",
+        failure_class=DirectArtifactFailureClass.RESOLVER,
+        retryable=True,
+        intervention=False,
+    )
+
+    await record_direct_host_operational_result(
+        session,
+        host_config_id=config.id,
+        occurred_at=NOW,
+        succeeded=False,
+        error=error,
+    )
+    await session.flush()
+
+    assert config.last_operational_result is DirectHostOperationalResult.FAILED
+    assert config.reachability_state is DirectHostReachabilityState.REACHABLE
+    assert config.account_state is DirectHostAccountState.HEALTHY
+    assert config.last_reachable_at == NOW
+    assert config.last_error_code == "artifact_host_resolver_unavailable"

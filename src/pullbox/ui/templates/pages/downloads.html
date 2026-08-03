@@ -8,6 +8,111 @@
 {% block content %}
 <div data-testid="downloads-page" class="space-y-6" x-data="downloadsPage({ csrfToken: '{{ csrf_token }}' })">
   {% include "partials/downloads_body.html" %}
+
+  <div
+    x-show="sourceModalOpen"
+    x-cloak
+    class="modal-shell"
+    data-testid="downloads-source-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="downloads-source-modal-title"
+    @keydown.escape.window="closeSourceModal()"
+  >
+    <div class="modal-backdrop" @click="closeSourceModal()"></div>
+    <div class="modal-panel max-h-[90vh] max-w-lg">
+      <div class="modal-header">
+        <div>
+          <p class="section-eyebrow">Direct download</p>
+          <h3 id="downloads-source-modal-title" class="text-sm font-semibold text-pb-text">Choose source</h3>
+        </div>
+        <button type="button" class="icon-btn icon-btn-sm" aria-label="Close source chooser" @click="closeSourceModal()">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div class="space-y-4 px-5 py-4">
+          <div x-show="sourceModalLoading" class="flex items-center gap-2 text-xs text-pb-text-sec">
+            <svg class="h-4 w-4 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3a9 9 0 109 9"/>
+            </svg>
+            <span>Loading available sources...</span>
+          </div>
+
+          <div x-show="sourceModalError" x-cloak class="inline-alert inline-alert-danger">
+            <p class="text-xs" x-text="sourceModalError"></p>
+          </div>
+
+          <template x-if="sourceOptions && !sourceModalLoading">
+            <div class="space-y-4">
+              <div class="rounded-lg border border-pb-border bg-pb-surface/40 px-3 py-2.5">
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-pb-text-dim">Current source</p>
+                <div class="mt-1 flex items-center justify-between gap-3">
+                  <span class="text-sm font-semibold text-pb-text" x-text="sourceOptions.current.host_label"></span>
+                  <span class="font-mono text-xs text-pb-text-dim" x-text="formatSourceBytes(sourceOptions.current.bytes_transferred) + ' transferred'"></span>
+                </div>
+              </div>
+
+              <div class="inline-alert inline-alert-warning">
+                <p class="text-xs"><strong>Already transferred data will be discarded.</strong> The selected source starts again from zero and previous usage may still count against that host's quota.</p>
+              </div>
+
+              <div>
+                <p class="mb-2 text-xs font-medium text-pb-text-sec">Available replacements</p>
+                <div x-show="sourceOptions.alternatives.length === 0" class="rounded-lg border border-pb-border bg-pb-bg/30 p-3 text-xs text-pb-text-sec">
+                  No other verified source is currently available for this download.
+                </div>
+                <div class="space-y-2" role="radiogroup" aria-label="Available download sources">
+                  <template x-for="option in sourceOptions.alternatives" :key="option.artifact_identity">
+                    <button
+                      type="button"
+                      role="radio"
+                      class="flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors"
+                      :class="selectedSourceIdentity === option.artifact_identity ? 'border-pb-interactive bg-pb-interactive-dim' : 'border-pb-border bg-pb-surface/40 hover:border-pb-border-hover'"
+                      :aria-checked="selectedSourceIdentity === option.artifact_identity"
+                      @click="selectedSourceIdentity = option.artifact_identity"
+                    >
+                      <span>
+                        <span class="block text-sm font-semibold text-pb-text" x-text="option.host_label"></span>
+                        <span class="mt-0.5 block text-[11px] text-pb-text-dim" x-text="option.is_next ? 'Next ranked source' : 'Available source'"></span>
+                      </span>
+                      <span class="font-mono text-xs text-pb-text-dim" x-text="option.expected_size ? formatSourceBytes(option.expected_size) : 'Size unknown'"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <label class="flex items-start gap-2 rounded-lg border border-pb-border bg-pb-bg/30 p-3">
+                <input type="checkbox" class="mt-0.5" x-model="blockCurrentSource">
+                <span>
+                  <span class="block text-xs font-medium text-pb-text">Do not use this mirror again for this result</span>
+                  <span class="mt-0.5 block text-[11px] text-pb-text-dim">Only the current artifact route is blocklisted. The direct provider remains enabled.</span>
+                </span>
+              </label>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="modal-footer justify-end">
+        <div class="flex items-center gap-2">
+          <button type="button" class="btn-ghost btn-sm" :disabled="sourceSwitching" @click="closeSourceModal()">Cancel</button>
+          <button
+            type="button"
+            class="btn-primary btn-sm"
+            data-testid="downloads-source-modal-submit"
+            :disabled="sourceSwitching || !selectedSourceIdentity"
+            @click="switchSelectedSource()"
+          >
+            <span x-text="sourceSwitching ? 'Switching...' : 'Switch Source'"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}
 

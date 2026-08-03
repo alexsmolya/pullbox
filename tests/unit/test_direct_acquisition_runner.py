@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
@@ -26,6 +27,7 @@ from pullbox.models.download import DownloadClientType, DownloadHistory, Downloa
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.artifact_hosts.contract import HostResolutionRequest
+from pullbox.services.direct_acquisition_switch import DirectSourceSwitchError
 from pullbox.services.direct_download_history_adapter import ensure_direct_download_history
 from pullbox.tasks.direct_acquisition_task import DirectAcquisitionRunner
 
@@ -243,6 +245,35 @@ class _FallbackExecutor:
                     is_selected=True,
                 )
             )
+        else:
+            attempt.state = DirectAcquisitionState.COMPLETED
+            artifact.state = DirectArtifactState.COMPLETED
+        await session.commit()
+
+
+@dataclass
+class _SourceSwitchExecutor:
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    artifact_ids: list[int] = field(default_factory=list)
+
+    async def execute(self, session: AsyncSession, **kwargs: Any) -> None:
+        artifact_id = kwargs["artifact_id"]
+        self.artifact_ids.append(artifact_id)
+        attempt = await session.get(DirectAcquisitionAttempt, kwargs["acquisition_id"])
+        artifact = await session.get(DirectArtifactAttempt, artifact_id)
+        assert attempt is not None and artifact is not None
+        if len(self.artifact_ids) == 1:
+            cancel_event = kwargs["cancel_event"]
+            assert isinstance(cancel_event, asyncio.Event)
+            self.started.set()
+            await cancel_event.wait()
+            attempt.state = DirectAcquisitionState.CANCELLED
+            attempt.cancelled_at = datetime.now(UTC)
+            attempt.completed_at = attempt.cancelled_at
+            artifact.state = DirectArtifactState.CANCELLED
+            artifact.completed_at = attempt.cancelled_at
+            artifact.bytes_transferred = 0
+            artifact.quarantine_path = None
         else:
             attempt.state = DirectAcquisitionState.COMPLETED
             artifact.state = DirectArtifactState.COMPLETED
@@ -483,6 +514,123 @@ async def test_runner_cancel_delegates_recoverable_inactive_attempt(
     assert await runner.cancel(1) is True
     assert executor.calls == [(1, 1)]
     assert await runner.cancel(999) is False
+    await runner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runner_switches_active_transfer_after_cooperative_cleanup(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        assert attempt is not None
+        attempt.plan_snapshot = {
+            "schema_version": 1,
+            "selected_artifact_identity": "route:one",
+            "artifacts": [
+                {
+                    "artifact_identity": "route:one",
+                    "content_identity": "artifact:primary",
+                    "route_kind": "direct",
+                    "host_kind": "generic_https",
+                    "eligible": True,
+                    "eligibility_code": "eligible",
+                },
+                {
+                    "artifact_identity": "route:two",
+                    "content_identity": "artifact:primary",
+                    "route_kind": "direct",
+                    "host_kind": "pixeldrain",
+                    "eligible": True,
+                    "eligibility_code": "eligible",
+                },
+            ],
+        }
+        attempt.artifact_attempts[0].bytes_transferred = 512
+        await session.commit()
+
+    executor = _SourceSwitchExecutor()
+
+    async def resolver(_session: AsyncSession, **_kwargs: Any) -> HostResolutionRequest:
+        return HostResolutionRequest(
+            artifact_identity="route:two",
+            host_kind=DirectArtifactHostKind.PIXELDRAIN,
+            share_url="https://pixeldrain.com/u/replacement",
+            final_url=None,
+        )
+
+    runner = DirectAcquisitionRunner(
+        session_factory,
+        executor=executor,
+        source_resolver=resolver,
+    )
+
+    assert await runner.dispatch(1, 1, initial_source=_source("initial")) is True
+    await asyncio.wait_for(executor.started.wait(), timeout=1)
+
+    outcome = await runner.switch_source(
+        1,
+        target_artifact_identity="route:two",
+        block_current=False,
+    )
+    await runner.wait_idle()
+
+    assert outcome.previous_host is DirectArtifactHostKind.GENERIC_HTTPS
+    assert outcome.selected.host_kind is DirectArtifactHostKind.PIXELDRAIN
+    assert executor.artifact_ids == [1, outcome.selected.id]
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        assert attempt is not None
+        assert attempt.state is DirectAcquisitionState.COMPLETED
+        current, replacement = attempt.artifact_attempts
+        assert current.state is DirectArtifactState.CANCELLED
+        assert current.failure_code == "source_switched_by_user"
+        assert replacement.state is DirectArtifactState.COMPLETED
+        assert replacement.is_selected is True
+        assert attempt.progress_snapshot["previous_bytes_discarded"] == 512
+        assert list((await session.execute(select(BlocklistEntry))).scalars()) == []
+    await runner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_source_switch_before_cancelling_when_no_route_exists(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, 1)
+        assert attempt is not None
+        attempt.plan_snapshot = {
+            "schema_version": 1,
+            "selected_artifact_identity": "route:one",
+            "artifacts": [
+                {
+                    "artifact_identity": "route:one",
+                    "content_identity": "artifact:primary",
+                    "route_kind": "direct",
+                    "host_kind": "generic_https",
+                    "eligible": True,
+                    "eligibility_code": "eligible",
+                }
+            ],
+        }
+        await session.commit()
+
+    executor = _SourceSwitchExecutor()
+    runner = DirectAcquisitionRunner(
+        session_factory,
+        executor=executor,
+        source_resolver=AsyncMock(),
+    )
+
+    assert await runner.dispatch(1, 1, initial_source=_source("initial")) is True
+    await asyncio.wait_for(executor.started.wait(), timeout=1)
+
+    with pytest.raises(DirectSourceSwitchError, match="No other verified"):
+        await runner.switch_source(1)
+
+    assert executor.artifact_ids == [1]
+    assert await runner.cancel(1) is True
+    await runner.wait_idle()
     await runner.aclose()
 
 

@@ -10883,6 +10883,16 @@ function downloadsPage(config) {
   var cfg = config || {};
 
   return {
+    sourceModalOpen: false,
+    sourceModalLoading: false,
+    sourceModalError: "",
+    sourceOptions: null,
+    sourceDownloadId: null,
+    selectedSourceIdentity: "",
+    blockCurrentSource: false,
+    sourceSwitching: false,
+    sourceRequestRevision: 0,
+
     csrfToken: function () {
       return cfg.csrfToken || readCsrfTokenFromBody();
     },
@@ -10935,6 +10945,151 @@ function downloadsPage(config) {
             self.dispatchToast(err.message, "error");
           });
       });
+    },
+
+    parseActionError: function (data, fallback) {
+      if (data && typeof data.detail === "string") return data.detail;
+      if (data && data.error && typeof data.error.message === "string") {
+        return data.error.message;
+      }
+      return fallback;
+    },
+
+    formatSourceBytes: function (value) {
+      var bytes = Number(value || 0);
+      if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+      var units = ["B", "KB", "MB", "GB", "TB"];
+      var index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      var amount = bytes / Math.pow(1024, index);
+      return amount.toFixed(index === 0 ? 0 : 1) + " " + units[index];
+    },
+
+    openSourceModal: function (id, btn) {
+      var self = this;
+      if (self.sourceSwitching) return;
+      var requestRevision = ++self.sourceRequestRevision;
+      self.sourceModalOpen = true;
+      self.sourceModalLoading = true;
+      self.sourceModalError = "";
+      self.sourceOptions = null;
+      self.sourceDownloadId = id;
+      self.selectedSourceIdentity = "";
+      self.blockCurrentSource = false;
+      if (btn) btn.disabled = true;
+      fetch("/api/v1/downloads/" + id + "/sources")
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            if (!res.ok) {
+              throw new Error(self.parseActionError(data, "Available sources could not be loaded."));
+            }
+            return data;
+          });
+        })
+        .then(function (data) {
+          if (requestRevision !== self.sourceRequestRevision || self.sourceDownloadId !== id) {
+            return;
+          }
+          self.sourceOptions = data;
+          self.selectedSourceIdentity = data.alternatives.length
+            ? data.alternatives[0].artifact_identity
+            : "";
+        })
+        .catch(function (err) {
+          if (requestRevision === self.sourceRequestRevision) {
+            self.sourceModalError = err.message;
+          }
+        })
+        .finally(function () {
+          if (requestRevision === self.sourceRequestRevision) {
+            self.sourceModalLoading = false;
+          }
+          if (btn) btn.disabled = false;
+        });
+    },
+
+    closeSourceModal: function () {
+      if (this.sourceSwitching) return;
+      this.sourceRequestRevision += 1;
+      this.sourceModalOpen = false;
+      this.sourceModalError = "";
+      this.sourceOptions = null;
+      this.sourceDownloadId = null;
+      this.selectedSourceIdentity = "";
+      this.blockCurrentSource = false;
+    },
+
+    performSourceSwitch: function (id, artifactIdentity, blockCurrent, btn) {
+      var self = this;
+      self.sourceSwitching = true;
+      if (btn) btn.disabled = true;
+      return fetch("/api/v1/downloads/" + id + "/switch-source", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": self.csrfToken(),
+        },
+        body: JSON.stringify({
+          artifact_identity: artifactIdentity || null,
+          block_current: Boolean(blockCurrent),
+        }),
+      })
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            if (!res.ok) {
+              throw new Error(self.parseActionError(data, "The download source could not be changed."));
+            }
+            return data;
+          });
+        })
+        .then(function (data) {
+          self.sourceModalOpen = false;
+          self.dispatchToast(
+            "Switching from " + data.previous_host + " to " + data.selected_host + ".",
+            "success"
+          );
+          self.refreshContent("/downloads?tab=queue");
+          return data;
+        })
+        .catch(function (err) {
+          if (self.sourceModalOpen) {
+            self.sourceModalError = err.message;
+          } else {
+            self.dispatchToast(err.message, "error");
+          }
+          throw err;
+        })
+        .finally(function () {
+          self.sourceSwitching = false;
+          if (btn) btn.disabled = false;
+        });
+    },
+
+    tryNextSource: function (id, btn) {
+      var self = this;
+      if (self.sourceSwitching) return;
+      pbConfirm({
+        title: "Try Next Source",
+        message: "Pullbox will stop this transfer, discard its partial data, and restart from the next ranked source.",
+        confirmText: "Switch Source",
+      }).then(function (ok) {
+        if (!ok) return;
+        self.dispatchToast(
+          "Stopping the current source and starting the next verified route...",
+          "info"
+        );
+        self.performSourceSwitch(id, null, false, btn).catch(function () {});
+      });
+    },
+
+    switchSelectedSource: function () {
+      if (!this.sourceDownloadId || !this.selectedSourceIdentity || this.sourceSwitching) return;
+      this.sourceModalError = "";
+      this.performSourceSwitch(
+        this.sourceDownloadId,
+        this.selectedSourceIdentity,
+        this.blockCurrentSource,
+        null
+      ).catch(function () {});
     },
 
     retryDownload: function (id, btn) {

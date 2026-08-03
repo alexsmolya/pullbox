@@ -8,10 +8,11 @@ import hmac
 import inspect
 import shutil
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
 import httpx
@@ -176,7 +177,14 @@ class HttpArtifactTransport:
         restarted_bad_range = False
 
         while True:
-            response = await self._open_response(active, resume_offset=resume_offset)
+            response = await _await_with_cancel(
+                partial(
+                    self._open_response,
+                    active,
+                    resume_offset=resume_offset,
+                ),
+                cancel_event,
+            )
             try:
                 if response.status_code in _EXPIRED_URL_STATUSES and refresh_transfer is not None:
                     if refreshed:
@@ -253,13 +261,15 @@ class HttpArtifactTransport:
         while transferred < total:
             range_end = min(total - 1, transferred + range_request_bytes - 1)
             try:
-                response = await asyncio.wait_for(
-                    self._open_response(
+                response = await _await_with_cancel(
+                    partial(
+                        self._open_response,
                         active,
                         resume_offset=transferred,
                         range_end=range_end,
                         force_range=True,
                     ),
+                    cancel_event,
                     timeout=range_open_timeout_seconds,
                 )
             except (ArtifactTransferError, TimeoutError) as exc:
@@ -514,9 +524,10 @@ class HttpArtifactTransport:
                 if remaining <= 0:
                     raise _timeout_error("artifact_transfer_total_timeout")
                 try:
-                    chunk = await asyncio.wait_for(
-                        iterator.__anext__(),
+                    chunk = await _next_chunk_with_cancel(
+                        iterator,
                         timeout=min(idle_timeout_seconds, remaining),
+                        cancel_event=cancel_event,
                     )
                 except StopAsyncIteration:
                     break
@@ -622,7 +633,11 @@ class HttpArtifactTransport:
                     raise _timeout_error("artifact_transfer_total_timeout")
                 timeout = min(self._policy.idle_timeout_seconds, remaining)
                 try:
-                    chunk = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
+                    chunk = await _next_chunk_with_cancel(
+                        iterator,
+                        timeout=timeout,
+                        cancel_event=cancel_event,
+                    )
                 except StopAsyncIteration:
                     break
                 except TimeoutError as exc:
@@ -780,6 +795,98 @@ async def _wait_for_range_retry(
 ) -> None:
     if policy.range_retry_backoff_seconds:
         await asyncio.sleep(policy.range_retry_backoff_seconds * retries)
+
+
+async def _next_chunk_with_cancel(
+    iterator: AsyncIterator[bytes],
+    *,
+    timeout: float,
+    cancel_event: asyncio.Event | None,
+) -> bytes:
+    next_chunk = iterator.__anext__
+    if cancel_event is None:
+        return await asyncio.wait_for(next_chunk(), timeout=timeout)
+    if cancel_event.is_set():
+        raise ArtifactTransferCancelledError
+
+    async def read_next_chunk() -> bytes:
+        return await next_chunk()
+
+    async def wait_until_cancelled() -> bytes:
+        await cancel_event.wait()
+        return b""
+
+    read_task = asyncio.create_task(read_next_chunk())
+    cancel_task = asyncio.create_task(wait_until_cancelled())
+    try:
+        done, _pending = await asyncio.wait(
+            {read_task, cancel_task},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        read_task.cancel()
+        cancel_task.cancel()
+        await asyncio.gather(read_task, cancel_task, return_exceptions=True)
+        raise
+    if cancel_task in done:
+        read_task.cancel()
+        await asyncio.gather(read_task, return_exceptions=True)
+        raise ArtifactTransferCancelledError
+    if read_task not in done:
+        read_task.cancel()
+        cancel_task.cancel()
+        await asyncio.gather(read_task, cancel_task, return_exceptions=True)
+        raise TimeoutError
+
+    cancel_task.cancel()
+    await asyncio.gather(cancel_task, return_exceptions=True)
+    return read_task.result()
+
+
+async def _await_with_cancel[T](
+    operation: Callable[[], Awaitable[T]],
+    cancel_event: asyncio.Event | None,
+    *,
+    timeout: float | None = None,
+) -> T:
+    if cancel_event is None:
+        if timeout is None:
+            return await operation()
+        return await asyncio.wait_for(operation(), timeout=timeout)
+    if cancel_event.is_set():
+        raise ArtifactTransferCancelledError
+
+    async def run_operation() -> T:
+        return await operation()
+
+    operation_task = asyncio.create_task(run_operation())
+    cancel_task = asyncio.create_task(cancel_event.wait())
+    waiters: set[asyncio.Task[Any]] = {operation_task, cancel_task}
+    try:
+        done, _pending = await asyncio.wait(
+            waiters,
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        operation_task.cancel()
+        cancel_task.cancel()
+        await asyncio.gather(operation_task, cancel_task, return_exceptions=True)
+        raise
+    if not done:
+        operation_task.cancel()
+        cancel_task.cancel()
+        await asyncio.gather(operation_task, cancel_task, return_exceptions=True)
+        raise TimeoutError
+    if cancel_task in done:
+        operation_task.cancel()
+        await asyncio.gather(operation_task, return_exceptions=True)
+        raise ArtifactTransferCancelledError
+
+    cancel_task.cancel()
+    await asyncio.gather(cancel_task, return_exceptions=True)
+    return operation_task.result()
 
 
 def _eligible_resume_offset(

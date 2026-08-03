@@ -12,7 +12,11 @@ from pullbox.composition.events import build_domain_event_bus, build_scoped_even
 from pullbox.config import get_settings
 from pullbox.core.comicvine_key import get_comicvine_api_key
 from pullbox.models.config import SystemConfig
-from pullbox.providers.artifact_hosts.contract import ArtifactResolutionProgress
+from pullbox.models.direct_acquisition import DirectArtifactFailureClass
+from pullbox.providers.artifact_hosts.contract import (
+    ArtifactHostResolutionError,
+    ArtifactResolutionProgress,
+)
 from pullbox.providers.artifact_hosts.datanodes import DataNodesAdapter
 from pullbox.providers.artifact_hosts.generic import GenericHttpsAdapter
 from pullbox.providers.artifact_hosts.helpers import challenge_required
@@ -183,9 +187,21 @@ async def _solve_datanodes_login(
                 on_attempt=publish_attempt,
             )
     except (DirectResolverError, DirectResolverServiceError) as exc:
-        raise challenge_required(
-            "DataNodes requires a healthy TRAWL resolver to complete account login."
-        ) from exc
+        raise _datanodes_login_failure(exc) from exc
+
+
+def _datanodes_login_failure(exc: Exception) -> ArtifactHostResolutionError:
+    if bool(getattr(exc, "retryable", False)):
+        return ArtifactHostResolutionError(
+            code="artifact_host_resolver_unavailable",
+            message="The TRAWL browser pool is temporarily busy or unavailable.",
+            failure_class=DirectArtifactFailureClass.RESOLVER,
+            retryable=True,
+            intervention=False,
+        )
+    return challenge_required(
+        "DataNodes requires a healthy TRAWL resolver to complete account login."
+    )
 
 
 async def build_metadata_service(session: AsyncSession) -> MetadataService:

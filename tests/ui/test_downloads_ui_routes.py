@@ -285,6 +285,9 @@ class TestDownloadsRouteContracts:
         assert _WAITING_EMPTY_ICON_PATH in response.text
         assert 'data-testid="downloads-summary-cards"' not in response.text
         assert 'data-testid="downloads-footer-strip"' not in response.text
+        assert 'data-testid="downloads-source-modal"' in response.text
+        assert 'aria-labelledby="downloads-source-modal-title"' in response.text
+        assert "Already transferred data will be discarded" in response.text
         assert (
             response.text.index('data-testid="downloads-header-actions"')
             < response.text.index('data-testid="downloads-tabs"')
@@ -456,6 +459,8 @@ class TestDownloadsRouteContracts:
         assert 'style="width: 45%"' in response.text
         assert "41.5 MB received" in response.text
         assert "Downloading from TeraBox" in response.text
+        assert 'data-testid="downloads-queue-try-next-source-' in response.text
+        assert 'data-testid="downloads-queue-choose-source-' in response.text
         assert (
             'data-testid="downloads-queue-item-progress-label">41.5 MB received</span>'
             in response.text

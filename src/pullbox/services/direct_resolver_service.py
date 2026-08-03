@@ -48,10 +48,19 @@ _resolver_runtimes: dict[tuple[int, str, int], ResolverCircuitBreaker] = {}
 
 
 class DirectResolverServiceError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        cause_code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.retryable = retryable
+        self.cause_code = cause_code
 
 
 @dataclass(frozen=True, slots=True)
@@ -745,7 +754,12 @@ async def _resolve_with_chain(
         else "Every compatible browser resolver failed this request. "
         "Check resolver health and retry."
     )
-    raise DirectResolverServiceError("resolver_chain_exhausted", message) from last_error
+    raise DirectResolverServiceError(
+        "resolver_chain_exhausted",
+        message,
+        retryable=bool(last_error and last_error.retryable),
+        cause_code=last_error.code if last_error is not None else None,
+    ) from last_error
 
 
 async def _get_or_create(session: AsyncSession) -> DirectResolverConfig:

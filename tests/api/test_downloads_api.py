@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -149,6 +150,88 @@ async def _seed_download(
         download_id = download.id
         await session.commit()
         return download_id
+
+
+async def _seed_direct_download_with_routes(
+    factory: async_sessionmaker[AsyncSession],
+    issue_id: int,
+) -> tuple[int, int]:
+    async with factory() as session:
+        attempt = DirectAcquisitionAttempt(
+            request_key=f"download-source-switch:{issue_id}",
+            issue_id=issue_id,
+            provider_identity="pullbox.getcomics",
+            provider_candidate_id="candidate-switch",
+            state=DirectAcquisitionState.DOWNLOADING,
+            plan_revision=1,
+            plan_snapshot={
+                "schema_version": 1,
+                "selected_artifact_identity": "route:current",
+                "artifacts": [
+                    {
+                        "artifact_identity": "route:current",
+                        "content_identity": "artifact:primary",
+                        "route_kind": "direct",
+                        "host_kind": "generic_https",
+                        "eligible": True,
+                        "eligibility_code": "eligible",
+                        "expected_size": 1_000,
+                    },
+                    {
+                        "artifact_identity": "route:pixel",
+                        "content_identity": "artifact:primary",
+                        "route_kind": "direct",
+                        "host_kind": "pixeldrain",
+                        "eligible": True,
+                        "eligibility_code": "eligible",
+                        "expected_size": 1_000,
+                    },
+                    {
+                        "artifact_identity": "route:other",
+                        "content_identity": "artifact:other",
+                        "route_kind": "direct",
+                        "host_kind": "mediafire",
+                        "eligible": True,
+                        "eligibility_code": "eligible",
+                    },
+                ],
+            },
+            progress_revision=1,
+            progress_snapshot={
+                "schema_version": 1,
+                "stage": "downloading",
+                "host_kind": "generic_https",
+                "bytes_transferred": 512,
+            },
+            candidate_snapshot={"display_title": "Batman 004 (2025)"},
+        )
+        attempt.artifact_attempts = [
+            DirectArtifactAttempt(
+                sequence_no=0,
+                artifact_identity="route:current",
+                route_kind=DirectArtifactRouteKind.DIRECT,
+                host_kind=DirectArtifactHostKind.GENERIC_HTTPS,
+                state=DirectArtifactState.TRANSFERRING,
+                is_selected=True,
+                expected_size=1_000,
+                bytes_transferred=512,
+            )
+        ]
+        session.add(attempt)
+        await session.flush()
+        download = DownloadHistory(
+            issue_id=issue_id,
+            title="Batman 004 (2025)",
+            state=DownloadState.DOWNLOADING,
+            download_client=DownloadClientType.DIRECT,
+            download_url=f"pullbox-direct://attempt/{attempt.id}",
+            external_id=f"direct:{attempt.id}",
+        )
+        session.add(download)
+        await session.flush()
+        ids = (download.id, attempt.id)
+        await session.commit()
+        return ids
 
 
 async def _get_download(
@@ -863,6 +946,106 @@ class TestDownloadRouteFunctions:
         download = await _get_download(db_factory, download_id)
         assert download.state is DownloadState.FAILED
         assert download.error_message == "Cancelled by user"
+
+    @pytest.mark.asyncio
+    async def test_direct_download_sources_list_only_verified_equivalent_routes(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.DOWNLOADING)
+        download_id, _attempt_id = await _seed_direct_download_with_routes(
+            db_factory,
+            issue_id,
+        )
+
+        response = await client.get(f"/api/v1/downloads/{download_id}/sources")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "download_id": download_id,
+            "current": {
+                "artifact_identity": "route:current",
+                "host_kind": "generic_https",
+                "host_label": "HTTPS",
+                "bytes_transferred": 512,
+            },
+            "alternatives": [
+                {
+                    "artifact_identity": "route:pixel",
+                    "host_kind": "pixeldrain",
+                    "host_label": "PixelDrain",
+                    "expected_size": 1_000,
+                    "is_next": True,
+                }
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_direct_download_source_switch_delegates_atomic_runner_action(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.DOWNLOADING)
+        download_id, attempt_id = await _seed_direct_download_with_routes(
+            db_factory,
+            issue_id,
+        )
+        runner = MagicMock()
+        runner.switch_source = AsyncMock(
+            return_value=SimpleNamespace(
+                previous_host=DirectArtifactHostKind.GENERIC_HTTPS,
+                selected=SimpleNamespace(host_kind=DirectArtifactHostKind.PIXELDRAIN),
+                current_route_blocklisted=True,
+            )
+        )
+
+        with patch(
+            "pullbox.tasks.direct_acquisition_task.get_direct_acquisition_runner",
+            return_value=runner,
+        ):
+            response = await client.post(
+                f"/api/v1/downloads/{download_id}/switch-source",
+                json={
+                    "artifact_identity": "route:pixel",
+                    "block_current": True,
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "queued",
+            "previous_host": "HTTPS",
+            "selected_host": "PixelDrain",
+            "current_route_blocklisted": True,
+        }
+        runner.switch_source.assert_awaited_once_with(
+            attempt_id,
+            target_artifact_identity="route:pixel",
+            block_current=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_source_switch_rejects_non_direct_download(
+        self,
+        client: AsyncClient,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        issue_id = await _seed_issue(db_factory)
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            state=DownloadState.DOWNLOADING,
+        )
+
+        response = await client.post(
+            f"/api/v1/downloads/{download_id}/switch-source",
+            json={"artifact_identity": None, "block_current": False},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Only direct downloads can change sources."
 
     @pytest.mark.asyncio
     async def test_route_error_branches_raise_expected_http_errors(

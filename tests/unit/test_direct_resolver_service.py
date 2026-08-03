@@ -932,3 +932,41 @@ async def test_trawl_host_adapter_never_falls_back_to_other_resolver_kinds(
 
     assert error.value.code == "resolver_chain_exhausted"
     assert _ChainResolverClient.chain_seen == [("http://trawl:8191", "trawl_native")]
+
+
+async def test_trawl_host_adapter_preserves_retryable_pool_exhaustion(
+    db_session: AsyncSession,
+) -> None:
+    _ChainResolverClient.chain_seen = []
+    _ChainResolverClient.errors = {
+        "http://trawl:8191": DirectResolverError(
+            "resolver_pool_exhausted",
+            "TRAWL browser pool is temporarily unavailable.",
+            retryable=True,
+        )
+    }
+    db_session.add(
+        DirectResolverConfig(
+            name="TRAWL",
+            resolver_kind=DirectResolverKind.TRAWL,
+            endpoint="http://trawl:8191",
+            enabled=True,
+            state=DirectResolverState.HEALTHY,
+            allow_private_http=True,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(DirectResolverServiceError) as error:
+        await resolve_for_trawl_host_adapter(
+            db_session,
+            target_url="https://datanodes.to/login.html",
+            adapter_id="datanodes",
+            declared_domains=("datanodes.to",),
+            challenge_category="artifact_host_login",
+            client_factory=_chain_factory,
+        )
+
+    assert error.value.code == "resolver_chain_exhausted"
+    assert error.value.cause_code == "resolver_pool_exhausted"
+    assert error.value.retryable is True

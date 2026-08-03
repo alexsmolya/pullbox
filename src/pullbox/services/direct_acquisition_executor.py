@@ -288,7 +288,10 @@ class DirectAcquisitionExecutor:
                 ),
             )
 
-            async with self._limiter.slot(artifact.host_kind):
+            async with self._limiter.slot(
+                artifact.host_kind,
+                cancel_event=cancel_event,
+            ):
                 resolved = await _await_with_cancel(
                     lambda: self._resolve_host(
                         session,

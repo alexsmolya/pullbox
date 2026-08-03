@@ -35,6 +35,12 @@ from pullbox.services.direct_acquisition_state import (
     transition_acquisition,
     transition_artifact,
 )
+from pullbox.services.direct_acquisition_switch import (
+    DirectSourceSwitchError,
+    DirectSourceSwitchOutcome,
+    list_source_switch_options,
+    queue_source_switch,
+)
 from pullbox.services.direct_download_history_adapter import (
     ensure_direct_download_history,
     sync_direct_download_history,
@@ -99,29 +105,12 @@ class DirectAcquisitionRunner:
         initial_source: HostResolutionRequest | None = None,
     ) -> bool:
         """Queue one attempt, returning false when the same artifact is already active."""
-        key = (acquisition_id, artifact_id)
         async with self._lock:
-            current = self._active.get(key)
-            if current is not None and not current.task.done():
-                return False
-            await self._mark_queued(acquisition_id, artifact_id)
-            cancel_event = asyncio.Event()
-            task = asyncio.create_task(
-                self._run(
-                    acquisition_id,
-                    artifact_id,
-                    initial_source=initial_source,
-                    cancel_event=cancel_event,
-                ),
-                name=f"direct-acquisition-{acquisition_id}-{artifact_id}",
+            return await self._dispatch_locked(
+                acquisition_id,
+                artifact_id,
+                initial_source=initial_source,
             )
-            self._active[key] = _ActiveRun(task=task, cancel_event=cancel_event)
-
-            def finish(completed: asyncio.Task[None]) -> None:
-                self._finish(key, completed)
-
-            task.add_done_callback(finish)
-            return True
 
     async def cancel(self, acquisition_id: int) -> bool:
         """Signal cooperative cancellation for an active direct acquisition."""
@@ -224,6 +213,94 @@ class DirectAcquisitionRunner:
 
         return await self.dispatch(acquisition_id, artifact_id)
 
+    async def switch_source(
+        self,
+        acquisition_id: int,
+        *,
+        target_artifact_identity: str | None = None,
+        block_current: bool = False,
+    ) -> DirectSourceSwitchOutcome:
+        """Stop one transfer, queue an equivalent route, and restart the acquisition."""
+        async with self._lock:
+            async with self._session_factory() as session:
+                attempt = await self._load_attempt_with_artifacts(session, acquisition_id)
+                current = [
+                    artifact for artifact in attempt.artifact_attempts if artifact.is_selected
+                ]
+                if len(current) != 1:
+                    raise DirectSourceSwitchError(
+                        "source_switch_selection_invalid",
+                        "This direct download does not have one active artifact source.",
+                    )
+                discarded_bytes = current[0].bytes_transferred
+                options = await list_source_switch_options(session, attempt)
+                if target_artifact_identity is None:
+                    selected_identity = options[0].artifact_identity if options else None
+                else:
+                    selected_identity = next(
+                        (
+                            option.artifact_identity
+                            for option in options
+                            if option.artifact_identity == target_artifact_identity
+                        ),
+                        None,
+                    )
+                if selected_identity is None:
+                    raise DirectSourceSwitchError(
+                        "source_switch_route_unavailable",
+                        "No other verified artifact source is available for this download.",
+                    )
+
+            active = [
+                run
+                for key, run in self._active.items()
+                if key[0] == acquisition_id and not run.task.done()
+            ]
+            for run in active:
+                run.cancel_event.set()
+            if active:
+                await asyncio.gather(*(run.task for run in active), return_exceptions=True)
+
+            async with self._session_factory() as session:
+                attempt = await self._load_attempt_with_artifacts(session, acquisition_id)
+                current = [
+                    artifact for artifact in attempt.artifact_attempts if artifact.is_selected
+                ]
+                if len(current) != 1:
+                    raise DirectSourceSwitchError(
+                        "source_switch_selection_invalid",
+                        "This direct download does not have one active artifact source.",
+                    )
+                if attempt.state is not DirectAcquisitionState.CANCELLED:
+                    cancelled = await self._executor.cancel(
+                        session,
+                        acquisition_id=attempt.id,
+                        artifact_id=current[0].id,
+                    )
+                    if not cancelled:
+                        raise DirectSourceSwitchError(
+                            "source_switch_not_cancellable",
+                            "This direct download can no longer change sources.",
+                        )
+                outcome = await queue_source_switch(
+                    session,
+                    attempt,
+                    current[0],
+                    target_artifact_identity=selected_identity,
+                    block_current=block_current,
+                    discarded_bytes=discarded_bytes,
+                    at=datetime.now(UTC),
+                )
+                replacement_id = outcome.selected.id
+
+            dispatched = await self._dispatch_locked(acquisition_id, replacement_id)
+            if not dispatched:
+                raise DirectSourceSwitchError(
+                    "source_switch_dispatch_failed",
+                    "The replacement source was queued but could not start right now.",
+                )
+            return outcome
+
     async def recover_and_dispatch(
         self,
         *,
@@ -310,6 +387,55 @@ class DirectAcquisitionRunner:
                 transition_acquisition(attempt, DirectAcquisitionState.QUEUED)
             await sync_direct_download_history(session, attempt, artifact, at=at)
             await session.commit()
+
+    async def _dispatch_locked(
+        self,
+        acquisition_id: int,
+        artifact_id: int,
+        *,
+        initial_source: HostResolutionRequest | None = None,
+    ) -> bool:
+        key = (acquisition_id, artifact_id)
+        current = self._active.get(key)
+        if current is not None and not current.task.done():
+            return False
+        await self._mark_queued(acquisition_id, artifact_id)
+        cancel_event = asyncio.Event()
+        task = asyncio.create_task(
+            self._run(
+                acquisition_id,
+                artifact_id,
+                initial_source=initial_source,
+                cancel_event=cancel_event,
+            ),
+            name=f"direct-acquisition-{acquisition_id}-{artifact_id}",
+        )
+        self._active[key] = _ActiveRun(task=task, cancel_event=cancel_event)
+
+        def finish(completed: asyncio.Task[None]) -> None:
+            self._finish(key, completed)
+
+        task.add_done_callback(finish)
+        return True
+
+    async def _load_attempt_with_artifacts(
+        self,
+        session: AsyncSession,
+        acquisition_id: int,
+    ) -> DirectAcquisitionAttempt:
+        attempt = (
+            await session.execute(
+                select(DirectAcquisitionAttempt)
+                .options(selectinload(DirectAcquisitionAttempt.artifact_attempts))
+                .where(DirectAcquisitionAttempt.id == acquisition_id)
+            )
+        ).scalar_one_or_none()
+        if attempt is None:
+            raise DirectSourceSwitchError(
+                "source_switch_not_found",
+                "The direct download could not be found.",
+            )
+        return attempt
 
     async def _run(
         self,

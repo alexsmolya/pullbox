@@ -304,6 +304,7 @@ class DirectResolverClient:
             if exc.code not in {
                 "resolver_busy",
                 "resolver_circuit_open",
+                "resolver_pool_exhausted",
                 "resolver_redirect_rejected",
                 "resolver_target_rejected",
             }:
@@ -438,6 +439,12 @@ class DirectResolverClient:
                 "resolver_authentication_failed", "Resolver rejected its authentication."
             )
         if response.status_code == 429:
+            if path == "/scrape":
+                raise DirectResolverError(
+                    "resolver_pool_exhausted",
+                    "The TRAWL browser pool is temporarily busy or unavailable.",
+                    retryable=True,
+                )
             raise DirectResolverError(
                 "resolver_rate_limited", "Resolver is rate limited.", retryable=True
             )
