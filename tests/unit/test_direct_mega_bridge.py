@@ -22,6 +22,7 @@ from pullbox.providers.artifact_hosts.mega import (
     MegaBridgePausedError,
     MegaBridgeRunner,
     MegaBridgeTransferError,
+    _send_request,
 )
 from pullbox.providers.artifact_hosts.transport_contract import (
     ArtifactTransferError,
@@ -30,6 +31,24 @@ from pullbox.providers.artifact_hosts.transport_contract import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+class _ClosedAfterDrainWriter:
+    def __init__(self) -> None:
+        self.payload = b""
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.payload += data
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        raise BrokenPipeError
 
 
 @pytest.mark.asyncio
@@ -52,6 +71,23 @@ async def test_mega_adapter_returns_secret_safe_native_transfer() -> None:
     assert transfer.bridge_session == session
     assert link not in repr(transfer)
     assert session not in repr(transfer)
+
+
+@pytest.mark.asyncio
+async def test_mega_request_accepts_peer_close_after_payload_was_drained(
+    tmp_path: Path,
+) -> None:
+    writer = _ClosedAfterDrainWriter()
+
+    await _send_request(  # type: ignore[arg-type]
+        writer,
+        public_link="https://mega.nz/file/id#key",
+        session="session",
+        destination=tmp_path / "attempt.part",
+    )
+
+    assert writer.payload.startswith(b"PULLBOX_MEGA_BRIDGE 1\nDOWNLOAD ")
+    assert writer.closed is True
 
 
 @pytest.mark.asyncio

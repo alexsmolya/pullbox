@@ -7,6 +7,7 @@ import inspect
 import os
 import re
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -346,10 +347,15 @@ async def _send_request(
     try:
         stdin.write(_PROTOCOL_HEADER + lengths + link_bytes + session_bytes + destination_bytes)
         await stdin.drain()
-        stdin.close()
-        await stdin.wait_closed()
     except (BrokenPipeError, ConnectionResetError) as exc:
+        stdin.close()
         raise _protocol_error() from exc
+    stdin.close()
+    # The request was already accepted by the pipe. Fast bridge helpers can
+    # close their read end before asyncio observes the local close; this is the
+    # same benign condition ignored by Process.communicate().
+    with suppress(BrokenPipeError, ConnectionResetError):
+        await stdin.wait_closed()
 
 
 def _parse_event(raw_line: bytes) -> tuple[str, tuple[object, ...]]:
