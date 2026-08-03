@@ -148,6 +148,23 @@ class TestIssueDetailPage:
         authed_page.locator("[data-testid='comic-reader-zoom-in']").click()
         assert issue.reader_page.get_attribute("data-fit-mode") == "actual"
 
+    def test_reader_positions_sizing_left_and_navigation_right(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        sizing_box = authed_page.locator(".comic-reader__sizing").bounding_box()
+        navigation_box = authed_page.locator(".comic-reader__navigation").bounding_box()
+
+        assert sizing_box is not None
+        assert navigation_box is not None
+        assert sizing_box["x"] < navigation_box["x"]
+
     def test_reader_settles_resumes_and_only_deliberate_final_page_completes(
         self,
         authed_page,

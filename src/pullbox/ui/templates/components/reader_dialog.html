@@ -144,6 +144,31 @@
     </main>
 
     <footer class="comic-reader__controls" data-reader-controls>
+      <div class="comic-reader__sizing">
+        <button type="button" class="comic-reader__button comic-reader__fit-page" @click="setReaderFit('page')" :aria-pressed="readerFitMode === 'page'">Fit page</button>
+        <button type="button" data-testid="comic-reader-fit-width" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('width')" :aria-pressed="readerFitMode === 'width'">Fit width</button>
+        <button type="button" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('height')" :aria-pressed="readerFitMode === 'height'">Fit height</button>
+        <button type="button" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('actual')" :aria-pressed="readerFitMode === 'actual'">Actual</button>
+        <select
+          class="comic-reader__fit-select"
+          :value="readerFitMode"
+          @change="setReaderFit($event.target.value)"
+          aria-label="Page sizing"
+        >
+          <option value="page">Fit page</option>
+          <option value="width">Fit width</option>
+          <option value="height">Fit height</option>
+          <option value="actual">Actual size</option>
+        </select>
+        <button type="button" class="comic-reader__button" @click="readerZoomOut()" :disabled="readerZoomPercent <= 50" aria-label="Zoom out">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
+        </button>
+        <button type="button" class="comic-reader__zoom-label" @click="resetReaderZoom()" :aria-label="'Reset zoom, currently ' + readerZoomPercent + ' percent'" x-text="readerZoomPercent + '%'">100%</button>
+        <button type="button" data-testid="comic-reader-zoom-in" class="comic-reader__button" @click="readerZoomIn()" :disabled="readerZoomPercent >= 300" aria-label="Zoom in">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+        </button>
+      </div>
+
       <div class="comic-reader__navigation">
         <button
           type="button"
@@ -191,31 +216,6 @@
           aria-label="Next page"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
-        </button>
-      </div>
-
-      <div class="comic-reader__sizing">
-        <button type="button" class="comic-reader__button comic-reader__fit-page" @click="setReaderFit('page')" :aria-pressed="readerFitMode === 'page'">Fit page</button>
-        <button type="button" data-testid="comic-reader-fit-width" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('width')" :aria-pressed="readerFitMode === 'width'">Fit width</button>
-        <button type="button" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('height')" :aria-pressed="readerFitMode === 'height'">Fit height</button>
-        <button type="button" class="comic-reader__button comic-reader__fit-wide" @click="setReaderFit('actual')" :aria-pressed="readerFitMode === 'actual'">Actual</button>
-        <select
-          class="comic-reader__fit-select"
-          :value="readerFitMode"
-          @change="setReaderFit($event.target.value)"
-          aria-label="Page sizing"
-        >
-          <option value="page">Fit page</option>
-          <option value="width">Fit width</option>
-          <option value="height">Fit height</option>
-          <option value="actual">Actual size</option>
-        </select>
-        <button type="button" class="comic-reader__button" @click="readerZoomOut()" :disabled="readerZoomPercent <= 50" aria-label="Zoom out">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
-        </button>
-        <button type="button" class="comic-reader__zoom-label" @click="resetReaderZoom()" :aria-label="'Reset zoom, currently ' + readerZoomPercent + ' percent'" x-text="readerZoomPercent + '%'">100%</button>
-        <button type="button" data-testid="comic-reader-zoom-in" class="comic-reader__button" @click="readerZoomIn()" :disabled="readerZoomPercent >= 300" aria-label="Zoom in">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         </button>
       </div>
     </footer>
