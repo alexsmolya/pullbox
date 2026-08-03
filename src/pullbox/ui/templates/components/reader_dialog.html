@@ -10,7 +10,11 @@
   @fullscreenchange.document="syncReaderFullscreen()"
   @keydown="handleReaderKeydown($event)"
 >
-  <div class="comic-reader__shell" :class="{ 'is-controls-hidden': !readerControlsVisible }">
+  <div
+    x-ref="readerShell"
+    class="comic-reader__shell"
+    :class="{ 'is-controls-hidden': !readerControlsVisible }"
+  >
     <header class="comic-reader__topbar" data-reader-controls>
       <button
         type="button"
@@ -38,6 +42,7 @@
         </button>
         <button
           type="button"
+          data-testid="comic-reader-fullscreen"
           class="comic-reader__button comic-reader__desktop-action"
           @click="toggleReaderFullscreen()"
           x-show="readerFullscreenAvailable"

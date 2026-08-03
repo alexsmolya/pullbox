@@ -165,6 +165,49 @@ class TestIssueDetailPage:
         assert navigation_box is not None
         assert sizing_box["x"] < navigation_box["x"]
 
+    def test_reader_fullscreen_targets_shell_and_tracks_browser_state(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.add_init_script(
+            """
+            (() => {
+                let fullscreenTarget = null;
+                Object.defineProperty(document, "fullscreenElement", {
+                    configurable: true,
+                    get: () => fullscreenTarget,
+                });
+                Element.prototype.requestFullscreen = function () {
+                    fullscreenTarget = this;
+                    window.__readerFullscreenTargetClass = this.className;
+                    document.dispatchEvent(new Event("fullscreenchange"));
+                    return Promise.resolve();
+                };
+                document.exitFullscreen = function () {
+                    fullscreenTarget = null;
+                    document.dispatchEvent(new Event("fullscreenchange"));
+                    return Promise.resolve();
+                };
+            })();
+            """
+        )
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+        fullscreen_button = authed_page.locator("[data-testid='comic-reader-fullscreen']")
+
+        fullscreen_button.click()
+
+        assert authed_page.evaluate("window.__readerFullscreenTargetClass") == (
+            "comic-reader__shell"
+        )
+        assert fullscreen_button.get_attribute("aria-pressed") == "true"
+
+        fullscreen_button.click()
+        assert fullscreen_button.get_attribute("aria-pressed") == "false"
+
     def test_reader_settles_resumes_and_only_deliberate_final_page_completes(
         self,
         authed_page,

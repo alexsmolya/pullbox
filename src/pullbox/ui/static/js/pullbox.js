@@ -14758,7 +14758,9 @@ function readerMixin(config) {
       self.resetReaderSession();
       self.readerOpen = true;
       self.readerLoading = true;
-      self.readerFullscreenAvailable = typeof dialog.requestFullscreen === "function";
+      var fullscreenTarget = self.$refs.readerShell;
+      self.readerFullscreenAvailable =
+        !!fullscreenTarget && typeof fullscreenTarget.requestFullscreen === "function";
       dialog.showModal();
       self.showReaderControls();
 
@@ -15336,23 +15338,23 @@ function readerMixin(config) {
     },
 
     toggleReaderFullscreen: function () {
-      var dialog = this.$refs.readerDialog;
-      if (!dialog) return;
+      var fullscreenTarget = this.$refs.readerShell;
+      if (!fullscreenTarget) return;
       if (document.fullscreenElement) {
         Promise.resolve(document.exitFullscreen()).catch(function () {
           return null;
         });
         return;
       }
-      if (typeof dialog.requestFullscreen === "function") {
-        Promise.resolve(dialog.requestFullscreen()).catch(function () {
+      if (typeof fullscreenTarget.requestFullscreen === "function") {
+        Promise.resolve(fullscreenTarget.requestFullscreen()).catch(function () {
           return null;
         });
       }
     },
 
     syncReaderFullscreen: function () {
-      this.readerFullscreenActive = document.fullscreenElement === this.$refs.readerDialog;
+      this.readerFullscreenActive = document.fullscreenElement === this.$refs.readerShell;
     },
 
     retryReaderPage: function () {
