@@ -330,6 +330,20 @@ def test_non_browser_baseline_images_are_normalized_to_jpeg(
     assert page.data.startswith(b"\xff\xd8\xff")
 
 
+def test_browser_png_is_verified_and_returned_unchanged(tmp_path: Path) -> None:
+    image_bytes = io.BytesIO()
+    with Image.new("RGB", (12, 18), color="purple") as image:
+        image.save(image_bytes, format="PNG")
+    payload = image_bytes.getvalue()
+    source = tmp_path / "book.cbz"
+    _write_cbz(source, {"001.png": payload})
+
+    page = open_page_source(source, declared_format=FileFormat.CBZ).read_page(0)
+
+    assert page.media_type == "image/png"
+    assert page.data == payload
+
+
 def test_large_page_is_downsampled_to_the_browser_memory_budget(tmp_path: Path) -> None:
     image_bytes = io.BytesIO()
     with Image.new("RGB", (400, 800), color="purple") as image:

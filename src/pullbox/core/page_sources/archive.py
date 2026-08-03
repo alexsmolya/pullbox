@@ -147,7 +147,10 @@ def _prepare_image_payload(
                 or height > limits.max_rendition_height
             )
             if not needs_normalization:
-                image.verify()
+                # Metadata access can detach a PNG decoder from its stream. Verify an
+                # untouched decoder so baseline browser formats remain zero-copy.
+                with Image.open(io.BytesIO(data)) as verification_image:
+                    verification_image.verify()
                 return PagePayload(index=index, media_type=source_media_type, data=data)
 
             image.seek(0)
