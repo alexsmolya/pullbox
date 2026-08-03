@@ -327,9 +327,18 @@ class ReaderContentService:
         except TimeoutError as exc:
             raise ReaderWorkerBusyError from exc
         try:
-            return await operation()
-        finally:
+            worker_task = asyncio.ensure_future(operation())
+        except BaseException:
             self._worker_slots.release()
+            raise
+
+        def _release_worker(completed: asyncio.Future[_T]) -> None:
+            self._worker_slots.release()
+            if not completed.cancelled():
+                completed.exception()
+
+        worker_task.add_done_callback(_release_worker)
+        return await asyncio.shield(worker_task)
 
     async def _source_lock(self, revision: str) -> asyncio.Lock:
         async with self._coordination_lock:

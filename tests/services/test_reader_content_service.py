@@ -293,6 +293,53 @@ async def test_worker_saturation_fails_with_a_bounded_retryable_error(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_reader_request_holds_worker_slot_until_thread_finishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pullbox.services import reader_content_service as content_module
+
+    root = tmp_path / "library"
+    root.mkdir()
+    first_source = root / "first.cbz"
+    second_source = root / "second.cbz"
+    _write_cbz(first_source)
+    _write_cbz(second_source)
+    first = resolve_reader_source(_record(first_source, root))
+    second = resolve_reader_source(
+        dataclasses.replace(_record(second_source, root), library_file_id=12)
+    )
+    original_open = content_module.open_page_source
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_open(path, **kwargs):  # type: ignore[no-untyped-def]
+        if path == first_source:
+            started.set()
+            release.wait(timeout=2)
+        return original_open(path, **kwargs)
+
+    monkeypatch.setattr(content_module, "open_page_source", _blocked_open)
+    service = ReaderContentService(
+        cache_dir=tmp_path / "cache",
+        max_workers=1,
+        worker_wait_seconds=0.02,
+    )
+    cancelled_request = asyncio.create_task(service.get_manifest(first))
+    await asyncio.to_thread(started.wait, 1)
+
+    cancelled_request.cancel()
+    await asyncio.sleep(0)
+    with pytest.raises(ReaderWorkerBusyError):
+        await service.get_manifest(second)
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_request
+    assert (await service.get_manifest(second)).page_count == 3
+
+
+@pytest.mark.asyncio
 async def test_cache_diagnostics_and_clear_are_bounded_to_generated_reader_files(
     tmp_path: Path,
 ) -> None:
