@@ -158,6 +158,13 @@ class TestIssueDetailRouteContracts:
         assert "Manage <span>issue</span>" in response.text
         assert "Manage <span>this issue</span>" not in response.text
         assert 'data-testid="issue-action-download"' in response.text
+        assert 'data-testid="issue-action-read"' in response.text
+        assert '@click="openReader($event)"' in response.text
+        assert 'data-testid="comic-reader-dialog"' in response.text
+        assert 'data-testid="comic-reader-viewport"' in response.text
+        assert 'data-testid="comic-reader-page"' in response.text
+        assert 'data-testid="comic-reader-close"' in response.text
+        assert "readerManifestUrl:" in response.text
         assert 'data-testid="issue-action-import"' in response.text
         assert 'data-testid="issue-action-manual-search"' in response.text
         assert 'data-testid="issue-action-delete-file"' in response.text
@@ -222,7 +229,32 @@ class TestIssueDetailRouteContracts:
         assert 'data-testid="file-browser-modal"' in response.text
         assert 'data-testid="file-browser-title"' in response.text
         assert 'data-testid="issue-action-search"' in response.text
+        assert 'data-testid="issue-action-read"' not in response.text
         assert 'data-testid="issue-library-file-section"' not in response.text
+
+    async def test_emergency_reader_gate_hides_the_entry_point(
+        self,
+        authenticated_client,
+        seeded_issue_detail_ui_data,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from types import SimpleNamespace
+
+        from pullbox.ui import series_detail_routes
+
+        monkeypatch.setattr(
+            series_detail_routes,
+            "get_settings",
+            lambda: SimpleNamespace(reader_enabled=False),
+        )
+
+        response = await authenticated_client.get(
+            f"/issues/{seeded_issue_detail_ui_data['owned_issue_id']}"
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="issue-action-read"' not in response.text
+        assert 'data-testid="comic-reader-dialog"' not in response.text
 
     async def test_missing_issue_metadata_uses_persistent_comicvine_cache(
         self,

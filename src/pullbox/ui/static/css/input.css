@@ -8711,3 +8711,542 @@ input[type="range"].range-pb::-moz-range-thumb {
     width: 100%;
   }
 }
+
+/* ── Embedded comic reader ───────────────────────────────────────── */
+
+.comic-reader {
+  --pb-reader-canvas: #070b12;
+  --pb-reader-surface: rgba(13, 20, 30, 0.94);
+  --pb-reader-surface-strong: rgba(13, 20, 30, 0.98);
+  --pb-reader-text: #f7f1e8;
+  --pb-reader-text-muted: #cbd5e1;
+  --pb-reader-text-dim: #9aaaba;
+  --pb-reader-interactive: #8fb9ee;
+  --pb-reader-danger: #e38473;
+  --pb-reader-warning: #f2c98d;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: var(--pb-reader-canvas);
+  color: var(--pb-reader-text);
+}
+
+.comic-reader::backdrop {
+  background: var(--pb-reader-canvas);
+}
+
+.comic-reader__shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--pb-reader-canvas);
+  color: var(--pb-reader-text);
+  font-family: "DM Sans", sans-serif;
+}
+
+.comic-reader__topbar,
+.comic-reader__controls {
+  position: relative;
+  z-index: 20;
+  border-color: rgba(203, 213, 225, 0.16);
+  background: var(--pb-reader-surface);
+  backdrop-filter: blur(12px);
+  transition: opacity 140ms ease;
+}
+
+.comic-reader__topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 58px;
+  padding: calc(0.45rem + env(safe-area-inset-top, 0px))
+    max(0.75rem, env(safe-area-inset-right, 0px)) 0.45rem
+    max(0.75rem, env(safe-area-inset-left, 0px));
+  border-bottom-width: 1px;
+}
+
+.comic-reader__identity {
+  min-width: 0;
+}
+
+.comic-reader__identity h2,
+.comic-reader__identity p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comic-reader__identity h2 {
+  margin: 0;
+  color: var(--pb-reader-text);
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.comic-reader__identity p {
+  margin: 0.1rem 0 0;
+  color: var(--pb-reader-text-dim);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.comic-reader__top-actions,
+.comic-reader__navigation,
+.comic-reader__sizing,
+.comic-reader__state-actions,
+.comic-reader__help-heading {
+  display: flex;
+  align-items: center;
+}
+
+.comic-reader__top-actions,
+.comic-reader__navigation,
+.comic-reader__sizing,
+.comic-reader__state-actions {
+  gap: 0.4rem;
+}
+
+.comic-reader__button,
+.comic-reader__zoom-label,
+.comic-reader__fit-select,
+.comic-reader__page-jump input {
+  min-height: 44px;
+  border: 1px solid rgba(203, 213, 225, 0.22);
+  border-radius: 0.55rem;
+  background: rgba(247, 241, 232, 0.07);
+  color: var(--pb-reader-text);
+  font: inherit;
+}
+
+.comic-reader__button,
+.comic-reader__zoom-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.comic-reader__button:hover,
+.comic-reader__zoom-label:hover,
+.comic-reader__button[aria-pressed="true"] {
+  border-color: rgba(143, 185, 238, 0.55);
+  background: rgba(143, 185, 238, 0.16);
+}
+
+.comic-reader__button:focus-visible,
+.comic-reader__zoom-label:focus-visible,
+.comic-reader__fit-select:focus-visible,
+.comic-reader__page-jump input:focus-visible,
+.comic-reader__viewport:focus-visible {
+  outline: 2px solid var(--pb-reader-interactive);
+  outline-offset: -2px;
+}
+
+.comic-reader__button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.comic-reader__button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.comic-reader__button--prominent {
+  border-color: rgba(143, 185, 238, 0.38);
+  background: rgba(143, 185, 238, 0.12);
+}
+
+.comic-reader__viewport {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--pb-reader-canvas);
+  scrollbar-color: rgba(154, 170, 186, 0.55) transparent;
+  touch-action: pan-y pinch-zoom;
+}
+
+.comic-reader__viewport.is-pannable {
+  touch-action: auto;
+}
+
+.comic-reader__page-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 0.75rem;
+}
+
+.comic-reader__page {
+  position: relative;
+  z-index: 1;
+  display: block;
+  flex: none;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.38);
+}
+
+.comic-reader__page--page {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.comic-reader__page--width {
+  width: 100%;
+  height: auto;
+  align-self: flex-start;
+}
+
+.comic-reader__page--height {
+  width: auto;
+  height: 100%;
+}
+
+.comic-reader__page--actual {
+  width: auto;
+  height: auto;
+  align-self: flex-start;
+}
+
+.comic-reader__state,
+.comic-reader__page-busy {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.comic-reader__state {
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(90vw, 32rem);
+  padding: 1.5rem;
+  border: 1px solid rgba(203, 213, 225, 0.2);
+  border-radius: 0.9rem;
+  background: rgba(13, 20, 30, 0.96);
+  color: var(--pb-reader-text-muted);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.46);
+}
+
+.comic-reader__state strong {
+  color: var(--pb-reader-text);
+  font-size: 1rem;
+}
+
+.comic-reader__state--error {
+  border-color: color-mix(in srgb, var(--pb-reader-danger) 45%, transparent);
+}
+
+.comic-reader__state-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.comic-reader__page-busy {
+  top: 1rem;
+  transform: translateX(-50%);
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(13, 20, 30, 0.9);
+  color: var(--pb-reader-text-muted);
+  font-size: 0.72rem;
+}
+
+.comic-reader__spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid rgba(143, 185, 238, 0.25);
+  border-top-color: var(--pb-reader-interactive);
+  border-radius: 999px;
+  animation: comic-reader-spin 700ms linear infinite;
+}
+
+@keyframes comic-reader-spin {
+  to { transform: rotate(360deg); }
+}
+
+.comic-reader__tap-zone {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.comic-reader__tap-zone--left {
+  left: 0;
+  width: 30%;
+}
+
+.comic-reader__tap-zone--center {
+  left: 30%;
+  width: 40%;
+}
+
+.comic-reader__tap-zone--right {
+  right: 0;
+  width: 30%;
+}
+
+.comic-reader__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.45rem max(0.75rem, env(safe-area-inset-right, 0px))
+    calc(0.45rem + env(safe-area-inset-bottom, 0px))
+    max(0.75rem, env(safe-area-inset-left, 0px));
+  border-top-width: 1px;
+}
+
+.comic-reader__navigation,
+.comic-reader__sizing {
+  position: relative;
+  min-width: 0;
+}
+
+.comic-reader__page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--pb-reader-text-dim);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.comic-reader__page-jump input {
+  width: 3.4rem;
+  padding: 0.4rem;
+  text-align: center;
+  appearance: textfield;
+}
+
+.comic-reader__page-jump input::-webkit-outer-spin-button,
+.comic-reader__page-jump input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.comic-reader__fit-select {
+  display: none;
+  max-width: 8.5rem;
+  padding: 0 1.9rem 0 0.65rem;
+  color-scheme: dark;
+}
+
+.comic-reader__zoom-label {
+  min-width: 3.75rem;
+  padding-inline: 0.45rem;
+  color: var(--pb-reader-text-muted);
+}
+
+.comic-reader__input-error {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.35rem);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 1.5rem));
+  padding: 0.35rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--pb-reader-danger) 42%, transparent);
+  border-radius: 0.45rem;
+  background: var(--pb-reader-surface-strong);
+  color: var(--pb-reader-danger);
+  font-size: 0.7rem;
+}
+
+.comic-reader__help {
+  position: absolute;
+  z-index: 30;
+  left: 50%;
+  top: 50%;
+  width: min(92vw, 34rem);
+  max-height: min(78vh, 38rem);
+  max-height: min(78dvh, 38rem);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  padding: 1rem;
+  border: 1px solid rgba(143, 185, 238, 0.4);
+  border-radius: 0.9rem;
+  background: var(--pb-reader-surface-strong);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.6);
+}
+
+.comic-reader__help-heading {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.comic-reader__help h3 {
+  margin: 0;
+  color: var(--pb-reader-text);
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-size: 1rem;
+}
+
+.comic-reader__help dl {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0.75rem 0 0;
+}
+
+.comic-reader__help dl > div {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 0.7fr) minmax(0, 1.3fr);
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+  border-top: 1px solid rgba(203, 213, 225, 0.12);
+}
+
+.comic-reader__help dt {
+  color: var(--pb-reader-interactive);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.comic-reader__help dd {
+  margin: 0;
+  color: var(--pb-reader-text-muted);
+  font-size: 0.75rem;
+}
+
+.comic-reader__save-status {
+  position: absolute;
+  z-index: 40;
+  right: max(0.75rem, env(safe-area-inset-right, 0px));
+  bottom: calc(4.1rem + env(safe-area-inset-bottom, 0px));
+  max-width: min(22rem, calc(100vw - 1.5rem));
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(215, 161, 91, 0.4);
+  border-radius: 0.55rem;
+  background: rgba(35, 27, 17, 0.96);
+  color: var(--pb-reader-warning);
+  font-size: 0.72rem;
+}
+
+.comic-reader__shell.is-controls-hidden .comic-reader__topbar,
+.comic-reader__shell.is-controls-hidden .comic-reader__controls {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .comic-reader__fit-page,
+  .comic-reader__fit-wide {
+    display: none;
+  }
+
+  .comic-reader__fit-select {
+    display: block;
+  }
+}
+
+@media (max-width: 600px) {
+  .comic-reader__topbar {
+    min-height: 54px;
+    gap: 0.5rem;
+  }
+
+  .comic-reader__desktop-action {
+    display: none;
+  }
+
+  .comic-reader__controls {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.35rem 0.6rem;
+  }
+
+  .comic-reader__navigation,
+  .comic-reader__sizing {
+    justify-content: center;
+  }
+
+  .comic-reader__page-stage {
+    padding: 0.4rem;
+  }
+
+  .comic-reader__help dl > div {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+}
+
+@media (max-height: 480px) {
+  .comic-reader__topbar,
+  .comic-reader__controls {
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+  }
+
+  .comic-reader__topbar {
+    min-height: 48px;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comic-reader__topbar,
+  .comic-reader__controls {
+    transition: none;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+
+  .comic-reader__spinner {
+    animation-duration: 1.4s;
+  }
+}

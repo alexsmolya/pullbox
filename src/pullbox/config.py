@@ -75,6 +75,26 @@ class PullboxSettings(BaseSettings):
     temp_dir: Path = Path("/data/tmp")
     backup_dir: Path = Path("/data/backups")
 
+    # ── Embedded Reader Resource Budgets ─────────────────────────────
+    reader_enabled: bool = True
+    reader_cache_max_mb: int = 512
+    reader_open_source_cache_size: int = 8
+    reader_max_entries: int = 10_000
+    reader_max_page_mb: int = 128
+    reader_max_expanded_mb: int = 4096
+    reader_max_compression_ratio: int = 250
+    reader_compression_ratio_min_mb: int = 4
+    reader_max_image_pixels: int = 80_000_000
+    reader_max_image_entries: int = 5_000
+    reader_max_member_path_chars: int = 1_024
+    reader_max_member_depth: int = 32
+    reader_max_rendition_width: int = 2_560
+    reader_max_rendition_height: int = 4_096
+    reader_pdf_dpi: int = 160
+    reader_render_timeout_seconds: int = 30
+    reader_worker_count: int = 2
+    reader_worker_wait_seconds: float = 2.0
+
     # ── Backup ─────────────────────────────────────────────────────────
     backup_interval_days: int = 7
     backup_retention_days: int = 28

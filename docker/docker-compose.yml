@@ -41,6 +41,7 @@ services:
       - PULLBOX_SQLITE_JOURNAL_MODE=WAL
       - PULLBOX_LIBRARY_ROOT=/comics
       - PULLBOX_COVERS_DIR=/comics/.covers
+      - PULLBOX_READER_ENABLED=${PULLBOX_READER_ENABLED:-true}
       # Optional overrides (config.xml handles the rest):
       # - PULLBOX_PORT=8585
       # - PULLBOX_BASE_URL=https://comics.example.com
