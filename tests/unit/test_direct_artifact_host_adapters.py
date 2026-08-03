@@ -437,18 +437,20 @@ async def test_terabox_follows_the_current_official_share_redirect() -> None:
 
     async def handler(request: httpx.Request) -> httpx.Response:
         seen_hosts.append(request.headers["Host"])
-        assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
         if request.headers["Host"] == "www.1024terabox.com":
+            assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
             return httpx.Response(
                 302,
                 headers={"Location": "https://www.terabox.app/s/1fixture"},
             )
         if request.headers["Host"] == "www.terabox.app":
+            assert request.headers.get("Cookie") is None
             return httpx.Response(
                 200,
                 text='<script>window.jsToken = "js-token";</script>',
                 headers={"Content-Type": "text/html"},
             )
+        assert request.headers["Cookie"] == f"ndus={TERABOX_SESSION}"
         assert request.url.path == "/share/list"
         return httpx.Response(
             200,

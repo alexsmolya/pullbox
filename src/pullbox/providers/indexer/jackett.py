@@ -18,6 +18,7 @@ import structlog
 from defusedxml import ElementTree as DefusedElementTree
 from defusedxml.common import DefusedXmlException
 
+from pullbox.core.url_validation import normalize_peer_base_url
 from pullbox.providers.base import ProviderHealthResult
 
 if TYPE_CHECKING:
@@ -55,19 +56,19 @@ class JackettClient:
         api_key: str,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._base_url = url.rstrip("/")
+        self._base_url = normalize_peer_base_url(url, reject_query_or_fragment=True)
         self._api_key = api_key
         self._client = httpx.AsyncClient(
+            base_url=f"{self._base_url}/",
             timeout=_REQUEST_TIMEOUT_SECONDS,
             transport=transport,
         )
 
     async def get_configured_indexers(self) -> list[JackettIndexerDefinition]:
         """Return configured trackers without using Jackett's aggregate feed."""
-        url = f"{self._base_url}/api/v2.0/indexers/all/results/torznab/api"
         try:
             response = await self._client.get(
-                url,
+                "api/v2.0/indexers/all/results/torznab/api",
                 params={
                     "apikey": self._api_key,
                     "t": "indexers",

@@ -23,6 +23,10 @@ from pullbox.providers.artifact_hosts.mega import (
     MegaBridgeRunner,
     MegaBridgeTransferError,
 )
+from pullbox.providers.artifact_hosts.transport_contract import (
+    ArtifactTransferError,
+    ArtifactTransferPolicy,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -89,6 +93,108 @@ emit(\"COMPLETE 5 69737375652e63627a\")
     assert session not in result.command_summary
     assert link not in repr(result)
     assert session not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_mega_bridge_rejects_oversized_expected_transfer_before_spawn(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "quarantine"
+    root.mkdir()
+
+    with pytest.raises(ArtifactTransferError) as caught:
+        await MegaBridgeRunner(
+            command=(tmp_path / "must-not-spawn",),
+            policy=ArtifactTransferPolicy(max_artifact_bytes=4, min_free_bytes=0),
+        ).transfer(
+            public_link="https://mega.nz/file/id#key",
+            destination=root / "attempt.part",
+            quarantine_root=root,
+            expected_size=5,
+        )
+
+    assert caught.value.code == "artifact_too_large"
+
+
+@pytest.mark.asyncio
+async def test_mega_bridge_rejects_insufficient_disk_before_spawn(tmp_path: Path) -> None:
+    root = tmp_path / "quarantine"
+    root.mkdir()
+
+    with pytest.raises(ArtifactTransferError) as caught:
+        await MegaBridgeRunner(
+            command=(tmp_path / "must-not-spawn",),
+            policy=ArtifactTransferPolicy(max_artifact_bytes=10, min_free_bytes=2),
+            disk_free_provider=lambda _path: 6,
+        ).transfer(
+            public_link="https://mega.nz/file/id#key",
+            destination=root / "attempt.part",
+            quarantine_root=root,
+            expected_size=5,
+        )
+
+    assert caught.value.code == "artifact_disk_space_insufficient"
+
+
+@pytest.mark.asyncio
+async def test_mega_bridge_enforces_discovered_size_limit_and_removes_partial(
+    tmp_path: Path,
+) -> None:
+    executable = _write_fake_bridge(
+        tmp_path,
+        body="""
+request = read_request()
+destination = Path(request["destination"])
+destination.write_bytes(b"comic")
+emit("META 5 69737375652e63627a")
+emit("COMPLETE 5 69737375652e63627a")
+""",
+    )
+    root = tmp_path / "quarantine"
+    root.mkdir()
+    destination = root / "attempt.part"
+
+    with pytest.raises(ArtifactTransferError) as caught:
+        await MegaBridgeRunner(
+            command=(sys.executable, str(executable)),
+            policy=ArtifactTransferPolicy(max_artifact_bytes=4, min_free_bytes=0),
+        ).transfer(
+            public_link="https://mega.nz/file/id#key",
+            destination=destination,
+            quarantine_root=root,
+        )
+
+    assert caught.value.code == "artifact_too_large"
+    assert not destination.exists()
+
+
+@pytest.mark.asyncio
+async def test_mega_bridge_verifies_checksum_and_removes_mismatch(tmp_path: Path) -> None:
+    executable = _write_fake_bridge(
+        tmp_path,
+        body="""
+request = read_request()
+destination = Path(request["destination"])
+destination.write_bytes(b"comic")
+emit("META 5 69737375652e63627a")
+emit("COMPLETE 5 69737375652e63627a")
+""",
+    )
+    root = tmp_path / "quarantine"
+    root.mkdir()
+    destination = root / "attempt.part"
+
+    with pytest.raises(ArtifactTransferError) as caught:
+        await MegaBridgeRunner(command=(sys.executable, str(executable))).transfer(
+            public_link="https://mega.nz/file/id#key",
+            destination=destination,
+            quarantine_root=root,
+            expected_size=5,
+            checksum=f"sha256:{'0' * 64}",
+        )
+
+    assert caught.value.code == "artifact_checksum_mismatch"
+    assert not destination.exists()
 
 
 @pytest.mark.asyncio

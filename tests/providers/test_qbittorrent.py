@@ -70,6 +70,23 @@ class TestAuthenticationAndRequests:
         with pytest.raises(QBittorrentError, match="HTTP 500"):
             await client._request("GET", "/app/version")
 
+    async def test_request_rejects_non_allowlisted_api_endpoint(self) -> None:
+        client = _make_client()
+        client._authenticated = True
+        client._client.request = AsyncMock(return_value=_make_response(status_code=200))  # type: ignore[method-assign]
+
+        with pytest.raises(ValueError, match="qBittorrent API endpoint"):
+            await client._request("GET", "/../../admin")
+
+        client._client.request.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_constructor_validates_peer_origin_without_embedded_credentials(self) -> None:
+        with pytest.raises(ValueError, match="embedded credentials"):
+            _make_client(url="http://user:password@qbittorrent:8080")
+
+        with pytest.raises(ValueError, match="query or fragment"):
+            _make_client(url="http://qbittorrent:8080?target=http://untrusted.example")
+
     async def test_redirecting_download_url_resolves_to_magnet(self) -> None:
         client = _make_client()
         redirected_magnet = f"magnet:?xt=urn:btih:{_MAGNET_HASH}&dn=Batman"

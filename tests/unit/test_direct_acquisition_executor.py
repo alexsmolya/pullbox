@@ -330,9 +330,11 @@ class _PausedMegaRunner:
 class _SuccessfulMegaRunner:
     def __init__(self) -> None:
         self.session: str | None = None
+        self.checksum: str | None = None
 
     async def transfer(self, **kwargs: Any) -> MegaBridgeTransferResult:
         self.session = kwargs["session"]
+        self.checksum = kwargs["checksum"]
         assert "app_key" not in kwargs
         destination = kwargs["destination"]
         with zipfile.ZipFile(destination, "w") as archive:
@@ -1569,12 +1571,14 @@ async def test_executor_forwards_mega_session_to_bridge_only(
             final_url=None,
         )
 
+    checksum = f"sha256:{'a' * 64}"
     resolved = ResolvedTransfer(
         host_kind=DirectArtifactHostKind.MEGA,
         url="https://mega.nz/file/fixture#fixture-key",
         allowed_domains=("mega.nz",),
         transport_protocol=ArtifactTransferProtocol.MEGA_BRIDGE,
         bridge_session=account_session,
+        checksum=checksum,
     )
     mega_runner = _SuccessfulMegaRunner()
     executor = DirectAcquisitionExecutor(
@@ -1595,6 +1599,7 @@ async def test_executor_forwards_mega_session_to_bridge_only(
 
     assert result.state is DirectAcquisitionState.COMPLETED
     assert mega_runner.session == account_session
+    assert mega_runner.checksum == checksum
     assert account_session not in repr(attempt.progress_snapshot)
 
 

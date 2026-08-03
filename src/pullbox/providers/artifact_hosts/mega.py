@@ -21,6 +21,15 @@ from pullbox.providers.artifact_hosts.contract import (
     ResolvedTransfer,
 )
 from pullbox.providers.artifact_hosts.helpers import safe_filename, validate_resolution_request
+from pullbox.providers.artifact_hosts.transfer_safety import (
+    DiskFreeProvider,
+    check_disk_budget,
+    disk_free_bytes,
+    parse_checksum,
+    validate_expected_size,
+    verify_checksum,
+)
+from pullbox.providers.artifact_hosts.transport_contract import ArtifactTransferPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -142,6 +151,8 @@ class MegaBridgeRunner:
         command: Sequence[str | os.PathLike[str]] = ("/usr/bin/pullbox-mega-bridge",),
         idle_timeout_seconds: float = _DEFAULT_IDLE_TIMEOUT_SECONDS,
         total_timeout_seconds: float = _DEFAULT_TOTAL_TIMEOUT_SECONDS,
+        policy: ArtifactTransferPolicy | None = None,
+        disk_free_provider: DiskFreeProvider | None = None,
     ) -> None:
         if not command or any(not os.fspath(part) for part in command):
             raise ValueError("MEGA bridge command cannot be empty.")
@@ -150,6 +161,8 @@ class MegaBridgeRunner:
         self._command = tuple(os.fspath(part) for part in command)
         self._idle_timeout_seconds = idle_timeout_seconds
         self._total_timeout_seconds = total_timeout_seconds
+        self._policy = policy or ArtifactTransferPolicy()
+        self._disk_free_provider = disk_free_provider or disk_free_bytes
 
     async def transfer(
         self,
@@ -159,6 +172,7 @@ class MegaBridgeRunner:
         quarantine_root: Path,
         session: str | None = None,
         expected_size: int | None = None,
+        checksum: str | None = None,
         cancel_event: asyncio.Event | None = None,
         pause_event: asyncio.Event | None = None,
         progress_callback: MegaProgressCallback | None = None,
@@ -167,8 +181,15 @@ class MegaBridgeRunner:
         _validate_request_field("public link", public_link, allow_empty=False)
         _validate_request_field("session", session or "", allow_empty=True)
         safe_destination = _validate_quarantine_destination(destination, quarantine_root)
-        if expected_size is not None and expected_size < 0:
-            raise ValueError("Expected MEGA transfer size cannot be negative.")
+        validate_expected_size(expected_size, self._policy)
+        parse_checksum(checksum)
+        check_disk_budget(
+            self._disk_free_provider,
+            quarantine_root,
+            expected_size=expected_size,
+            existing_size=0,
+            policy=self._policy,
+        )
         if cancel_event is not None and cancel_event.is_set():
             raise MegaBridgeCancelledError
 
@@ -245,17 +266,34 @@ class MegaBridgeRunner:
                 if event == "META":
                     metadata_size = cast("int", values[0])
                     metadata_name = cast("str | None", values[1])
+                    validate_expected_size(metadata_size, self._policy)
                     if expected_size is not None and metadata_size != expected_size:
                         raise _changed_object_error()
+                    check_disk_budget(
+                        self._disk_free_provider,
+                        quarantine_root,
+                        expected_size=metadata_size,
+                        existing_size=0,
+                        policy=self._policy,
+                    )
                     filename_hint = metadata_name
                 elif event == "PROGRESS":
                     current = cast("int", values[0])
                     total = cast("int", values[1])
+                    validate_expected_size(total, self._policy)
                     if expected_size is not None and total != expected_size:
                         raise _changed_object_error()
+                    check_disk_budget(
+                        self._disk_free_provider,
+                        quarantine_root,
+                        expected_size=total,
+                        existing_size=current,
+                        policy=self._policy,
+                    )
                     await _emit_progress(progress_callback, current, total)
                 elif event == "COMPLETE":
                     completed_bytes = cast("int", values[0])
+                    validate_expected_size(completed_bytes, self._policy)
                     filename_hint = cast("str | None", values[1])
                 elif event == "ERROR":
                     code = cast("str", values[0])
@@ -272,6 +310,7 @@ class MegaBridgeRunner:
                 raise _changed_object_error()
             if expected_size is not None and actual_size != expected_size:
                 raise _changed_object_error()
+            await verify_checksum(safe_destination, checksum)
             return MegaBridgeTransferResult(
                 bytes_transferred=actual_size,
                 filename_hint=filename_hint,

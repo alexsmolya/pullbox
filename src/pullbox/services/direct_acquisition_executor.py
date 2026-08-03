@@ -488,6 +488,7 @@ class DirectAcquisitionExecutor:
                 quarantine_root=workspace.root,
                 session=resolved.bridge_session,
                 expected_size=resolved.expected_size,
+                checksum=resolved.checksum,
                 cancel_event=cancel_event,
                 pause_event=pause_event,
                 progress_callback=mega_progress,

@@ -56,6 +56,13 @@ _CHALLENGE_FIELDS = frozenset(
         "turnstile-response",
     }
 )
+_CHALLENGE_IFRAME_DOMAINS = frozenset(
+    {
+        "challenges.cloudflare.com",
+        "hcaptcha.com",
+        "recaptcha.net",
+    }
+)
 _WAIT_PATTERNS = (
     re.compile(r"\bcountdown=[\"'](\d{1,3})[\"']", re.IGNORECASE),
     re.compile(r"\bcountdown\s*=\s*(\d{1,3})\b", re.IGNORECASE),
@@ -351,12 +358,7 @@ def _validated_page(response: BoundedArtifactResponse) -> HostPageParser:
 def _reject_challenge(parsed: HostPageParser) -> None:
     has_widget = bool(parsed.class_names & _CHALLENGE_CLASSES)
     has_challenge_form = bool(parsed.forms.keys() & _CHALLENGE_FORM_IDS)
-    has_challenge_frame = any(
-        "challenges.cloudflare.com" in source.casefold()
-        or "recaptcha" in source.casefold()
-        or "hcaptcha.com" in source.casefold()
-        for source in parsed.iframe_sources
-    )
+    has_challenge_frame = any(_is_challenge_frame(source) for source in parsed.iframe_sources)
     has_unsolved_field = any(
         name.casefold() in _CHALLENGE_FIELDS and not value.strip()
         for form in parsed.forms.values()
@@ -364,6 +366,19 @@ def _reject_challenge(parsed: HostPageParser) -> None:
     )
     if has_widget or has_challenge_form or has_challenge_frame or has_unsolved_field:
         raise challenge_required()
+
+
+def _is_challenge_frame(source: str) -> bool:
+    try:
+        parsed = urlsplit(source)
+        host = (parsed.hostname or "").casefold().rstrip(".")
+    except ValueError:
+        return False
+    if any(host == domain or host.endswith(f".{domain}") for domain in _CHALLENGE_IFRAME_DOMAINS):
+        return True
+    return (host == "google.com" or host.endswith(".google.com")) and "recaptcha" in (
+        parsed.path.casefold()
+    )
 
 
 def _login_form(parsed: HostPageParser) -> ParsedForm | None:

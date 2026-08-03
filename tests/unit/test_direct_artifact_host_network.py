@@ -155,6 +155,92 @@ async def test_bounded_request_cookies_do_not_leak_to_unrelated_redirects() -> N
     ]
 
 
+async def test_bounded_request_strips_raw_credentials_after_origin_change() -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.headers["Host"], dict(request.headers)))
+        if request.headers["Host"] == "files.example.test":
+            return httpx.Response(
+                302,
+                headers={"Location": "https://cdn.example.test/final"},
+            )
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await request_bounded(
+            client,
+            "GET",
+            "https://files.example.test/start",
+            resolver=_public,
+            allowed_domains=None,
+            headers={
+                "Authorization": "Bearer secret",
+                "Cookie": "session=secret",
+                "Proxy-Authorization": "Basic secret",
+                "X-Preserved": "yes",
+            },
+        )
+
+    assert seen[0][1]["authorization"] == "Bearer secret"
+    assert seen[0][1]["cookie"] == "session=secret"
+    assert seen[0][1]["proxy-authorization"] == "Basic secret"
+    assert "authorization" not in seen[1][1]
+    assert "cookie" not in seen[1][1]
+    assert "proxy-authorization" not in seen[1][1]
+    assert seen[1][1]["x-preserved"] == "yes"
+
+
+async def test_bounded_request_treats_port_change_as_new_origin() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.headers["Host"], request.headers.get("Authorization")))
+        if request.headers["Host"] == "files.example.test":
+            return httpx.Response(
+                302,
+                headers={"Location": "https://files.example.test:8443/final"},
+            )
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await request_bounded(
+            client,
+            "GET",
+            "https://files.example.test/start",
+            resolver=_public,
+            allowed_domains=None,
+            headers={"Authorization": "Bearer secret"},
+        )
+
+    assert seen == [
+        ("files.example.test", "Bearer secret"),
+        ("files.example.test:8443", None),
+    ]
+
+
+async def test_bounded_request_preserves_raw_credentials_on_same_origin_redirect() -> None:
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("Authorization"))
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"Location": "/final"})
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await request_bounded(
+            client,
+            "GET",
+            "https://files.example.test/start",
+            resolver=_public,
+            allowed_domains=None,
+            headers={"Authorization": "Bearer secret"},
+        )
+
+    assert seen == ["Bearer secret", "Bearer secret"]
+
+
 async def test_mediafire_cannot_redirect_transfer_to_an_unrelated_domain() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(

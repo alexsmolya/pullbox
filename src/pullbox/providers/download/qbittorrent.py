@@ -16,12 +16,20 @@ import httpx
 import structlog
 
 from pullbox.core.config_resolver import resolve_runtime_service_url
+from pullbox.core.url_validation import normalize_peer_base_url
 from pullbox.providers.base import ClientOptions, DownloadStatus, ProviderHealthResult
 
 logger = structlog.get_logger(__name__)
 
 _REQUEST_TIMEOUT = 10.0
 _HTTP_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_QBITTORRENT_API_ROUTES = {
+    "/app/version": "api/v2/app/version",
+    "/torrents/add": "api/v2/torrents/add",
+    "/torrents/categories": "api/v2/torrents/categories",
+    "/torrents/delete": "api/v2/torrents/delete",
+    "/torrents/info": "api/v2/torrents/info",
+}
 
 
 class QBittorrentError(Exception):
@@ -51,14 +59,21 @@ class QBittorrentClient:
         ratio_limit: float | None = None,
         seeding_time_limit: int | None = None,
     ) -> None:
-        self._base_url = resolve_runtime_service_url(url).rstrip("/")
+        runtime_url = resolve_runtime_service_url(url)
+        self._base_url = normalize_peer_base_url(
+            runtime_url,
+            reject_query_or_fragment=True,
+        )
         self._username = username
         self._password = password
         self._default_category = category
         self._content_layout = content_layout
         self._ratio_limit = ratio_limit
         self._seeding_time_limit = seeding_time_limit
-        self._client = httpx.AsyncClient(timeout=_REQUEST_TIMEOUT)
+        self._client = httpx.AsyncClient(
+            base_url=f"{self._base_url}/",
+            timeout=_REQUEST_TIMEOUT,
+        )
         self._authenticated = False
 
     @property
@@ -78,7 +93,7 @@ class QBittorrentClient:
 
         try:
             response = await self._client.post(
-                f"{self._base_url}/api/v2/auth/login",
+                "api/v2/auth/login",
                 data={"username": self._username, "password": self._password},
             )
             response.raise_for_status()
@@ -118,7 +133,9 @@ class QBittorrentClient:
         """
         await self._ensure_auth()
 
-        url = f"{self._base_url}/api/v2{endpoint}"
+        api_route = _QBITTORRENT_API_ROUTES.get(endpoint)
+        if api_route is None:
+            raise ValueError("Unsupported qBittorrent API endpoint.")
         log = logger.bind(endpoint=endpoint)
         log.debug("qbittorrent_request")
 
@@ -126,7 +143,7 @@ class QBittorrentClient:
             try:
                 response = await self._client.request(
                     method,
-                    url,
+                    api_route,
                     data=data,
                     params=params,
                     files=files,

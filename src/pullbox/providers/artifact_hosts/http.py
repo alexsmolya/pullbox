@@ -20,6 +20,7 @@ ArtifactMultipartFiles = Mapping[str, tuple[None, str]]
 _MAX_URL_LENGTH = 4_000
 _MAX_REDIRECTS = 3
 _MAX_ADAPTER_RESPONSE_BYTES = 2 * 1024 * 1024
+_SENSITIVE_HEADER_NAMES = frozenset({"authorization", "cookie", "proxy-authorization"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +132,8 @@ async def request_bounded(
     current_method = method.upper()
     current_data = data
     current_files = files
+    credential_origin: tuple[str, str, int] | None = None
+    credentials_allowed = True
     for redirect_count in range(max_redirects + 1):
         target = await validate_artifact_url(
             current_url,
@@ -139,6 +142,17 @@ async def request_bounded(
         )
         request_url, host_header = pinned_request_target(target)
         request_headers = {**dict(headers or {}), "Host": host_header}
+        target_origin = ("https", target.host, target.port)
+        if credential_origin is None:
+            credential_origin = target_origin
+        elif target_origin != credential_origin:
+            credentials_allowed = False
+        if not credentials_allowed:
+            request_headers = {
+                name: value
+                for name, value in request_headers.items()
+                if name.casefold() not in _SENSITIVE_HEADER_NAMES
+            }
         logical_request = httpx.Request(current_method, target.url)
         managed_cookie_header = _header_value(request_headers, "cookie")
         if cookies is not None and managed_cookie_header is None:

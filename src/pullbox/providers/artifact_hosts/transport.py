@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import inspect
-import shutil
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from functools import partial
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
@@ -36,6 +32,15 @@ from pullbox.providers.artifact_hosts.quarantine import (
     remove_quarantine_file,
     validate_quarantine_file,
 )
+from pullbox.providers.artifact_hosts.transfer_safety import (
+    DiskFreeProvider,
+    artifact_too_large_error,
+    check_disk_budget,
+    disk_free_bytes,
+    parse_checksum,
+    validate_expected_size,
+    verify_checksum,
+)
 from pullbox.providers.artifact_hosts.transport_contract import (
     ArtifactTransferCancelledError,
     ArtifactTransferError,
@@ -47,12 +52,11 @@ from pullbox.providers.artifact_hosts.transport_contract import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from typing import BinaryIO
 
 ProgressCallback = Callable[[TransferProgressSnapshot], Awaitable[None] | None]
 RefreshTransfer = Callable[[], Awaitable[ResolvedTransfer]]
-DiskFreeProvider = Callable[[Path], int]
-
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _EXPIRED_URL_STATUSES = frozenset({401, 403, 410})
 _SENSITIVE_HEADER_NAMES = frozenset({"authorization", "cookie", "proxy-authorization"})
@@ -82,7 +86,7 @@ class HttpArtifactTransport:
         self._client = client
         self._resolver = resolver
         self._policy = policy or ArtifactTransferPolicy()
-        self._disk_free_provider = disk_free_provider or _disk_free_bytes
+        self._disk_free_provider = disk_free_provider or disk_free_bytes
 
     async def transfer(
         self,
@@ -102,10 +106,10 @@ class HttpArtifactTransport:
             quarantine_root,
             allow_existing=checkpoint is not None,
         )
-        _validate_expected_size(resolved.expected_size, self._policy)
-        _parse_checksum(resolved.checksum)
+        validate_expected_size(resolved.expected_size, self._policy)
+        parse_checksum(resolved.checksum)
         _validate_checkpoint(safe_path, checkpoint)
-        _check_disk_budget(
+        check_disk_budget(
             self._disk_free_provider,
             quarantine_root,
             expected_size=resolved.expected_size,
@@ -118,7 +122,7 @@ class HttpArtifactTransport:
             refreshed_transfer = await _refresh_or_raise(refresh_transfer)
             _validate_refreshed_identity(resolved, refreshed_transfer)
             active = refreshed_transfer
-            _validate_expected_size(active.expected_size, self._policy)
+            validate_expected_size(active.expected_size, self._policy)
 
         try:
             if _use_bounded_ranges(active, self._policy):
@@ -143,7 +147,7 @@ class HttpArtifactTransport:
                     pause_event=pause_event,
                     refresh_transfer=refresh_transfer,
                 )
-            await _verify_checksum(safe_path, active.checksum)
+            await verify_checksum(safe_path, active.checksum)
             return result
         except ArtifactTransferCancelledError:
             remove_quarantine_file(safe_path)
@@ -193,7 +197,7 @@ class HttpArtifactTransport:
                     refreshed_transfer = await _refresh_or_raise(refresh_transfer)
                     _validate_refreshed_identity(resolved, refreshed_transfer)
                     active = refreshed_transfer
-                    _validate_expected_size(active.expected_size, self._policy)
+                    validate_expected_size(active.expected_size, self._policy)
                     resume_offset = _eligible_resume_offset(active, checkpoint)
                     refreshed = True
                     continue
@@ -585,14 +589,14 @@ class HttpArtifactTransport:
     ) -> ArtifactTransferResult:
         total = _response_total(response, resume_offset=resume_offset)
         expected = total if total is not None else resolved.expected_size
-        _validate_expected_size(expected, self._policy)
+        validate_expected_size(expected, self._policy)
         if (
             resolved.expected_size is not None
             and expected is not None
             and resolved.expected_size != expected
         ):
             raise _object_changed_error()
-        _check_disk_budget(
+        check_disk_budget(
             self._disk_free_provider,
             quarantine_root,
             expected_size=expected,
@@ -656,7 +660,7 @@ class HttpArtifactTransport:
                 if not chunk:
                     continue
                 if transferred + len(chunk) > self._policy.max_artifact_bytes:
-                    raise _artifact_too_large_error()
+                    raise artifact_too_large_error()
                 await asyncio.to_thread(handle.write, chunk)
                 transferred += len(chunk)
                 now = time.monotonic()
@@ -785,7 +789,7 @@ async def _refresh_range_source(
             return active
         raise
     _validate_refreshed_identity(original, refreshed)
-    _validate_expected_size(refreshed.expected_size, policy)
+    validate_expected_size(refreshed.expected_size, policy)
     return refreshed
 
 
@@ -984,11 +988,6 @@ def _response_total(response: httpx.Response, *, resume_offset: int) -> int | No
     return None
 
 
-def _validate_expected_size(size: int | None, policy: ArtifactTransferPolicy) -> None:
-    if size is not None and (size < 0 or size > policy.max_artifact_bytes):
-        raise _artifact_too_large_error()
-
-
 def _validate_checkpoint(path: Path, checkpoint: HttpTransferCheckpoint | None) -> None:
     if checkpoint is None:
         return
@@ -1000,35 +999,6 @@ def _validate_checkpoint(path: Path, checkpoint: HttpTransferCheckpoint | None) 
         raise _object_changed_error() from exc
     if actual != checkpoint.bytes_transferred:
         raise _object_changed_error()
-
-
-def _check_disk_budget(
-    provider: DiskFreeProvider,
-    root: Path,
-    *,
-    expected_size: int | None,
-    existing_size: int,
-    policy: ArtifactTransferPolicy,
-) -> None:
-    remaining = max(0, (expected_size or 0) - existing_size)
-    try:
-        free = provider(root)
-    except OSError as exc:
-        raise ArtifactTransferError(
-            code="artifact_disk_space_unavailable",
-            message="Pullbox could not verify quarantine disk space.",
-            failure_class=DirectArtifactFailureClass.SAFETY,
-            retryable=False,
-            intervention=True,
-        ) from exc
-    if free < remaining + policy.min_free_bytes:
-        raise ArtifactTransferError(
-            code="artifact_disk_space_insufficient",
-            message="The direct-download quarantine does not have enough free space.",
-            failure_class=DirectArtifactFailureClass.SAFETY,
-            retryable=False,
-            intervention=True,
-        )
 
 
 def _raise_for_control(
@@ -1093,7 +1063,7 @@ def _validate_refreshed_identity(
     original: ResolvedTransfer,
     refreshed: ResolvedTransfer,
 ) -> None:
-    _parse_checksum(refreshed.checksum)
+    parse_checksum(refreshed.checksum)
     if original.host_kind is not refreshed.host_kind:
         raise _object_changed_error()
     if original.expected_size is not None and refreshed.expected_size != original.expected_size:
@@ -1102,41 +1072,6 @@ def _validate_refreshed_identity(
         raise _object_changed_error()
     if original.range_supported and not refreshed.range_supported:
         raise _object_changed_error()
-
-
-def _parse_checksum(value: str | None) -> tuple[str, str] | None:
-    if value is None:
-        return None
-    algorithm, separator, expected = value.strip().lower().partition(":")
-    expected_lengths = {"md5": 32, "sha256": 64}
-    if (
-        separator != ":"
-        or algorithm not in expected_lengths
-        or len(expected) != expected_lengths[algorithm]
-        or any(character not in "0123456789abcdef" for character in expected)
-    ):
-        raise _checksum_invalid_error()
-    return algorithm, expected
-
-
-async def _verify_checksum(path: Path, checksum: str | None) -> None:
-    parsed = _parse_checksum(checksum)
-    if parsed is None:
-        return
-    algorithm, expected = parsed
-    actual = await asyncio.to_thread(_file_checksum, path, algorithm)
-    if hmac.compare_digest(actual, expected):
-        return
-    remove_quarantine_file(path)
-    raise _checksum_mismatch_error()
-
-
-def _file_checksum(path: Path, algorithm: str) -> str:
-    digest = hashlib.md5(usedforsecurity=False) if algorithm == "md5" else hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024**2):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _is_expired(resolved: ResolvedTransfer) -> bool:
@@ -1148,10 +1083,6 @@ def _is_expired(resolved: ResolvedTransfer) -> bool:
     return expires_at <= datetime.now(UTC)
 
 
-def _disk_free_bytes(path: Path) -> int:
-    return shutil.disk_usage(path).free
-
-
 def _from_resolution_error(exc: ArtifactHostResolutionError) -> ArtifactTransferError:
     return ArtifactTransferError(
         code=exc.code,
@@ -1159,16 +1090,6 @@ def _from_resolution_error(exc: ArtifactHostResolutionError) -> ArtifactTransfer
         failure_class=exc.failure_class,
         retryable=exc.retryable,
         intervention=exc.intervention,
-    )
-
-
-def _artifact_too_large_error() -> ArtifactTransferError:
-    return ArtifactTransferError(
-        code="artifact_too_large",
-        message="The artifact exceeds the configured transfer size limit.",
-        failure_class=DirectArtifactFailureClass.SAFETY,
-        retryable=False,
-        intervention=True,
     )
 
 
@@ -1186,26 +1107,6 @@ def _object_changed_error() -> ArtifactTransferError:
     return ArtifactTransferError(
         code="artifact_object_changed",
         message="The remote artifact changed during transfer.",
-        failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
-        retryable=True,
-        intervention=False,
-    )
-
-
-def _checksum_invalid_error() -> ArtifactTransferError:
-    return ArtifactTransferError(
-        code="artifact_checksum_invalid",
-        message="The artifact provider returned an unsupported checksum.",
-        failure_class=DirectArtifactFailureClass.PERMANENT_MIRROR,
-        retryable=False,
-        intervention=True,
-    )
-
-
-def _checksum_mismatch_error() -> ArtifactTransferError:
-    return ArtifactTransferError(
-        code="artifact_checksum_mismatch",
-        message="The downloaded artifact did not match its expected checksum.",
         failure_class=DirectArtifactFailureClass.TRANSIENT_HOST,
         retryable=True,
         intervention=False,

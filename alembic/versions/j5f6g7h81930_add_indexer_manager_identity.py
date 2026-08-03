@@ -28,7 +28,7 @@ def upgrade() -> None:
             "manager_available",
             sa.Boolean(),
             nullable=False,
-            server_default=sa.text("1"),
+            server_default=sa.true(),
         ),
     )
     op.execute(

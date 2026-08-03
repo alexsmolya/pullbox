@@ -55,6 +55,14 @@ def _transport(
     return httpx.MockTransport(handler)
 
 
+def test_constructor_rejects_peer_url_query_or_fragment() -> None:
+    with pytest.raises(ValueError, match="query or fragment"):
+        JackettClient(
+            url="http://jackett:9117/?target=http://untrusted.example",
+            api_key="secret-key",
+        )
+
+
 @pytest.mark.asyncio
 async def test_configured_indexers_request_and_parse_individual_feed_metadata() -> None:
     requests: list[httpx.Request] = []
