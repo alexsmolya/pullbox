@@ -13,11 +13,32 @@ from pullbox.models.direct_acquisition import (
     DirectArtifactAttempt,
 )
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
+from pullbox.models.issue import Issue, IssueStatus
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+_ACTIVE_ISSUE_STATES = frozenset(
+    {
+        DirectAcquisitionState.RESOLVING,
+        DirectAcquisitionState.PLANNED,
+        DirectAcquisitionState.QUEUED,
+        DirectAcquisitionState.DOWNLOADING,
+        DirectAcquisitionState.VALIDATING,
+        DirectAcquisitionState.POST_PROCESSING,
+        DirectAcquisitionState.RETRY_PENDING,
+        DirectAcquisitionState.PAUSED,
+    }
+)
+_FAILED_ISSUE_STATES = frozenset(
+    {
+        DirectAcquisitionState.CANCELLED,
+        DirectAcquisitionState.FAILED,
+    }
+)
 
 
 async def ensure_direct_download_history(
@@ -106,7 +127,24 @@ async def sync_direct_download_history(
         history.error_message = "Cancelled by user"
     elif attempt.state is DirectAcquisitionState.FAILED:
         history.completed_at = at
+    await _sync_issue_status(session, attempt)
     return history
+
+
+async def _sync_issue_status(
+    session: AsyncSession,
+    attempt: DirectAcquisitionAttempt,
+) -> None:
+    """Keep direct acquisitions aligned with the shared issue-status contract."""
+    issue = await session.get(Issue, attempt.issue_id)
+    if issue is None:
+        return
+
+    state = DirectAcquisitionState(attempt.state)
+    if state in _ACTIVE_ISSUE_STATES:
+        issue.status = IssueStatus.DOWNLOADING
+    elif state in _FAILED_ISSUE_STATES and issue.status is IssueStatus.DOWNLOADING:
+        issue.status = IssueStatus.WANTED
 
 
 def _download_state(state: DirectAcquisitionState) -> DownloadState:

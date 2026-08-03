@@ -280,8 +280,14 @@ class _SourceSwitchExecutor:
         await session.commit()
 
 
+@dataclass
 class _UnexpectedFailureExecutor:
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
     async def execute(self, _session: AsyncSession, **_kwargs: Any) -> None:
+        self.started.set()
+        await self.release.wait()
         raise RuntimeError("sensitive internal failure")
 
 
@@ -325,11 +331,14 @@ async def test_runner_queues_once_uses_ephemeral_source_then_reresolves(
 
     async with session_factory() as session:
         history = (await session.execute(select(DownloadHistory))).scalar_one()
+        issue = await session.get(Issue, 1)
+        assert issue is not None
         assert history.download_client is DownloadClientType.DIRECT
         assert history.external_id == "direct:1"
         assert history.download_url == "pullbox-direct://attempt/1"
         assert history.title == "Runner Series 001 (2026)"
         assert history.state is DownloadState.QUEUED
+        assert issue.status is IssueStatus.DOWNLOADING
         assert "files.example" not in f"{history.download_url} {history.title}"
 
     executor.release.set()
@@ -444,25 +453,35 @@ async def test_runner_continues_automatically_with_queued_fallback_route(
 async def test_runner_marks_unexpected_worker_failure_instead_of_leaving_download_stuck(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    executor = _UnexpectedFailureExecutor()
     runner = DirectAcquisitionRunner(
         session_factory,
-        executor=_UnexpectedFailureExecutor(),
+        executor=executor,
         source_resolver=lambda *_args, **_kwargs: _source("unused"),  # type: ignore[arg-type]
     )
 
     assert await runner.dispatch(1, 1, initial_source=_source("initial")) is True
+    await asyncio.wait_for(executor.started.wait(), timeout=1)
+    async with session_factory() as session:
+        issue = await session.get(Issue, 1)
+        assert issue is not None
+        assert issue.status is IssueStatus.DOWNLOADING
+
+    executor.release.set()
     with pytest.raises(RuntimeError, match="sensitive internal failure"):
         await runner.wait_idle()
 
     async with session_factory() as session:
         attempt = await session.get(DirectAcquisitionAttempt, 1)
         artifact = await session.get(DirectArtifactAttempt, 1)
-        assert attempt is not None and artifact is not None
+        issue = await session.get(Issue, 1)
+        assert attempt is not None and artifact is not None and issue is not None
         assert attempt.state is DirectAcquisitionState.FAILED
         assert artifact.state is DirectArtifactState.FAILED
         assert attempt.failure_class is DirectArtifactFailureClass.TRANSIENT_SOURCE
         assert attempt.failure_code == "direct_acquisition_worker_failed"
         assert attempt.error_message == "Direct acquisition stopped unexpectedly."
+        assert issue.status is IssueStatus.WANTED
         assert "sensitive" not in repr(attempt.progress_snapshot)
     await runner.aclose()
 
