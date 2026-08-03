@@ -85,3 +85,41 @@ async def test_direct_handoff_fails_when_pipeline_does_not_register_file(
             replace_existing_file=False,
             post_processor=no_op_post_processor,
         )
+
+
+@pytest.mark.asyncio
+async def test_direct_handoff_materializes_library_symlink_before_quarantine_cleanup(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "quarantine" / "artifact-2.cbz"
+    source.parent.mkdir()
+    source.write_bytes(b"direct artifact")
+    library_path = tmp_path / "library" / "Issue 1.cbz"
+    library_path.parent.mkdir()
+    session = AsyncMock()
+    library_file = SimpleNamespace(id=77, file_path=str(library_path))
+    session.execute.return_value = SimpleNamespace(
+        scalar_one_or_none=lambda: library_file,
+    )
+
+    async def symlink_post_processor(
+        _session: Any,
+        download: Any,
+        **_kwargs: Any,
+    ) -> None:
+        library_path.symlink_to(source)
+        download.final_path = str(library_path)
+
+    result = await run_direct_artifact_post_processing(
+        session,
+        acquisition_id=12,
+        issue_id=34,
+        source_path=source,
+        replace_existing_file=False,
+        post_processor=symlink_post_processor,
+    )
+
+    assert result.final_path == library_path
+    assert library_path.is_symlink() is False
+    assert library_path.read_bytes() == b"direct artifact"
+    assert source.exists()

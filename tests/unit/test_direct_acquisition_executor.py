@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from pullbox.models import Base
 from pullbox.models.blocklist import BlocklistEntry
+from pullbox.models.config import SystemConfig
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -1637,6 +1638,42 @@ async def test_post_processing_failure_keeps_valid_artifact_for_intervention(
     ).scalar_one()
     assert pending.status == PendingMatchStatus.PENDING
     assert pending.download_url == f"pullbox-direct://attempt/{attempt.id}"
+    assert pending.match_details["failure_code"] == "direct_post_processing_failed"
+
+
+@pytest.mark.asyncio
+async def test_post_processing_database_failure_rolls_back_before_intervention(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    session.add(SystemConfig(key="direct-review-rollback", value="first", value_type="string"))
+    attempt = _attempt()
+    session.add(attempt)
+    await session.commit()
+    artifact = attempt.artifact_attempts[0]
+
+    async def fail_flush(*_args: Any, **_kwargs: Any) -> DirectPostProcessingResult:
+        session.add(
+            SystemConfig(key="direct-review-rollback", value="duplicate", value_type="string")
+        )
+        await session.flush()
+        raise AssertionError("The duplicate key flush must fail")
+
+    result = await _executor(
+        tmp_path,
+        transport=_SuccessfulTransport(),
+        post_processor=fail_flush,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=_async_source,
+    )
+
+    assert result.state is DirectAcquisitionState.INTERVENTION
+    pending = (
+        await session.execute(select(PendingMatch).where(PendingMatch.issue_id == attempt.issue_id))
+    ).scalar_one()
     assert pending.match_details["failure_code"] == "direct_post_processing_failed"
 
 

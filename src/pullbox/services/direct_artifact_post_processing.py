@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -98,10 +102,16 @@ async def run_direct_artifact_post_processing(
     library_file = result.scalar_one_or_none()
     if library_file is None:
         raise RuntimeError("Direct artifact post-processing did not register a library file.")
+    final_path = Path(library_file.file_path)
+    await asyncio.to_thread(
+        _materialize_library_symlink,
+        final_path,
+        source_path,
+    )
     record.imported_at = datetime.now(UTC)
     return DirectPostProcessingResult(
         library_file_id=library_file.id,
-        final_path=Path(library_file.file_path),
+        final_path=final_path,
     )
 
 
@@ -110,3 +120,29 @@ async def _resolve_direct_source(
     download: _DirectPostProcessingRecord,
 ) -> str:
     return download.downloaded_path
+
+
+def _materialize_library_symlink(final_path: Path, source_path: Path) -> None:
+    """Replace a direct-import symlink before its quarantine target is removed."""
+    if not final_path.is_symlink():
+        return
+    try:
+        target = final_path.resolve(strict=True)
+        source = source_path.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("Direct artifact symlink target is unavailable.") from exc
+    if target != source:
+        return
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=final_path.parent,
+        prefix=f".{final_path.name}.pullbox-direct-",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, final_path)
+    finally:
+        temporary.unlink(missing_ok=True)

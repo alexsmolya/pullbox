@@ -565,6 +565,8 @@ class DirectAcquisitionExecutor:
         final_path: Path,
         progress: _ProgressWriter,
     ) -> DirectExecutionResult:
+        acquisition_id = attempt.id
+        artifact_id = artifact.id
         try:
             processed = await self._post_processor(
                 session,
@@ -575,6 +577,9 @@ class DirectAcquisitionExecutor:
                 allow_resource_safety_exception=_resource_safety_override_allowed(attempt),
             )
         except Exception:
+            await session.rollback()
+            attempt, artifact = await _load_attempt(session, acquisition_id, artifact_id)
+            progress = _ProgressWriter(session, attempt, artifact, now=self._now)
             attempt.failure_class = DirectArtifactFailureClass.POST_PROCESS
             attempt.failure_code = "direct_post_processing_failed"
             attempt.error_message = "Direct artifact post-processing failed."
