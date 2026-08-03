@@ -1,4 +1,4 @@
-"""Archive reader for comic book files (CBZ, CBR, CB7).
+"""Archive reader for comic book files (CBZ, CBR, CB7, CBT).
 
 Provides a unified interface for reading comic book archives regardless
 of underlying format.  Auto-detects the format from the file extension.
@@ -8,9 +8,10 @@ pool executor for CPU-bound work.
 
 from __future__ import annotations
 
+import tarfile
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import structlog
 
@@ -26,7 +27,7 @@ class ArchiveError(Exception):
 
 
 class ArchiveReader:
-    """Unified reader for CBZ, CBR, and CB7 comic archives.
+    """Unified reader for CBZ, CBR, CB7, and CBT comic archives.
 
     Args:
         path: Path to the archive file.
@@ -57,6 +58,8 @@ class ArchiveReader:
                 return self._list_rar()
             if self._extension == ".cb7":
                 return self._list_7z()
+            if self._extension == ".cbt":
+                return self._list_tar()
         except ArchiveError:
             raise
         except Exception as exc:
@@ -77,6 +80,8 @@ class ArchiveReader:
                 return self._read_rar(name)
             if self._extension == ".cb7":
                 return self._read_7z(name)
+            if self._extension == ".cbt":
+                return self._read_tar(name)
         except ArchiveError:
             raise
         except Exception as exc:
@@ -178,16 +183,50 @@ class ArchiveReader:
             raise ArchiveError("py7zr package required for CB7 support") from None
 
         try:
+            _validate_archive_member_name(name)
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_root = Path(temp_dir)
                 with py7zr.SevenZipFile(self._path, "r") as sz:
                     sz.extract(path=temp_root, targets=[name])
-                extracted = temp_root / Path(name)
-                if not extracted.exists():
+                extracted = (temp_root / Path(name)).resolve(strict=False)
+                if not extracted.is_relative_to(temp_root.resolve()) or not extracted.is_file():
                     raise ArchiveError(f"File not found in archive: {name}")
                 return extracted.read_bytes()
         except py7zr.Bad7zFile as exc:
             raise ArchiveError(f"Corrupt CB7 file: {exc}") from exc
+
+    # -- CBT (TAR) ----------------------------------------------------------
+
+    def _list_tar(self) -> list[str]:
+        try:
+            with tarfile.open(self._path, "r:*") as archive:
+                return [member.name for member in archive.getmembers()]
+        except tarfile.TarError as exc:
+            raise ArchiveError(f"Corrupt CBT file: {exc}") from exc
+
+    def _read_tar(self, name: str) -> bytes:
+        _validate_archive_member_name(name)
+        try:
+            with tarfile.open(self._path, "r:*") as archive:
+                member = archive.getmember(name)
+                if not member.isfile():
+                    raise ArchiveError(f"File is not a regular archive member: {name}")
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ArchiveError(f"File not found in archive: {name}")
+                return extracted.read()
+        except KeyError:
+            raise ArchiveError(f"File not found in archive: {name}") from None
+        except tarfile.TarError as exc:
+            raise ArchiveError(f"Corrupt CBT file: {exc}") from exc
+
+
+def _validate_archive_member_name(name: str) -> None:
+    """Reject absolute and traversal archive member names before extraction."""
+    normalized = name.replace("\\", "/")
+    member = PurePosixPath(normalized)
+    if member.is_absolute() or not member.parts or ".." in member.parts:
+        raise ArchiveError("Unsafe archive member path")
 
 
 def inspect_archive_page_count(path: Path) -> int | None:
