@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy import Select, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from pullbox.models import Base
+from pullbox.models.reader import IssueReaderState
 from pullbox.services.reader_state_service import (
     ReaderStateValidationError,
     load_reader_state,
@@ -140,6 +145,66 @@ async def test_load_reader_state_is_private_to_user_and_issue(db_session: AsyncS
     assert own is not None
     assert own.last_page_index == 2
     assert absent is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_initial_progress_writes_create_one_state_row(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'reader-state.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user_id, issue_id = await _seed_user_and_issue(session)
+        await session.commit()
+
+    ready_count = 0
+    both_initial_reads_complete = asyncio.Event()
+
+    class CoordinatedSession:
+        """Hold legacy read-before-insert writes until both observed no row."""
+
+        def __init__(self, session: AsyncSession) -> None:
+            self._session = session
+
+        async def execute(self, statement, *args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal ready_count
+            result = await self._session.execute(statement, *args, **kwargs)
+            if isinstance(statement, Select):
+                ready_count += 1
+                if ready_count == 2:
+                    both_initial_reads_complete.set()
+                await asyncio.wait_for(both_initial_reads_complete.wait(), timeout=1)
+            return result
+
+        def __getattr__(self, name: str):
+            return getattr(self._session, name)
+
+    async def save(page_index: int):  # type: ignore[no-untyped-def]
+        async with session_factory() as session:
+            snapshot = await update_reader_state(
+                CoordinatedSession(session),  # type: ignore[arg-type]
+                user_id=user_id,
+                issue_id=issue_id,
+                revision="revision-a",
+                page_index=page_index,
+                page_count=5,
+                completion_candidate=False,
+                expected_revision="revision-a",
+                expected_page_count=5,
+            )
+            await session.commit()
+            return snapshot
+
+    try:
+        snapshots = await asyncio.gather(save(1), save(2))
+        async with session_factory() as session:
+            rows = list((await session.execute(select(IssueReaderState))).scalars().all())
+    finally:
+        await engine.dispose()
+
+    assert len(snapshots) == 2
+    assert len(rows) == 1
+    assert rows[0].last_page_index in {1, 2}
 
 
 async def _seed_user_and_issue(session: AsyncSession) -> tuple[int, int]:

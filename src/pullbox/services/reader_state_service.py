@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from pullbox.models.reader import IssueReaderState
 
@@ -71,38 +73,51 @@ async def update_reader_state(
         expected_revision=expected_revision,
         expected_page_count=expected_page_count,
     )
-    result = await session.execute(
-        select(IssueReaderState)
-        .where(
-            IssueReaderState.user_id == user_id,
-            IssueReaderState.issue_id == issue_id,
-        )
-        .with_for_update()
-    )
-    state = result.scalar_one_or_none()
-    if state is None:
-        state = IssueReaderState(
-            user_id=user_id,
-            issue_id=issue_id,
-            last_page_index=page_index,
-            content_revision=revision,
-            page_count=page_count,
-        )
-        session.add(state)
-    elif state.content_revision != revision:
-        state.content_revision = revision
-        state.last_page_index = page_index
-        state.page_count = page_count
-        state.completed_at = None
-    else:
-        state.last_page_index = page_index
-        state.page_count = page_count
-
     now = datetime.now(UTC)
-    if completion_candidate and state.completed_at is None:
-        state.completed_at = now
-    state.updated_at = now
-    await session.flush()
+    completed_at = now if completion_candidate else None
+    dialect_name = session.get_bind().dialect.name
+    statement: Any
+    if dialect_name == "sqlite":
+        statement = sqlite_insert(IssueReaderState)
+    elif dialect_name == "postgresql":
+        statement = postgresql_insert(IssueReaderState)
+    else:  # pragma: no cover - Pullbox supports SQLite and PostgreSQL only
+        raise RuntimeError(f"Unsupported reader-state database dialect: {dialect_name}")
+    statement = statement.values(
+        user_id=user_id,
+        issue_id=issue_id,
+        last_page_index=page_index,
+        content_revision=revision,
+        page_count=page_count,
+        completed_at=completed_at,
+        updated_at=now,
+    )
+    excluded = statement.excluded
+    statement = statement.on_conflict_do_update(
+        index_elements=[IssueReaderState.user_id, IssueReaderState.issue_id],
+        set_={
+            "last_page_index": excluded.last_page_index,
+            "content_revision": excluded.content_revision,
+            "page_count": excluded.page_count,
+            "completed_at": case(
+                (
+                    IssueReaderState.content_revision != excluded.content_revision,
+                    excluded.completed_at,
+                ),
+                (
+                    and_(
+                        excluded.completed_at.is_not(None),
+                        IssueReaderState.completed_at.is_(None),
+                    ),
+                    excluded.completed_at,
+                ),
+                else_=IssueReaderState.completed_at,
+            ),
+            "updated_at": excluded.updated_at,
+        },
+    ).returning(IssueReaderState)
+    result = await session.execute(statement)
+    state = result.scalar_one()
     return _snapshot(state)
 
 
