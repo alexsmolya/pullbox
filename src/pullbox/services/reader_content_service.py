@@ -345,6 +345,11 @@ class ReaderContentService:
             return self._source_locks.setdefault(revision, asyncio.Lock())
 
     def _write_cache_file(self, target: Path, data: bytes) -> None:
+        if len(data) > self._max_cache_bytes:
+            raise PageSourceError(
+                PageSourceErrorCode.RESOURCE_LIMIT,
+                "This comic page exceeds the configured reader cache limit.",
+            )
         target.parent.mkdir(parents=True, exist_ok=True)
         temp_path: Path | None = None
         try:

@@ -236,7 +236,7 @@ async def test_expensive_reader_workers_are_globally_bounded(
 
 
 @pytest.mark.asyncio
-async def test_new_cache_page_is_not_evicted_before_it_is_returned(tmp_path: Path) -> None:
+async def test_page_larger_than_cache_budget_is_rejected_without_retention(tmp_path: Path) -> None:
     root = tmp_path / "library"
     root.mkdir()
     source = root / "book.cbz"
@@ -244,9 +244,13 @@ async def test_new_cache_page_is_not_evicted_before_it_is_returned(tmp_path: Pat
     service = ReaderContentService(cache_dir=tmp_path / "cache", max_cache_bytes=1)
     resolved = resolve_reader_source(_record(source, root))
 
-    page = await service.get_page(resolved, page_index=0, revision=resolved.revision)
+    with pytest.raises(PageSourceError) as exc_info:
+        await service.get_page(resolved, page_index=0, revision=resolved.revision)
 
-    assert page.path.is_file()
+    diagnostics = await service.get_diagnostics()
+    assert exc_info.value.code is PageSourceErrorCode.RESOURCE_LIMIT
+    assert diagnostics.cache_file_count == 0
+    assert diagnostics.cache_bytes == 0
 
 
 @pytest.mark.asyncio
