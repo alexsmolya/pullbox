@@ -113,7 +113,10 @@ async def recompute_file_counters(
         series_item.files_imported = counts.get(ImportedFileStatus.IMPORTED, 0)
         series_item.files_failed = counts.get(ImportedFileStatus.FAILED, 0)
 
-        safety_blocked = counts.get(ImportedFileStatus.SAFETY_BLOCKED, 0)
+        safety_blocked = counts.get(ImportedFileStatus.SAFETY_BLOCKED, 0) + counts.get(
+            ImportedFileStatus.SAFETY_APPROVED,
+            0,
+        )
         diagnostics = dict(series_item.diagnostics or {})
         if safety_blocked:
             diagnostics["safety_blocked_files"] = safety_blocked
@@ -156,7 +159,10 @@ async def recompute_file_counters(
     job.total_files_no_match = job_status_counts.get(ImportedFileStatus.NO_MATCH, 0)
     job.total_files_imported = job_status_counts.get(ImportedFileStatus.IMPORTED, 0)
     job.total_files_failed = job_status_counts.get(ImportedFileStatus.FAILED, 0)
-    total_files_safety_blocked = job_status_counts.get(ImportedFileStatus.SAFETY_BLOCKED, 0)
+    total_files_safety_blocked = job_status_counts.get(
+        ImportedFileStatus.SAFETY_BLOCKED,
+        0,
+    ) + job_status_counts.get(ImportedFileStatus.SAFETY_APPROVED, 0)
     job.total_files_found = (
         job.total_files_matched
         + job.total_files_duplicate

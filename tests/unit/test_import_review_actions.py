@@ -623,7 +623,7 @@ async def test_import_service_review_action_shims_remain_available(
     assert matched.selected_for_import is False
 
 
-async def test_allow_safety_blocked_file_once_returns_file_to_pending_without_selecting(
+async def test_allow_safety_blocked_file_once_keeps_file_in_safety_review_until_rematched(
     db_session: AsyncSession,
 ) -> None:
     job = await _create_job_row(db_session)
@@ -656,7 +656,7 @@ async def test_allow_safety_blocked_file_once_returns_file_to_pending_without_se
         recompute_series_counters=recompute_series,
     )
 
-    assert updated_file.status == ImportedFileStatus.PENDING
+    assert updated_file.status == ImportedFileStatus.SAFETY_APPROVED
     assert updated_file.include_in_import is False
     assert updated_file.error_message is None
     assert imported.selected_for_import is False

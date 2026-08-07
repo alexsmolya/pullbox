@@ -231,7 +231,9 @@ async def run_import_file_matching(
         files_result = await session.execute(
             sa_select(ImportedFile).where(
                 ImportedFile.import_series_id == imp_series.id,
-                ImportedFile.status == ImportedFileStatus.PENDING,
+                ImportedFile.status.in_(
+                    [ImportedFileStatus.PENDING, ImportedFileStatus.SAFETY_APPROVED]
+                ),
             )
         )
         files = list(files_result.scalars().all())
