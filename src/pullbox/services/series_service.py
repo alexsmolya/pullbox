@@ -23,6 +23,7 @@ from pullbox.models.series import (
     Series,
     SeriesStatus,
     SeriesStatusOverride,
+    SeriesType,
 )
 from pullbox.providers.base import IssueSummary, SeriesMetadata
 from pullbox.services.cover_cache_service import purge_series_cover_cache
@@ -50,6 +51,25 @@ if TYPE_CHECKING:
     from pullbox.services.metadata_service import MetadataService
 
 logger = structlog.get_logger(__name__)
+
+
+def _targeted_import_folder_type_hint(
+    series: Series,
+    issue_summaries: list[IssueSummary],
+) -> SeriesType | None:
+    """Return source-only folder naming evidence for a standalone one-shot.
+
+    ComicVine can model a one-shot as issue #1 of an otherwise standard volume.
+    Keep that catalog classification intact, but retain an explicit source hint
+    in the initial folder name when the selected volume contains only that item.
+    """
+    if series.series_type != SeriesType.STANDARD or series.issue_count != 1:
+        return None
+    if len(issue_summaries) != 1:
+        return None
+    return (
+        SeriesType.ONE_SHOT if issue_summaries[0].issue_type.strip().lower() == "one_shot" else None
+    )
 
 
 async def _cancel_download_on_client(download: DownloadHistory, session: AsyncSession) -> None:
@@ -185,7 +205,13 @@ class SeriesService:
         series.metadata_source = "comicvine_partial"
 
         if library_root_id is not None and not series.path:
-            await self._create_series_folder(session, series, library_root_id, cv_id)
+            await self._create_series_folder(
+                session,
+                series,
+                library_root_id,
+                cv_id,
+                folder_series_type=_targeted_import_folder_type_hint(series, issue_summaries),
+            )
 
         if issue_summaries:
             await self._metadata.upsert_issue_summaries(session, series, issue_summaries)
@@ -328,6 +354,8 @@ class SeriesService:
         series: Series,
         library_root_id: int,
         comicvine_id: int,
+        *,
+        folder_series_type: SeriesType | None = None,
     ) -> None:
         """Create a series folder on disk inside the given library root.
 
@@ -359,7 +387,9 @@ class SeriesService:
             year=series.year_start,
             publisher=publisher_name,
             comicvine_id=comicvine_id,
-            series_type=series.series_type.value if series.series_type else None,
+            series_type=(folder_series_type or series.series_type).value
+            if (folder_series_type or series.series_type)
+            else None,
             template=template,
             replace_illegal=replace_illegal,
             colon_replacement=colon_replacement,

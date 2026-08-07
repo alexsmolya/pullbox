@@ -217,6 +217,51 @@ async def test_targeted_import_uses_cached_metadata_for_type_aware_folder_name(
 
 
 @pytest.mark.asyncio
+async def test_targeted_import_uses_explicit_single_one_shot_as_folder_hint(
+    db_session: AsyncSession,
+    tmp_path,
+) -> None:
+    """A source one-shot hint names a one-issue folder without reclassifying its series."""
+    root = LibraryRoot(name="Comics", path=str(tmp_path), enabled=True)
+    db_session.add(root)
+    await db_session.flush()
+    await _seed_folder_naming_config(db_session, "{Series} ({Year}) [{Type}]")
+
+    metadata = MagicMock()
+    metadata.upsert_series_metadata = AsyncMock(side_effect=_fake_upsert_series)
+    metadata.upsert_issue_summaries = AsyncMock(side_effect=_fake_upsert_issue_summaries)
+    service = SeriesService(metadata_service=metadata, event_bus=EventBus())
+    import_series = ImportedSeries(
+        raw_series_name="Black Mass Rising",
+        cv_id=144914,
+        cv_title="Black Mass Rising",
+        cv_year=2022,
+        cv_publisher="TKO Studios",
+        cv_issue_count=1,
+        cv_url="https://comicvine.gamespot.com/black-mass-rising/4050-144914/",
+    )
+
+    series = await service.add_from_import_review_targeted(
+        db_session,
+        import_series=import_series,
+        library_root_id=root.id,
+        issue_summaries=[
+            IssueSummary(
+                provider_id="945536",
+                issue_number=1.0,
+                title=None,
+                release_date=None,
+                cover_url=None,
+                issue_type="one_shot",
+            )
+        ],
+    )
+
+    assert series.series_type == SeriesType.STANDARD
+    assert series.path == str(tmp_path / "Black Mass Rising (2022) [One-Shot]")
+
+
+@pytest.mark.asyncio
 async def test_hydrate_series_catalog_marks_complete_and_emits_series_added(
     db_session: AsyncSession,
 ) -> None:
