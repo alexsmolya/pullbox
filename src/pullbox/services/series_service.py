@@ -168,6 +168,14 @@ class SeriesService:
             issue_count=getattr(import_series, "cv_issue_count", None),
             comicvine_url=getattr(import_series, "cv_url", None),
         )
+        # Step 2 may already have fetched the complete series record. Reuse it
+        # before folder creation so type-aware naming has the same metadata as
+        # the later hydration pass, without adding a cold ComicVine request.
+        cached_lookup = getattr(type(self._metadata), "get_cached_series_metadata", None)
+        if cached_lookup is not None:
+            cached_meta = await cached_lookup(self._metadata, cv_id)
+            if cached_meta is not None:
+                series_meta = cached_meta
         series = await self._metadata.upsert_series_metadata(session, cv_id, series_meta)
         series.monitored = search_on_add
         series.issue_catalog_state = IssueCatalogState.HYDRATING
