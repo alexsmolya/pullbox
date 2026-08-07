@@ -15877,6 +15877,18 @@ function seriesDetailPage(config) {
       return window.location.pathname + window.location.search;
     },
 
+    refreshIssuesPanel: function () {
+      var issuesPanel = document.getElementById("series-issues-panel");
+      if (!issuesPanel || typeof htmx === "undefined") {
+        return;
+      }
+
+      htmx.ajax("GET", issuesPanel.getAttribute("hx-get"), {
+        target: "#series-issues-panel",
+        swap: "morph:outerHTML",
+      });
+    },
+
     normalizeIssuesPanelAfterRestore: function () {
       if (!cfg.seriesId) {
         return;
@@ -16054,9 +16066,8 @@ function seriesDetailPage(config) {
             enabled ? "Monitoring enabled" : "Monitoring disabled",
             enabled ? "success" : "info"
           );
-          setTimeout(function () {
-            window.location.assign(self.currentDetailUrl());
-          }, 900);
+          self.refreshIssuesPanel();
+          self.saving = false;
         })
         .catch(function () {
           self.dispatchToast("Failed to update monitoring", "error");

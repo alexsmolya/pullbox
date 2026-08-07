@@ -94,6 +94,32 @@ class TestSeriesDetailPage:
         assert series.monitor_label.text_content() == "Monitored"
         assert not series.monitor_toggle.is_checked()
 
+    def test_monitoring_toggle_updates_in_place_without_reloading_the_detail_page(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series = SeriesDetailPage(authed_page, seeded_server)
+        series.goto(2)
+        authed_page.evaluate(
+            """() => {
+                document.querySelector("[data-testid='series-detail-page']")
+                    ?.setAttribute("data-monitor-toggle-shell", "preserved");
+            }"""
+        )
+
+        with authed_page.expect_response(
+            lambda response: "/htmx/series/2/issues" in response.url and response.ok,
+            timeout=5000,
+        ):
+            series.monitor_toggle.locator("xpath=..").click()
+
+        assert authed_page.url.endswith("/series/2")
+        assert series.page_shell.get_attribute("data-monitor-toggle-shell") == "preserved"
+        assert series.monitor_toggle.is_checked()
+        status_row = authed_page.locator("[data-testid='series-detail-status-row']")
+        assert "Monitored" in (status_row.text_content() or "")
+
     def test_status_row_uses_real_pill_contracts(
         self,
         authed_page,
