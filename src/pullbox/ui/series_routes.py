@@ -1,6 +1,7 @@
 """Series list and add-series UI routes."""
 
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, timedelta
 from typing import Any
@@ -195,31 +196,46 @@ async def series_list(
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = min(page, total_pages)
 
-    issue_counts = (
-        select(
-            Issue.series_id.label("series_id"),
-            func.count(Issue.id).label("total_issues"),
-            func.coalesce(
-                func.sum(case((Issue.status == IssueStatus.OWNED, 1), else_=0)),
-                0,
-            ).label("owned_count"),
-            func.coalesce(
-                func.sum(case((Issue.status == IssueStatus.WANTED, 1), else_=0)),
-                0,
-            ).label("wanted_count"),
-            func.max(Issue.release_date).label("latest_release_date"),
-        )
-        .group_by(Issue.series_id)
-        .subquery()
-    )
-
     status_sort = _lower_enum_sort(Series.status)
     series_type_sort = _lower_enum_sort(Series.series_type)
+    requires_issue_aggregate_sort = sort_field in {"issues", "acquisition"}
+
+    issue_counts = None
+    if requires_issue_aggregate_sort:
+        issue_counts = (
+            select(
+                Issue.series_id.label("series_id"),
+                func.count(Issue.id).label("total_issues"),
+                func.coalesce(
+                    func.sum(case((Issue.status == IssueStatus.OWNED, 1), else_=0)),
+                    0,
+                ).label("owned_count"),
+                func.coalesce(
+                    func.sum(case((Issue.status == IssueStatus.WANTED, 1), else_=0)),
+                    0,
+                ).label("wanted_count"),
+                func.max(Issue.release_date).label("latest_release_date"),
+            )
+            .where(Issue.series_id.in_(select(filtered_series_ids_subquery.c.id)))
+            .group_by(Issue.series_id)
+            .subquery()
+        )
+
+    zero_issue_count = cast(0, Float)
+    aggregate_total = (
+        func.coalesce(issue_counts.c.total_issues, 0)
+        if issue_counts is not None
+        else zero_issue_count
+    )
+    aggregate_owned = (
+        func.coalesce(issue_counts.c.owned_count, 0)
+        if issue_counts is not None
+        else zero_issue_count
+    )
     acquisition_sort = case(
         (
-            func.coalesce(issue_counts.c.total_issues, 0) > 0,
-            cast(func.coalesce(issue_counts.c.owned_count, 0), Float)
-            / cast(issue_counts.c.total_issues, Float),
+            aggregate_total > 0,
+            cast(aggregate_owned, Float) / cast(aggregate_total, Float),
         ),
         else_=0.0,
     )
@@ -229,7 +245,7 @@ async def series_list(
         "date_added": Series.created_at,
         "publisher": func.lower(Publisher.name),
         "status": status_sort,
-        "issues": func.coalesce(issue_counts.c.owned_count, 0),
+        "issues": aggregate_owned,
         "acquisition": acquisition_sort,
         "series_type": series_type_sort,
     }
@@ -255,26 +271,49 @@ async def series_list(
         )
     order_clauses.append(Series.id.asc())
 
-    query = (
-        select(
-            Series,
-            func.coalesce(issue_counts.c.total_issues, 0).label("total_issues"),
-            func.coalesce(issue_counts.c.owned_count, 0).label("owned_count"),
-            func.coalesce(issue_counts.c.wanted_count, 0).label("wanted_count"),
-            issue_counts.c.latest_release_date,
-        )
-        .outerjoin(Series.publisher)
-        .outerjoin(issue_counts, issue_counts.c.series_id == Series.id)
-        .options(contains_eager(Series.publisher))
-        .order_by(*order_clauses)
-    )
+    route_query_start = time.monotonic()
+    query = select(Series).outerjoin(Series.publisher).options(contains_eager(Series.publisher))
+    if issue_counts is not None:
+        query = query.outerjoin(issue_counts, issue_counts.c.series_id == Series.id)
+    query = query.order_by(*order_clauses)
     offset = (page - 1) * per_page
     query = query.limit(per_page).offset(offset)
     if filters:
         query = query.where(*filters)
 
     result = await session.execute(query)
-    series_rows = result.unique().all()
+    visible_series = list(result.unique().scalars().all())
+    visible_series_ids = [series.id for series in visible_series]
+
+    visible_issue_counts: dict[int, tuple[int, int, int, date | None]] = {}
+    if visible_series_ids:
+        visible_counts_result = await session.execute(
+            select(
+                Issue.series_id,
+                func.count(Issue.id),
+                func.coalesce(
+                    func.sum(case((Issue.status == IssueStatus.OWNED, 1), else_=0)),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(case((Issue.status == IssueStatus.WANTED, 1), else_=0)),
+                    0,
+                ),
+                func.max(Issue.release_date),
+            )
+            .where(Issue.series_id.in_(visible_series_ids))
+            .group_by(Issue.series_id)
+        )
+        visible_issue_counts = {
+            int(series_id): (int(total), int(owned), int(wanted), latest_release_date)
+            for series_id, total, owned, wanted, latest_release_date in visible_counts_result.all()
+        }
+
+    series_rows = [
+        (series, *visible_issue_counts.get(series.id, (0, 0, 0, None))) for series in visible_series
+    ]
+
+    request.state.series_list_query_ms = round((time.monotonic() - route_query_start) * 1000, 2)
     catalog_sync_refresh_active = any(
         s.issue_catalog_state == IssueCatalogState.HYDRATING
         for s, _total_issues, _owned, _wanted, _latest_release_date in series_rows
@@ -429,10 +468,17 @@ async def series_list(
         },
     )
 
+    render_start = time.monotonic()
     if request.headers.get("HX-Request"):
-        return _templates().TemplateResponse(request, "partials/series_results_bundle.html", ctx)
-
-    return _templates().TemplateResponse(request, "pages/series_list.html", ctx)
+        response = _templates().TemplateResponse(
+            request,
+            "partials/series_results_bundle.html",
+            ctx,
+        )
+    else:
+        response = _templates().TemplateResponse(request, "pages/series_list.html", ctx)
+    request.state.series_list_render_ms = round((time.monotonic() - render_start) * 1000, 2)
+    return response
 
 
 @router.get("/series/selection-ids", include_in_schema=False)

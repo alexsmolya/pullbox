@@ -1,5 +1,6 @@
 """FastAPI dependency injection — database sessions, auth, and settings."""
 
+import time
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
@@ -52,9 +53,14 @@ logger = structlog.get_logger(__name__)
 
 
 def _should_prime_sidebar_context(request: Request) -> bool:
-    """Return True when this request should preload sidebar badge state."""
+    """Return True when this request will render sidebar badge state."""
     path = request.url.path
     if request.method != "GET":
+        return False
+    # Boosted navigation receives a full document only so the browser can swap
+    # its content region; the existing sidebar remains mounted and polls its
+    # own badge fragments. Avoid rebuilding sidebar data that will be discarded.
+    if request.headers.get("HX-Boosted", "").lower() == "true":
         return False
     return not (path.startswith("/api/") or path.startswith("/htmx/") or path == "/health/badge")
 
@@ -116,7 +122,9 @@ async def _prime_sidebar_context(request: Request, session: AsyncSession) -> Non
         return
     if getattr(request.state, "sidebar_context", None) is not None:
         return
+    start = time.monotonic()
     request.state.sidebar_context = await _build_sidebar_context(session)
+    request.state.sidebar_context_ms = round((time.monotonic() - start) * 1000, 2)
 
 
 async def get_db_dep() -> AsyncGenerator[AsyncSession, None]:
@@ -157,6 +165,7 @@ async def get_current_user(
 
     Returns None if no valid credentials are provided.
     """
+    auth_start = time.monotonic()
     auth_config = await load_system_config_values(
         session,
         (
@@ -166,6 +175,7 @@ async def get_current_user(
             "session_lifetime_hours",
         ),
     )
+    request.state.auth_config_ms = round((time.monotonic() - auth_start) * 1000, 2)
     session_lifetime_seconds = get_int_setting(auth_config, "session_lifetime_hours", 24) * 3600
 
     # Try session cookie first

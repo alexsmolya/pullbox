@@ -252,6 +252,36 @@ class TestRequestLoggingSlow:
         assert call_args[0][0] == "http_request_slow"
 
     @pytest.mark.asyncio
+    async def test_request_logging_includes_navigation_timing_breakdown(self) -> None:
+        """Slow navigation logs should identify auth, sidebar, and route costs."""
+        import time
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/series",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+        middleware = RequestLoggingMiddleware(app=MagicMock())
+
+        async def slow_call_next(req: Request) -> Response:
+            req.state.auth_config_ms = 2.5
+            req.state.sidebar_context_ms = 4.0
+            req.state.series_list_query_ms = 211.25
+            time.sleep(0.25)
+            return Response(status_code=200)
+
+        with patch("pullbox.api.middleware.logger") as mock_logger:
+            await middleware.dispatch(request, slow_call_next)
+
+        log_kwargs = mock_logger.warning.call_args.kwargs
+        assert log_kwargs["auth_config_ms"] == 2.5
+        assert log_kwargs["sidebar_context_ms"] == 4.0
+        assert log_kwargs["series_list_query_ms"] == 211.25
+
+    @pytest.mark.asyncio
     async def test_fast_server_error_logs_error(self) -> None:
         """Fast 5xx responses should log as errors, not info."""
         scope = {

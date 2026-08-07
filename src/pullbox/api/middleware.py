@@ -163,6 +163,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "duration_ms": round(duration_ms, 2),
                 "request_id": request_id,
             }
+            for timing_key in (
+                "auth_config_ms",
+                "sidebar_context_ms",
+                "series_list_query_ms",
+                "series_list_render_ms",
+            ):
+                timing_value = getattr(request.state, timing_key, None)
+                if isinstance(timing_value, int | float):
+                    log_kwargs[timing_key] = timing_value
             if response.status_code >= 500:
                 logger.error("http_request_failed", outcome="server_error", **log_kwargs)
             elif duration_ms > _SLOW_REQUEST_THRESHOLD_MS:
