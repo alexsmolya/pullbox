@@ -13,7 +13,7 @@
     <div class="health-detail-card__header">
       <div class="health-detail-card__title-row">
         <span class="health-led health-led--{{ health_component.led_tone }} health-led--header"></span>
-        <h2 class="health-detail-card__title">DOWNLOAD CLIENTS DETAIL</h2>
+        <h2 class="health-detail-card__title">ACQUISITION CLIENTS DETAIL</h2>
         <span class="pill {{ health_component.pill_tone }}">{{ health_component.status_label }}</span>
       </div>
 
@@ -43,13 +43,13 @@
       {% endfor %}
     </div>
 
-    <p class="health-section__label">Client Registry ({{ health_client_rows | length }})</p>
+    <p class="health-section__label">Acquisition Registry ({{ health_client_rows | length }})</p>
     <div class="downloads-table-wrap health-history-wrap">
       <table class="downloads-table health-history-table" data-testid="health-download-clients-table">
         <thead>
           <tr>
             <th class="is-center">SYS</th>
-            <th>Client</th>
+            <th>Client / Source</th>
             <th>Type</th>
             <th class="is-right">Response</th>
             <th>Last Check</th>
@@ -95,8 +95,8 @@
                   <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
                   </svg>
-                  <p class="downloads-empty-title">No clients configured</p>
-                  <p class="downloads-empty-copy">Configure a download client in Settings to start recording client health.</p>
+                  <p class="downloads-empty-title">No acquisition routes configured</p>
+                  <p class="downloads-empty-copy">Configure a download client or direct-download provider in Settings to start recording health.</p>
                 </div>
               </td>
             </tr>

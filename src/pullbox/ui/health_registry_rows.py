@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import DirectHostConfig, DirectProviderConfig
 from pullbox.models.indexer import IndexerConfig
 from pullbox.ui.health_data import (
     _load_latest_health_subject_summary_rows,
@@ -110,6 +111,28 @@ async def build_download_client_registry_rows(
         .scalars()
         .all()
     )
+    direct_providers = (
+        (
+            await session.execute(
+                select(DirectProviderConfig)
+                .where(DirectProviderConfig.enabled.is_(True))
+                .order_by(DirectProviderConfig.priority, DirectProviderConfig.display_name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    artifact_hosts = (
+        (
+            await session.execute(
+                select(DirectHostConfig)
+                .where(DirectHostConfig.enabled.is_(True))
+                .order_by(DirectHostConfig.preference, DirectHostConfig.host_kind)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     rows: list[HealthSubjectSummaryView] = []
     for config in configs:
@@ -139,6 +162,53 @@ async def build_download_client_registry_rows(
                 pill_tone=_health_pill_tone(status),
                 led_tone=_health_led_tone(status),
                 href=f"/health/download_clients/{subject_key}",
+            )
+        )
+
+    for config in direct_providers:
+        subject_key = f"direct-provider:{config.id}"
+        latest_row = latest_rows.get(subject_key)
+        protocol, host, port = download_client_endpoint_summary(config.endpoint)
+        status = latest_row.status.value if latest_row is not None else "unknown"
+        rows.append(
+            HealthSubjectSummaryView(
+                key=subject_key,
+                display_name=config.display_name,
+                kind_label="Direct Provider",
+                detail_label=f"{protocol} · {host}:{port}",
+                response_label="—",
+                last_check_label=(
+                    relative_time_label(latest_row.checked_at, current_time)
+                    if latest_row is not None
+                    else "—"
+                ),
+                status_label=status.capitalize(),
+                pill_tone=_health_pill_tone(status),
+                led_tone=_health_led_tone(status),
+                href="/settings?tab=direct",
+            )
+        )
+
+    for config in artifact_hosts:
+        subject_key = f"artifact-host:{config.host_kind.value}"
+        latest_row = latest_rows.get(subject_key)
+        status = latest_row.status.value if latest_row is not None else "unknown"
+        rows.append(
+            HealthSubjectSummaryView(
+                key=subject_key,
+                display_name=config.host_kind.value.replace("_", " ").title(),
+                kind_label="Artifact Host",
+                detail_label=f"Preference {config.preference}",
+                response_label="—",
+                last_check_label=(
+                    relative_time_label(latest_row.checked_at, current_time)
+                    if latest_row is not None
+                    else "—"
+                ),
+                status_label=status.capitalize(),
+                pill_tone=_health_pill_tone(status),
+                led_tone=_health_led_tone(status),
+                href="/settings?tab=direct",
             )
         )
     return tuple(rows)

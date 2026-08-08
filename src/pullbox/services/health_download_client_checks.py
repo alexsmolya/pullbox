@@ -42,16 +42,20 @@ async def check_download_clients(
         select(DownloadClientConfig).where(DownloadClientConfig.enabled.is_(True))
     )
     client_configs = list(result.scalars().all())
+    direct_outcomes = await _check_direct_download_subjects(session)
     bootstrap_checks = list(bootstrap_errors.get("download_clients", []))
 
-    if not client_configs:
+    if not client_configs and not direct_outcomes:
         return [
             CheckOutcome(
                 component="download_clients",
                 check_name="connectivity",
                 status=HealthStatus.UNKNOWN,
                 message="Not configured",
-                actionable_guidance=("Configure a download client in Settings > Download Clients."),
+                actionable_guidance=(
+                    "Configure a download client in Settings > Download Clients or a direct "
+                    "provider in Settings > Direct Downloads."
+                ),
             )
         ]
 
@@ -92,22 +96,46 @@ async def check_download_clients(
         else:
             flagged_names.append(config.name)
 
+    subject_outcomes.extend(direct_outcomes)
+    for outcome in direct_outcomes:
+        summary_checks.append(_serialize_download_client_summary(outcome))
+        total_ms += outcome.response_time_ms
+        if outcome.status == HealthStatus.HEALTHY:
+            healthy_count += 1
+        elif outcome.status != HealthStatus.UNKNOWN:
+            flagged_names.append(outcome.subject_label or "Direct acquisition")
+
     total = len(subject_outcomes)
 
     if flagged_names and healthy_count == 0:
         component_status = HealthStatus.UNHEALTHY
-        message = "All clients unreachable or misconfigured"
-        guidance = (
-            "Verify host, port, and credentials for each download client in "
-            "Settings > Download Clients."
+        message = (
+            "All acquisition routes need attention"
+            if direct_outcomes
+            else "All clients unreachable or misconfigured"
         )
+        guidance = "Review download-client and direct-download configuration in Settings."
     elif flagged_names:
         component_status = HealthStatus.DEGRADED
-        message = f"{len(flagged_names)} of {total} client(s) need attention"
-        guidance = f"Review {', '.join(flagged_names)} in Settings > Download Clients."
+        message = (
+            f"{len(flagged_names)} of {total} acquisition route(s) need attention"
+            if direct_outcomes
+            else f"{len(flagged_names)} of {total} client(s) need attention"
+        )
+        guidance = (
+            f"Review {', '.join(flagged_names)} in Settings > Direct Downloads."
+            if direct_outcomes
+            else f"Review {', '.join(flagged_names)} in Settings > Download Clients."
+        )
+    elif healthy_count == 0:
+        component_status = HealthStatus.UNKNOWN
+        message = "No acquisition route has completed a health check"
+        guidance = (
+            "Test direct download providers and artifact hosts in Settings > Direct Downloads."
+        )
     else:
         component_status = HealthStatus.HEALTHY
-        message = "All clients reachable"
+        message = "All acquisition routes available" if direct_outcomes else "All clients reachable"
         guidance = ""
 
     return [
@@ -122,6 +150,152 @@ async def check_download_clients(
         ),
         *subject_outcomes,
     ]
+
+
+async def _check_direct_download_subjects(session: AsyncSession) -> list[CheckOutcome]:
+    """Project persisted direct-provider and artifact-host health into this component.
+
+    Direct providers and artifact hosts already record bounded protocol and
+    reachability checks in their own settings workflows. Reusing those results
+    keeps scheduled health non-destructive: it never resolves or downloads an
+    artifact just to prove a source is available.
+    """
+    from pullbox.models.direct_acquisition import DirectHostConfig, DirectProviderConfig
+
+    providers = list(
+        (
+            await session.execute(
+                select(DirectProviderConfig)
+                .where(DirectProviderConfig.enabled.is_(True))
+                .order_by(DirectProviderConfig.priority, DirectProviderConfig.display_name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    hosts = list(
+        (
+            await session.execute(
+                select(DirectHostConfig)
+                .where(DirectHostConfig.enabled.is_(True))
+                .order_by(DirectHostConfig.preference, DirectHostConfig.host_kind)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        *(_direct_provider_outcome(provider) for provider in providers),
+        *(_direct_artifact_host_outcome(host) for host in hosts),
+    ]
+
+
+def _direct_provider_outcome(config: Any) -> CheckOutcome:
+    """Build a health subject from a provider's last authenticated protocol test."""
+    from pullbox.models.direct_acquisition import DirectProviderState
+
+    status = {
+        DirectProviderState.HEALTHY: HealthStatus.HEALTHY,
+        DirectProviderState.DEGRADED: HealthStatus.DEGRADED,
+        DirectProviderState.RATE_LIMITED: HealthStatus.DEGRADED,
+        DirectProviderState.AUTHENTICATION_REQUIRED: HealthStatus.UNHEALTHY,
+        DirectProviderState.INCOMPATIBLE: HealthStatus.UNHEALTHY,
+        DirectProviderState.UNAVAILABLE: HealthStatus.UNHEALTHY,
+        DirectProviderState.DISABLED: HealthStatus.UNKNOWN,
+    }.get(config.state, HealthStatus.UNKNOWN)
+    endpoint = _download_client_endpoint_details(config.endpoint)
+    message = {
+        HealthStatus.HEALTHY: "Provider protocol is available",
+        HealthStatus.DEGRADED: "Provider is available with limits",
+        HealthStatus.UNHEALTHY: "Provider needs attention",
+        HealthStatus.UNKNOWN: "Provider has not completed a health check",
+    }[status]
+    sub_check = SubCheckOutcome(
+        check_name="provider_protocol",
+        name="Provider protocol",
+        status=status,
+        message=message,
+        subject_key=f"direct-provider:{config.id}",
+        subject_label=config.display_name,
+    )
+    return CheckOutcome(
+        component="download_clients",
+        check_name="direct_provider_summary",
+        status=status,
+        message=message,
+        subject_key=f"direct-provider:{config.id}",
+        subject_label=config.display_name,
+        details={
+            "checks": [_serialize_sub_check(sub_check)],
+            "client_type": "direct_provider",
+            "provider_id": config.provider_id,
+            "url": config.endpoint,
+            "protocol": endpoint["protocol"],
+            "host": endpoint["host"],
+            "port": endpoint["port"],
+            "provider_state": config.state.value,
+            "last_error_code": config.last_error_code,
+        },
+        actionable_guidance=(
+            "Test or reconfigure this provider in Settings > Direct Downloads."
+            if status != HealthStatus.HEALTHY
+            else ""
+        ),
+        sub_checks=(sub_check,),
+    )
+
+
+def _direct_artifact_host_outcome(config: Any) -> CheckOutcome:
+    """Build a health subject from an artifact host's persisted reachability."""
+    from pullbox.models.direct_acquisition import DirectHostReachabilityState
+
+    status = {
+        DirectHostReachabilityState.REACHABLE: HealthStatus.HEALTHY,
+        DirectHostReachabilityState.AUTHENTICATION_REQUIRED: HealthStatus.DEGRADED,
+        DirectHostReachabilityState.QUOTA_LIMITED: HealthStatus.DEGRADED,
+        DirectHostReachabilityState.NOT_REACHABLE: HealthStatus.UNHEALTHY,
+        DirectHostReachabilityState.UNAVAILABLE: HealthStatus.UNHEALTHY,
+        DirectHostReachabilityState.NOT_CHECKED: HealthStatus.UNKNOWN,
+    }.get(config.reachability_state, HealthStatus.UNKNOWN)
+    host_name = config.host_kind.value.replace("_", " ").title()
+    message = {
+        HealthStatus.HEALTHY: "Artifact host reachable",
+        HealthStatus.DEGRADED: "Artifact host needs account attention",
+        HealthStatus.UNHEALTHY: "Artifact host unavailable",
+        HealthStatus.UNKNOWN: "Artifact host has not been checked",
+    }[status]
+    subject_key = f"artifact-host:{config.host_kind.value}"
+    sub_check = SubCheckOutcome(
+        check_name="artifact_host_reachability",
+        name="Artifact host reachability",
+        status=status,
+        message=message,
+        subject_key=subject_key,
+        subject_label=host_name,
+    )
+    return CheckOutcome(
+        component="download_clients",
+        check_name="artifact_host_summary",
+        status=status,
+        message=message,
+        subject_key=subject_key,
+        subject_label=host_name,
+        details={
+            "checks": [_serialize_sub_check(sub_check)],
+            "client_type": "artifact_host",
+            "host_kind": config.host_kind.value,
+            "preference": config.preference,
+            "reachability_state": config.reachability_state.value,
+            "account_state": config.account_state.value,
+            "last_error_code": config.last_error_code,
+        },
+        actionable_guidance=(
+            "Test or reconfigure this artifact host in Settings > Direct Downloads."
+            if status != HealthStatus.HEALTHY
+            else ""
+        ),
+        sub_checks=(sub_check,),
+    )
 
 
 async def check_download_client_subject(

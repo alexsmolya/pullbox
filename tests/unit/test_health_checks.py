@@ -19,6 +19,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.direct_acquisition import (
+    DirectArtifactHostKind,
+    DirectHostConfig,
+    DirectHostReachabilityState,
+    DirectProviderConfig,
+    DirectProviderState,
+)
 from pullbox.models.health import HealthStatus
 from pullbox.models.library import LibraryRoot
 from pullbox.providers.base import ProviderHealthResult, ProviderRegistry
@@ -906,6 +913,83 @@ class TestDownloadClientsCheck:
         assert len(outcomes) == 1
         assert outcomes[0].status == HealthStatus.UNKNOWN
         assert outcomes[0].message == "Not configured"
+
+    @pytest.mark.asyncio
+    async def test_direct_provider_and_reachable_artifact_host_are_healthy(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        db_session.add_all(
+            [
+                DirectProviderConfig(
+                    provider_id="pullbox.getcomics",
+                    display_name="GetComics",
+                    endpoint="http://getcomics:8780",
+                    enabled=True,
+                    state=DirectProviderState.HEALTHY,
+                ),
+                DirectHostConfig(
+                    host_kind=DirectArtifactHostKind.PIXELDRAIN,
+                    enabled=True,
+                    reachability_state=DirectHostReachabilityState.REACHABLE,
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        outcomes = await _make_service(settings, registry=ProviderRegistry()).run_check(
+            db_session,
+            "download_clients",
+        )
+
+        assert outcomes[0].status is HealthStatus.HEALTHY
+        assert outcomes[0].message == "All acquisition routes available"
+        assert {outcome.subject_key for outcome in outcomes[1:]} == {
+            "direct-provider:1",
+            "artifact-host:pixeldrain",
+        }
+        assert {outcome.subject_label for outcome in outcomes[1:]} == {
+            "GetComics",
+            "Pixeldrain",
+        }
+
+    @pytest.mark.asyncio
+    async def test_unreachable_artifact_host_degrades_direct_acquisition_health(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        db_session.add_all(
+            [
+                DirectProviderConfig(
+                    provider_id="pullbox.getcomics",
+                    display_name="GetComics",
+                    endpoint="http://getcomics:8780",
+                    enabled=True,
+                    state=DirectProviderState.HEALTHY,
+                ),
+                DirectHostConfig(
+                    host_kind=DirectArtifactHostKind.MEDIAFIRE,
+                    enabled=True,
+                    reachability_state=DirectHostReachabilityState.NOT_REACHABLE,
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        outcomes = await _make_service(settings, registry=ProviderRegistry()).run_check(
+            db_session,
+            "download_clients",
+        )
+
+        assert outcomes[0].status is HealthStatus.DEGRADED
+        assert outcomes[0].message == "1 of 2 acquisition route(s) need attention"
+        host_outcome = next(
+            outcome for outcome in outcomes if outcome.subject_key == "artifact-host:mediafire"
+        )
+        assert host_outcome.status is HealthStatus.UNHEALTHY
+        assert host_outcome.details["host_kind"] == "mediafire"
 
     @pytest.mark.asyncio
     async def test_bootstrap_errors_report_unhealthy(

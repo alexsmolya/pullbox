@@ -8,6 +8,13 @@ import pytest
 
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import (
+    DirectArtifactHostKind,
+    DirectHostConfig,
+    DirectHostReachabilityState,
+    DirectProviderConfig,
+    DirectProviderState,
+)
 from pullbox.models.download import DownloadClientType
 from pullbox.models.health import HealthCurrentStatus, HealthStatus
 from pullbox.models.indexer import IndexerConfig, IndexerType
@@ -68,6 +75,75 @@ async def test_build_download_client_registry_rows_uses_enabled_configs_and_late
     assert row.last_check_label == "3m ago"
     assert row.status_label == "Healthy"
     assert row.href == f"/health/download_clients/{enabled.id}"
+
+
+@pytest.mark.asyncio
+async def test_download_client_registry_includes_direct_provider_and_artifact_host(
+    db_session,
+) -> None:  # type: ignore[no-untyped-def]
+    from pullbox.ui.health_registry_rows import build_download_client_registry_rows
+
+    now = datetime.now(UTC)
+    provider = DirectProviderConfig(
+        provider_id="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="https://getcomics.example:8780",
+        enabled=True,
+        state=DirectProviderState.HEALTHY,
+    )
+    host = DirectHostConfig(
+        host_kind=DirectArtifactHostKind.PIXELDRAIN,
+        enabled=True,
+        preference=10,
+        reachability_state=DirectHostReachabilityState.REACHABLE,
+    )
+    db_session.add_all([provider, host])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            HealthCurrentStatus(
+                component="download_clients",
+                current_key="summary",
+                check_name="direct_provider_summary",
+                subject_key=f"direct-provider:{provider.id}",
+                subject_key_norm=f"direct-provider:{provider.id}",
+                status=HealthStatus.HEALTHY,
+                message="OK",
+                checked_at=now - timedelta(minutes=1),
+                is_summary=True,
+            ),
+            HealthCurrentStatus(
+                component="download_clients",
+                current_key="summary",
+                check_name="artifact_host_summary",
+                subject_key="artifact-host:pixeldrain",
+                subject_key_norm="artifact-host:pixeldrain",
+                status=HealthStatus.HEALTHY,
+                message="OK",
+                checked_at=now - timedelta(minutes=2),
+                is_summary=True,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    rows = await build_download_client_registry_rows(
+        db_session,
+        current_time=now,
+        relative_time_label=lambda value, reference: (
+            f"{int((reference - value).total_seconds() // 60)}m ago"
+        ),
+        download_client_type_label=lambda value: value.upper(),
+    )
+
+    assert [(row.display_name, row.kind_label) for row in rows] == [
+        ("GetComics", "Direct Provider"),
+        ("Pixeldrain", "Artifact Host"),
+    ]
+    assert rows[0].detail_label == "HTTPS · getcomics.example:8780"
+    assert rows[1].detail_label == "Preference 10"
+    assert rows[0].href == "/settings?tab=direct"
+    assert rows[1].href == "/settings?tab=direct"
 
 
 @pytest.mark.asyncio
