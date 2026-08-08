@@ -67,6 +67,8 @@ class TestHealthRouteContracts:
         assert 'data-testid="health-component-detail-page"' in response.text
         assert 'data-testid="health-component-detail-database"' in response.text
         assert 'data-testid="health-detail-back-link"' in response.text
+        assert 'data-testid="health-detail-optimize-database-link"' in response.text
+        assert 'href="/utilities/db-check?check=optimize"' in response.text
         assert 'data-testid="health-component-footer-dock"' in response.text
         assert 'data-testid="health-history-toolbar"' in response.text
         assert 'data-testid="health-history-search-field"' in response.text

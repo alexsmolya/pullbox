@@ -662,6 +662,12 @@ async def get_comics_dir(
 
 async def _task_manual_run_disabled_reason() -> str | None:
     """Return why manual task runs are unavailable, if imports are protected."""
+    from pullbox.database import database_maintenance_reason
+
+    maintenance_reason = database_maintenance_reason()
+    if maintenance_reason:
+        return "Manual runs are disabled while database maintenance is in progress."
+
     try:
         active_import = await has_active_import_scheduler_protection()
     except Exception as exc:

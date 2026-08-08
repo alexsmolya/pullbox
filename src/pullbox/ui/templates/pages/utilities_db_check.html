@@ -8,7 +8,7 @@
 <div
   data-testid="utilities-db-check-page"
   class="utilities-tool-page space-y-6"
-  x-data='utilitiesDbCheckPage({ csrfToken: "{{ csrf_token }}", defaultLibraryRoot: {{ db_check_default_root|tojson }} })'
+  x-data='utilitiesDbCheckPage({ csrfToken: "{{ csrf_token }}", defaultLibraryRoot: {{ db_check_default_root|tojson }}, defaultOptimize: {{ db_check_initial_optimize|default(false)|tojson }} })'
 >
   {% include "partials/utilities_db_check_header.html" %}
   {% include "partials/utilities_db_check_workspace.html" %}

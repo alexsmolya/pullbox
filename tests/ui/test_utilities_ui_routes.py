@@ -568,10 +568,21 @@ class TestUtilitiesRouteContracts:
         assert 'data-testid="utilities-db-check-footer-dock"' in response.text
         assert 'data-testid="utilities-db-check-check-orphans"' in response.text
         assert 'data-testid="utilities-db-check-check-stale"' in response.text
+        assert 'data-testid="utilities-db-check-check-optimize"' in response.text
+        assert "defaultOptimize: false" in response.text
         assert 'data-testid="utilities-db-check-preview"' in response.text
         assert 'data-testid="utilities-db-check-start"' in response.text
         assert 'data-testid="utilities-db-check-browse-library-root"' not in response.text
         assert "disabled" in response.text
+
+    async def test_database_optimize_link_selects_only_database_optimization(
+        self,
+        authenticated_client,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get("/utilities/db-check?check=optimize")
+
+        assert response.status_code == 200
+        assert "defaultOptimize: true" in response.text
         assert 'class="flex flex-nowrap items-center justify-end gap-2"' in response.text
         assert "data-tooltip-auto" in response.text
         assert 'data-tip-pos="left"' in response.text
@@ -583,8 +594,10 @@ class TestUtilitiesRouteContracts:
         assert (
             "findings.length + (findings.length === 1 ? ' finding' : ' findings')" in response.text
         )
-        assert "selectedChecksLabel() + ' checks'" in response.text
-        assert "Orphaned records, untracked files, path repairs, metadata refresh" in response.text
+        assert (
+            "Orphaned records, untracked files, path repairs, metadata refresh, "
+            "storage optimization" in response.text
+        )
         assert "Stale file references" not in response.text
         assert "Missing series paths" not in response.text
         assert "Rebuild search index" not in response.text

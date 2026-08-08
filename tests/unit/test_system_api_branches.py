@@ -335,6 +335,43 @@ async def test_task_routes_cover_statuses(
 
 
 @pytest.mark.asyncio
+async def test_task_routes_disable_manual_runs_during_database_maintenance(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Scheduler:
+        async def load_persisted_stats(self, _session: AsyncSession) -> None:
+            return None
+
+        def get_scheduled_tasks(self) -> list[dict[str, str]]:
+            return [{"id": "metadata"}]
+
+        def run_task_now(self, _task_id: str) -> str:
+            raise AssertionError("maintenance must prevent scheduling a task")
+
+    monkeypatch.setattr("pullbox.core.scheduler.get_scheduler", Scheduler)
+    monkeypatch.setattr(
+        "pullbox.database.database_maintenance_reason",
+        lambda: "database_optimize",
+    )
+
+    listed = await system_api.list_tasks(object(), db_session)
+
+    assert listed["scheduled"] == [
+        {
+            "id": "metadata",
+            "manual_run_disabled_reason": (
+                "Manual runs are disabled while database maintenance is in progress."
+            ),
+        }
+    ]
+    with pytest.raises(HTTPException) as exc_info:
+        await system_api.run_task("metadata", object())
+    assert exc_info.value.status_code == 409
+    assert "database maintenance" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_task_routes_include_durable_search_wanted_progress(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

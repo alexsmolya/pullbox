@@ -552,6 +552,29 @@ class PullboxScheduler:
 
     async def _defer_task_for_import(self, task_id: str, log: Any, *, trigger_type: str) -> bool:
         """Skip scheduler-managed background work while an import owns the runtime."""
+        from pullbox.database import database_maintenance_reason
+
+        maintenance_reason = database_maintenance_reason()
+        if maintenance_reason:
+            stats = self._task_stats.setdefault(task_id, TaskStats())
+            ended = datetime.now(UTC).isoformat()
+            stats.last_execution = ended
+            stats.last_duration_seconds = 0.0
+            stats.last_status = "deferred"
+            stats.running_since = None
+            await self._persist_task_stat(
+                task_id,
+                stats,
+                trigger_type=trigger_type,
+                reason="database_maintenance",
+            )
+            log.info(
+                "task_deferred_database_maintenance",
+                trigger_type=trigger_type,
+                maintenance_reason=maintenance_reason,
+            )
+            return True
+
         if self._import_protection_check_disabled:
             return False
 

@@ -24,8 +24,10 @@ if TYPE_CHECKING:
 
 import pullbox
 from pullbox.api.deps import DbSession, InteractiveOperatorUser  # noqa: TC001
+from pullbox.core.exceptions import ValidationError
 from pullbox.models.health import HealthCurrentStatus as HealthCurrentStatusModel
 from pullbox.models.health import HealthStatus
+from pullbox.models.import_job import ImportJob, ImportJobStatus
 from pullbox.schemas.health import (
     HealthCheckResponse,
     HealthComponentDetail,
@@ -36,8 +38,15 @@ from pullbox.schemas.health import (
     HealthIncidentResponse,
     HealthSummary,
 )
+from pullbox.services.database_optimization_service import (
+    DatabaseOptimizationError,
+    DatabaseOptimizationResult,
+    DatabaseOptimizationRuntimeService,
+)
+from pullbox.services.health_helpers import _sqlite_database_path
 from pullbox.services.health_runtime import run_health_refresh
 from pullbox.services.health_service import HealthService
+from pullbox.utilities.models import JobState, UtilityJob
 
 logger = structlog.get_logger(__name__)
 
@@ -59,11 +68,83 @@ _COMPONENT_ORDER = (
     "system",
 )
 
+_DATABASE_OPTIMIZE_BLOCKING_IMPORT_STATUSES = frozenset(
+    {
+        ImportJobStatus.PENDING,
+        ImportJobStatus.SCANNING,
+        ImportJobStatus.PAUSING,
+        ImportJobStatus.ANALYZING,
+        ImportJobStatus.MATCHING,
+        ImportJobStatus.FILE_MATCHING,
+        ImportJobStatus.IMPORTING,
+        ImportJobStatus.STALLED,
+        ImportJobStatus.CANCELLING,
+        ImportJobStatus.ROLLING_BACK,
+    }
+)
+_DATABASE_OPTIMIZE_BLOCKING_UTILITY_STATES = frozenset(
+    {
+        JobState.QUEUED,
+        JobState.RUNNING,
+        JobState.PAUSING,
+        JobState.PAUSED,
+        JobState.CANCELLING,
+        JobState.ROLLING_BACK,
+    }
+)
+
 
 def _outcome_subject_key(outcome: object) -> str | None:
     """Return a normalized subject key from a health outcome-like object."""
     value = getattr(outcome, "subject_key", None)
     return value if isinstance(value, str) and value else None
+
+
+async def _ensure_database_optimization_is_admissible(session: DbSession) -> None:
+    """Reject compaction while stateful import or utility work is active."""
+    active_import = await session.scalar(
+        select(ImportJob.id)
+        .where(ImportJob.status.in_(_DATABASE_OPTIMIZE_BLOCKING_IMPORT_STATUSES))
+        .limit(1)
+    )
+    if active_import is not None:
+        raise ValidationError(
+            "Database optimization is unavailable while an import or rollback is active."
+        )
+
+    active_utility = await session.scalar(
+        select(UtilityJob.id)
+        .where(UtilityJob.state.in_(_DATABASE_OPTIMIZE_BLOCKING_UTILITY_STATES))
+        .limit(1)
+    )
+    if active_utility is not None:
+        raise ValidationError(
+            "Database optimization is unavailable while a utility job is queued or running."
+        )
+
+
+def _database_optimization_response_payload(
+    result: DatabaseOptimizationResult,
+) -> dict[str, object]:
+    """Build the stable API result shape without exposing filesystem paths."""
+    before = result.before
+    after = result.after
+    return {
+        "message": "Database optimization completed.",
+        "reclaimed_bytes": int(result.reclaimed_bytes),
+        "before": {
+            "database_bytes": int(before.database_bytes),
+            "wal_bytes": int(before.wal_bytes),
+            "free_pages": int(before.free_pages),
+            "reclaimable_bytes": int(before.reclaimable_bytes),
+        },
+        "after": {
+            "database_bytes": int(after.database_bytes),
+            "wal_bytes": int(after.wal_bytes),
+            "free_pages": int(after.free_pages),
+            "reclaimable_bytes": int(after.reclaimable_bytes),
+        },
+    }
 
 
 # ── Health ───────────────────────────────────────────────────────────
@@ -328,6 +409,39 @@ async def health_component_refresh(
         content={"message": "Health component check completed", "component": component, **summary},
         status_code=200,
     )
+
+
+@router.post("/health/database/optimize")
+async def optimize_database(
+    _user: InteractiveOperatorUser,
+    session: DbSession,
+) -> JSONResponse:
+    """Compact SQLite free-list pages after explicit UI confirmation."""
+    db_path = _sqlite_database_path(session)
+    if db_path is None:
+        raise ValidationError(
+            "Database optimization is only available for file-backed SQLite databases."
+        )
+
+    await _ensure_database_optimization_is_admissible(session)
+    # Release the request transaction before the exclusive maintenance window starts.
+    await session.commit()
+    await session.close()
+
+    try:
+        result = await DatabaseOptimizationRuntimeService(db_path).optimize()
+    except DatabaseOptimizationError as exc:
+        raise ValidationError(str(exc)) from exc
+
+    await run_health_refresh(component="database")
+    payload = _database_optimization_response_payload(result)
+    logger.info(
+        "database_optimized",
+        reclaimed_bytes=result.reclaimed_bytes,
+        before_bytes=result.before.database_bytes,
+        after_bytes=result.after.database_bytes,
+    )
+    return JSONResponse(content=payload, status_code=200)
 
 
 # ── System Status ────────────────────────────────────────────────────

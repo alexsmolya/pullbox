@@ -9741,16 +9741,18 @@ function utilitiesDbCheckPage(config) {
     },
 
     checks: {
-      orphans: true,
-      stale: true,
+      orphans: !cfg.defaultOptimize,
+      stale: !cfg.defaultOptimize,
       referential: false,
       reindex: false,
+      optimize: !!cfg.defaultOptimize,
     },
     libraryRoot: cfg.defaultLibraryRoot || "",
     findings: [],
     previewLoaded: false,
     previewLoading: false,
     validationError: "",
+    optimizationResult: "",
     submitting: false,
 
     init: function () {
@@ -9772,6 +9774,11 @@ function utilitiesDbCheckPage(config) {
           self.validationError = "";
           self.syncFooterDock();
         });
+        this.$watch("checks.optimize", function () {
+          self.validationError = "";
+          self.optimizationResult = "";
+          self.syncFooterDock();
+        });
         this.$watch("libraryRoot", function () {
           self.validationError = "";
           self.syncFooterDock();
@@ -9787,7 +9794,7 @@ function utilitiesDbCheckPage(config) {
     },
 
     selectedChecksLabel: function () {
-      return this.selectedChecks().length + " of 4";
+      return this.selectedChecks().length + " of 5";
     },
 
     syncFooterDock: function () {
@@ -9815,6 +9822,7 @@ function utilitiesDbCheckPage(config) {
       if (action === "add") return "Add";
       if (action === "repair") return "Repair";
       if (action === "reindex") return "Reindex";
+      if (action === "optimize") return "Optimize";
       return "Skip";
     },
 
@@ -9823,6 +9831,7 @@ function utilitiesDbCheckPage(config) {
       if (checkType === "stale") return "Untracked";
       if (checkType === "referential") return "Consistency";
       if (checkType === "reindex") return "Metadata";
+      if (checkType === "optimize") return "Optimize";
       return checkType;
     },
 
@@ -9907,6 +9916,48 @@ function utilitiesDbCheckPage(config) {
       this.submitting = true;
       this.validationError = "";
       try {
+        var optimizeFindings = this.findings.filter(function (finding) {
+          return finding.current_action === "optimize";
+        });
+        var otherActions = this.findings.filter(function (finding) {
+          return finding.current_action && finding.current_action !== "skip" && finding.current_action !== "optimize";
+        });
+        if (optimizeFindings.length > 0) {
+          if (otherActions.length > 0) {
+            this.validationError = "Run database optimization separately from record cleanup actions.";
+            return;
+          }
+          var optimizeContext = optimizeFindings[0].context || {};
+          var reclaimableMb = Number(optimizeContext.reclaimable_bytes || 0) / (1024 * 1024);
+          var confirmed = await pbConfirm({
+            title: "Optimize Database Storage",
+            message:
+              "Pullbox will briefly pause database activity, checkpoint its write-ahead log, and compact unused pages. " +
+              "About " + reclaimableMb.toFixed(1) + " MB is currently reclaimable. This cannot be cancelled once started.",
+            confirmText: "Optimize Database",
+          });
+          if (!confirmed) {
+            return;
+          }
+          var optimizeResponse = await fetch("/api/v1/health/database/optimize", {
+            method: "POST",
+            headers: { "X-CSRF-Token": this.csrfToken() },
+          });
+          if (!optimizeResponse.ok) {
+            var optimizeError = await optimizeResponse.json();
+            this.validationError = (optimizeError.error && optimizeError.error.message) || "Database optimization failed.";
+            return;
+          }
+          var optimizeData = await optimizeResponse.json();
+          var reclaimedBytes = Number(optimizeData.reclaimed_bytes || 0);
+          this.optimizationResult =
+            "Database optimization completed. Reclaimed " +
+            (reclaimedBytes / (1024 * 1024)).toFixed(1) +
+            " MB and verified database integrity.";
+          this.findings = [];
+          this.previewLoaded = false;
+          return;
+        }
         var response = await fetch("/api/v1/utilities/jobs", {
           method: "POST",
           headers: {
