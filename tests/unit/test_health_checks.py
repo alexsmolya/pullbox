@@ -1070,6 +1070,13 @@ class TestIndexersCheck:
         db_session.add(SystemConfig(key="prowlarr_api_key", value="api-key"))
         await db_session.flush()
 
+    async def _seed_jackett_config(self, db_session: AsyncSession) -> None:
+        from pullbox.models.config import SystemConfig
+
+        db_session.add(SystemConfig(key="jackett_url", value="http://jackett:9117"))
+        db_session.add(SystemConfig(key="jackett_api_key", value="api-key"))
+        await db_session.flush()
+
     @pytest.mark.asyncio
     async def test_all_healthy(self, db_session: AsyncSession, settings: MagicMock) -> None:
         from pullbox.models.indexer import IndexerType
@@ -1426,11 +1433,173 @@ class TestIndexersCheck:
             mock_torznab.return_value.close = AsyncMock()
             outcomes = await service.run_check(db_session, "indexers")
 
-        mock_torznab.return_value.test_connection.assert_awaited_once()
+        assert mock_torznab.return_value.test_connection.await_count == 1
         assert outcomes[0].status == HealthStatus.DEGRADED
         subject_summaries = {outcome.subject_label: outcome for outcome in outcomes[1:]}
         assert subject_summaries["Prowlarr"].status == HealthStatus.UNHEALTHY
         assert subject_summaries["1337x (Jackett)"].status == HealthStatus.HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_jackett_unavailable_skips_only_jackett_managed_indexers(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        from pullbox.models.indexer import IndexerType
+
+        await self._seed_jackett_config(db_session)
+        await self._seed_indexer_config(
+            db_session,
+            name="1337x (Jackett)",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+            source="jackett",
+        )
+        await self._seed_indexer_config(
+            db_session,
+            name="Independent Torznab",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://independent.example/api",
+        )
+
+        unavailable = ProviderHealthResult(
+            healthy=False,
+            message="Connection refused",
+            response_time_ms=0.0,
+        )
+        healthy = ProviderHealthResult(
+            healthy=True,
+            message="Independent Torznab: 8 categories available",
+            response_time_ms=80.0,
+            details={"categories": "8"},
+        )
+        service = _make_service(settings)
+        with (
+            patch("pullbox.providers.indexer.jackett.JackettClient") as mock_jackett,
+            patch("pullbox.providers.indexer.torznab.TorznabIndexer") as mock_torznab,
+        ):
+            mock_jackett.return_value.test_connection = AsyncMock(return_value=unavailable)
+            mock_jackett.return_value.close = AsyncMock()
+            mock_torznab.return_value.test_connection = AsyncMock(return_value=healthy)
+            mock_torznab.return_value.close = AsyncMock()
+            outcomes = await service.run_check(db_session, "indexers")
+
+        mock_torznab.return_value.test_connection.assert_awaited_once()
+        assert outcomes[0].status == HealthStatus.DEGRADED
+        assert outcomes[0].message == "1 of 3 service(s) need attention"
+        subject_summaries = {outcome.subject_label: outcome for outcome in outcomes[1:]}
+        assert subject_summaries["Jackett"].status == HealthStatus.UNHEALTHY
+        assert subject_summaries["1337x (Jackett)"].status == HealthStatus.UNKNOWN
+        assert subject_summaries["1337x (Jackett)"].message == (
+            "Skipped because Jackett is unavailable"
+        )
+        assert subject_summaries["Independent Torznab"].status == HealthStatus.HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_jackett_healthy_records_proxy_and_managed_indexer_health(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        from pullbox.models.indexer import IndexerType
+
+        await self._seed_jackett_config(db_session)
+        await self._seed_indexer_config(
+            db_session,
+            name="1337x (Jackett)",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+            source="jackett",
+        )
+        jackett_healthy = ProviderHealthResult(
+            healthy=True,
+            message="Jackett: 1 configured tracker(s)",
+            response_time_ms=70.0,
+            details={"indexer_count": "1"},
+        )
+        tracker_healthy = ProviderHealthResult(
+            healthy=True,
+            message="1337x: 8 categories available",
+            response_time_ms=80.0,
+            details={"categories": "8"},
+        )
+        service = _make_service(settings)
+        with (
+            patch("pullbox.providers.indexer.jackett.JackettClient") as mock_jackett,
+            patch("pullbox.providers.indexer.torznab.TorznabIndexer") as mock_torznab,
+        ):
+            mock_jackett.return_value.test_connection = AsyncMock(return_value=jackett_healthy)
+            mock_jackett.return_value.close = AsyncMock()
+            mock_torznab.return_value.test_connection = AsyncMock(return_value=tracker_healthy)
+            mock_torznab.return_value.close = AsyncMock()
+            outcomes = await service.run_check(db_session, "indexers")
+
+        assert outcomes[0].status == HealthStatus.HEALTHY
+        assert outcomes[0].message == "Jackett and all indexers reachable"
+        subject_summaries = {outcome.subject_label: outcome for outcome in outcomes[1:]}
+        assert subject_summaries["Jackett"].details["indexer_count"] == 1
+        assert subject_summaries["1337x (Jackett)"].status == HealthStatus.HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_jackett_outage_is_degraded_when_prowlarr_remains_healthy(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        from pullbox.models.indexer import IndexerType
+
+        await self._seed_prowlarr_config(db_session)
+        await self._seed_jackett_config(db_session)
+        await self._seed_indexer_config(
+            db_session,
+            name="NZBGeek (Prowlarr)",
+            indexer_type=IndexerType.NEWZNAB,
+            url="http://prowlarr:9696/api/v1/indexer/1",
+            source="prowlarr",
+        )
+        await self._seed_indexer_config(
+            db_session,
+            name="1337x (Jackett)",
+            indexer_type=IndexerType.TORZNAB,
+            url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+            source="jackett",
+        )
+        prowlarr_healthy = ProviderHealthResult(
+            healthy=True,
+            message="Prowlarr: 1 indexer(s) configured",
+            response_time_ms=70.0,
+            details={"indexer_count": "1"},
+        )
+        jackett_unavailable = ProviderHealthResult(
+            healthy=False,
+            message="Connection refused",
+            response_time_ms=0.0,
+        )
+        indexer_healthy = ProviderHealthResult(
+            healthy=True,
+            message="NZBGeek: 8 categories available",
+            response_time_ms=80.0,
+            details={"categories": "8"},
+        )
+        service = _make_service(settings)
+        with (
+            patch(
+                "pullbox.providers.indexer.prowlarr.ProwlarrIndexer",
+                autospec=True,
+            ) as mock_prowlarr,
+            patch("pullbox.providers.indexer.jackett.JackettClient") as mock_jackett,
+            patch("pullbox.providers.indexer.newznab.NewznabIndexer") as mock_newznab,
+        ):
+            mock_prowlarr.return_value.test_connection = AsyncMock(return_value=prowlarr_healthy)
+            mock_prowlarr.return_value.close = AsyncMock()
+            mock_jackett.return_value.test_connection = AsyncMock(return_value=jackett_unavailable)
+            mock_jackett.return_value.close = AsyncMock()
+            mock_newznab.return_value.test_connection = AsyncMock(return_value=indexer_healthy)
+            mock_newznab.return_value.close = AsyncMock()
+            outcomes = await service.run_check(db_session, "indexers")
+
+        assert outcomes[0].status == HealthStatus.DEGRADED
+        assert outcomes[0].message == "1 of 4 service(s) need attention"
 
     @pytest.mark.asyncio
     async def test_retired_manager_tracker_is_not_health_checked(

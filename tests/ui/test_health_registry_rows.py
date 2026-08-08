@@ -147,7 +147,7 @@ async def test_download_client_registry_includes_direct_provider_and_artifact_ho
 
 
 @pytest.mark.asyncio
-async def test_build_indexer_registry_rows_splits_prowlarr_proxy_and_enabled_indexers(
+async def test_build_indexer_registry_rows_splits_search_proxies_and_enabled_indexers(
     db_session,
 ) -> None:  # type: ignore[no-untyped-def]
     from pullbox.ui.health_registry_rows import build_indexer_registry_rows
@@ -157,6 +157,8 @@ async def test_build_indexer_registry_rows_splits_prowlarr_proxy_and_enabled_ind
         [
             SystemConfig(key="prowlarr_url", value="http://prowlarr.example:9696"),
             SystemConfig(key="prowlarr_api_key", value="secret"),
+            SystemConfig(key="jackett_url", value="http://jackett.example:9117"),
+            SystemConfig(key="jackett_api_key", value="secret"),
         ]
     )
     indexer = IndexerConfig(
@@ -194,6 +196,19 @@ async def test_build_indexer_registry_rows_splits_prowlarr_proxy_and_enabled_ind
                 component="indexers",
                 current_key="summary",
                 check_name="summary",
+                subject_key="jackett",
+                subject_key_norm="jackett",
+                status=HealthStatus.HEALTHY,
+                message="OK",
+                details_json='{"indexer_count": 2}',
+                response_time_ms=120.0,
+                checked_at=now - timedelta(minutes=1),
+                is_summary=True,
+            ),
+            HealthCurrentStatus(
+                component="indexers",
+                current_key="summary",
+                check_name="summary",
                 subject_key=str(indexer.id),
                 subject_key_norm=str(indexer.id),
                 status=HealthStatus.HEALTHY,
@@ -206,7 +221,7 @@ async def test_build_indexer_registry_rows_splits_prowlarr_proxy_and_enabled_ind
     )
     await db_session.flush()
 
-    prowlarr_row, rows = await build_indexer_registry_rows(
+    proxy_rows, rows = await build_indexer_registry_rows(
         db_session,
         current_time=now,
         relative_time_label=lambda value, reference: (
@@ -214,12 +229,17 @@ async def test_build_indexer_registry_rows_splits_prowlarr_proxy_and_enabled_ind
         ),
     )
 
-    assert prowlarr_row is not None
+    assert len(proxy_rows) == 2
+    prowlarr_row, jackett_row = proxy_rows
     assert prowlarr_row.display_name == "Prowlarr"
     assert prowlarr_row.kind_label == "Proxy"
     assert prowlarr_row.detail_label == "HTTP · prowlarr.example:9696 · 7 indexers"
     assert prowlarr_row.status_label == "Degraded"
     assert prowlarr_row.href == "/health/indexers/prowlarr"
+    assert jackett_row.display_name == "Jackett"
+    assert jackett_row.detail_label == "HTTP · jackett.example:9117 · 2 indexers"
+    assert jackett_row.status_label == "Healthy"
+    assert jackett_row.href == "/health/indexers/jackett"
 
     assert len(rows) == 1
     row = rows[0]

@@ -44,9 +44,9 @@
       {% endfor %}
     </div>
 
-    <p class="health-section__label">Search Proxy</p>
+    <p class="health-section__label">Search Proxies ({{ health_proxy_rows | length }})</p>
     <div class="downloads-table-wrap health-history-wrap">
-      <table class="downloads-table health-history-table" data-testid="health-prowlarr-table">
+      <table class="downloads-table health-history-table" data-testid="health-proxies-table">
         <thead>
           <tr>
             <th class="is-center">SYS</th>
@@ -58,25 +58,26 @@
           </tr>
         </thead>
         <tbody>
-          {% if health_prowlarr_row %}
-            <tr data-testid="health-prowlarr-row">
-              <td class="is-center"><span class="health-led health-led--{{ health_prowlarr_row.led_tone }}"></span></td>
+          {% if health_proxy_rows %}
+            {% for row in health_proxy_rows %}
+            <tr data-testid="health-proxy-row-{{ row.key }}">
+              <td class="is-center"><span class="health-led health-led--{{ row.led_tone }}"></span></td>
               <td>
-                <div class="health-table__name">{{ health_prowlarr_row.display_name }}</div>
-                <div class="health-table__detail">{{ health_prowlarr_row.detail_label }}</div>
+                <div class="health-table__name">{{ row.display_name }}</div>
+                <div class="health-table__detail">{{ row.detail_label }}</div>
               </td>
-              <td class="is-right downloads-mono-cell">{{ health_prowlarr_row.response_label }}</td>
-              <td class="downloads-mono-cell">{{ health_prowlarr_row.last_check_label }}</td>
-              <td><span class="pill {{ health_prowlarr_row.pill_tone }}">{{ health_prowlarr_row.status_label }}</span></td>
+              <td class="is-right downloads-mono-cell">{{ row.response_label }}</td>
+              <td class="downloads-mono-cell">{{ row.last_check_label }}</td>
+              <td><span class="pill {{ row.pill_tone }}">{{ row.status_label }}</span></td>
               <td class="is-right">
                 <div class="downloads-action-group justify-end">
                   <a
-                    href="{{ health_prowlarr_row.href }}"
+                    href="{{ row.href }}"
                     class="downloads-action-btn"
                     data-tip="Open details"
                     data-tip-pos="left"
-                    aria-label="Open Prowlarr details"
-                    data-testid="health-indexer-open-prowlarr"
+                    aria-label="Open {{ row.display_name }} details"
+                    data-testid="health-indexer-open-{{ row.key }}"
                   >
                     <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
@@ -85,6 +86,7 @@
                 </div>
               </td>
             </tr>
+            {% endfor %}
           {% else %}
             <tr>
               <td colspan="6">
@@ -92,8 +94,8 @@
                   <svg class="downloads-empty-icon" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
                   </svg>
-                  <p class="downloads-empty-title">Prowlarr not configured</p>
-                  <p class="downloads-empty-copy">Add the Prowlarr URL and API key in Settings to track proxy health here.</p>
+                  <p class="downloads-empty-title">No search proxy configured</p>
+                  <p class="downloads-empty-copy">Add Prowlarr or Jackett in Settings to track search-manager health here.</p>
                 </div>
               </td>
             </tr>

@@ -104,7 +104,7 @@ class TestHealthRouteContracts:
         assert 'data-testid="health-indexers-page"' in response.text
         assert 'data-testid="health-indexers-status-region"' in response.text
         assert 'data-testid="health-indexers-detail-page"' in response.text
-        assert 'data-testid="health-prowlarr-table"' in response.text
+        assert 'data-testid="health-proxies-table"' in response.text
         assert 'data-testid="health-indexers-table"' in response.text
         assert 'data-testid="health-indexers-footer-dock"' in response.text
         assert 'data-testid="health-history-toolbar"' not in response.text

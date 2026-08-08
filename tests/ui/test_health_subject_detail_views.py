@@ -166,3 +166,62 @@ async def test_build_indexer_detail_view_builds_prowlarr_proxy_detail(
         ("Indexers", "3"),
     ]
     assert view.history_base_path == "/health/indexers/prowlarr"
+
+
+@pytest.mark.asyncio
+async def test_build_indexer_detail_view_builds_jackett_proxy_detail(
+    db_session,
+) -> None:  # type: ignore[no-untyped-def]
+    from pullbox.ui.health_subject_detail_views import build_indexer_detail_view
+
+    current_time = datetime(2026, 6, 7, 12, 0, tzinfo=UTC)
+    db_session.add_all(
+        [
+            SystemConfig(key="jackett_url", value="http://jackett.example:9117"),
+            SystemConfig(key="jackett_api_key", value="secret"),
+            HealthCurrentStatus(
+                component="indexers",
+                current_key="summary",
+                check_name="summary",
+                subject_key="jackett",
+                subject_key_norm="jackett",
+                status=HealthStatus.HEALTHY,
+                message="Jackett OK",
+                details_json='{"indexer_count":2,"checks":[]}',
+                response_time_ms=95.0,
+                checked_at=current_time - timedelta(minutes=1),
+                is_summary=True,
+            ),
+            HealthCheckResult(
+                component="indexers",
+                check_name="summary",
+                subject_key="jackett",
+                status=HealthStatus.HEALTHY,
+                message="Jackett OK",
+                response_time_ms=95.0,
+                checked_at=current_time - timedelta(minutes=1),
+                is_summary=True,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    view = await build_indexer_detail_view(
+        db_session,
+        subject_key="jackett",
+        current_time=current_time,
+        history_page=1,
+        history_sort="-checked_at",
+        history_search="",
+        relative_time_label=_relative_time,
+    )
+
+    assert view.display_name == "Jackett"
+    assert view.detail_title == "JACKETT DETAILS"
+    assert view.sublabel == "Search proxy"
+    assert [(stat.label, stat.value_label) for stat in view.detail_stats][-3:] == [
+        ("Host", "jackett.example"),
+        ("Port", "9117"),
+        ("Indexers", "2"),
+    ]
+    assert view.history_base_path == "/health/indexers/jackett"

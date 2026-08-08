@@ -393,8 +393,8 @@ async def test_health_indexer_registry_routes(
     async def _overview(_session: object, **_options: object) -> tuple[str, HealthMonitoringView]:
         return "healthy", _health_view()
 
-    async def _rows(_session: object) -> tuple[str, tuple[str, ...]]:
-        return "prowlarr-row", ("indexer-row",)
+    async def _rows(_session: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        return ("prowlarr-row",), ("indexer-row",)
 
     monkeypatch.setattr(health_routes, "_load_health_overview", _overview)
     monkeypatch.setattr(
@@ -420,7 +420,7 @@ async def test_health_indexer_registry_routes(
 
     assert status.template_name == "partials/health_indexers_content_bundle.html"
     assert status.headers["HX-Replace-Url"] == "/health/indexers"
-    assert status.context["health_prowlarr_row"] == "prowlarr-row"
+    assert status.context["health_proxy_rows"] == ("prowlarr-row",)
     assert status.context["health_indexer_rows"] == ("indexer-row",)
     assert page.template_name == "pages/health_indexers.html"
 

@@ -68,6 +68,25 @@ async def load_prowlarr_route_config(session: AsyncSession) -> str | None:
     return url
 
 
+async def load_jackett_route_config(session: AsyncSession) -> str | None:
+    """Return the configured Jackett URL when both URL and API key are present."""
+    rows = (
+        (
+            await session.execute(
+                select(SystemConfig).where(SystemConfig.key.in_(("jackett_url", "jackett_api_key")))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    values = {row.key: row.value for row in rows}
+    url = str(values.get("jackett_url") or "").strip()
+    api_key = str(values.get("jackett_api_key") or "").strip()
+    if not url or not api_key:
+        return None
+    return url
+
+
 def indexer_endpoint_summary(url: str) -> tuple[str, str, str]:
     """Return protocol, host, and port labels for an indexer URL."""
     return download_client_endpoint_summary(url)
@@ -135,18 +154,18 @@ async def build_download_client_registry_rows(
     )
 
     rows: list[HealthSubjectSummaryView] = []
-    for config in configs:
-        subject_key = str(config.id)
+    for download_client in configs:
+        subject_key = str(download_client.id)
         latest_row = latest_rows.get(subject_key)
-        protocol, host, port = download_client_endpoint_summary(config.url)
+        protocol, host, port = download_client_endpoint_summary(download_client.url)
         details = _parse_health_details_json(getattr(latest_row, "details_json", None))
         version = str(details.get("version") or "").strip() if isinstance(details, Mapping) else ""
         status = latest_row.status.value if latest_row is not None else "unknown"
         rows.append(
             HealthSubjectSummaryView(
                 key=subject_key,
-                display_name=config.name,
-                kind_label=download_client_type_label(config.client_type.value),
+                display_name=download_client.name,
+                kind_label=download_client_type_label(download_client.client_type.value),
                 detail_label=(f"{protocol} · {host}:{port}" + (f" · {version}" if version else "")),
                 response_label=(
                     health_response_or_dash(latest_row.response_time_ms)
@@ -165,15 +184,15 @@ async def build_download_client_registry_rows(
             )
         )
 
-    for config in direct_providers:
-        subject_key = f"direct-provider:{config.id}"
+    for provider in direct_providers:
+        subject_key = f"direct-provider:{provider.id}"
         latest_row = latest_rows.get(subject_key)
-        protocol, host, port = download_client_endpoint_summary(config.endpoint)
+        protocol, host, port = download_client_endpoint_summary(provider.endpoint)
         status = latest_row.status.value if latest_row is not None else "unknown"
         rows.append(
             HealthSubjectSummaryView(
                 key=subject_key,
-                display_name=config.display_name,
+                display_name=provider.display_name,
                 kind_label="Direct Provider",
                 detail_label=f"{protocol} · {host}:{port}",
                 response_label="—",
@@ -189,16 +208,16 @@ async def build_download_client_registry_rows(
             )
         )
 
-    for config in artifact_hosts:
-        subject_key = f"artifact-host:{config.host_kind.value}"
+    for artifact_host in artifact_hosts:
+        subject_key = f"artifact-host:{artifact_host.host_kind.value}"
         latest_row = latest_rows.get(subject_key)
         status = latest_row.status.value if latest_row is not None else "unknown"
         rows.append(
             HealthSubjectSummaryView(
                 key=subject_key,
-                display_name=config.host_kind.value.replace("_", " ").title(),
+                display_name=artifact_host.host_kind.value.replace("_", " ").title(),
                 kind_label="Artifact Host",
-                detail_label=f"Preference {config.preference}",
+                detail_label=f"Preference {artifact_host.preference}",
                 response_label="—",
                 last_check_label=(
                     relative_time_label(latest_row.checked_at, current_time)
@@ -219,11 +238,12 @@ async def build_indexer_registry_rows(
     *,
     current_time: datetime,
     relative_time_label: Callable[[datetime, datetime], str],
-) -> tuple[HealthSubjectSummaryView | None, tuple[HealthSubjectSummaryView, ...]]:
-    """Build the split proxy/indexer registry rows for the indexers page."""
+) -> tuple[tuple[HealthSubjectSummaryView, ...], tuple[HealthSubjectSummaryView, ...]]:
+    """Build the split search-proxy/indexer registry rows for the indexers page."""
     latest_rows = await _load_latest_health_subject_summary_rows(session, "indexers")
     prowlarr_url = await load_prowlarr_route_config(session)
-    prowlarr_row: HealthSubjectSummaryView | None = None
+    jackett_url = await load_jackett_route_config(session)
+    proxy_rows: list[HealthSubjectSummaryView] = []
 
     if prowlarr_url:
         latest_row = latest_rows.get("prowlarr")
@@ -233,28 +253,64 @@ async def build_indexer_registry_rows(
             _object_to_int(details.get("indexer_count")) if isinstance(details, Mapping) else 0
         )
         status = latest_row.status.value if latest_row is not None else "unknown"
-        prowlarr_row = HealthSubjectSummaryView(
-            key="prowlarr",
-            display_name="Prowlarr",
-            kind_label="Proxy",
-            detail_label=(
-                f"{protocol} · {host}:{port}"
-                + (f" · {indexer_count} indexers" if indexer_count else "")
-            ),
-            response_label=(
-                health_response_or_dash(latest_row.response_time_ms)
-                if latest_row is not None
-                else "—"
-            ),
-            last_check_label=(
-                relative_time_label(latest_row.checked_at, current_time)
-                if latest_row is not None
-                else "—"
-            ),
-            status_label=status.capitalize(),
-            pill_tone=_health_pill_tone(status),
-            led_tone=_health_led_tone(status),
-            href="/health/indexers/prowlarr",
+        proxy_rows.append(
+            HealthSubjectSummaryView(
+                key="prowlarr",
+                display_name="Prowlarr",
+                kind_label="Proxy",
+                detail_label=(
+                    f"{protocol} · {host}:{port}"
+                    + (f" · {indexer_count} indexers" if indexer_count else "")
+                ),
+                response_label=(
+                    health_response_or_dash(latest_row.response_time_ms)
+                    if latest_row is not None
+                    else "—"
+                ),
+                last_check_label=(
+                    relative_time_label(latest_row.checked_at, current_time)
+                    if latest_row is not None
+                    else "—"
+                ),
+                status_label=status.capitalize(),
+                pill_tone=_health_pill_tone(status),
+                led_tone=_health_led_tone(status),
+                href="/health/indexers/prowlarr",
+            )
+        )
+
+    if jackett_url:
+        latest_row = latest_rows.get("jackett")
+        protocol, host, port = indexer_endpoint_summary(jackett_url)
+        details = _parse_health_details_json(getattr(latest_row, "details_json", None))
+        indexer_count = (
+            _object_to_int(details.get("indexer_count")) if isinstance(details, Mapping) else 0
+        )
+        status = latest_row.status.value if latest_row is not None else "unknown"
+        proxy_rows.append(
+            HealthSubjectSummaryView(
+                key="jackett",
+                display_name="Jackett",
+                kind_label="Proxy",
+                detail_label=(
+                    f"{protocol} · {host}:{port}"
+                    + (f" · {indexer_count} indexers" if indexer_count else "")
+                ),
+                response_label=(
+                    health_response_or_dash(latest_row.response_time_ms)
+                    if latest_row is not None
+                    else "—"
+                ),
+                last_check_label=(
+                    relative_time_label(latest_row.checked_at, current_time)
+                    if latest_row is not None
+                    else "—"
+                ),
+                status_label=status.capitalize(),
+                pill_tone=_health_pill_tone(status),
+                led_tone=_health_led_tone(status),
+                href="/health/indexers/jackett",
+            )
         )
 
     configs = (
@@ -300,4 +356,4 @@ async def build_indexer_registry_rows(
             )
         )
 
-    return prowlarr_row, tuple(rows)
+    return tuple(proxy_rows), tuple(rows)
