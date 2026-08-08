@@ -539,6 +539,59 @@ class TestApproveMatch:
                 await svc.approve_match(session, 99999)
 
     @pytest.mark.asyncio
+    async def test_retry_direct_recovery_replans_from_a_fresh_attempt(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Recovery never dispatches the failed artifact route a second time."""
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock()
+        runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+        svc = InterventionService(direct_planner=planner, direct_runner_getter=lambda: runner)
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            attempt.failure_class = DirectArtifactFailureClass.PERMANENT_MIRROR
+            attempt.failure_code = "artifact_host_contract_changed"
+            pending = _make_direct_pending(issue.id, attempt.id)
+            pending.match_details.update(
+                {
+                    "failure_class": "permanent_mirror",
+                    "failure_code": "artifact_host_contract_changed",
+                }
+            )
+            session.add(pending)
+            await session.commit()
+            pending_id = pending.id
+
+        async with db_factory() as session:
+            pending = await session.get(PendingMatch, pending_id)
+            assert pending is not None
+            original = await session.get(DirectAcquisitionAttempt, attempt.id)
+            assert original is not None
+
+            async def plan_fresh(_session, *, acquisition_id: int):  # type: ignore[no-untyped-def]
+                fresh = await _session.get(DirectAcquisitionAttempt, acquisition_id)
+                assert fresh is not None
+                assert fresh.id != original.id
+                assert fresh.state is DirectAcquisitionState.DISCOVERED
+                return SimpleNamespace(
+                    attempt=fresh,
+                    selected_artifact=SimpleNamespace(id=77),
+                    initial_source=None,
+                )
+
+            svc._direct_planner = plan_fresh  # type: ignore[assignment]
+            fresh_attempt = await svc.retry_direct_recovery(session, pending_id)
+            await session.commit()
+
+            assert fresh_attempt.id != original.id
+            assert pending.status is PendingMatchStatus.APPROVED
+            assert pending.match_details["resolution_reason"] == "recovery_replanned"
+            runner.dispatch.assert_awaited_once_with(fresh_attempt.id, 77, initial_source=None)
+
+    @pytest.mark.asyncio
     async def test_approve_direct_match_plans_and_dispatches_without_download_client(
         self, db_factory: async_sessionmaker[AsyncSession]
     ) -> None:

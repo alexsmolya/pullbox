@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from typing import cast as typing_cast
 
-from sqlalchemy import ColumnElement, and_, case, func, true
+from sqlalchemy import ColumnElement, and_, case, func, or_, true
 
 from pullbox.models.indexer import IndexerConfig
 from pullbox.models.issue import Issue
@@ -15,7 +15,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from datetime import datetime
 
-INTERVENTION_TABS = {"queue", "history"}
+INTERVENTION_TABS = {"queue", "recovery", "history"}
+INTERVENTION_LANES = {"review", "recovery"}
 INTERVENTION_CONFIDENCE_FILTERS = {"high", "medium", "low"}
 INTERVENTION_PROTOCOL_FILTERS = {"usenet", "torrent", "direct"}
 INTERVENTION_REASON_LABELS = {
@@ -57,6 +58,22 @@ def normalize_intervention_tab(tab: str | None) -> str:
     if normalized in INTERVENTION_TABS:
         return normalized
     return "queue"
+
+
+def normalize_intervention_lane(lane: str | None) -> str:
+    """Return a valid pending-work lane, defaulting to semantic review."""
+    normalized = (lane or "").strip().lower()
+    return normalized if normalized in INTERVENTION_LANES else "review"
+
+
+def intervention_lane_clause(lane: str) -> ColumnElement[bool]:
+    """Separate failed direct acquisition from semantic matching decisions."""
+    source_kind = func.coalesce(PendingMatch.match_details["source_kind"].as_string(), "")
+    failure_class = PendingMatch.match_details["failure_class"].as_string()
+    recovery = and_(source_kind == "direct", failure_class.is_not(None))
+    if lane == "recovery":
+        return recovery
+    return or_(source_kind != "direct", failure_class.is_(None))
 
 
 def normalize_intervention_confidence_filter(confidence: str | None) -> str:
@@ -288,6 +305,11 @@ def build_intervention_item_meta(pending_match: Any) -> dict[str, object]:
             else str(details.get("provider_name") or details.get("indexer_name") or "Unknown")
         )
 
+    lane = (
+        "recovery"
+        if details.get("source_kind") == "direct" and details.get("failure_class")
+        else "review"
+    )
     return {
         "protocol_label": intervention_protocol_label(
             bool(pending_match.is_torrent),
@@ -301,6 +323,8 @@ def build_intervention_item_meta(pending_match: Any) -> dict[str, object]:
         "similarity_pct": similarity_pct,
         "source_label": source_label.strip() or "Unknown",
         "rejection_reason": str(details.get("rejection_reason") or "").strip(),
+        "lane": lane,
+        "recovery_summary": _direct_recovery_summary(details) if lane == "recovery" else "",
     }
 
 
@@ -318,3 +342,21 @@ def _direct_source_label(details: dict[str, object]) -> str:
         host_kind.replace("_", " ").title(),
     )
     return f"{provider_label} via {host_label}" if host_label else provider_label
+
+
+def _direct_recovery_summary(details: dict[str, object]) -> str:
+    """Describe the acquisition failure without implying the semantic match was wrong."""
+    host = _DIRECT_ARTIFACT_HOST_LABELS.get(
+        str(details.get("artifact_host_kind") or "").strip(),
+        "Artifact host",
+    )
+    failure = str(details.get("failure_class") or "").strip()
+    if failure == "artifact_host_auth_required":
+        return f"{host} authentication required"
+    if failure == "resolver":
+        return f"{host} route changed or needs challenge resolution"
+    if failure == "permanent_mirror":
+        return f"{host} mirror is no longer available"
+    if failure == "quota":
+        return f"{host} quota is currently unavailable"
+    return "Download route needs recovery"
