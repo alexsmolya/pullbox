@@ -276,6 +276,7 @@ class TestPostProcessingRouteContracts:
         assert "Detective Comics 003 (2024) (Digital).cbz" in response.text
         assert "qBittorrent" in response.text
         assert 'aria-label="Toggle details"' in response.text
+        assert 'hx-boost="false" class="downloads-issue-link"' in response.text
         assert 'data-testid="pp-queue-empty"' not in response.text
 
     async def test_post_processing_queue_detail_loads_only_on_expand(
@@ -307,6 +308,7 @@ class TestPostProcessingRouteContracts:
         assert "/downloads/Detective Comics 003 (2024).cbz" in response.text
         assert "Library path" in response.text
         assert "Pending library move" in response.text
+        assert 'hx-boost="false"' in response.text
 
     async def test_post_processing_queue_partial_renders_phase_progress_and_time(
         self,
@@ -452,6 +454,7 @@ class TestPostProcessingRouteContracts:
         assert 'data-testid="pp-queue-imported-table"' in response.text
         assert "Imported" in response.text
         assert "pill-success" in response.text
+        assert 'hx-boost="false" class="downloads-issue-link"' in response.text
         assert 'data-testid="pp-queue-item-progress-bar"' not in response.text
 
     async def test_post_processing_live_status_map_uses_real_snapshot_phase_progress(
