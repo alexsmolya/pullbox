@@ -120,6 +120,15 @@ class TestSeriesDetailPage:
         status_row = authed_page.locator("[data-testid='series-detail-status-row']")
         assert "Monitored" in (status_row.text_content() or "")
 
+        # Restore the session-scoped seed so later E2E tests retain their fixture contract.
+        with authed_page.expect_response(
+            lambda response: "/htmx/series/2/issues" in response.url and response.ok,
+            timeout=5000,
+        ):
+            series.monitor_toggle.locator("xpath=..").click()
+
+        assert not series.monitor_toggle.is_checked()
+
     def test_status_row_uses_real_pill_contracts(
         self,
         authed_page,

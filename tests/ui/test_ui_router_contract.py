@@ -345,6 +345,12 @@ def test_ui_router_manifest_remains_stable_during_decomposition() -> None:
             "htmx_intervention_reject",
             "htmx_intervention_reject",
         ),
+        (
+            "/htmx/intervention/{pending_id}/retry-recovery",
+            ("POST",),
+            "htmx_intervention_retry_recovery",
+            "htmx_intervention_retry_recovery",
+        ),
         ("/search-history", ("GET",), "search_history_page", "search_history_page"),
         (
             "/htmx/search-history/logs/{log_id}/detail",

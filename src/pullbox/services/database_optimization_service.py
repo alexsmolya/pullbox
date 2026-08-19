@@ -95,7 +95,7 @@ class DatabaseOptimizationService:
                 timeout=_BUSY_TIMEOUT_MS / 1000,
                 isolation_level=None,
             )
-        connection.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        connection.execute("PRAGMA busy_timeout=30000")
         return connection
 
     def _build_preview(self, connection: sqlite3.Connection) -> DatabaseOptimizationPreview:

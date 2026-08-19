@@ -35,6 +35,7 @@ class TestImportedFileStatusEnum:
             "pending",
             "matched",
             "safety_blocked",
+            "safety_approved",
             "duplicate_file",
             "already_owned",
             "conflict",
@@ -47,7 +48,7 @@ class TestImportedFileStatusEnum:
         assert {s.value for s in ImportedFileStatus} == expected
 
     def test_member_count(self) -> None:
-        assert len(ImportedFileStatus) == 11
+        assert len(ImportedFileStatus) == 12
 
 
 class TestFileMatchingJobStatus:
