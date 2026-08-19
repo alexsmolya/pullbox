@@ -792,12 +792,18 @@ async def test_download_issue_direct_status_branches(
         no_result = await issues_api.download_issue(issue_id, object(), session)
         assert no_result["status"] == "no_results"
 
-        monkeypatch.setattr(issues_api, "should_auto_grab", lambda *_args: True)
+        monkeypatch.setattr(
+            "pullbox.services.search_acquisition_router.should_auto_grab",
+            lambda *_args: True,
+        )
         downloading = await issues_api.download_issue(issue_id, object(), session)
         assert downloading["status"] == "downloading"
         assert downloading["download_id"] == 22
 
-        monkeypatch.setattr(issues_api, "should_auto_grab", lambda *_args: False)
+        monkeypatch.setattr(
+            "pullbox.services.search_acquisition_router.should_auto_grab",
+            lambda *_args: False,
+        )
 
         class FakeInterventionService:
             pending = True

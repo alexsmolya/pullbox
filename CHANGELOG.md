@@ -57,6 +57,11 @@ long-running imports.
 - Corrected direct acquisition planning when a release exposes multiple
   artifact mirrors, including unavailable or unsafe routes, stale landing
   pages, host fallback, and source-specific retries.
+- Routed one-click issue downloads through the same cross-source acquisition
+  path as scheduled searches, so direct results honor source priority and work
+  when no indexer result is available.
+- Kept direct-review and direct-recovery entries actionable when background
+  dispatch cannot start, instead of resolving them before a transfer is queued.
 - Prevented direct downloads from appearing stalled during slow transfers and
   report a clear slow-source status after sustained low throughput.
 - Preserved direct-download issue state as downloading throughout acquisition

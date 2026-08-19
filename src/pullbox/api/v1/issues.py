@@ -59,6 +59,7 @@ from pullbox.services.issue_service import IssueService
 from pullbox.services.release_validator import (
     ValidationResult,
 )
+from pullbox.services.search_acquisition_router import route_search_acquisition
 from pullbox.services.search_scoring import match_confidence_rank, normalize_source_priority
 from pullbox.services.search_service import (
     DEFAULT_TYPE_THRESHOLDS,
@@ -72,6 +73,7 @@ from pullbox.services.search_service import (
     should_auto_grab,
     summarize_search_pass,
 )
+from pullbox.services.search_source_selection import select_search_source
 from pullbox.services.search_types import SearchEvalKwargs
 from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
 from pullbox.tasks.issue_import_task import (
@@ -895,11 +897,7 @@ async def download_issue(
 
     download_svc = build_download_service(bundle.runtime.registry)
 
-    if (
-        bundle.outcome is None
-        or bundle.outcome.best_release is None
-        or bundle.outcome.best_validation is None
-    ):
+    if bundle.outcome is None:
         session.add(
             _build_issue_search_log(
                 bundle,
@@ -912,92 +910,81 @@ async def download_issue(
         logger.info("issue_download_no_results", issue_id=issue_id)
         return {"issue_id": issue_id, "status": "no_results"}
 
-    validation = bundle.outcome.best_validation
-    best = bundle.outcome.best_release
-
-    # Check threshold — auto-grab or queue to intervention
-    if should_auto_grab(
-        validation.confidence,
-        bundle.target.issue_type,
-        bundle.runtime.type_thresholds,
-    ):
-        download = await download_svc.send_to_client(session, best, issue_id)
+    intervention_svc = InterventionService(download_service=download_svc)
+    selection = select_search_source(
+        bundle.outcome,
+        bundle.runtime.eval_kwargs,
+        source_priority=bundle.runtime.source_priority,
+    )
+    if selection is None:
         session.add(
             _build_issue_search_log(
                 bundle,
                 search_type=SearchType.AUTOMATED,
-                results_grabbed=1,
-                results_rejected=max(0, len(bundle.outcome.raw_results) - 1),
-                action_status="downloading",
+                action_status="no_results",
             )
         )
         await session.commit()
-        logger.info(
-            "issue_download_started",
-            issue_id=issue_id,
-            download_id=download.id,
-            title=best.title,
-            confidence=validation.confidence.value,
-        )
-        return {
+        logger.info("issue_download_no_results", issue_id=issue_id)
+        return {"issue_id": issue_id, "status": "no_results"}
+
+    search_log = _build_issue_search_log(bundle, search_type=SearchType.AUTOMATED)
+    session.add(search_log)
+    await session.flush()
+    routed = await route_search_acquisition(
+        session,
+        outcome=bundle.outcome,
+        search_log_id=search_log.id,
+        eval_kwargs=bundle.runtime.eval_kwargs,
+        type_thresholds=bundle.runtime.type_thresholds,
+        download_service=download_svc,
+        intervention_service=intervention_svc,
+        runner=get_direct_acquisition_runner() if bundle.runtime.direct_providers else None,
+        source_priority=bundle.runtime.source_priority,
+    )
+
+    direct_outcome = bundle.outcome.direct_outcome
+    total_results = len(bundle.outcome.raw_results) + (
+        len(direct_outcome.matched) + len(direct_outcome.rejected) if direct_outcome else 0
+    )
+    search_log.results_grabbed = routed.grabbed
+    search_log.results_queued = routed.queued
+    search_log.results_rejected = max(0, total_results - routed.grabbed - routed.queued)
+    details = dict(search_log.details or {})
+    details["action_status"] = routed.action_status
+    if routed.notices:
+        details["notices"] = list(routed.notices)
+    search_log.details = details
+    await session.commit()
+
+    if routed.grabbed:
+        payload: dict[str, object] = {
             "issue_id": issue_id,
             "status": "downloading",
-            "download_id": download.id,
-            "release_title": best.title,
+            "release_title": selection.release.title,
+            "source_kind": routed.source_kind,
         }
+        if routed.download_id is not None:
+            payload["download_id"] = routed.download_id
+        if routed.acquisition_id is not None:
+            payload["acquisition_id"] = routed.acquisition_id
+        return payload
 
-    # Below threshold — queue to intervention
-    intervention_svc = InterventionService(download_service=download_svc)
-    if await intervention_svc.has_pending_for_issue(session, issue_id):
-        session.add(
-            _build_issue_search_log(
-                bundle,
-                search_type=SearchType.AUTOMATED,
-                results_rejected=max(0, len(bundle.outcome.raw_results) - 1),
-                action_status="queued_existing",
-            )
-        )
-        await session.commit()
-        logger.info(
-            "issue_download_pending_exists",
-            issue_id=issue_id,
-            best_title=best.title,
-        )
+    if routed.queued or routed.action_status == "pending_exists":
         return {
             "issue_id": issue_id,
             "status": "queued",
-            "release_title": best.title,
-            "message": "Already queued for review",
+            "release_title": selection.release.title,
+            "confidence": selection.validation.confidence.value,
+            "source_kind": routed.source_kind,
+            **(
+                {"message": "Already queued for review"}
+                if routed.action_status == "pending_exists"
+                else {}
+            ),
         }
 
-    await intervention_svc.create_pending_match(
-        session,
-        issue_id,
-        best,
-        validation,
-    )
-    session.add(
-        _build_issue_search_log(
-            bundle,
-            search_type=SearchType.AUTOMATED,
-            results_queued=1,
-            results_rejected=max(0, len(bundle.outcome.raw_results) - 1),
-            action_status="queued",
-        )
-    )
-    await session.commit()
-    logger.info(
-        "issue_download_queued",
-        issue_id=issue_id,
-        title=best.title,
-        confidence=validation.confidence.value,
-    )
-    return {
-        "issue_id": issue_id,
-        "status": "queued",
-        "release_title": best.title,
-        "confidence": validation.confidence.value,
-    }
+    return {"issue_id": issue_id, "status": "no_results"}
 
 
 @router.post(
