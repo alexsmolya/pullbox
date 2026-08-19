@@ -640,6 +640,22 @@ class TestHandlersDirect:
         assert 'data-testid="intervention-retry-recovery-' in body
         assert 'data-tip="Dismiss recovery"' in body
         assert 'data-tip="Approve"' not in body
+        assert "bulkActionsEnabled: false" in body
+        assert re.search(
+            r'data-testid="intervention-select-mode-toggle"[^>]*\sdisabled(?:\s|>|=)', body
+        )
+
+    def test_intervention_selection_controller_respects_recovery_bulk_action_lock(self) -> None:
+        """Recovery rows must never enter the generic approve/reject bulk flow."""
+        script = Path("src/pullbox/ui/static/js/pullbox.js").read_text(encoding="utf-8")
+
+        can_enter_body = re.search(
+            r"canEnterSelectMode: function \(\) \{(?P<body>.*?)\n    \},",
+            script,
+            flags=re.DOTALL,
+        )
+        assert can_enter_body is not None
+        assert "this.bulkActionsEnabled" in can_enter_body.group("body")
 
     @pytest.mark.asyncio
     async def test_intervention_history_detail_loads_only_on_expand(

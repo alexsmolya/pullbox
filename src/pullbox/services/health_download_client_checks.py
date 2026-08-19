@@ -102,7 +102,7 @@ async def check_download_clients(
         total_ms += outcome.response_time_ms
         if outcome.status == HealthStatus.HEALTHY:
             healthy_count += 1
-        elif outcome.status != HealthStatus.UNKNOWN:
+        else:
             flagged_names.append(outcome.subject_label or "Direct acquisition")
 
     total = len(subject_outcomes)

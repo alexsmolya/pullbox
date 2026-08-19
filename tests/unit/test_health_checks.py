@@ -992,6 +992,42 @@ class TestDownloadClientsCheck:
         assert host_outcome.details["host_kind"] == "mediafire"
 
     @pytest.mark.asyncio
+    async def test_untested_artifact_host_degrades_direct_acquisition_health(
+        self,
+        db_session: AsyncSession,
+        settings: MagicMock,
+    ) -> None:
+        """An enabled but untested route cannot support an all-routes-available claim."""
+        db_session.add_all(
+            [
+                DirectProviderConfig(
+                    provider_id="pullbox.getcomics",
+                    display_name="GetComics",
+                    endpoint="http://getcomics:8780",
+                    enabled=True,
+                    state=DirectProviderState.HEALTHY,
+                ),
+                DirectHostConfig(
+                    host_kind=DirectArtifactHostKind.MEDIAFIRE,
+                    enabled=True,
+                    reachability_state=DirectHostReachabilityState.NOT_CHECKED,
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        outcomes = await _make_service(settings, registry=ProviderRegistry()).run_check(
+            db_session,
+            "download_clients",
+        )
+
+        assert outcomes[0].status is HealthStatus.DEGRADED
+        assert outcomes[0].message == "1 of 2 acquisition route(s) need attention"
+        assert outcomes[0].actionable_guidance == (
+            "Review Mediafire in Settings > Direct Downloads."
+        )
+
+    @pytest.mark.asyncio
     async def test_bootstrap_errors_report_unhealthy(
         self, db_session: AsyncSession, settings: MagicMock
     ) -> None:

@@ -13419,6 +13419,7 @@ function interventionPage() {
     toolbarMode: "browse",
     bulkActionBusy: null,
     selectAllMatchingBusy: false,
+    bulkActionsEnabled: cfg.bulkActionsEnabled !== false,
     totalMatchingCount: Number(cfg.totalMatchingCount || 0),
     selectionFilterSignature: "",
     afterSettleHandler: null,
@@ -13571,7 +13572,7 @@ function interventionPage() {
     },
 
     canEnterSelectMode: function () {
-      return this.totalMatchingCount > 0;
+      return this.bulkActionsEnabled && this.totalMatchingCount > 0;
     },
 
     enterSelectMode: function () {
