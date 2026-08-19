@@ -11,10 +11,9 @@ from pullbox.ui.health_presenters import (
     _health_response_label,
     _mapping_text,
 )
-from pullbox.ui.health_registry_rows import health_response_or_dash
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from datetime import datetime
 
     from pullbox.ui.health_presenters import HealthCheckItemView
@@ -46,34 +45,18 @@ def health_component_card_stats(
 
     if component_key == "indexers":
         raw_checks = _health_detail_checks(details)
-        proxy_check = next(
-            (check for check in raw_checks if str(check.get("subject_key") or "") == "prowlarr"),
-            None,
-        )
+        proxy_checks = _search_proxy_checks(raw_checks)
         indexer_checks = [
             check for check in raw_checks if str(check.get("subject_kind") or "") == "indexer"
         ]
         healthy_indexers = sum(
             1 for check in indexer_checks if str(check.get("status") or "") == "healthy"
         )
-        proxy_status = str(proxy_check.get("status") or "unknown") if proxy_check else "unknown"
         return (
             HealthComponentStatView(
-                label="Prowlarr",
-                value_label=(
-                    health_response_or_dash(proxy_check.get("response_time_ms"))
-                    if proxy_check
-                    else "Not configured"
-                ),
-                tone=(
-                    "danger"
-                    if proxy_status == "unhealthy"
-                    else "warning"
-                    if proxy_status == "degraded"
-                    else "default"
-                )
-                if proxy_check
-                else "default",
+                label="Search Proxies",
+                value_label=_search_proxy_status_label(proxy_checks),
+                tone=_search_proxy_tone(proxy_checks),
             ),
             HealthComponentStatView(
                 label="Indexers",
@@ -165,35 +148,19 @@ def health_component_detail_stats(
     attention_count = sum(1 for check in checks if check.status in {"degraded", "unhealthy"})
     if component_key == "indexers":
         raw_checks = _health_detail_checks(details)
-        proxy_check = next(
-            (check for check in raw_checks if str(check.get("subject_key") or "") == "prowlarr"),
-            None,
-        )
+        proxy_checks = _search_proxy_checks(raw_checks)
         indexer_checks = [
             check for check in raw_checks if str(check.get("subject_kind") or "") == "indexer"
         ]
         healthy_indexers = sum(
             1 for check in indexer_checks if str(check.get("status") or "") == "healthy"
         )
-        proxy_status = str(proxy_check.get("status") or "unknown") if proxy_check else "unknown"
         return (
             HealthComponentStatView(label="Status", value_label=message or "Unknown"),
             HealthComponentStatView(
-                label="Prowlarr",
-                value_label=(
-                    health_response_or_dash(proxy_check.get("response_time_ms"))
-                    if proxy_check
-                    else "Not configured"
-                ),
-                tone=(
-                    "danger"
-                    if proxy_status == "unhealthy"
-                    else "warning"
-                    if proxy_status == "degraded"
-                    else "default"
-                )
-                if proxy_check
-                else "default",
+                label="Search Proxies",
+                value_label=_search_proxy_status_label(proxy_checks),
+                tone=_search_proxy_tone(proxy_checks),
             ),
             HealthComponentStatView(
                 label="Indexers",
@@ -270,10 +237,38 @@ def health_component_sublabel(
             1 for check in raw_checks if str(check.get("subject_kind") or "") == "indexer"
         )
         if proxy_count:
-            return f"{proxy_count} proxy + {indexer_count} indexers"
+            proxy_label = "proxy" if proxy_count == 1 else "proxies"
+            indexer_label = "indexer" if indexer_count == 1 else "indexers"
+            return f"{proxy_count} {proxy_label} + {indexer_count} {indexer_label}"
         return f"{indexer_count} indexers"
     if component_key == "filesystem":
         return f"{len(checks)} paths checked"
     if component_key == "system":
         return f"{len(checks)} resource checks"
     return f"{len(checks)} checks"
+
+
+def _search_proxy_checks(
+    raw_checks: tuple[Mapping[str, object], ...],
+) -> list[Mapping[str, object]]:
+    """Return configured search-manager proxy subjects from health details."""
+    return [check for check in raw_checks if str(check.get("subject_kind") or "") == "proxy"]
+
+
+def _search_proxy_status_label(proxy_checks: list[Mapping[str, object]]) -> str:
+    """Summarize live proxy health without privileging one manager over another."""
+    if not proxy_checks:
+        return "Not configured"
+    healthy_count = sum(1 for check in proxy_checks if str(check.get("status") or "") == "healthy")
+    total = len(proxy_checks)
+    return f"{healthy_count}/{total} OK" if healthy_count != total else f"{total} active"
+
+
+def _search_proxy_tone(proxy_checks: list[Mapping[str, object]]) -> str:
+    """Expose the worst live proxy status in a compact card-stat tone."""
+    statuses = {str(check.get("status") or "unknown") for check in proxy_checks}
+    if "unhealthy" in statuses:
+        return "danger"
+    if statuses - {"healthy"}:
+        return "warning"
+    return "default"

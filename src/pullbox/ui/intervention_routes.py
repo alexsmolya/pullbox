@@ -219,7 +219,7 @@ async def intervention_page(
 
     hx_target = request.headers.get("HX-Target")
     if request.headers.get("HX-Request"):
-        if normalized_tab == "queue" and hx_target == "intervention-queue-results":
+        if normalized_tab in {"queue", "recovery"} and hx_target == "intervention-queue-results":
             return _templates().TemplateResponse(
                 request,
                 "partials/intervention_queue_results_bundle.html",
@@ -284,7 +284,7 @@ async def htmx_intervention_content(
         ),
     )
     hx_target = request.headers.get("HX-Target")
-    if normalized_tab == "queue" and hx_target == "intervention-queue-results":
+    if normalized_tab in {"queue", "recovery"} and hx_target == "intervention-queue-results":
         return _templates().TemplateResponse(
             request,
             "partials/intervention_queue_results_bundle.html",
@@ -804,6 +804,7 @@ async def htmx_intervention_reject(
     protocol = str(form.get("protocol", "") or "")
     search = str(form.get("search", "") or "")
     requested_page = int(str(form.get("page", "1") or "1") or "1")
+    tab = str(form.get("tab", "queue") or "queue")
 
     from pullbox.services.intervention_service import InterventionService
 
@@ -820,7 +821,7 @@ async def htmx_intervention_reject(
             user,
             **await load_intervention_context(
                 session,
-                tab="queue",
+                tab=tab,
                 reason_filter=reason,
                 confidence_filter=confidence,
                 protocol_filter=protocol,
@@ -859,4 +860,74 @@ async def htmx_intervention_reject(
             ),
             tone="neutral",
         ),
+    )
+
+
+@router.post(
+    "/htmx/intervention/{pending_id}/retry-recovery",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def htmx_intervention_retry_recovery(
+    request: Request,
+    pending_id: int,
+    user: AuthenticatedUser,
+    session: DbSession,
+) -> Response:
+    """Refresh direct download routes after automatic fallback has been exhausted."""
+    pending_match = await session.get(PendingMatch, pending_id)
+    if pending_match is None:
+        return Response(status_code=404)
+    form_getter = getattr(request, "form", None)
+    form = await form_getter() if callable(form_getter) else {}
+    reason = str(form.get("reason", "") or "")
+    confidence = str(form.get("confidence", "") or "")
+    protocol = str(form.get("protocol", "") or "")
+    search = str(form.get("search", "") or "")
+    requested_page = int(str(form.get("page", "1") or "1") or "1")
+
+    from pullbox.services.intervention_service import InterventionService
+
+    try:
+        await InterventionService().retry_direct_recovery(session, pending_id)
+    except (DirectAcquisitionPlanningError, ValueError) as exc:
+        logger.warning("htmx_direct_recovery_retry_failed", pending_id=pending_id, error=str(exc))
+        return _templates().TemplateResponse(
+            request,
+            "partials/intervention_action_result.html",
+            _ctx(
+                request,
+                user,
+                pending_id=pending_id,
+                heading="Could Not Refresh Download Routes",
+                title=pending_match.release_title,
+                message=(
+                    "Pullbox could not find a fresh eligible route. Check provider or "
+                    "artifact-host settings, then try again."
+                ),
+                tone="error",
+            ),
+        )
+
+    ctx = _ctx(
+        request,
+        user,
+        **await load_intervention_context(
+            session,
+            tab="recovery",
+            reason_filter=reason,
+            confidence_filter=confidence,
+            protocol_filter=protocol,
+            search_query=search,
+            requested_page=requested_page,
+        ),
+    )
+    return _toast_response(
+        _templates().TemplateResponse(
+            request,
+            "partials/intervention_queue_results_bundle.html",
+            ctx,
+        ),
+        "Download routes refreshed and acquisition queued.",
+        "success",
     )

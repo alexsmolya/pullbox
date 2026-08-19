@@ -15,7 +15,7 @@
     :data-toolbar-mode="toolbarMode"
     :data-intervention-bulk-busy="bulkActionBusy ? 'true' : 'false'"
     class="series-page-shell"
-    x-data="interventionPage({ csrfToken: '{{ csrf_token }}' })"
+    x-data="interventionPage({ csrfToken: '{{ csrf_token }}', bulkActionsEnabled: {{ 'false' if tab == 'recovery' else 'true' }} })"
   >
     {% include "partials/intervention_results.html" %}
   </div>

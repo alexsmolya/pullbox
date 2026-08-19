@@ -20,6 +20,8 @@ from pullbox.services.auth_service import SESSION_COOKIE_NAME, AuthService
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from httpx import AsyncClient
 
 os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-health-tests")
@@ -709,6 +711,88 @@ class TestHealthRefresh:
 
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Unknown component: definitely_not_real"
+
+    async def test_database_optimize_runs_maintenance_and_refreshes_health(
+        self,
+        authenticated_client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        class FakeResult:
+            reclaimed_bytes = 4096
+            before = type(
+                "Before",
+                (),
+                {
+                    "database_bytes": 8192,
+                    "wal_bytes": 1024,
+                    "free_pages": 1,
+                    "reclaimable_bytes": 4096,
+                },
+            )()
+            after = type(
+                "After",
+                (),
+                {
+                    "database_bytes": 4096,
+                    "wal_bytes": 0,
+                    "free_pages": 0,
+                    "reclaimable_bytes": 0,
+                },
+            )()
+
+        runtime = MagicMock()
+        runtime.optimize = AsyncMock(return_value=FakeResult())
+        refresh = AsyncMock(return_value=[])
+        monkeypatch.setattr(
+            "pullbox.api.v1.health._sqlite_database_path",
+            lambda _session: tmp_path / "pullbox.db",
+        )
+        monkeypatch.setattr(
+            "pullbox.api.v1.health.DatabaseOptimizationRuntimeService",
+            lambda _path: runtime,
+        )
+        monkeypatch.setattr("pullbox.api.v1.health.run_health_refresh", refresh)
+
+        response = await authenticated_client.post(
+            f"{HEALTH_URL}/database/optimize",
+            headers=_csrf_header_for(authenticated_client),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["reclaimed_bytes"] == 4096
+        runtime.optimize.assert_awaited_once_with()
+        refresh.assert_awaited_once_with(component="database")
+
+    async def test_database_optimize_rejects_active_import(
+        self,
+        authenticated_client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from pullbox.core.exceptions import ValidationError
+
+        async def reject_active_import(_session: object) -> None:
+            raise ValidationError(
+                "Database optimization is unavailable while an import or rollback is active."
+            )
+
+        monkeypatch.setattr(
+            "pullbox.api.v1.health._ensure_database_optimization_is_admissible",
+            reject_active_import,
+        )
+        monkeypatch.setattr(
+            "pullbox.api.v1.health._sqlite_database_path",
+            lambda _session: tmp_path / "pullbox.db",
+        )
+
+        response = await authenticated_client.post(
+            f"{HEALTH_URL}/database/optimize",
+            headers=_csrf_header_for(authenticated_client),
+        )
+
+        assert response.status_code == 422
+        assert "import or rollback" in response.json()["error"]["message"]
 
 
 @pytest.mark.asyncio

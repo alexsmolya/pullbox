@@ -16,6 +16,7 @@ import pytest
 
 from pullbox.api.deps import (
     _is_local_address,
+    _should_prime_sidebar_context,
     get_current_user,
     get_db_dep,
     require_auth,
@@ -68,6 +69,26 @@ def _make_request(
     request.headers = _Headers(headers or {})
     request.state = MagicMock()
     return request
+
+
+class TestSidebarContextPriming:
+    """Verify sidebar badge queries only run when their markup will render."""
+
+    def test_boosted_navigation_skips_sidebar_context_priming(self) -> None:
+        """Boosted navigation keeps the existing sidebar instead of swapping it."""
+        request = _make_request(headers={"HX-Boosted": "true"})
+        request.method = "GET"
+        request.url.path = "/series"
+
+        assert _should_prime_sidebar_context(request) is False
+
+    def test_full_page_navigation_primes_sidebar_context(self) -> None:
+        """Initial document loads retain server-rendered badge values."""
+        request = _make_request()
+        request.method = "GET"
+        request.url.path = "/series"
+
+        assert _should_prime_sidebar_context(request) is True
 
 
 class TestGetCurrentUserSessionCookie:

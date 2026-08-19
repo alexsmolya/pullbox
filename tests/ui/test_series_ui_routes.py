@@ -352,6 +352,26 @@ class TestSeriesRouteContracts:
         assert 'data-testid="series-result-row"' in response.text
         assert all("issues_1" not in statement for statement in recorder.statements)
 
+    async def test_title_sort_aggregates_issue_counts_for_visible_page_only(
+        self,
+        authenticated_client,
+        seeded_series_ui_data,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Default sorting must not group every issue solely to render one page."""
+        engine = sec_db.kw["bind"]
+        with SelectRecorder(engine) as recorder:
+            response = await authenticated_client.get("/series?sort=title&per_page=2")
+
+        assert response.status_code == 200
+        grouped_issue_queries = [
+            statement
+            for statement in recorder.statements
+            if "GROUP BY issues.series_id" in statement
+        ]
+        assert grouped_issue_queries
+        assert any("WHERE issues.series_id IN" in statement for statement in grouped_issue_queries)
+
     async def test_series_cards_render_status_aware_year_ranges(
         self,
         authenticated_client,

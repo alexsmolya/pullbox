@@ -69,6 +69,20 @@
             class="checkbox-pb utility-step-check"
           />
         </label>
+
+        <label
+          class="utility-step-card utility-step-card-inline cursor-pointer transition-colors hover:border-pb-border-hover"
+          :class="checks.optimize ? 'utility-step-card-active' : ''"
+        >
+          <span class="utility-step-num">05</span>
+          <span class="utility-step-name">Optimize database storage</span>
+          <input
+            x-model="checks.optimize"
+            type="checkbox"
+            data-testid="utilities-db-check-check-optimize"
+            class="checkbox-pb utility-step-check"
+          />
+        </label>
       </div>
 
       <div class="space-y-2">
@@ -167,6 +181,12 @@
             <p class="mt-1 text-xs text-pb-text-dim">That usually means the library metadata and filesystem are already in good shape for this scope.</p>
           </div>
         </template>
+      </div>
+
+      <div x-show="optimizationResult" x-cloak data-testid="utilities-db-check-optimization-result">
+        {% call inline_alert(tone="success", icon="check") %}
+          <p x-text="optimizationResult"></p>
+        {% endcall %}
       </div>
 
       <div class="utility-tool-action-footer utility-tool-action-footer-card">

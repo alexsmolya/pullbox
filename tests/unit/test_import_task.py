@@ -21,6 +21,7 @@ from pullbox.tasks.import_task import (
     ImportRunner,
     _build_import_service,
     _publish_progress_event,
+    _review_rematch_locks,
     get_highest_visible_progress_revision,
     get_latest_progress_event,
     get_progress_queue,
@@ -64,6 +65,38 @@ def _sqlite_database_locked_error() -> SQLAlchemyOperationalError:
         {},
         sqlite3.OperationalError("database is locked"),
     )
+
+
+@pytest.mark.asyncio
+async def test_review_series_rematches_are_serialized_per_import_job() -> None:
+    """Approved safety files must not rematch concurrently against one review job."""
+    from pullbox.tasks.import_task import run_import_series_rematch_task
+
+    started_first = asyncio.Event()
+    release_first = asyncio.Event()
+    calls: list[int] = []
+
+    async def fake_rematch(job_id: int, imported_series_id: int) -> None:
+        calls.append(imported_series_id)
+        if imported_series_id == 10:
+            started_first.set()
+            await release_first.wait()
+
+    _review_rematch_locks.pop(71, None)
+    with patch(
+        "pullbox.tasks.import_task._run_import_series_rematch_task",
+        side_effect=fake_rematch,
+    ):
+        first = asyncio.create_task(run_import_series_rematch_task(71, 10))
+        await started_first.wait()
+        second = asyncio.create_task(run_import_series_rematch_task(71, 11))
+        await asyncio.sleep(0)
+        assert calls == [10]
+        release_first.set()
+        await asyncio.gather(first, second)
+
+    assert calls == [10, 11]
+    _review_rematch_locks.pop(71, None)
 
 
 # ── Test: Progress Queues ────────────────────────────────────────────────

@@ -15,7 +15,19 @@
     aria-current="{{ 'page' if tab == 'queue' else 'false' }}"
     class="downloads-tab-btn{% if tab == 'queue' %} is-active{% endif %}"
   >
-    Queue
+    Match Review{% if match_review_count is defined %} ({{ match_review_count }}){% endif %}
+  </a>
+  <a
+    href="/intervention?tab=recovery"
+    data-testid="intervention-tab-recovery"
+    hx-get="/intervention?tab=recovery"
+    hx-target="#intervention-page"
+    hx-swap="outerHTML"
+    hx-push-url="true"
+    aria-current="{{ 'page' if tab == 'recovery' else 'false' }}"
+    class="downloads-tab-btn{% if tab == 'recovery' %} is-active{% endif %}"
+  >
+    Recovery{% if recovery_count is defined %} ({{ recovery_count }}){% endif %}
   </a>
   <a
     href="/intervention?tab=history"

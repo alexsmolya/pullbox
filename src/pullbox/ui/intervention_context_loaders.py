@@ -16,6 +16,7 @@ from pullbox.ui.intervention_filter_helpers import (
     INTERVENTION_REASON_LABELS,
     build_intervention_item_meta,
     get_intervention_history_order_by,
+    intervention_lane_clause,
     intervention_protocol_clause,
     intervention_review_reason_clause,
     intervention_source_expr,
@@ -71,6 +72,7 @@ def build_intervention_queue_filters(
     confidence_filter: str | None = None,
     protocol_filter: str | None = None,
     search_query: str | None = None,
+    lane: str = "review",
 ) -> tuple[list[ColumnElement[bool]], str, str, str, str]:
     """Build normalized queue filters for intervention queue queries."""
     from pullbox.core.db_utils import escape_like
@@ -81,7 +83,10 @@ def build_intervention_queue_filters(
     normalized_search = (search_query or "").strip()
     source_expr = intervention_source_expr()
 
-    filters: list[ColumnElement[bool]] = [PendingMatch.status == PendingMatchStatus.PENDING]
+    filters: list[ColumnElement[bool]] = [
+        PendingMatch.status == PendingMatchStatus.PENDING,
+        intervention_lane_clause(lane),
+    ]
     if normalized_reason:
         filters.append(intervention_review_reason_clause(normalized_reason))
     if normalized_confidence:
@@ -116,6 +121,7 @@ async def load_intervention_queue_context(
     protocol_filter: str | None = None,
     search_query: str | None = None,
     requested_page: int = 1,
+    lane: str = "review",
 ) -> dict[str, object]:
     """Load queue-only intervention context for actionable pending matches."""
     (
@@ -129,11 +135,12 @@ async def load_intervention_queue_context(
         confidence_filter=confidence_filter,
         protocol_filter=protocol_filter,
         search_query=search_query,
+        lane=lane,
     )
 
     summary_result = await session.execute(
         select(PendingMatch.confidence, func.count(PendingMatch.id))
-        .where(PendingMatch.status == PendingMatchStatus.PENDING)
+        .where(PendingMatch.status == PendingMatchStatus.PENDING, intervention_lane_clause(lane))
         .group_by(PendingMatch.confidence)
     )
     confidence_counts = {
@@ -178,6 +185,7 @@ async def load_intervention_queue_context(
 
     return {
         "tab": "queue",
+        "lane": lane,
         "pending_count": pending_count,
         "pending_matches": pending_matches,
         "intervention_item_meta": item_meta,
@@ -355,17 +363,38 @@ async def load_intervention_context(
 ) -> dict[str, object]:
     """Load the intervention workspace context for queue or history."""
     normalized_tab = normalize_intervention_tab(tab)
+    queue_lane = "recovery" if normalized_tab == "recovery" else "review"
 
     summary_result = await session.execute(
         select(PendingMatch.confidence, func.count(PendingMatch.id))
-        .where(PendingMatch.status == PendingMatchStatus.PENDING)
+        .where(
+            PendingMatch.status == PendingMatchStatus.PENDING,
+            intervention_lane_clause(queue_lane),
+        )
         .group_by(PendingMatch.confidence)
     )
     confidence_counts = {
         (typing_cast("str", confidence_value) or "").lower(): count
         for confidence_value, count in summary_result.all()
     }
-    pending_count = sum(confidence_counts.values())
+    active_pending_count = sum(confidence_counts.values())
+    match_review_count: int = (
+        await session.execute(
+            select(func.count(PendingMatch.id)).where(
+                PendingMatch.status == PendingMatchStatus.PENDING,
+                intervention_lane_clause("review"),
+            )
+        )
+    ).scalar_one()
+    recovery_count: int = (
+        await session.execute(
+            select(func.count(PendingMatch.id)).where(
+                PendingMatch.status == PendingMatchStatus.PENDING,
+                intervention_lane_clause("recovery"),
+            )
+        )
+    ).scalar_one()
+    pending_count = match_review_count + recovery_count
     history_total: int = (
         await session.execute(
             select(func.count(PendingMatch.id)).where(
@@ -392,15 +421,21 @@ async def load_intervention_context(
             protocol_filter=protocol_filter,
             search_query=search_query,
             requested_page=requested_page,
+            lane=queue_lane,
         )
+
+    active_context["tab"] = normalized_tab
 
     return {
         "tab": normalized_tab,
         "queue_count": pending_count,
         "history_total": history_total,
+        "match_review_count": match_review_count,
+        "recovery_count": recovery_count,
+        **active_context,
         "pending_count": pending_count,
+        "active_pending_count": active_pending_count,
         "high_count": confidence_counts.get("high", 0),
         "medium_count": confidence_counts.get("medium", 0),
         "low_count": confidence_counts.get("low", 0),
-        **active_context,
     }

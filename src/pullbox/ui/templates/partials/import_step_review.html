@@ -203,6 +203,13 @@
   x-on:import:conflicts-reset.window="handleConflictsReset($event.detail)"
   data-testid="import-collection-review"
   data-import-review-status-counts='{{ status_counts|tojson|forceescape }}'
+  {% if safety_rematch_pending %}
+  hx-get="/import/{{ job.id }}/review-partial?status=safety_blocked&sort={{ sort }}&page={{ page }}"
+  hx-trigger="every 2s [window.pullboxLiveUpdatesEnabled()]"
+  hx-target="#import-step-review-shell"
+  hx-swap="outerHTML"
+  hx-sync="#import-step-review-shell:replace"
+  {% endif %}
   class="space-y-6"
 >
   <input type="hidden" name="review_status_filter" value="{{ active_review_view if active_review_view != 'series' else '' }}">
@@ -1006,17 +1013,27 @@
                     {% for blocked_file in safety_blocked_files_by_series_id.get(item.id, []) %}
                     {% set blocked_diagnostics = blocked_file.diagnostics or {} %}
                     {% set safety_block = blocked_diagnostics.get('safety_block', {}) %}
+                    {% set safety_approved = blocked_file.status.value == 'safety_approved' %}
                     {% set safety_block_overrideable = safety_block.get('overrideable', true) is not sameas false %}
                     <div class="rounded-lg border border-pb-border bg-pb-card/70 p-3">
                       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div class="min-w-0">
                           <p class="break-words font-mono text-xs text-pb-text">{{ blocked_file.file_name }}</p>
                           <p class="mt-1 break-words text-xs text-pb-text-sec">
+                            {% if safety_approved %}
+                            Safety exception approved. Preparing this file for matching before it can be selected.
+                            {% else %}
                             {{ safety_block.get('reason') or blocked_file.error_message or 'File failed archive safety review.' }}
+                            {% endif %}
                           </p>
                         </div>
                         <div class="flex shrink-0 flex-wrap items-center gap-2">
-                          {% if safety_block_overrideable %}
+                          {% if safety_approved %}
+                          <span class="pill pill-info justify-center">
+                            <svg data-testid="import-review-safety-rematch-spinner" class="h-3 w-3 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path stroke-linecap="round" d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
+                            Preparing match
+                          </span>
+                          {% elif safety_block_overrideable %}
                           <button
                             type="button"
                             class="btn-primary btn-sm"
@@ -1031,6 +1048,7 @@
                           {% else %}
                           <span class="pill pill-error justify-center">Cannot override</span>
                           {% endif %}
+                          {% if not safety_approved %}
                           <button
                             type="button"
                             class="btn-ghost btn-sm"
@@ -1042,6 +1060,7 @@
                           >
                             Skip
                           </button>
+                          {% endif %}
                         </div>
                       </div>
                     </div>

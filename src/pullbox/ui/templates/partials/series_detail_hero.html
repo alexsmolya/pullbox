@@ -60,8 +60,9 @@
 
       <div data-testid="series-detail-status-row" class="series-domain-status-row">
         <span
-          class="series-domain-led {{ 'series-domain-led-on' if series.monitored else 'series-domain-led-off' }}"
-          data-tip="{{ 'Monitored' if series.monitored else 'Paused' }}"
+          class="series-domain-led"
+          :class="monitored ? 'series-domain-led-on' : 'series-domain-led-off'"
+          :data-tip="monitored ? 'Monitored' : 'Paused'"
           data-tip-pos="right"
           data-tip-size="narrow"
         ></span>
@@ -69,7 +70,11 @@
         {% if series.status_override %}
         <span class="pill pill-warning">Manual status</span>
         {% endif %}
-        <span class="pill {{ 'pill-info' if series.monitored else 'pill-neutral' }}">{{ "Monitored" if series.monitored else "Paused" }}</span>
+        <span
+          class="pill"
+          :class="monitored ? 'pill-info' : 'pill-neutral'"
+          x-text="monitored ? 'Monitored' : 'Paused'"
+        >{{ "Monitored" if series.monitored else "Paused" }}</span>
         {% if series.publisher %}
         <span class="pill pill-neutral">{{ series.publisher.name }}</span>
         {% endif %}

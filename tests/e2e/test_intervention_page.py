@@ -86,6 +86,10 @@ class TestInterventionPage:
                 const toolbarRect = toolbar.getBoundingClientRect();
                 const content = document.querySelector("#content");
                 if (content) {
+                    const spacer = document.createElement("div");
+                    spacer.style.flex = "0 0 480px";
+                    spacer.setAttribute("aria-hidden", "true");
+                    content.append(spacer);
                     content.scrollTop = 480;
                     content.dispatchEvent(new Event("scroll"));
                 } else {
@@ -120,6 +124,10 @@ class TestInterventionPage:
                 const toolbarRect = toolbar.getBoundingClientRect();
                 const content = document.querySelector("#content");
                 if (content) {
+                    const spacer = document.createElement("div");
+                    spacer.style.flex = "0 0 480px";
+                    spacer.setAttribute("aria-hidden", "true");
+                    content.append(spacer);
                     content.scrollTop = 480;
                     content.dispatchEvent(new Event("scroll"));
                 } else {

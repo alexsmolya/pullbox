@@ -604,6 +604,60 @@ class TestHandlersDirect:
         assert "2026" in body
 
     @pytest.mark.asyncio
+    async def test_intervention_recovery_tab_renders_recovery_actions(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Failed direct routes are actionable without mislabeling them as a bad match."""
+        from pullbox.ui.routes import intervention_page
+
+        pending_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pending_ids[0])
+            assert pending is not None
+            pending.match_details = {
+                "source_kind": "direct",
+                "provider_identity": "pullbox.getcomics",
+                "provider_name": "pullbox.getcomics",
+                "artifact_host_kind": "mega",
+                "failure_class": "permanent_mirror",
+                "failure_code": "provider_mirror_changed",
+                "series_match_type": "exact",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            response = await intervention_page(
+                request=_mock_request(),
+                user=MagicMock(),
+                session=session,
+                tab="recovery",
+            )
+
+        body = response.body.decode()
+        assert 'data-testid="intervention-tab-recovery"' in body
+        assert "MEGA mirror is no longer available" in body
+        assert 'data-testid="intervention-retry-recovery-' in body
+        assert 'data-tip="Dismiss recovery"' in body
+        assert 'data-tip="Approve"' not in body
+        assert "bulkActionsEnabled: false" in body
+        assert re.search(
+            r'data-testid="intervention-select-mode-toggle"[^>]*\sdisabled(?:\s|>|=)', body
+        )
+
+    def test_intervention_selection_controller_respects_recovery_bulk_action_lock(self) -> None:
+        """Recovery rows must never enter the generic approve/reject bulk flow."""
+        script = Path("src/pullbox/ui/static/js/pullbox.js").read_text(encoding="utf-8")
+
+        can_enter_body = re.search(
+            r"canEnterSelectMode: function \(\) \{(?P<body>.*?)\n    \},",
+            script,
+            flags=re.DOTALL,
+        )
+        assert can_enter_body is not None
+        assert "this.bulkActionsEnabled" in can_enter_body.group("body")
+
+    @pytest.mark.asyncio
     async def test_intervention_history_detail_loads_only_on_expand(
         self,
         _db_factory: async_sessionmaker[AsyncSession],

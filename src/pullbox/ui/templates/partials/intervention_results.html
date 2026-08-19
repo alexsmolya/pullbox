@@ -12,7 +12,7 @@
 {% endset %}
 
 {% set intervention_hidden_inputs_html %}
-  <input type="hidden" name="tab" value="queue">
+  <input type="hidden" name="tab" value="{{ tab }}">
   <input type="hidden" name="page" value="{{ page }}">
 {% endset %}
 
@@ -107,9 +107,9 @@
             data-testid="intervention-select-mode-toggle"
             @click="enterSelectMode()"
             class="select-btn whitespace-nowrap"
-            x-bind:disabled="!canEnterSelectMode()"
+          x-bind:disabled="!canEnterSelectMode()"
             aria-label="Select intervention items"
-            {% if filtered_count == 0 %}disabled{% endif %}
+          {% if filtered_count == 0 or tab == 'recovery' %}disabled{% endif %}
             x-text="selectModeButtonLabel()"
           >
             Select

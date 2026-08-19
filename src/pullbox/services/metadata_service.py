@@ -32,13 +32,14 @@ from pullbox.models.series import (
     SeriesStatusOverride,
     SeriesType,
 )
+from pullbox.providers.base import SeriesMetadata
 from pullbox.providers.metadata.comicvine import ComicVineError
 from pullbox.services.cover_cache_service import purge_series_cover_cache
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from pullbox.providers.base import IssueSummary, SeriesMetadata
+    from pullbox.providers.base import IssueSummary
     from pullbox.providers.metadata.comicvine import ComicVineProvider
 
 logger = structlog.get_logger(__name__)
@@ -235,6 +236,17 @@ class MetadataService:
             return await self._provider.get_series(str(comicvine_id))
         except ComicVineError as exc:
             raise _provider_error_from_comicvine(exc) from exc
+
+    async def get_cached_series_metadata(
+        self,
+        comicvine_id: int,
+    ) -> SeriesMetadata | None:
+        """Return fresh cached series metadata without starting a provider request."""
+        cached_lookup = getattr(type(self._provider), "get_series_cached", None)
+        if cached_lookup is None:
+            return None
+        cached_metadata = await cached_lookup(self._provider, str(comicvine_id))
+        return cached_metadata if isinstance(cached_metadata, SeriesMetadata) else None
 
     async def get_issue_summaries_for_series(
         self,

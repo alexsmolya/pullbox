@@ -17,6 +17,8 @@ from pullbox.core.exceptions import NotFoundError, ValidationError
 from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.models.config import DEFAULT_SYSTEM_CONFIG, SystemConfig
 from pullbox.models.library import LibraryFile, LibraryRoot
+from pullbox.services.database_optimization_service import DatabaseOptimizationService
+from pullbox.services.health_helpers import _sqlite_database_path
 from pullbox.utilities.import_guards import (
     ensure_no_active_import_file_mutation,
     ensure_utility_job_allowed_during_import,
@@ -635,6 +637,34 @@ async def db_check_preview(
                 context={
                     "repair_kind": "reindex_root",
                     "target_root_path": body.library_root,
+                },
+            )
+        )
+
+    if "optimize" in checks:
+        db_path = _sqlite_database_path(session)
+        if db_path is None:
+            raise ValidationError(
+                "Database optimization is only available for file-backed SQLite databases."
+            )
+        preview = await asyncio.to_thread(DatabaseOptimizationService(db_path).preview)
+        findings.append(
+            DBCheckPreviewFinding(
+                finding_id="optimize-database",
+                check_type="optimize",
+                record_id=None,
+                record_type="database",
+                description=(
+                    f"Reclaim about {preview.reclaimable_bytes / (1024 * 1024):.1f} MB "
+                    f"from {preview.free_pages:,} SQLite free pages."
+                ),
+                suggested_action="optimize",
+                allowed_actions=["optimize", "skip"],
+                context={
+                    "reclaimable_bytes": preview.reclaimable_bytes,
+                    "required_free_bytes": preview.required_free_bytes,
+                    "available_free_bytes": preview.available_free_bytes,
+                    "integrity_result": preview.integrity_result,
                 },
             )
         )

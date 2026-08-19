@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
+from uuid import uuid4
 
 import structlog
 from sqlalchemy import func, select, update
@@ -459,6 +460,70 @@ class InterventionService:
             attempt_id=attempt.id,
         )
         return attempt
+
+    async def retry_direct_recovery(
+        self,
+        session: AsyncSession,
+        pending_id: int,
+    ) -> DirectAcquisitionAttempt:
+        """Resolve a failed direct candidate again without replaying its stale artifact."""
+        pending_match = await session.get(PendingMatch, pending_id)
+        if pending_match is None or pending_match.status != PendingMatchStatus.PENDING:
+            raise ValueError("Direct recovery item is not pending")
+        attempt_id = _direct_attempt_id(pending_match)
+        if attempt_id is None or not (pending_match.match_details or {}).get("failure_class"):
+            raise ValueError("Pending match is not a direct acquisition recovery")
+
+        prior = await session.get(DirectAcquisitionAttempt, attempt_id)
+        if prior is None or prior.issue_id != pending_match.issue_id:
+            raise ValueError("Pending match has an invalid direct attempt reference")
+
+        fresh = DirectAcquisitionAttempt(
+            request_key=f"direct-recovery:{uuid4().hex}",
+            issue_id=prior.issue_id,
+            search_log_id=prior.search_log_id,
+            provider_config_id=prior.provider_config_id,
+            provider_identity=prior.provider_identity,
+            provider_candidate_id=prior.provider_candidate_id,
+            state=DirectAcquisitionState.DISCOVERED,
+            requested_coverage=dict(prior.requested_coverage or {}),
+            candidate_snapshot=dict(prior.candidate_snapshot or {}),
+            progress_snapshot={"schema_version": 1, "stage": "discovered", "recovery_of": prior.id},
+            max_retries=prior.max_retries,
+            replace_existing_file=prior.replace_existing_file,
+        )
+        session.add(fresh)
+        await session.flush()
+        try:
+            planned = await self._direct_planner(session, acquisition_id=fresh.id)
+        except Exception:
+            await session.delete(fresh)
+            await session.flush()
+            raise
+
+        details = dict(pending_match.match_details or {})
+        details["resolution_reason"] = "recovery_replanned"
+        details["recovery_attempt_id"] = fresh.id
+        pending_match.match_details = details
+        pending_match.status = PendingMatchStatus.APPROVED
+        pending_match.resolved_at = datetime.now(UTC)
+        pending_match.resolved_by = "user"
+        await session.commit()
+
+        runner_getter = self._direct_runner_getter or _get_direct_runner
+        await runner_getter().dispatch(
+            planned.attempt.id,
+            planned.selected_artifact.id,
+            initial_source=planned.initial_source,
+        )
+        logger.info(
+            "direct_acquisition_recovery_replanned",
+            pending_id=pending_id,
+            issue_id=pending_match.issue_id,
+            prior_attempt_id=prior.id,
+            fresh_attempt_id=fresh.id,
+        )
+        return planned.attempt
 
     async def reject_match(
         self,

@@ -18,6 +18,8 @@ from pullbox.core.sqlite_lock import (
 from pullbox.database import get_session_factory
 from pullbox.models.import_job import (
     ImportControlRequest,
+    ImportedFile,
+    ImportedFileStatus,
     ImportedSeries,
     ImportJob,
     ImportJobStatus,
@@ -48,6 +50,7 @@ _latest_import_progress_events: dict[int, ImportProgressEvent] = {}
 _latest_import_progress_revisions: dict[int, int] = {}
 _import_runner: ImportRunner | None = None
 _background_tasks: set[asyncio.Task[Any]] = set()
+_review_rematch_locks: dict[int, asyncio.Lock] = {}
 
 _SCAN_STATES = frozenset(
     {
@@ -779,6 +782,13 @@ async def run_import_execute_task(job_id: int) -> None:
 
 async def run_import_series_rematch_task(job_id: int, imported_series_id: int) -> None:
     """Rerun review file matching for one manually overridden import series."""
+    lock = _review_rematch_locks.setdefault(job_id, asyncio.Lock())
+    async with lock:
+        await _run_import_series_rematch_task(job_id, imported_series_id)
+
+
+async def _run_import_series_rematch_task(job_id: int, imported_series_id: int) -> None:
+    """Perform one rematch after the job-level review rematch lock is held."""
     session_factory = get_session_factory()
     async with session_factory() as session:
         service = await _build_import_service(session)
@@ -799,6 +809,16 @@ async def run_import_series_rematch_task(job_id: int, imported_series_id: int) -
                     diagnostics.pop("rematch_pending", None)
                     diagnostics["rematch_error"] = "File rematch failed. Check the import log."
                     item.diagnostics = diagnostics
+                    files_result = await session.execute(
+                        sa_select(ImportedFile).where(
+                            ImportedFile.import_job_id == job_id,
+                            ImportedFile.import_series_id == imported_series_id,
+                            ImportedFile.status == ImportedFileStatus.SAFETY_APPROVED,
+                        )
+                    )
+                    for imp_file in files_result.scalars().all():
+                        imp_file.status = ImportedFileStatus.SAFETY_BLOCKED
+                        imp_file.error_message = "File rematch failed. Check the import log."
                 if await session.get(ImportJob, job_id) is not None:
                     await service._log_event(
                         session,

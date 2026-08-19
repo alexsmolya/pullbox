@@ -43,7 +43,9 @@ from pullbox.services.health_filesystem_checks import (
 from pullbox.services.health_indexer_checks import (
     check_indexer_subject,
     check_indexers,
+    check_jackett_subject,
     check_prowlarr_subject,
+    load_jackett_subject_config,
     load_prowlarr_subject_config,
 )
 from pullbox.services.health_persistence import (
@@ -348,11 +350,13 @@ class HealthService:
         return download_client_unknown_outcome(config, message=message)
 
     async def _check_indexers(self, session: AsyncSession) -> list[CheckOutcome]:
-        """Test Prowlarr and enabled indexers as a grouped multi-entity component."""
+        """Test configured search managers and enabled indexers as one component."""
         return await check_indexers(
             session,
             load_prowlarr_subject_config=self._load_prowlarr_subject_config,
+            load_jackett_subject_config=self._load_jackett_subject_config,
             check_prowlarr_subject=self._check_prowlarr_subject,
+            check_jackett_subject=self._check_jackett_subject,
             check_indexer_subject=self._check_indexer_subject,
         )
 
@@ -363,6 +367,13 @@ class HealthService:
         """Load and decrypt Prowlarr connection settings for health checks."""
         return await load_prowlarr_subject_config(session)
 
+    async def _load_jackett_subject_config(
+        self,
+        session: AsyncSession,
+    ) -> tuple[str | None, str | None]:
+        """Load and decrypt Jackett connection settings for health checks."""
+        return await load_jackett_subject_config(session)
+
     async def _check_prowlarr_subject(
         self,
         *,
@@ -371,6 +382,15 @@ class HealthService:
     ) -> CheckOutcome:
         """Build a persisted health summary for the configured Prowlarr proxy."""
         return await check_prowlarr_subject(url=url, api_key=api_key)
+
+    async def _check_jackett_subject(
+        self,
+        *,
+        url: str,
+        api_key: str,
+    ) -> CheckOutcome:
+        """Build a persisted health summary for the configured Jackett proxy."""
+        return await check_jackett_subject(url=url, api_key=api_key)
 
     async def _check_indexer_subject(
         self,

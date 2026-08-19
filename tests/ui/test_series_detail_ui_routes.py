@@ -172,9 +172,10 @@ class TestSeriesDetailRouteContracts:
         assert 'target="_blank"' in response.text
         assert 'rel="noopener"' in response.text
         assert 'data-testid="series-detail-status-row"' in response.text
-        assert 'class="pill pill-info">Monitored</span>' in response.text
+        assert "x-text=\"monitored ? 'Monitored' : 'Paused'\"" in response.text
+        assert ":class=\"monitored ? 'pill-info' : 'pill-neutral'\"" in response.text
         assert f"2016{_EN_DASH}present" in response.text
-        assert 'data-tip="Monitored"' in response.text
+        assert ":data-tip=\"monitored ? 'Monitored' : 'Paused'\"" in response.text
         assert 'data-tip="Remove alternate name"' in response.text
         assert 'data-testid="series-detail-hero-summary-panel"' in response.text
         assert 'data-testid="series-detail-hero-actions-panel"' in response.text
@@ -307,12 +308,33 @@ class TestSeriesDetailRouteContracts:
         monitor_control_html = _series_monitor_control_html(response.text)
         assert ">Monitored</span>" in monitor_control_html
         assert "Toggle monitoring for this series" in monitor_control_html
-        assert 'class="pill pill-neutral">Paused</span>' in response.text
+        assert "x-text=\"monitored ? 'Monitored' : 'Paused'\"" in response.text
+        assert ":class=\"monitored ? 'pill-info' : 'pill-neutral'\"" in response.text
         assert ':checked="monitored"' in monitor_control_html
         assert ":aria-checked=\"monitored ? 'true' : 'false'\"" in monitor_control_html
         assert '@change="toggleMonitoring($event.target.checked)"' in monitor_control_html
         assert "Mark as continuing" in response.text
         assert '@click="updateStatusOverride(&#34;continuing&#34;)"' in response.text
+
+    async def test_monitoring_toggle_refreshes_in_place_without_navigating(
+        self,
+        authenticated_client,
+        seeded_series_detail_ui_data,
+    ) -> None:  # type: ignore[no-untyped-def]
+        response = await authenticated_client.get(
+            f"/series/{seeded_series_detail_ui_data['series_id']}"
+        )
+        script = Path("src/pullbox/ui/static/js/pullbox.js").read_text(encoding="utf-8")
+
+        assert response.status_code == 200
+        assert "x-text=\"monitored ? 'Monitored' : 'Paused'\"" in response.text
+        assert ":data-tip=\"monitored ? 'Monitored' : 'Paused'\"" in response.text
+        monitoring_start = script.index("toggleMonitoring: function (enabled)")
+        monitoring_end = script.index("updateStatusOverride: function", monitoring_start)
+        monitoring_script = script[monitoring_start:monitoring_end]
+        assert "window.location.assign" not in monitoring_script
+        assert "refreshIssuesPanel" in monitoring_script
+        assert "self.saving = false" in monitoring_script
 
     async def test_manual_status_override_offers_comicvine_restore_action(
         self,
