@@ -1101,6 +1101,141 @@ function settingsPage(config) {
   };
 }
 
+function whatsNewRefreshControl(config) {
+  var cfg = config || {};
+  return {
+    refreshing: false,
+    refreshMessage: "",
+    reloadPending: false,
+
+    csrfToken: function () {
+      return cfg.csrfToken || readCsrfTokenFromBody();
+    },
+
+    dispatchToast: function (message, level) {
+      if (typeof showToast === "function") {
+        showToast({ message: message, level: level });
+      }
+    },
+
+    staleEndpoints: function () {
+      var endpoints = [];
+      if (cfg.currentStale) {
+        endpoints.push("/api/v1/whats-new");
+      }
+      if (cfg.upcomingStale) {
+        endpoints.push("/api/v1/whats-new?upcoming=true");
+      }
+      return endpoints;
+    },
+
+    responseMessage: async function (response, fallback) {
+      try {
+        var body = await response.json();
+        if (body && body.error && body.error.message) {
+          return body.error.message;
+        }
+        if (body && body.message) {
+          return body.message;
+        }
+      } catch (_) {
+        // The fallback remains more useful than a JSON parsing error.
+      }
+      return fallback;
+    },
+
+    staleScopesAreFresh: async function () {
+      var endpoints = this.staleEndpoints();
+      if (endpoints.length === 0) {
+        return true;
+      }
+      var responses = await Promise.all(
+        endpoints.map(function (endpoint) {
+          return fetch(endpoint, {
+            headers: {
+              Accept: "application/json",
+              "Cache-Control": "no-store",
+            },
+            cache: "no-store",
+          });
+        })
+      );
+      for (var i = 0; i < responses.length; i += 1) {
+        if (!responses[i].ok) {
+          return false;
+        }
+        var payload = await responses[i].json();
+        if (!payload.cache || payload.cache.stale) {
+          return false;
+        }
+      }
+      return true;
+    },
+
+    waitForFreshData: async function () {
+      var maxAttempts = Number(cfg.maxAttempts || 30);
+      var pollIntervalMs = Number(cfg.pollIntervalMs || 2000);
+      for (var attempt = 0; attempt < maxAttempts; attempt += 1) {
+        await new Promise(function (resolve) {
+          window.setTimeout(resolve, attempt === 0 ? 500 : pollIntervalMs);
+        });
+        try {
+          if (await this.staleScopesAreFresh()) {
+            return true;
+          }
+        } catch (_) {
+          // A transient polling failure should not interrupt the queued refresh.
+        }
+      }
+      return false;
+    },
+
+    refreshNow: async function () {
+      if (this.refreshing) {
+        return;
+      }
+      this.refreshing = true;
+      this.reloadPending = false;
+      this.refreshMessage = "Requesting release refresh...";
+      try {
+        var response = await fetch("/api/v1/whats-new/refresh", {
+          method: "POST",
+          headers: { "X-CSRF-Token": this.csrfToken() },
+        });
+        if (response.status !== 202 && response.status !== 409) {
+          throw new Error(
+            await this.responseMessage(response, "Release data refresh could not be started.")
+          );
+        }
+
+        this.refreshMessage =
+          response.status === 409
+            ? "A release refresh is already running..."
+            : "Refreshing release data...";
+        if (!(await this.waitForFreshData())) {
+          this.refreshMessage =
+            "The refresh is taking longer than expected. You can try again.";
+          this.dispatchToast(this.refreshMessage, "warning");
+          return;
+        }
+
+        this.reloadPending = true;
+        this.refreshMessage = "Release data refreshed.";
+        this.dispatchToast(this.refreshMessage, "success");
+        window.location.reload();
+      } catch (err) {
+        this.refreshMessage =
+          err && err.message ? err.message : "Release data refresh could not be started.";
+        this.dispatchToast(this.refreshMessage, "error");
+      } finally {
+        if (!this.reloadPending) {
+          this.refreshing = false;
+        }
+      }
+    },
+  };
+}
+
 function healthPage(config) {
   var cfg = config || {};
   return {
@@ -9606,16 +9741,18 @@ function utilitiesDbCheckPage(config) {
     },
 
     checks: {
-      orphans: true,
-      stale: true,
+      orphans: !cfg.defaultOptimize,
+      stale: !cfg.defaultOptimize,
       referential: false,
       reindex: false,
+      optimize: !!cfg.defaultOptimize,
     },
     libraryRoot: cfg.defaultLibraryRoot || "",
     findings: [],
     previewLoaded: false,
     previewLoading: false,
     validationError: "",
+    optimizationResult: "",
     submitting: false,
 
     init: function () {
@@ -9637,6 +9774,11 @@ function utilitiesDbCheckPage(config) {
           self.validationError = "";
           self.syncFooterDock();
         });
+        this.$watch("checks.optimize", function () {
+          self.validationError = "";
+          self.optimizationResult = "";
+          self.syncFooterDock();
+        });
         this.$watch("libraryRoot", function () {
           self.validationError = "";
           self.syncFooterDock();
@@ -9652,7 +9794,7 @@ function utilitiesDbCheckPage(config) {
     },
 
     selectedChecksLabel: function () {
-      return this.selectedChecks().length + " of 4";
+      return this.selectedChecks().length + " of 5";
     },
 
     syncFooterDock: function () {
@@ -9680,6 +9822,7 @@ function utilitiesDbCheckPage(config) {
       if (action === "add") return "Add";
       if (action === "repair") return "Repair";
       if (action === "reindex") return "Reindex";
+      if (action === "optimize") return "Optimize";
       return "Skip";
     },
 
@@ -9688,6 +9831,7 @@ function utilitiesDbCheckPage(config) {
       if (checkType === "stale") return "Untracked";
       if (checkType === "referential") return "Consistency";
       if (checkType === "reindex") return "Metadata";
+      if (checkType === "optimize") return "Optimize";
       return checkType;
     },
 
@@ -9772,6 +9916,48 @@ function utilitiesDbCheckPage(config) {
       this.submitting = true;
       this.validationError = "";
       try {
+        var optimizeFindings = this.findings.filter(function (finding) {
+          return finding.current_action === "optimize";
+        });
+        var otherActions = this.findings.filter(function (finding) {
+          return finding.current_action && finding.current_action !== "skip" && finding.current_action !== "optimize";
+        });
+        if (optimizeFindings.length > 0) {
+          if (otherActions.length > 0) {
+            this.validationError = "Run database optimization separately from record cleanup actions.";
+            return;
+          }
+          var optimizeContext = optimizeFindings[0].context || {};
+          var reclaimableMb = Number(optimizeContext.reclaimable_bytes || 0) / (1024 * 1024);
+          var confirmed = await pbConfirm({
+            title: "Optimize Database Storage",
+            message:
+              "Pullbox will briefly pause database activity, checkpoint its write-ahead log, and compact unused pages. " +
+              "About " + reclaimableMb.toFixed(1) + " MB is currently reclaimable. This cannot be cancelled once started.",
+            confirmText: "Optimize Database",
+          });
+          if (!confirmed) {
+            return;
+          }
+          var optimizeResponse = await fetch("/api/v1/health/database/optimize", {
+            method: "POST",
+            headers: { "X-CSRF-Token": this.csrfToken() },
+          });
+          if (!optimizeResponse.ok) {
+            var optimizeError = await optimizeResponse.json();
+            this.validationError = (optimizeError.error && optimizeError.error.message) || "Database optimization failed.";
+            return;
+          }
+          var optimizeData = await optimizeResponse.json();
+          var reclaimedBytes = Number(optimizeData.reclaimed_bytes || 0);
+          this.optimizationResult =
+            "Database optimization completed. Reclaimed " +
+            (reclaimedBytes / (1024 * 1024)).toFixed(1) +
+            " MB and verified database integrity.";
+          this.findings = [];
+          this.previewLoaded = false;
+          return;
+        }
         var response = await fetch("/api/v1/utilities/jobs", {
           method: "POST",
           headers: {
@@ -10615,25 +10801,37 @@ function issueSearchResultActions(config) {
         return;
       }
 
+      var directAttemptId = parseInt(button.dataset.directAttempt, 10) || 0;
+      var endpoint = "/api/v1/issues/" + cfg.issueId + "/grab";
+      var payload = {
+        download_url: button.dataset.url,
+        indexer_name: button.dataset.indexer,
+        indexer_id: parseInt(button.dataset.indexerId, 10) || null,
+        title: button.dataset.title,
+        is_torrent: button.dataset.torrent === "true",
+        file_size: parseInt(button.dataset.size, 10) || 0,
+        search_log_id: cfg.searchLogId,
+      };
+      if (directAttemptId) {
+        endpoint = "/api/v1/issues/" + cfg.issueId + "/direct-grab";
+        payload = { direct_attempt_id: directAttemptId };
+      }
+
       self.grabbing = true;
-      fetch("/api/v1/issues/" + cfg.issueId + "/grab", {
+      fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": self.csrfToken(),
         },
-        body: JSON.stringify({
-          download_url: button.dataset.url,
-          indexer_name: button.dataset.indexer,
-          title: button.dataset.title,
-          is_torrent: button.dataset.torrent === "true",
-          file_size: parseInt(button.dataset.size, 10) || 0,
-          search_log_id: cfg.searchLogId,
-        }),
+        body: JSON.stringify(payload),
       })
         .then(function (response) {
           if (response.ok) {
-            self.dispatchToast("Grabbed successfully", "success");
+            self.dispatchToast(
+              directAttemptId ? "Direct download queued" : "Grabbed successfully",
+              "success"
+            );
             self.grabbing = false;
             return;
           }
@@ -10667,12 +10865,15 @@ function issueSearchResultActions(config) {
       }
 
       var reason = button.dataset.rejectionReason || "Pullbox rejected this result.";
+      var isDirect = Boolean(parseInt(button.dataset.directAttempt, 10) || 0);
       pbConfirm({
         title: "Grab Rejected Result",
         message:
           "Pullbox rejected this result: " +
           reason +
-          " If you continue, Pullbox will send it to your download client anyway.",
+          (isDirect
+            ? " If you continue, Pullbox will plan and queue this direct result anyway."
+            : " If you continue, Pullbox will send it to your download client anyway."),
         confirmText: "Grab anyway",
         destructive: false,
       }).then(function (ok) {
@@ -10733,6 +10934,16 @@ function downloadsPage(config) {
   var cfg = config || {};
 
   return {
+    sourceModalOpen: false,
+    sourceModalLoading: false,
+    sourceModalError: "",
+    sourceOptions: null,
+    sourceDownloadId: null,
+    selectedSourceIdentity: "",
+    blockCurrentSource: false,
+    sourceSwitching: false,
+    sourceRequestRevision: 0,
+
     csrfToken: function () {
       return cfg.csrfToken || readCsrfTokenFromBody();
     },
@@ -10785,6 +10996,151 @@ function downloadsPage(config) {
             self.dispatchToast(err.message, "error");
           });
       });
+    },
+
+    parseActionError: function (data, fallback) {
+      if (data && typeof data.detail === "string") return data.detail;
+      if (data && data.error && typeof data.error.message === "string") {
+        return data.error.message;
+      }
+      return fallback;
+    },
+
+    formatSourceBytes: function (value) {
+      var bytes = Number(value || 0);
+      if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+      var units = ["B", "KB", "MB", "GB", "TB"];
+      var index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      var amount = bytes / Math.pow(1024, index);
+      return amount.toFixed(index === 0 ? 0 : 1) + " " + units[index];
+    },
+
+    openSourceModal: function (id, btn) {
+      var self = this;
+      if (self.sourceSwitching) return;
+      var requestRevision = ++self.sourceRequestRevision;
+      self.sourceModalOpen = true;
+      self.sourceModalLoading = true;
+      self.sourceModalError = "";
+      self.sourceOptions = null;
+      self.sourceDownloadId = id;
+      self.selectedSourceIdentity = "";
+      self.blockCurrentSource = false;
+      if (btn) btn.disabled = true;
+      fetch("/api/v1/downloads/" + id + "/sources")
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            if (!res.ok) {
+              throw new Error(self.parseActionError(data, "Available sources could not be loaded."));
+            }
+            return data;
+          });
+        })
+        .then(function (data) {
+          if (requestRevision !== self.sourceRequestRevision || self.sourceDownloadId !== id) {
+            return;
+          }
+          self.sourceOptions = data;
+          self.selectedSourceIdentity = data.alternatives.length
+            ? data.alternatives[0].artifact_identity
+            : "";
+        })
+        .catch(function (err) {
+          if (requestRevision === self.sourceRequestRevision) {
+            self.sourceModalError = err.message;
+          }
+        })
+        .finally(function () {
+          if (requestRevision === self.sourceRequestRevision) {
+            self.sourceModalLoading = false;
+          }
+          if (btn) btn.disabled = false;
+        });
+    },
+
+    closeSourceModal: function () {
+      if (this.sourceSwitching) return;
+      this.sourceRequestRevision += 1;
+      this.sourceModalOpen = false;
+      this.sourceModalError = "";
+      this.sourceOptions = null;
+      this.sourceDownloadId = null;
+      this.selectedSourceIdentity = "";
+      this.blockCurrentSource = false;
+    },
+
+    performSourceSwitch: function (id, artifactIdentity, blockCurrent, btn) {
+      var self = this;
+      self.sourceSwitching = true;
+      if (btn) btn.disabled = true;
+      return fetch("/api/v1/downloads/" + id + "/switch-source", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": self.csrfToken(),
+        },
+        body: JSON.stringify({
+          artifact_identity: artifactIdentity || null,
+          block_current: Boolean(blockCurrent),
+        }),
+      })
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            if (!res.ok) {
+              throw new Error(self.parseActionError(data, "The download source could not be changed."));
+            }
+            return data;
+          });
+        })
+        .then(function (data) {
+          self.sourceModalOpen = false;
+          self.dispatchToast(
+            "Switching from " + data.previous_host + " to " + data.selected_host + ".",
+            "success"
+          );
+          self.refreshContent("/downloads?tab=queue");
+          return data;
+        })
+        .catch(function (err) {
+          if (self.sourceModalOpen) {
+            self.sourceModalError = err.message;
+          } else {
+            self.dispatchToast(err.message, "error");
+          }
+          throw err;
+        })
+        .finally(function () {
+          self.sourceSwitching = false;
+          if (btn) btn.disabled = false;
+        });
+    },
+
+    tryNextSource: function (id, btn) {
+      var self = this;
+      if (self.sourceSwitching) return;
+      pbConfirm({
+        title: "Try Next Source",
+        message: "Pullbox will stop this transfer, discard its partial data, and restart from the next ranked source.",
+        confirmText: "Switch Source",
+      }).then(function (ok) {
+        if (!ok) return;
+        self.dispatchToast(
+          "Stopping the current source and starting the next verified route...",
+          "info"
+        );
+        self.performSourceSwitch(id, null, false, btn).catch(function () {});
+      });
+    },
+
+    switchSelectedSource: function () {
+      if (!this.sourceDownloadId || !this.selectedSourceIdentity || this.sourceSwitching) return;
+      this.sourceModalError = "";
+      this.performSourceSwitch(
+        this.sourceDownloadId,
+        this.selectedSourceIdentity,
+        this.blockCurrentSource,
+        null
+      ).catch(function () {});
     },
 
     retryDownload: function (id, btn) {
@@ -13063,6 +13419,7 @@ function interventionPage() {
     toolbarMode: "browse",
     bulkActionBusy: null,
     selectAllMatchingBusy: false,
+    bulkActionsEnabled: cfg.bulkActionsEnabled !== false,
     totalMatchingCount: Number(cfg.totalMatchingCount || 0),
     selectionFilterSignature: "",
     afterSettleHandler: null,
@@ -13215,7 +13572,7 @@ function interventionPage() {
     },
 
     canEnterSelectMode: function () {
-      return this.totalMatchingCount > 0;
+      return this.bulkActionsEnabled && this.totalMatchingCount > 0;
     },
 
     enterSelectMode: function () {
@@ -14337,10 +14694,735 @@ function orphanedRecoveryModal(config) {
   };
 }
 
+function readerMixin(config) {
+  var cfg = config || {};
+  var zoomSteps = [50, 67, 80, 100, 125, 150, 200, 300];
+
+  function clampPage(index, count) {
+    if (!count) return 0;
+    return Math.max(0, Math.min(count - 1, index));
+  }
+
+  function isTypingTarget(target) {
+    if (!target) return false;
+    var tagName = String(target.tagName || "").toLowerCase();
+    return (
+      tagName === "input" ||
+      tagName === "select" ||
+      tagName === "textarea" ||
+      target.isContentEditable
+    );
+  }
+
+  function responseMessage(response, fallback) {
+    return response
+      .json()
+      .catch(function () {
+        return {};
+      })
+      .then(function (data) {
+        if (typeof data.detail === "string") return data.detail;
+        if (data.detail && typeof data.detail.message === "string") {
+          return data.detail.message;
+        }
+        return fallback;
+      });
+  }
+
+  return {
+    readerOpen: false,
+    readerLoading: false,
+    readerPageLoading: false,
+    readerFatalError: false,
+    readerErrorTitle: "Pullbox could not open this comic.",
+    readerErrorMessage: "",
+    readerManifest: null,
+    readerTitle: "",
+    readerIssueLabel: "",
+    readerPageIndex: 0,
+    readerPageCount: 0,
+    readerPageDraft: "1",
+    readerPageInputError: "",
+    readerImageUrl: "",
+    readerImageNaturalWidth: 0,
+    readerImageNaturalHeight: 0,
+    readerFitMode: "page",
+    readerZoomPercent: 100,
+    readerDirection: "ltr",
+    readerControlsVisible: true,
+    readerHelpVisible: false,
+    readerFullscreenAvailable: false,
+    readerFullscreenActive: false,
+    readerProgressSaveFailed: false,
+    readerLastSettledPage: null,
+    readerLastSettledCompletion: false,
+    readerLastSavedSignature: "",
+    readerCurrentUserInitiated: false,
+    readerFailedPageIndex: null,
+    readerOpener: null,
+    readerSavedScrollX: 0,
+    readerSavedScrollY: 0,
+    readerManifestController: null,
+    readerProgressController: null,
+    readerLoadGeneration: 0,
+    readerSettledTimer: null,
+    readerControlsTimer: null,
+    readerPrefetchTimer: null,
+    readerPrefetchIdleHandle: null,
+    readerPrefetchImages: [],
+    readerPointer: null,
+    readerVisibilityHandler: null,
+
+    init: function () {
+      var self = this;
+      self.readerVisibilityHandler = function () {
+        if (!self.readerOpen) return;
+        if (document.visibilityState === "hidden") {
+          self.clearReaderTimer("readerSettledTimer");
+          self.saveReaderProgress(true);
+          return;
+        }
+        if (!self.readerPageLoading && !self.readerFatalError && self.readerPageCount) {
+          self.scheduleReaderSettled(
+            self.readerPageIndex,
+            self.readerCurrentUserInitiated
+          );
+        }
+      };
+      document.addEventListener("visibilitychange", self.readerVisibilityHandler);
+    },
+
+    destroy: function () {
+      if (this.readerVisibilityHandler) {
+        document.removeEventListener("visibilitychange", this.readerVisibilityHandler);
+      }
+      this.clearReaderWork();
+    },
+
+    openReader: function (event) {
+      var self = this;
+      var dialog = self.$refs.readerDialog;
+      if (!dialog || !cfg.readerManifestUrl || self.readerOpen) return;
+
+      self.readerOpener = event && event.currentTarget ? event.currentTarget : document.activeElement;
+      self.readerSavedScrollX = window.scrollX;
+      self.readerSavedScrollY = window.scrollY;
+      self.resetReaderSession();
+      self.readerOpen = true;
+      self.readerLoading = true;
+      var fullscreenTarget = self.$refs.readerShell;
+      self.readerFullscreenAvailable =
+        !!fullscreenTarget && typeof fullscreenTarget.requestFullscreen === "function";
+      dialog.showModal();
+      self.showReaderControls();
+
+      if (typeof self.$nextTick === "function") {
+        self.$nextTick(function () {
+          if (self.$refs.readerViewport) self.$refs.readerViewport.focus();
+        });
+      }
+
+      self.readerManifestController = new AbortController();
+      fetch(cfg.readerManifestUrl, {
+        method: "GET",
+        signal: self.readerManifestController.signal,
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            return responseMessage(response, "The comic could not be prepared.").then(
+              function (message) {
+                throw new Error(message);
+              }
+            );
+          }
+          return response.json();
+        })
+        .then(function (manifest) {
+          if (!self.readerOpen) return;
+          var pageCount = Number(manifest.page_count);
+          if (!Number.isInteger(pageCount) || pageCount < 1 || !manifest.page_url_template) {
+            throw new Error("This comic does not contain any readable pages.");
+          }
+          self.readerManifest = manifest;
+          self.readerTitle = String(manifest.title || cfg.seriesTitle || "Comic reader");
+          self.readerIssueLabel = String(manifest.issue_label || cfg.issueLabel || "");
+          self.readerPageCount = pageCount;
+          var initialPage = clampPage(Number(manifest.initial_page_index) || 0, pageCount);
+          return self.loadReaderPage(initialPage, false);
+        })
+        .catch(function (error) {
+          if (error && error.name === "AbortError") return;
+          self.readerLoading = false;
+          self.readerPageLoading = false;
+          self.readerFatalError = true;
+          self.readerErrorMessage =
+            (error && error.message) || "The comic could not be prepared.";
+          self.showReaderControls();
+        });
+    },
+
+    resetReaderSession: function () {
+      this.clearReaderWork();
+      this.readerLoading = false;
+      this.readerPageLoading = false;
+      this.readerFatalError = false;
+      this.readerErrorTitle = "Pullbox could not open this comic.";
+      this.readerErrorMessage = "";
+      this.readerManifest = null;
+      this.readerTitle = "";
+      this.readerIssueLabel = "";
+      this.readerPageIndex = 0;
+      this.readerPageCount = 0;
+      this.readerPageDraft = "1";
+      this.readerPageInputError = "";
+      this.readerImageUrl = "";
+      this.readerImageNaturalWidth = 0;
+      this.readerImageNaturalHeight = 0;
+      this.readerFitMode = "page";
+      this.readerZoomPercent = 100;
+      this.readerDirection = "ltr";
+      this.readerControlsVisible = true;
+      this.readerHelpVisible = false;
+      this.readerProgressSaveFailed = false;
+      this.readerLastSettledPage = null;
+      this.readerLastSettledCompletion = false;
+      this.readerLastSavedSignature = "";
+      this.readerCurrentUserInitiated = false;
+      this.readerFailedPageIndex = null;
+      this.readerPointer = null;
+    },
+
+    clearReaderWork: function () {
+      if (this.readerManifestController) {
+        this.readerManifestController.abort();
+        this.readerManifestController = null;
+      }
+      if (this.readerProgressController) {
+        this.readerProgressController.abort();
+        this.readerProgressController = null;
+      }
+      this.readerLoadGeneration += 1;
+      this.clearReaderTimer("readerSettledTimer");
+      this.clearReaderTimer("readerControlsTimer");
+      this.clearReaderTimer("readerPrefetchTimer");
+      if (
+        this.readerPrefetchIdleHandle !== null &&
+        typeof window.cancelIdleCallback === "function"
+      ) {
+        window.cancelIdleCallback(this.readerPrefetchIdleHandle);
+      }
+      this.readerPrefetchIdleHandle = null;
+      this.readerPrefetchImages = [];
+    },
+
+    clearReaderTimer: function (name) {
+      if (this[name]) {
+        window.clearTimeout(this[name]);
+        this[name] = null;
+      }
+    },
+
+    closeReader: function () {
+      var self = this;
+      if (!self.readerOpen) return;
+
+      if (document.fullscreenElement) {
+        Promise.resolve(document.exitFullscreen())
+          .catch(function () {
+            return null;
+          })
+          .then(function () {
+            self.closeReaderDialog();
+          });
+        return;
+      }
+      self.closeReaderDialog();
+    },
+
+    closeReaderDialog: function () {
+      var dialog = this.$refs.readerDialog;
+      this.saveReaderProgress(true);
+      this.readerOpen = false;
+      this.clearReaderWork();
+      if (dialog && dialog.open) dialog.close();
+    },
+
+    finishReaderClose: function () {
+      var opener = this.readerOpener;
+      var scrollX = this.readerSavedScrollX;
+      var scrollY = this.readerSavedScrollY;
+      this.readerOpen = false;
+      window.requestAnimationFrame(function () {
+        window.scrollTo(scrollX, scrollY);
+        if (opener && document.contains(opener) && typeof opener.focus === "function") {
+          opener.focus({ preventScroll: true });
+        }
+      });
+    },
+
+    retryReader: function () {
+      var opener = this.readerOpener;
+      this.closeReaderDialog();
+      var self = this;
+      window.setTimeout(function () {
+        self.openReader({ currentTarget: opener });
+      }, 0);
+    },
+
+    readerPageUrl: function (pageIndex) {
+      if (!this.readerManifest) return "";
+      return String(this.readerManifest.page_url_template).replace(
+        "{page_index}",
+        encodeURIComponent(String(pageIndex))
+      );
+    },
+
+    loadReaderPage: function (pageIndex, userInitiated) {
+      var self = this;
+      if (!self.readerManifest || !self.readerOpen) return Promise.resolve(false);
+      var nextIndex = clampPage(Number(pageIndex), self.readerPageCount);
+      if (!Number.isInteger(nextIndex)) return Promise.resolve(false);
+
+      self.clearReaderTimer("readerSettledTimer");
+      self.readerLastSettledCompletion = false;
+      self.readerPageLoading = true;
+      self.readerFatalError = false;
+      self.showReaderControls();
+      var generation = self.readerLoadGeneration + 1;
+      self.readerLoadGeneration = generation;
+      var pageUrl = self.readerPageUrl(nextIndex);
+
+      return new Promise(function (resolve) {
+        var image = new Image();
+        var settleLoadedImage = function () {
+          if (generation !== self.readerLoadGeneration || !self.readerOpen) {
+            resolve(false);
+            return;
+          }
+          self.readerImageNaturalWidth = image.naturalWidth || 0;
+          self.readerImageNaturalHeight = image.naturalHeight || 0;
+          self.readerImageUrl = pageUrl;
+          self.readerPageIndex = nextIndex;
+          self.readerPageDraft = String(nextIndex + 1);
+          self.readerPageLoading = false;
+          self.readerLoading = false;
+          self.readerFatalError = false;
+          self.readerFailedPageIndex = null;
+          self.readerCurrentUserInitiated = Boolean(userInitiated);
+          if (self.$refs.readerViewport) {
+            self.$refs.readerViewport.scrollTop = 0;
+            self.$refs.readerViewport.scrollLeft = 0;
+          }
+          self.scheduleReaderSettled(nextIndex, Boolean(userInitiated));
+          self.prefetchReaderNeighbors(nextIndex);
+          self.scheduleReaderControlsHide();
+          resolve(true);
+        };
+
+        image.onload = function () {
+          if (typeof image.decode === "function") {
+            image.decode().catch(function () {
+              return null;
+            }).then(settleLoadedImage);
+            return;
+          }
+          settleLoadedImage();
+        };
+        image.onerror = function () {
+          if (generation !== self.readerLoadGeneration || !self.readerOpen) {
+            resolve(false);
+            return;
+          }
+          self.readerLoading = false;
+          self.readerPageLoading = false;
+          self.readerFatalError = true;
+          self.readerFailedPageIndex = nextIndex;
+          self.readerErrorTitle = "Page " + (nextIndex + 1) + " could not be displayed.";
+          self.readerErrorMessage =
+            "Try this page again, navigate to another page, or download the original comic.";
+          self.showReaderControls();
+          resolve(false);
+        };
+        image.src = pageUrl;
+      });
+    },
+
+    scheduleReaderSettled: function (pageIndex, userInitiated) {
+      var self = this;
+      self.clearReaderTimer("readerSettledTimer");
+      self.readerSettledTimer = window.setTimeout(function () {
+        self.readerSettledTimer = null;
+        if (
+          !self.readerOpen ||
+          document.visibilityState !== "visible" ||
+          self.readerPageIndex !== pageIndex ||
+          self.readerPageLoading
+        ) {
+          return;
+        }
+        self.readerLastSettledPage = pageIndex;
+        self.readerLastSettledCompletion =
+          Boolean(userInitiated) && pageIndex === self.readerPageCount - 1;
+        self.saveReaderProgress(false);
+      }, 750);
+    },
+
+    saveReaderProgress: function (keepalive) {
+      var self = this;
+      var manifest = self.readerManifest;
+      if (
+        !manifest ||
+        self.readerLastSettledPage === null ||
+        !manifest.progress_url ||
+        !manifest.revision
+      ) {
+        return;
+      }
+      var payload = {
+        revision: String(manifest.revision),
+        page_index: self.readerLastSettledPage,
+        page_count: self.readerPageCount,
+        completion_candidate: Boolean(self.readerLastSettledCompletion),
+      };
+      var signature = JSON.stringify(payload);
+      if (!self.readerProgressSaveFailed && signature === self.readerLastSavedSignature) {
+        return;
+      }
+
+      if (!keepalive && self.readerProgressController) {
+        self.readerProgressController.abort();
+      }
+      var controller = keepalive ? null : new AbortController();
+      self.readerProgressController = controller;
+      fetch(manifest.progress_url, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": self.csrfToken(),
+        },
+        body: signature,
+        keepalive: Boolean(keepalive),
+        signal: controller ? controller.signal : undefined,
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("Reading position was not saved.");
+          self.readerLastSavedSignature = signature;
+          self.readerProgressSaveFailed = false;
+        })
+        .catch(function (error) {
+          if (error && error.name === "AbortError") return;
+          self.readerProgressSaveFailed = true;
+        })
+        .finally(function () {
+          if (self.readerProgressController === controller) {
+            self.readerProgressController = null;
+          }
+        });
+    },
+
+    prefetchReaderNeighbors: function (pageIndex) {
+      var self = this;
+      self.clearReaderTimer("readerPrefetchTimer");
+      if (
+        self.readerPrefetchIdleHandle !== null &&
+        typeof window.cancelIdleCallback === "function"
+      ) {
+        window.cancelIdleCallback(self.readerPrefetchIdleHandle);
+      }
+      self.readerPrefetchIdleHandle = null;
+      self.readerPrefetchImages = [];
+
+      var candidates = [];
+      if (pageIndex + 1 < self.readerPageCount) candidates.push(pageIndex + 1);
+      if (pageIndex - 1 >= 0) candidates.push(pageIndex - 1);
+      if (!candidates.length) return;
+
+      var first = new Image();
+      first.decoding = "async";
+      first.src = self.readerPageUrl(candidates[0]);
+      self.readerPrefetchImages.push(first);
+
+      if (candidates.length > 1) {
+        var loadOtherNeighbor = function () {
+          self.readerPrefetchIdleHandle = null;
+          if (!self.readerOpen || self.readerPageIndex !== pageIndex) return;
+          var second = new Image();
+          second.decoding = "async";
+          second.src = self.readerPageUrl(candidates[1]);
+          self.readerPrefetchImages.push(second);
+        };
+        if (typeof window.requestIdleCallback === "function") {
+          self.readerPrefetchIdleHandle = window.requestIdleCallback(loadOtherNeighbor, {
+            timeout: 900,
+          });
+        } else {
+          self.readerPrefetchTimer = window.setTimeout(loadOtherNeighbor, 350);
+        }
+      }
+    },
+
+    readerPrevious: function () {
+      if (this.readerPageLoading || this.readerPageIndex <= 0) return;
+      this.loadReaderPage(this.readerPageIndex - 1, true);
+    },
+
+    readerNext: function () {
+      if (this.readerPageLoading || this.readerPageIndex >= this.readerPageCount - 1) return;
+      this.loadReaderPage(this.readerPageIndex + 1, true);
+    },
+
+    readerTapZone: function (side) {
+      if (side === "left") {
+        if (this.readerDirection === "rtl") this.readerNext();
+        else this.readerPrevious();
+        return;
+      }
+      if (this.readerDirection === "rtl") this.readerPrevious();
+      else this.readerNext();
+    },
+
+    restoreReaderPageDraft: function () {
+      this.readerPageDraft = String(this.readerPageIndex + 1);
+    },
+
+    commitReaderPageJump: function () {
+      var pageNumber = Number.parseInt(String(this.readerPageDraft), 10);
+      if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > this.readerPageCount) {
+        this.readerPageInputError =
+          "Enter a page from 1 to " + String(this.readerPageCount) + ".";
+        this.restoreReaderPageDraft();
+        return;
+      }
+      this.readerPageInputError = "";
+      this.loadReaderPage(pageNumber - 1, true);
+      if (this.$refs.readerViewport) this.$refs.readerViewport.focus();
+    },
+
+    toggleReaderDirection: function () {
+      this.readerDirection = this.readerDirection === "ltr" ? "rtl" : "ltr";
+      this.showReaderControls();
+    },
+
+    setReaderFit: function (mode) {
+      if (["page", "width", "height", "actual"].indexOf(mode) === -1) return;
+      this.readerFitMode = mode;
+      if (mode !== "actual") this.readerZoomPercent = 100;
+      this.showReaderControls();
+    },
+
+    readerImageClass: function () {
+      return "comic-reader__page--" + this.readerFitMode;
+    },
+
+    readerImageStyle: function () {
+      if (this.readerFitMode !== "actual" || !this.readerImageNaturalWidth) return "";
+      return "width: " + Math.round(
+        this.readerImageNaturalWidth * (this.readerZoomPercent / 100)
+      ) + "px; height: auto;";
+    },
+
+    readerZoomIn: function () {
+      var current = this.readerFitMode === "actual" ? this.readerZoomPercent : 100;
+      this.readerFitMode = "actual";
+      for (var i = 0; i < zoomSteps.length; i += 1) {
+        if (zoomSteps[i] > current) {
+          this.readerZoomPercent = zoomSteps[i];
+          this.showReaderControls();
+          return;
+        }
+      }
+      this.readerZoomPercent = zoomSteps[zoomSteps.length - 1];
+    },
+
+    readerZoomOut: function () {
+      var current = this.readerFitMode === "actual" ? this.readerZoomPercent : 100;
+      this.readerFitMode = "actual";
+      for (var i = zoomSteps.length - 1; i >= 0; i -= 1) {
+        if (zoomSteps[i] < current) {
+          this.readerZoomPercent = zoomSteps[i];
+          this.showReaderControls();
+          return;
+        }
+      }
+      this.readerZoomPercent = zoomSteps[0];
+    },
+
+    resetReaderZoom: function () {
+      this.readerFitMode = "actual";
+      this.readerZoomPercent = 100;
+      this.showReaderControls();
+    },
+
+    resetReaderSizing: function () {
+      this.readerFitMode = "page";
+      this.readerZoomPercent = 100;
+      this.showReaderControls();
+    },
+
+    readerPageAlt: function () {
+      if (!this.readerPageCount) return "Comic page";
+      return "Page " + (this.readerPageIndex + 1) + " of " + this.readerPageCount;
+    },
+
+    readerPageStatus: function () {
+      if (!this.readerPageCount) return "Preparing pages";
+      return "Page " + (this.readerPageIndex + 1) + " of " + this.readerPageCount;
+    },
+
+    showReaderControls: function () {
+      this.readerControlsVisible = true;
+      this.scheduleReaderControlsHide();
+    },
+
+    toggleReaderControls: function () {
+      this.readerControlsVisible = !this.readerControlsVisible;
+      if (this.readerControlsVisible) this.scheduleReaderControlsHide();
+      else this.clearReaderTimer("readerControlsTimer");
+    },
+
+    scheduleReaderControlsHide: function () {
+      var self = this;
+      self.clearReaderTimer("readerControlsTimer");
+      if (
+        !self.readerOpen ||
+        self.readerLoading ||
+        self.readerPageLoading ||
+        self.readerFatalError ||
+        self.readerHelpVisible ||
+        (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      ) {
+        return;
+      }
+      self.readerControlsTimer = window.setTimeout(function () {
+        var active = document.activeElement;
+        var focusedControl = active && active.closest
+          ? active.closest("[data-reader-controls]")
+          : null;
+        if (focusedControl) {
+          self.scheduleReaderControlsHide();
+          return;
+        }
+        self.readerControlsVisible = false;
+      }, 3000);
+    },
+
+    handleReaderKeydown: function (event) {
+      if (!this.readerOpen || !event || event.defaultPrevented) return;
+      if (isTypingTarget(event.target)) {
+        if (event.key === "Escape") {
+          event.target.blur();
+          event.preventDefault();
+        }
+        return;
+      }
+
+      var key = event.key;
+      var handled = true;
+      if (key === "ArrowLeft") this.readerTapZone("left");
+      else if (key === "ArrowRight") this.readerTapZone("right");
+      else if (key === "PageUp" || (key === " " && event.shiftKey)) this.readerPrevious();
+      else if (key === "PageDown" || key === " ") this.readerNext();
+      else if (key === "Home") this.loadReaderPage(0, true);
+      else if (key === "End") this.loadReaderPage(this.readerPageCount - 1, true);
+      else if (key === "g" || key === "G") {
+        var input = this.$refs.readerDialog
+          ? this.$refs.readerDialog.querySelector(".comic-reader__page-jump input")
+          : null;
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      } else if (key === "w" || key === "W") this.setReaderFit("width");
+      else if (key === "h" || key === "H") this.setReaderFit("height");
+      else if (key === "0") this.resetReaderSizing();
+      else if (key === "+" || key === "=") this.readerZoomIn();
+      else if (key === "-" || key === "_") this.readerZoomOut();
+      else if (key === "f" || key === "F") this.toggleReaderFullscreen();
+      else if (key === "r" || key === "R") this.toggleReaderDirection();
+      else if (key === "?") {
+        this.readerHelpVisible = !this.readerHelpVisible;
+        this.showReaderControls();
+      } else if (key === "Escape") {
+        if (this.readerHelpVisible) this.readerHelpVisible = false;
+        else if (document.fullscreenElement) this.toggleReaderFullscreen();
+        else this.closeReader();
+      } else handled = false;
+
+      if (handled) {
+        event.preventDefault();
+        this.showReaderControls();
+      }
+    },
+
+    beginReaderPointer: function (event) {
+      if (
+        !event ||
+        event.pointerType !== "touch" ||
+        !event.isPrimary ||
+        this.readerFitMode === "actual"
+      ) {
+        this.readerPointer = null;
+        return;
+      }
+      this.readerPointer = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        time: Date.now(),
+      };
+    },
+
+    endReaderPointer: function (event) {
+      var pointer = this.readerPointer;
+      this.readerPointer = null;
+      if (!pointer || !event || pointer.id !== event.pointerId) return;
+      var deltaX = event.clientX - pointer.x;
+      var deltaY = event.clientY - pointer.y;
+      var elapsed = Date.now() - pointer.time;
+      if (elapsed > 700 || Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) {
+        return;
+      }
+      this.readerTapZone(deltaX < 0 ? "right" : "left");
+    },
+
+    cancelReaderPointer: function () {
+      this.readerPointer = null;
+    },
+
+    toggleReaderFullscreen: function () {
+      var fullscreenTarget = this.$refs.readerShell;
+      if (!fullscreenTarget) return;
+      if (document.fullscreenElement) {
+        Promise.resolve(document.exitFullscreen()).catch(function () {
+          return null;
+        });
+        return;
+      }
+      if (typeof fullscreenTarget.requestFullscreen === "function") {
+        Promise.resolve(fullscreenTarget.requestFullscreen()).catch(function () {
+          return null;
+        });
+      }
+    },
+
+    syncReaderFullscreen: function () {
+      this.readerFullscreenActive = document.fullscreenElement === this.$refs.readerShell;
+    },
+
+    retryReaderPage: function () {
+      if (this.readerManifest && this.readerFailedPageIndex !== null) {
+        this.loadReaderPage(this.readerFailedPageIndex, true);
+        return;
+      }
+      this.retryReader();
+    },
+  };
+}
+
 function issueDetailPage(config) {
   var cfg = config || {};
 
-  return Object.assign(fileBrowserMixin(cfg), {
+  return Object.assign(fileBrowserMixin(cfg), readerMixin(cfg), {
     coverModalOpen: false,
     coverModalUrl: "",
     searching: false,
@@ -14847,6 +15929,18 @@ function seriesDetailPage(config) {
       return window.location.pathname + window.location.search;
     },
 
+    refreshIssuesPanel: function () {
+      var issuesPanel = document.getElementById("series-issues-panel");
+      if (!issuesPanel || typeof htmx === "undefined") {
+        return;
+      }
+
+      htmx.ajax("GET", issuesPanel.getAttribute("hx-get"), {
+        target: "#series-issues-panel",
+        swap: "morph:outerHTML",
+      });
+    },
+
     normalizeIssuesPanelAfterRestore: function () {
       if (!cfg.seriesId) {
         return;
@@ -15024,9 +16118,8 @@ function seriesDetailPage(config) {
             enabled ? "Monitoring enabled" : "Monitoring disabled",
             enabled ? "success" : "info"
           );
-          setTimeout(function () {
-            window.location.assign(self.currentDetailUrl());
-          }, 900);
+          self.refreshIssuesPanel();
+          self.saving = false;
         })
         .catch(function () {
           self.dispatchToast("Failed to update monitoring", "error");
@@ -16332,6 +17425,30 @@ function destroyAlpineTree(root) {
   }
 }
 
+function resolveHtmxLiveTarget(target) {
+  if (!target || target.isConnected !== false || !target.id) {
+    return target;
+  }
+
+  // outerHTML swaps leave event.detail.target pointing at the detached node.
+  // Resolve its replacement so interactive directives bind to the live DOM.
+  return document.getElementById(target.id) || target;
+}
+
+var _htmxRequestsNeedingAlpineInit = new WeakSet();
+
+function prepareAlpineSwap(detail, target) {
+  if (!detail || detail.shouldSwap === false) {
+    return false;
+  }
+
+  if (detail.xhr) {
+    _htmxRequestsNeedingAlpineInit.add(detail.xhr);
+  }
+  destroyAlpineTree(target);
+  return true;
+}
+
 function _purgeDetailHistoryRestoreEntry(pathname, search) {
   var normalizedPath = normalizePath(pathname || window.location.pathname);
   if (!_isDetailHistoryRestorePath(normalizedPath)) {
@@ -16436,7 +17553,7 @@ document.body.addEventListener("htmx:beforeSwap", function (e) {
     if (responseText && content && responseText.indexOf('id="content"') !== -1) {
       _importEventSourceRegistry.closeAll("content-before-swap");
       _importEventSourceRegistry.clearSuspended();
-      destroyAlpineTree(content);
+      prepareAlpineSwap(e.detail, content);
       e.detail.target = content;
       e.detail.selectOverride = "#content";
       e.detail.swapOverride = "outerHTML";
@@ -16467,8 +17584,26 @@ document.body.addEventListener("htmx:beforeSwap", function (e) {
       _importEventSourceRegistry.closeAll("content-before-swap");
       _importEventSourceRegistry.clearSuspended();
     }
-    destroyAlpineTree(e.detail.target);
+    prepareAlpineSwap(e.detail, e.detail.target);
   }
+});
+
+document.addEventListener("htmx:afterRequest", function (e) {
+  var detail = e.detail || {};
+  if (!detail.xhr || !_htmxRequestsNeedingAlpineInit.has(detail.xhr)) {
+    return;
+  }
+
+  _htmxRequestsNeedingAlpineInit.delete(detail.xhr);
+  var target = resolveHtmxLiveTarget(detail.target);
+  if (!target || target.isConnected === false) {
+    return;
+  }
+
+  if (window.Alpine) {
+    Alpine.initTree(target);
+  }
+  seedSearchFieldStates(target);
 });
 
 // After a shell content swap, update the header title from the full-page response.
@@ -17439,13 +18574,15 @@ document.addEventListener(
 
 // After hx-boost swaps #content: update sidebar active state + initialize Alpine
 document.addEventListener("htmx:afterSettle", function (e) {
-  if (e.detail.target && (e.detail.target.id === "main-area" || e.detail.target.id === "content")) {
-    if (e.detail.target.id === "content") {
+  var settledTarget = resolveHtmxLiveTarget(e.detail.target);
+
+  if (settledTarget && (settledTarget.id === "main-area" || settledTarget.id === "content")) {
+    if (settledTarget.id === "content") {
       window.__pbDetailHistoryRefreshPending = false;
     }
-    if (e.detail.target.id === "content") {
-      e.detail.target.scrollTop = 0;
-      e.detail.target.dispatchEvent(new Event("scroll"));
+    if (settledTarget.id === "content") {
+      settledTarget.scrollTop = 0;
+      settledTarget.dispatchEvent(new Event("scroll"));
     }
     syncAppShellNavigation(document);
 
@@ -17477,12 +18614,12 @@ document.addEventListener("htmx:afterSettle", function (e) {
 
   if (
     window.location.pathname === "/series" &&
-    e.detail.target &&
+    settledTarget &&
     (
-      e.detail.target.id === "content" ||
-      e.detail.target.id === "series-results-body" ||
-      e.detail.target.id === "series-summary" ||
-      e.detail.target.id === "series-pagination"
+      settledTarget.id === "content" ||
+      settledTarget.id === "series-results-body" ||
+      settledTarget.id === "series-summary" ||
+      settledTarget.id === "series-pagination"
     )
   ) {
     persistSeriesStateFromLocation();
@@ -17490,46 +18627,46 @@ document.addEventListener("htmx:afterSettle", function (e) {
 
   if (
     window.location.pathname === "/series" &&
-    e.detail.target &&
-    e.detail.target.id === "series-results-body"
+    settledTarget &&
+    settledTarget.id === "series-results-body"
   ) {
-    _refreshSeriesResultLinks(e.detail.target);
+    _refreshSeriesResultLinks(settledTarget);
   }
 
   if (
     window.location.pathname.indexOf("/series/") === 0 &&
-    e.detail.target &&
-    (e.detail.target.id === "content" || e.detail.target.id === "series-issues-panel")
+    settledTarget &&
+    (settledTarget.id === "content" || settledTarget.id === "series-issues-panel")
   ) {
-    _refreshSeriesIssueLinks(e.detail.target);
+    _refreshSeriesIssueLinks(settledTarget);
   }
 
   if (
     window.htmx &&
     typeof window.htmx.process === "function" &&
-    e.detail.target &&
-    (e.detail.target.id === "import-step-review" ||
-      e.detail.target.id === "import-step-review-shell" ||
-      e.detail.target.id === "conflicts-content")
+    settledTarget &&
+    (settledTarget.id === "import-step-review" ||
+      settledTarget.id === "import-step-review-shell" ||
+      settledTarget.id === "conflicts-content")
   ) {
-    window.htmx.process(e.detail.target);
+    window.htmx.process(settledTarget);
   }
 
   // Re-initialize Alpine components in the primary HTMX swap target.
-  if (window.Alpine && e.detail.target) {
-    Alpine.initTree(e.detail.target);
+  if (window.Alpine && settledTarget) {
+    Alpine.initTree(settledTarget);
   }
 
   if (
-    e.detail.target &&
-    (e.detail.target.id === "import-step-review" ||
-      e.detail.target.id === "import-step-review-shell")
+    settledTarget &&
+    (settledTarget.id === "import-step-review" ||
+      settledTarget.id === "import-step-review-shell")
   ) {
     var reviewRoot =
-      e.detail.target.matches &&
-      e.detail.target.matches("[data-testid='import-collection-review']")
-        ? e.detail.target
-        : e.detail.target.querySelector("[data-testid='import-collection-review']");
+      settledTarget.matches &&
+      settledTarget.matches("[data-testid='import-collection-review']")
+        ? settledTarget
+        : settledTarget.querySelector("[data-testid='import-collection-review']");
     if (reviewRoot && window.Alpine && typeof window.Alpine.$data === "function") {
       try {
         var reviewData = window.Alpine.$data(reviewRoot);
@@ -17551,8 +18688,8 @@ document.addEventListener("htmx:afterSettle", function (e) {
     }
   }
 
-  if (e.detail.target) {
-    seedSearchFieldStates(e.detail.target);
+  if (settledTarget) {
+    seedSearchFieldStates(settledTarget);
   }
 });
 

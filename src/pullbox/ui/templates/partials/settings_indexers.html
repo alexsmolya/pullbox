@@ -112,6 +112,96 @@
     </form>
   </section>
 
+  <section class="section-card" data-testid="settings-indexers-jackett-card">
+    {% call section_header(
+      title="Jackett connection",
+      eyebrow="Sync",
+      title_style="plain",
+      attrs='data-testid="settings-indexers-jackett-header"'
+    ) %}
+      <button
+        @click="syncJackett()"
+        :disabled="jackett.syncing || !jackettReady()"
+        class="btn-ghost btn-sm gap-2"
+        data-testid="settings-indexers-jackett-sync"
+      >
+        <svg class="h-3.5 w-3.5" :class="jackett.syncing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+        </svg>
+        <span x-text="jackett.syncing ? 'Syncing...' : 'Sync Now'"></span>
+      </button>
+    {% endcall %}
+
+    <form
+      class="section-body p-0"
+      data-testid="settings-indexers-jackett-form"
+      @submit.prevent="saveJackettAndSync()"
+    >
+      <input type="text" name="jackett_username" value="jackett" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+      <div class="settings-rows settings-rows-align-end">
+        {% call settings_row(label="Jackett URL") %}
+          <input
+            type="url"
+            x-model="jackett.url"
+            class="input-pb font-mono w-[22rem]"
+            placeholder="http://172.20.0.6:9117"
+            data-testid="settings-indexers-jackett-url"
+          >
+        {% endcall %}
+
+        {% call settings_row(label="API Key") %}
+          <div class="w-full max-w-xl space-y-3">
+            <input
+              type="password"
+              x-model="jackett.apiKey"
+              class="input-pb font-mono w-full"
+              autocomplete="new-password"
+              :placeholder="jackett.hasApiKey ? '(set — leave blank to keep)' : 'Enter your Jackett API key'"
+              data-testid="settings-indexers-jackett-api-key"
+            >
+
+            {% call field_note(tone="info", icon="check", attrs='x-show="jackett.hasApiKey && !jackett.apiKey" x-cloak') %}
+              Current stored key: <code class="font-mono text-[11px]" x-text="jackett.obfuscatedApiKey"></code>
+            {% endcall %}
+          </div>
+        {% endcall %}
+      </div>
+
+      <template x-if="jackett.message">
+        <div class="border-t border-pb-border px-5 py-3">
+          <div class="inline-alert" :class="jackett.success ? 'inline-alert-success' : 'inline-alert-danger'">
+            <p class="text-xs" x-text="jackett.message"></p>
+          </div>
+        </div>
+      </template>
+
+      {% call settings_footer(align="end") %}
+        <div class="settings-footer-actions ml-auto justify-end">
+          <button
+            type="button"
+            @click="testJackett()"
+            :disabled="jackett.testing || !jackettReady()"
+            class="btn-ghost gap-2 shrink-0"
+            data-testid="settings-indexers-jackett-test"
+          >
+            <svg class="h-3.5 w-3.5" :class="jackett.testing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728"/>
+            </svg>
+            <span x-text="jackett.testing ? 'Testing...' : 'Test'"></span>
+          </button>
+          <button
+            type="submit"
+            :disabled="jackett.syncing || !jackettReady() || !jackettDirty()"
+            class="btn-primary"
+            data-testid="settings-indexers-jackett-save-sync"
+          >
+            <span x-text="jackett.syncing ? 'Syncing...' : 'Save & Sync'"></span>
+          </button>
+        </div>
+      {% endcall %}
+    </form>
+  </section>
+
   <section class="section-card" data-testid="settings-indexers-registry-card">
     {% call section_header(
       title="Indexer registry",
@@ -142,6 +232,16 @@
     {% endcall %}
 
     <div class="section-body">
+      {% if indexer_manager_duplicates %}
+        <div class="inline-alert inline-alert-warning mb-4" data-testid="settings-indexers-manager-duplicates">
+          <div>
+            <p class="text-xs font-semibold">Duplicate manager sources</p>
+            {% for duplicate_name in indexer_manager_duplicates %}
+              <p class="mt-1 text-xs">{{ duplicate_name }} is synchronized by both Prowlarr and Jackett. Disable one row to avoid duplicate searches.</p>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
       <div class="settings-connection-list" data-testid="settings-indexers-registry-list">
         {% if indexers %}
           {% for idx in indexers %}
@@ -168,10 +268,10 @@
                     @click.stop="quickDelete({{ idx.id }}, '{{ idx.name | e }}', '{{ idx.source | e }}')"
                     data-testid="settings-indexers-delete-{{ idx.id }}"
                     class="downloads-action-btn is-danger"
-                    data-tip="{{ 'Remove' if idx.source == 'prowlarr' else 'Delete' }}"
+                    data-tip="{{ 'Remove' if idx.source != 'manual' else 'Delete' }}"
                     data-tip-pos="left"
-                    aria-label="{{ 'Remove' if idx.source == 'prowlarr' else 'Delete' }} {{ idx.name | e }}"
-                    title="{{ 'Remove' if idx.source == 'prowlarr' else 'Delete' }} {{ idx.name | e }}"
+                    aria-label="{{ 'Remove' if idx.source != 'manual' else 'Delete' }} {{ idx.name | e }}"
+                    title="{{ 'Remove' if idx.source != 'manual' else 'Delete' }} {{ idx.name | e }}"
                     type="button"
                   >
                     <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -184,8 +284,13 @@
                   <span class="pill {{ indexer_lane_pill_map.get(indexer_type, 'pill-info') }}">{{ indexer_lane_map.get(indexer_type, indexer_type|title) }}</span>
                   {% if idx.source == 'prowlarr' %}
                     <span class="pill pill-purple">Prowlarr</span>
+                  {% elif idx.source == 'jackett' %}
+                    <span class="pill pill-purple">Jackett</span>
                   {% else %}
                     <span class="pill pill-muted">Manual</span>
+                  {% endif %}
+                  {% if not idx.manager_available %}
+                    <span class="pill pill-warning">Unavailable in {{ idx.source|title }}</span>
                   {% endif %}
                   {% if idx.enabled %}
                     <span class="pill pill-success">Enabled</span>
@@ -236,18 +341,17 @@
       <div class="space-y-4 p-5">
         <div class="flex max-w-2xl flex-col gap-2">
         <template x-for="(item, index) in order" :key="item">
-          <div class="flex items-center gap-3 rounded-xl border border-pb-border bg-pb-card px-4 py-3"
-               :class="item === 'ddl' ? 'border-dashed opacity-40' : 'hover:border-pb-border-hover hover:bg-pb-card-hover/20'">
+          <div class="flex items-center gap-3 rounded-xl border border-pb-border bg-pb-card px-4 py-3 hover:border-pb-border-hover hover:bg-pb-card-hover/20">
             <span class="w-5 text-center text-sm font-bold text-pb-text-dim" x-text="index + 1"></span>
 
-            <div class="flex flex-col gap-0.5" x-show="item !== 'ddl'">
+            <div class="flex flex-col gap-0.5">
               <button type="button" @click="moveUp(index)" :disabled="index === 0"
                       class="rounded p-0.5 text-pb-text-dim transition-colors hover:text-pb-text disabled:opacity-20">
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5"/>
                 </svg>
               </button>
-              <button type="button" @click="moveDown(index)" :disabled="index >= order.length - 2"
+              <button type="button" @click="moveDown(index)" :disabled="index >= order.length - 1"
                       class="rounded p-0.5 text-pb-text-dim transition-colors hover:text-pb-text disabled:opacity-20">
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
@@ -263,18 +367,14 @@
                 <template x-if="item === 'torrent'">
                   <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-info-dim text-[10px] font-bold text-pb-info">TOR</div>
                 </template>
-                <template x-if="item === 'ddl'">
-                  <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-card-hover text-[10px] font-bold text-pb-text-dim">DDL</div>
+                <template x-if="item === 'direct'">
+                  <div class="flex h-7 w-7 items-center justify-center rounded-md bg-pb-success-dim text-[10px] font-bold text-pb-success">DDL</div>
                 </template>
                 <div class="min-w-0">
-                  <p class="text-sm font-medium" :class="item === 'ddl' ? 'text-pb-text-dim' : 'text-pb-text'" x-text="labels[item]"></p>
+                  <p class="text-sm font-medium text-pb-text" x-text="labels[item]"></p>
                 </div>
               </div>
             </div>
-
-            <template x-if="item === 'ddl'">
-              <span class="shrink-0 rounded bg-pb-card-hover px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-pb-text-dim">Coming soon</span>
-            </template>
           </div>
         </template>
         </div>
@@ -320,48 +420,51 @@
 
   <script>
   function sourcePriority() {
-    {%- set sp_default = '["usenet", "torrent"]' -%}
+    {%- set sp_default = '["usenet", "torrent", "direct"]' -%}
     const stored = {{ configs.get("source_priority", sp_default) | tojson }};
     let initial;
-    try { initial = JSON.parse(stored); } catch { initial = ['usenet', 'torrent']; }
-    // Ensure DDL is always last
-    const active = initial.filter(p => p !== 'ddl');
-    const full = [...active, 'ddl'];
+    try { initial = JSON.parse(stored); } catch { initial = []; }
+    const supported = ['usenet', 'torrent', 'direct'];
+    const parsed = Array.isArray(initial) ? initial : [];
+    const active = parsed
+      .map(item => item === 'ddl' ? 'direct' : item)
+      .filter((item, index, items) => supported.includes(item) && items.indexOf(item) === index);
+    const full = [...active, ...supported.filter(item => !active.includes(item))];
 
     return {
-      savedOrder: [...active],
+      savedOrder: [...full],
       order: full,
       dirty: false,
       saved: false,
-      labels: { usenet: 'Usenet', torrent: 'Torrents', ddl: 'Direct Downloads' },
+      labels: { usenet: 'Usenet', torrent: 'Torrents', direct: 'Direct Downloads' },
       descriptions: {
         usenet: 'SABnzbd, NZBGet \\u2022 Newznab indexers',
         torrent: 'qBittorrent, Transmission, Deluge \\u2022 Torznab indexers',
-        ddl: 'GetComics, direct file downloads',
+        direct: 'GetComics, Anna\'s Archive, direct file downloads',
       },
 
       moveUp(index) {
         if (index <= 0) return;
         [this.order[index], this.order[index - 1]] = [this.order[index - 1], this.order[index]];
-        this.dirty = JSON.stringify(this.order.filter(p => p !== 'ddl')) !== JSON.stringify(this.savedOrder);
+        this.dirty = JSON.stringify(this.order) !== JSON.stringify(this.savedOrder);
         this.saved = false;
       },
 
       moveDown(index) {
-        if (index >= this.order.length - 2) return; // Can't move past DDL
+        if (index >= this.order.length - 1) return;
         [this.order[index], this.order[index + 1]] = [this.order[index + 1], this.order[index]];
-        this.dirty = JSON.stringify(this.order.filter(p => p !== 'ddl')) !== JSON.stringify(this.savedOrder);
+        this.dirty = JSON.stringify(this.order) !== JSON.stringify(this.savedOrder);
         this.saved = false;
       },
 
       reset() {
-        this.order = [...this.savedOrder, 'ddl'];
+        this.order = [...this.savedOrder];
         this.dirty = false;
         this.saved = false;
       },
 
       save() {
-        const value = JSON.stringify(this.order.filter(p => p !== 'ddl'));
+        const value = JSON.stringify(this.order);
         fetch('/api/v1/config', {
           method: 'PUT',
           headers: {
@@ -372,7 +475,7 @@
         })
           .then(r => { if (!r.ok) throw new Error('Failed to save.'); })
           .then(() => {
-            this.savedOrder = [...this.order.filter(p => p !== 'ddl')];
+            this.savedOrder = [...this.order];
             this.dirty = false;
             this.saved = true;
             if (typeof showToast === 'function') showToast({ message: 'Source priority saved.', level: 'success' });
@@ -528,7 +631,7 @@
               </svg>
             </div>
             <p class="text-sm font-semibold text-pb-text">Torznab</p>
-            <p class="text-[11px] text-pb-text-dim mt-0.5">Torrent indexer (Jackett, etc.)</p>
+            <p class="text-[11px] text-pb-text-dim mt-0.5">Torrent indexer (1337x, etc.)</p>
           </button>
         </div>
       </div>
@@ -539,7 +642,7 @@
             class="flex flex-col flex-1 min-h-0">
         <input type="text" name="indexer_username" value="indexer" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
 
-        <div class="modal-body">
+        <div class="modal-body" x-ref="indexerModalBody">
         <div class="px-5 py-4 space-y-4">
 
           {# Prowlarr source notice #}
@@ -552,13 +655,23 @@
             </div>
           </template>
 
+          <template x-if="form.source === 'jackett'">
+            <div class="inline-alert inline-alert-info">
+              <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/>
+              </svg>
+              <span>Synced from Jackett. URL and API key are managed by Jackett sync. Pullbox controls enabled state, priority, and search options; Jackett owns tracker challenge resolution.</span>
+            </div>
+          </template>
+
           {# Name + Enabled toggle #}
           <div class="grid grid-cols-[1fr_auto] gap-4 items-end">
             <div>
               <label class="block text-xs font-medium text-pb-text-sec mb-1.5">Name</label>
-              <input type="text" x-model="form.name" placeholder="NZBgeek"
-                     :disabled="form.source === 'prowlarr'"
-                     :class="form.source === 'prowlarr' ? 'opacity-60 cursor-not-allowed' : ''"
+              <input type="text" x-model="form.name"
+                     :placeholder="form.indexer_type === 'torznab' ? 'Torznab' : 'NZBgeek'"
+                     :disabled="form.source !== 'manual'"
+                     :class="form.source !== 'manual' ? 'opacity-60 cursor-not-allowed' : ''"
                      autocomplete="nickname"
                      class="input-pb">
             </div>
@@ -574,25 +687,29 @@
           {# URL #}
           <div>
             <label class="block text-xs font-medium text-pb-text-sec mb-1.5">URL</label>
-            <input type="url" x-model="form.url" placeholder="https://api.nzbgeek.info"
-                   :disabled="form.source === 'prowlarr'"
-                   :class="form.source === 'prowlarr' ? 'opacity-60 cursor-not-allowed' : ''"
+            <input type="url" x-model="form.url"
+                   :placeholder="form.indexer_type === 'torznab' ? 'https://api.torznab.com' : 'https://api.nzbgeek.info'"
+                   :disabled="form.source !== 'manual'"
+                   :class="form.source !== 'manual' ? 'opacity-60 cursor-not-allowed' : ''"
                    autocomplete="url"
                    class="input-pb font-mono">
-            <p x-show="form.source !== 'prowlarr'" class="text-[11px] text-pb-text-dim mt-1">Base URL of the indexer. Include protocol.</p>
+            <p x-show="form.source === 'manual'" class="text-[11px] text-pb-text-dim mt-1">Base URL of the indexer. Include protocol.</p>
           </div>
 
           {# API Key (masked) #}
           <div>
             <label class="block text-xs font-medium text-pb-text-sec mb-1.5">
               API Key
+              <template x-if="form.source === 'manual' && !(modalMode === 'edit' && form.has_api_key)">
+                <span class="text-pb-text-dim font-normal ml-1">(optional)</span>
+              </template>
               <template x-if="modalMode === 'edit' && form.has_api_key">
                 <span class="text-pb-text-dim font-normal ml-1">(set — blank to keep)</span>
               </template>
             </label>
             <input type="password" x-model="form.api_key" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
-                   :disabled="form.source === 'prowlarr'"
-                   :class="form.source === 'prowlarr' ? 'opacity-60 cursor-not-allowed' : ''"
+                   :disabled="form.source !== 'manual'"
+                   :class="form.source !== 'manual' ? 'opacity-60 cursor-not-allowed' : ''"
                    autocomplete="new-password"
                    class="input-pb font-mono">
           </div>
@@ -644,6 +761,33 @@
                 </div>
               </div>
 
+              <div
+                x-show="form.indexer_type === 'torznab' && form.source === 'manual'"
+                data-testid="settings-indexers-manual-torznab-resolver"
+                class="flex items-center justify-between gap-4 rounded-lg border border-pb-border bg-pb-surface/40 p-3"
+              >
+                <div class="min-w-0">
+                  <p class="text-xs font-medium text-pb-text">Ranked browser resolver chain</p>
+                  <p class="mt-1 text-[11px] leading-relaxed text-pb-text-dim">
+                    Only available for manually added torznab providers. Pullbox tries ordinary HTTP first and never sends the API key or search query to a resolver.
+                  </p>
+                </div>
+                <label
+                  class="relative inline-flex shrink-0 items-center gap-2"
+                  :class="resolverChainAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'"
+                >
+                  <input
+                    type="checkbox"
+                    x-model="form.resolver_enabled"
+                    class="peer toggle-input"
+                    :disabled="!resolverChainAvailable"
+                    data-testid="settings-indexers-manual-torznab-resolver-toggle"
+                  >
+                  <span class="toggle-switch"></span>
+                  <span class="text-xs text-pb-text-sec" x-text="form.resolver_enabled ? 'Enabled' : 'Disabled'"></span>
+                </label>
+              </div>
+
             </div>
           </div>
 
@@ -683,7 +827,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round"
                         d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
                 </svg>
-                <span x-text="form.source === 'prowlarr' ? 'Remove' : 'Delete'"></span>
+                <span x-text="form.source !== 'manual' ? 'Remove' : 'Delete'"></span>
               </button>
             </template>
           </div>
@@ -710,7 +854,7 @@
             </button>
 
             <button type="submit"
-                    :disabled="saving || !form.name || !form.url || !form.indexer_type || (!form.api_key && !form.has_api_key && form.source !== 'prowlarr')"
+                    :disabled="saving || !form.name || !form.url || !form.indexer_type"
                     class="btn-primary btn-sm">
               <span x-text="saving ? 'Saving...' : (modalMode === 'add' ? 'Add Indexer' : 'Save Changes')"></span>
             </button>
@@ -834,11 +978,13 @@ function indexersSettings() {
     testMessage: '',
     testSuccess: false,
     modalError: '',
+    resolverChainAvailable: {{ browser_resolver_available|default(false)|tojson }},
 
     form: {
       indexer_type: '', name: '', url: '', api_key: '', has_api_key: false, enabled: true,
       priority: 50, categories: '', source: 'manual',
       enable_rss: true, enable_automatic_search: true, enable_interactive_search: true,
+      resolver_enabled: false,
     },
 
     // Prowlarr connection state
@@ -854,11 +1000,25 @@ function indexersSettings() {
     },
     initialProwlarrUrl: '{{ configs.get("prowlarr_url", "") }}',
 
+    // Jackett connection state
+    jackett: {
+      url: {{ configs.get("jackett_url", "")|tojson }},
+      apiKey: '',
+      obfuscatedApiKey: {{ configs.get("obfuscated_jackett_api_key", "")|tojson }},
+      hasApiKey: {{ 'true' if configs.get('has_jackett_api_key', '') else 'false' }},
+      testing: false,
+      syncing: false,
+      message: '',
+      success: false,
+    },
+    initialJackettUrl: {{ configs.get("jackett_url", "")|tojson }},
+
     blankForm() {
       return {
         indexer_type: '', name: '', url: '', api_key: '', has_api_key: false, enabled: true,
         priority: 50, categories: '', source: 'manual',
         enable_rss: true, enable_automatic_search: true, enable_interactive_search: true,
+        resolver_enabled: false,
       };
     },
 
@@ -867,8 +1027,44 @@ function indexersSettings() {
       return labels[type] || type;
     },
 
+    formatApiError(payload, fallback) {
+      const detail = payload?.detail ?? payload?.error?.message ?? payload?.message;
+      if (typeof detail === 'string' && detail.trim()) return detail;
+      if (Array.isArray(detail)) {
+        const messages = detail.map(item => {
+          if (typeof item === 'string') return item;
+          const message = item?.msg || item?.message;
+          if (!message) return '';
+          const field = Array.isArray(item?.loc)
+            ? item.loc.filter(part => part !== 'body').join('.')
+            : '';
+          return field ? `${field}: ${message}` : message;
+        }).filter(Boolean);
+        if (messages.length) return messages.join(' ');
+      }
+      if (detail && typeof detail === 'object') {
+        return detail.message || detail.msg || fallback;
+      }
+      return fallback;
+    },
+
+    scrollIndexerModalToStatus() {
+      this.$nextTick(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const modalBody = this.$refs.indexerModalBody;
+            if (!modalBody) return;
+            modalBody.scrollTo({
+              top: modalBody.scrollHeight,
+              behavior: 'smooth',
+            });
+          });
+        });
+      });
+    },
+
     async quickDelete(id, name, source) {
-      const label = source === 'prowlarr' ? 'Remove' : 'Delete';
+      const label = source !== 'manual' ? 'Remove' : 'Delete';
       const ok = await pbConfirm({
         title: `${label} Indexer`,
         message: `${label} "${name}"? This cannot be undone.`,
@@ -907,6 +1103,14 @@ function indexersSettings() {
 
     prowlarrDirty() {
       return this.prowlarr.url !== this.initialProwlarrUrl || Boolean(this.prowlarr.apiKey);
+    },
+
+    jackettReady() {
+      return Boolean(this.jackett.url && (this.jackett.apiKey || this.jackett.hasApiKey));
+    },
+
+    jackettDirty() {
+      return this.jackett.url !== this.initialJackettUrl || Boolean(this.jackett.apiKey);
     },
 
     obfuscateStoredKey(key) {
@@ -969,6 +1173,7 @@ function indexersSettings() {
             enable_rss: data.enable_rss !== false,
             enable_automatic_search: data.enable_automatic_search !== false,
             enable_interactive_search: data.enable_interactive_search !== false,
+            resolver_enabled: this.resolverChainAvailable && data.resolver_enabled === true,
           };
           this.showModal = true;
         })
@@ -987,6 +1192,7 @@ function indexersSettings() {
     saveIndexer() {
       this.saving = true;
       this.modalError = '';
+      this.scrollIndexerModalToStatus();
 
       const body = {
         name: this.form.name,
@@ -997,6 +1203,11 @@ function indexersSettings() {
         enable_rss: this.form.enable_rss,
         enable_automatic_search: this.form.enable_automatic_search,
         enable_interactive_search: this.form.enable_interactive_search,
+        resolver_enabled: this.resolverChainAvailable
+          && this.form.indexer_type === 'torznab'
+          && this.form.source === 'manual'
+          ? this.form.resolver_enabled
+          : false,
       };
 
       // Only send api_key if user entered a new one
@@ -1013,9 +1224,10 @@ function indexersSettings() {
         },
         body: JSON.stringify(body),
       })
-        .then(r => {
-          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Failed to save.'); });
-          return r.json();
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(this.formatApiError(data, 'Failed to save.'));
+          return data;
         })
         .then(() => {
           this.closeModal();
@@ -1026,11 +1238,12 @@ function indexersSettings() {
         .catch(err => {
           this.modalError = err.message;
           this.saving = false;
+          this.scrollIndexerModalToStatus();
         });
     },
 
     async deleteIndexer() {
-      const label = this.form.source === 'prowlarr' ? 'Remove' : 'Delete';
+      const label = this.form.source !== 'manual' ? 'Remove' : 'Delete';
       const ok = await pbConfirm({
         title: label + ' Indexer',
         message: `${label} "${this.form.name}"? This cannot be undone.`,
@@ -1057,11 +1270,16 @@ function indexersSettings() {
 
       if (this.modalMode === 'edit' && this.editingId) {
         this.testing = true;
+        this.scrollIndexerModalToStatus();
         fetch(`/api/v1/indexers/${this.editingId}/test`, {
           method: 'POST',
           headers: { 'X-CSRF-Token': '{{ csrf_token }}' },
         })
-          .then(r => r.json())
+          .then(async r => {
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(this.formatApiError(data, 'Test request failed.'));
+            return data;
+          })
           .then(data => {
             this.testSuccess = data.healthy;
             const ms = data.response_time_ms ? ` (${pbFormatDurationMs(data.response_time_ms)})` : '';
@@ -1070,14 +1288,18 @@ function indexersSettings() {
               : (data.message || 'Connection failed.');
             this.setIndexerResult(this.editingId, data.healthy);
           })
-          .catch(() => {
+          .catch(err => {
             this.testSuccess = false;
-            this.testMessage = 'Test request failed — check Pullbox logs.';
+            this.testMessage = err.message || 'Test request failed — check Pullbox logs.';
           })
-          .finally(() => { this.testing = false; });
+          .finally(() => {
+            this.testing = false;
+            this.scrollIndexerModalToStatus();
+          });
       } else {
         this.testSuccess = false;
         this.testMessage = 'Save the indexer first, then use Test to verify the connection.';
+        this.scrollIndexerModalToStatus();
       }
     },
 
@@ -1173,16 +1395,17 @@ function indexersSettings() {
       }
 
       fetch(url, opts)
-        .then(r => {
-          if (!r.ok) return r.json().then(d => { throw new Error(d?.detail || 'Sync failed.'); });
-          return r.json();
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(this.formatApiError(data, 'Sync failed.'));
+          return data;
         })
         .then(data => {
           this.prowlarr.success = true;
           const parts = [];
           if (data.added > 0) parts.push(`${data.added} added`);
           if (data.updated > 0) parts.push(`${data.updated} updated`);
-          if (data.removed > 0) parts.push(`${data.removed} removed`);
+          if (data.removed > 0) parts.push(`${data.removed} retired`);
           this.prowlarr.message = parts.length
             ? `Sync complete: ${parts.join(', ')}. ${data.total} total indexers.`
             : `Sync complete. ${data.total} indexers up to date.`;
@@ -1206,6 +1429,103 @@ function indexersSettings() {
 
     saveProwlarrAndSync() {
       this.syncProwlarr();
+    },
+
+    // ── Jackett ──────────────────────────────────────────────────
+    testJackett() {
+      this.jackett.testing = true;
+      this.jackett.message = '';
+
+      const useStored = !this.jackett.apiKey && this.jackett.hasApiKey;
+      const url = useStored ? '/api/v1/indexers/jackett/test-stored' : '/api/v1/indexers/jackett/test';
+      const opts = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+      };
+      if (!useStored) {
+        opts.body = JSON.stringify({
+          jackett_url: this.jackett.url,
+          jackett_api_key: this.jackett.apiKey,
+        });
+      }
+
+      fetch(url, opts)
+        .then(r => r.json())
+        .then(data => {
+          this.jackett.success = data.healthy;
+          const ms = data.response_time_ms ? ` (${pbFormatDurationMs(data.response_time_ms)})` : '';
+          this.jackett.message = data.healthy
+            ? `${data.message}${ms}`
+            : (data.message || 'Connection failed.');
+        })
+        .catch(() => {
+          this.jackett.success = false;
+          this.jackett.message = 'Test request failed.';
+        })
+        .finally(() => {
+          this.jackett.testing = false;
+          setTimeout(() => { this.jackett.message = ''; }, 3000);
+        });
+    },
+
+    syncJackett() {
+      this.jackett.syncing = true;
+      this.jackett.message = '';
+
+      const useStored = !this.jackett.apiKey && this.jackett.hasApiKey;
+      const url = useStored ? '/api/v1/indexers/jackett/resync' : '/api/v1/indexers/jackett/sync';
+      const opts = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': '{{ csrf_token }}',
+        },
+      };
+      if (!useStored) {
+        opts.body = JSON.stringify({
+          jackett_url: this.jackett.url,
+          jackett_api_key: this.jackett.apiKey,
+        });
+      }
+
+      fetch(url, opts)
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(this.formatApiError(data, 'Sync failed.'));
+          return data;
+        })
+        .then(data => {
+          this.jackett.success = true;
+          const parts = [];
+          if (data.added > 0) parts.push(`${data.added} added`);
+          if (data.updated > 0) parts.push(`${data.updated} updated`);
+          if (data.reactivated > 0) parts.push(`${data.reactivated} restored`);
+          if (data.retired > 0) parts.push(`${data.retired} retired`);
+          this.jackett.message = parts.length
+            ? `Sync complete: ${parts.join(', ')}. ${data.total} active trackers.`
+            : `Sync complete. ${data.total} trackers up to date.`;
+          this.initialJackettUrl = this.jackett.url;
+          if (this.jackett.apiKey) {
+            this.jackett.obfuscatedApiKey = this.obfuscateStoredKey(this.jackett.apiKey);
+          }
+          this.jackett.apiKey = '';
+          this.jackett.hasApiKey = true;
+          if (typeof showToast === 'function')
+            showToast({ message: this.jackett.message, level: 'success' });
+          setTimeout(() => window.location.reload(), 3000);
+        })
+        .catch(err => {
+          this.jackett.success = false;
+          this.jackett.message = err.message;
+        })
+        .finally(() => { this.jackett.syncing = false; });
+    },
+
+    saveJackettAndSync() {
+      this.syncJackett();
     },
 
     // ── Config save ──────────────────────────────────────────────

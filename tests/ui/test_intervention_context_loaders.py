@@ -55,6 +55,22 @@ async def _seed_intervention_rows(db_session) -> None:  # type: ignore[no-untype
             ),
             PendingMatch(
                 issue_id=issue.id,
+                release_title="Batman 001 Direct recovery.cbz",
+                download_url="pullbox-direct://attempt/991",
+                is_torrent=False,
+                confidence="high",
+                match_details={
+                    "source_kind": "direct",
+                    "provider_name": "pullbox.getcomics",
+                    "artifact_host_kind": "terabox",
+                    "failure_class": "artifact_host_auth_required",
+                    "failure_code": "artifact_host_auth_required",
+                    "series_match_type": "exact",
+                },
+                status=PendingMatchStatus.PENDING,
+            ),
+            PendingMatch(
+                issue_id=issue.id,
                 release_title="Batman 001 Alternate.cbz",
                 download_url="https://indexer.example.com/pending-low",
                 is_torrent=False,
@@ -108,8 +124,8 @@ async def test_load_intervention_context_filters_queue_rows(db_session) -> None:
     )
 
     assert context["tab"] == "queue"
-    assert context["queue_count"] == 2
-    assert context["pending_count"] == 2
+    assert context["queue_count"] == 3
+    assert context["pending_count"] == 3
     assert context["history_total"] == 1
     assert context["filtered_count"] == 1
     assert context["visible_count"] == 1
@@ -125,6 +141,28 @@ async def test_load_intervention_context_filters_queue_rows(db_session) -> None:
     [pending_match] = context["pending_matches"]
     assert pending_match.release_title == "Batman 001 (2016) [Digital].cbz"
     assert context["intervention_item_meta"][pending_match.id]["source_label"] == "Torrent Cave"
+
+
+@pytest.mark.asyncio
+async def test_load_intervention_context_separates_acquisition_recovery_rows(db_session) -> None:  # type: ignore[no-untyped-def]
+    """Direct download failures appear in recovery, not semantic match review."""
+    from pullbox.ui.intervention_context_loaders import load_intervention_context
+
+    await _seed_intervention_rows(db_session)
+
+    review = await load_intervention_context(db_session, tab="queue")
+    recovery = await load_intervention_context(db_session, tab="recovery")
+
+    assert review["match_review_count"] == 2
+    assert review["recovery_count"] == 1
+    assert [item.release_title for item in review["pending_matches"]] == [
+        "Batman 001 Alternate.cbz",
+        "Batman 001 (2016) [Digital].cbz",
+    ]
+    assert recovery["tab"] == "recovery"
+    assert [item.release_title for item in recovery["pending_matches"]] == [
+        "Batman 001 Direct recovery.cbz"
+    ]
 
 
 @pytest.mark.asyncio
@@ -145,7 +183,7 @@ async def test_load_intervention_context_filters_history_rows(db_session) -> Non
     )
 
     assert context["tab"] == "history"
-    assert context["queue_count"] == 2
+    assert context["queue_count"] == 3
     assert context["history_total"] == 1
     assert context["history_rejected_count"] == 1
     assert context["history_approved_count"] == 0

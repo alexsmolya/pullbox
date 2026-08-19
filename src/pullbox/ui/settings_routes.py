@@ -47,6 +47,16 @@ SETTINGS_TABS: tuple[dict[str, str], ...] = (
         "icon": "M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z",
     },
     {
+        "key": "resolvers",
+        "label": "Challenge Resolvers",
+        "icon": "M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.249-8.25-3.285z",  # noqa: E501
+    },
+    {
+        "key": "direct",
+        "label": "Direct Downloads",
+        "icon": "M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4.5 18.75h15",
+    },
+    {
         "key": "metadata",
         "label": "Metadata",
         "icon": "M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z",  # noqa: E501
@@ -73,6 +83,8 @@ _SETTINGS_TABS = (
     "media",
     "clients",
     "indexers",
+    "resolvers",
+    "direct",
     "metadata",
     "search",
     "utilities",
@@ -256,6 +268,16 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
     elif tab == "search":
         result = await session.execute(select(SystemConfig).order_by(SystemConfig.key))
         ctx["configs"] = {c.key: c.value for c in result.scalars().all()}
+    elif tab == "resolvers":
+        from pullbox.schemas.direct_resolver import DirectResolverResponse
+        from pullbox.services.direct_resolver_service import list_direct_resolvers
+
+        resolvers = await list_direct_resolvers(session)
+        ctx["direct_resolvers"] = resolvers
+        ctx["direct_resolver_seed"] = [
+            DirectResolverResponse.model_validate(resolver).model_dump(mode="json")
+            for resolver in resolvers
+        ]
     elif tab == "clients":
         client_result = await session.execute(
             select(DownloadClientConfig).order_by(
@@ -280,11 +302,34 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         )
         ctx["configs"] = {c.key: c.value for c in cfg_result.scalars().all()}
     elif tab == "indexers":
+        from pullbox.models.direct_acquisition import DirectResolverConfig
+
         indexer_result = await session.execute(
             select(IndexerConfig).order_by(IndexerConfig.priority, IndexerConfig.name)
         )
         indexers: list[IndexerConfig] = list(indexer_result.scalars().all())
         ctx["indexers"] = indexers
+        ctx["browser_resolver_available"] = (
+            await session.scalar(select(DirectResolverConfig.id).limit(1)) is not None
+        )
+        manager_sources_by_name: dict[str, set[str]] = {}
+        manager_display_names: dict[str, str] = {}
+        for indexer in indexers:
+            source = str(indexer.source)
+            if source not in {"prowlarr", "jackett"} or not indexer.manager_available:
+                continue
+            suffix = f" ({source.title()})"
+            display_name = indexer.name
+            if display_name.casefold().endswith(suffix.casefold()):
+                display_name = display_name[: -len(suffix)]
+            normalized_name = " ".join(display_name.casefold().split())
+            manager_sources_by_name.setdefault(normalized_name, set()).add(source)
+            manager_display_names.setdefault(normalized_name, display_name)
+        ctx["indexer_manager_duplicates"] = sorted(
+            manager_display_names[name]
+            for name, sources in manager_sources_by_name.items()
+            if {"prowlarr", "jackett"}.issubset(sources)
+        )
         ctx["indexer_status_seed"] = load_indexer_status_seed(request, indexers)
         cfg_result = await session.execute(
             select(SystemConfig).where(
@@ -293,6 +338,8 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
                         "indexer_failure_threshold",
                         "prowlarr_url",
                         "prowlarr_api_key",
+                        "jackett_url",
+                        "jackett_api_key",
                         "source_priority",
                     ]
                 )
@@ -315,6 +362,19 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         configs["prowlarr_api_key"] = ""  # never send to browser
         configs["has_prowlarr_api_key"] = "true" if has_prowlarr_key else ""
         configs["obfuscated_prowlarr_api_key"] = obfuscated_prowlarr_key
+
+        has_jackett_key = bool(configs.get("jackett_api_key", ""))
+        obfuscated_jackett_key = ""
+        if has_jackett_key:
+            try:
+                obfuscated_jackett_key = obfuscate_api_key(
+                    decrypt_secret(configs["jackett_api_key"])
+                )
+            except (ValueError, Exception):
+                obfuscated_jackett_key = ""
+        configs["jackett_api_key"] = ""  # never send to browser
+        configs["has_jackett_api_key"] = "true" if has_jackett_key else ""
+        configs["obfuscated_jackett_api_key"] = obfuscated_jackett_key
         ctx["configs"] = configs
         # Load blocklist config for the blocklist section
         bl_row = await session.get(SystemConfig, "blocklist.release_groups")
@@ -327,6 +387,35 @@ async def load_settings_tab(request: Request, session: DbSession, tab: str) -> d
         ctx["blocklist_expiry_days"] = bl_expiry.value if bl_expiry else "90"
         bl_auto = await session.get(SystemConfig, "blocklist.auto_add_on_failure")
         ctx["blocklist_auto_add"] = (bl_auto.value.lower() == "true") if bl_auto else True
+    elif tab == "direct":
+        from pullbox.schemas.direct_host import DirectHostResponse
+        from pullbox.schemas.direct_provider import DirectProviderResponse
+        from pullbox.services.direct_host_settings import list_direct_host_settings
+        from pullbox.services.direct_provider_capabilities import visible_artifact_host_kinds
+        from pullbox.services.direct_provider_registration import list_direct_providers
+
+        providers = await list_direct_providers(session)
+        visible_host_kinds = visible_artifact_host_kinds(
+            provider.artifact_host_patterns for provider in providers if provider.enabled
+        )
+        hosts = (
+            [
+                host
+                for host in await list_direct_host_settings(session)
+                if host.host_kind in visible_host_kinds
+            ]
+            if visible_host_kinds
+            else []
+        )
+        ctx["direct_providers"] = providers
+        ctx["direct_provider_seed"] = [
+            DirectProviderResponse.model_validate(provider).model_dump(mode="json")
+            for provider in providers
+        ]
+        ctx["direct_hosts"] = hosts
+        ctx["direct_host_seed"] = [
+            DirectHostResponse.model_validate(host).model_dump(mode="json") for host in hosts
+        ]
     elif tab == "utilities":
         result = await session.execute(
             select(SystemConfig).where(

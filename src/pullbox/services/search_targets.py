@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy import and_, exists, or_, select
 
+from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.base import ReleaseResult
+    from pullbox.services.direct_search_coordinator import DirectSearchOutcome
     from pullbox.services.release_validator import ValidationResult
     from pullbox.services.search_types import IssueSearchMode, SearchEvalKwargs, ValidatorKwargs
 
@@ -33,7 +35,16 @@ class IssueSearchTarget:
     issue_type: IssueType
     issue_title: str | None = None
     series_year: int | None = None
+    release_year: int | None = None
     alternate_names: list[str] | None = None
+    series_issue_count: int | None = None
+
+    @property
+    def search_year(self) -> int | None:
+        """Use publication year for collections and series year for serial issues."""
+        if issue_type_family(self.issue_type) is TypeFamily.COLLECTION:
+            return self.release_year or self.series_year
+        return self.series_year
 
 
 @dataclass(frozen=True)
@@ -52,6 +63,7 @@ class IssueSearchOutcome:
     search_details: dict[str, object]
     elapsed_ms: int
     used_fallback: bool = False
+    direct_outcome: DirectSearchOutcome | None = None
 
 
 SearchOutcomeCallback = Callable[[IssueSearchOutcome], Awaitable[None]]
@@ -78,6 +90,8 @@ class SearchIssueTargetFunc(Protocol):
 
 def _target_from_row(row: Any) -> IssueSearchTarget:
     """Build a search target from a SQLAlchemy row with the expected labels."""
+    release_date = getattr(row, "release_date", None) or getattr(row, "store_date", None)
+    series_issue_count = getattr(row, "series_issue_count", None)
     return IssueSearchTarget(
         issue_id=int(row.issue_id),
         series_id=int(row.series_id),
@@ -86,7 +100,9 @@ def _target_from_row(row: Any) -> IssueSearchTarget:
         issue_type=IssueType(str(row.issue_type)) if row.issue_type else IssueType.ISSUE,
         issue_title=str(row.issue_title) if row.issue_title else None,
         series_year=int(row.series_year) if row.series_year else None,
+        release_year=release_date.year if release_date is not None else None,
         alternate_names=list(row.alternate_names) if row.alternate_names else None,
+        series_issue_count=(int(series_issue_count) if series_issue_count is not None else None),
     )
 
 
@@ -102,9 +118,12 @@ async def load_issue_search_target(
             Issue.issue_number.label("issue_number"),
             Issue.issue_type.label("issue_type"),
             Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
         )
         .join(Series, Series.id == Issue.series_id)
         .where(Issue.id == issue_id)
@@ -128,9 +147,12 @@ async def load_series_wanted_search_targets(
             Issue.issue_number.label("issue_number"),
             Issue.issue_type.label("issue_type"),
             Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
         )
         .join(Series, Series.id == Issue.series_id)
         .where(Issue.series_id == series_id)
@@ -223,9 +245,12 @@ async def load_wanted_issue_search_targets(
             Issue.issue_number.label("issue_number"),
             Issue.issue_type.label("issue_type"),
             Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
             Series.title.label("series_title"),
             Series.year_start.label("series_year"),
             Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
         )
         .join(Series, Series.id == Issue.series_id)
         .where(*filters)
@@ -233,3 +258,43 @@ async def load_wanted_issue_search_targets(
         .limit(limit)
     )
     return [_target_from_row(row) for row in result.all()]
+
+
+async def load_wanted_issue_search_targets_by_ids(
+    session: AsyncSession,
+    issue_ids: list[int],
+) -> list[IssueSearchTarget]:
+    """Load still-eligible wanted targets while preserving snapshot order."""
+    if not issue_ids:
+        return []
+    result = await session.execute(
+        select(
+            Issue.id.label("issue_id"),
+            Issue.series_id.label("series_id"),
+            Issue.issue_number.label("issue_number"),
+            Issue.issue_type.label("issue_type"),
+            Issue.title.label("issue_title"),
+            Issue.release_date.label("release_date"),
+            Issue.store_date.label("store_date"),
+            Series.title.label("series_title"),
+            Series.year_start.label("series_year"),
+            Series.alternate_names.label("alternate_names"),
+            Series.issue_count.label("series_issue_count"),
+        )
+        .join(Series, Series.id == Issue.series_id)
+        .where(
+            Issue.id.in_(issue_ids),
+            Issue.status == IssueStatus.WANTED,
+            Series.monitored.is_(True),
+            ~exists().where(
+                and_(
+                    PendingMatch.issue_id == Issue.id,
+                    PendingMatch.status == PendingMatchStatus.PENDING,
+                )
+            ),
+        )
+    )
+    targets_by_id = {
+        target.issue_id: target for target in (_target_from_row(row) for row in result.all())
+    }
+    return [targets_by_id[issue_id] for issue_id in issue_ids if issue_id in targets_by_id]

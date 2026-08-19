@@ -240,6 +240,8 @@ class TestSystemRouteContracts:
         assert "<th>Last execution</th>" in tasks.text
         assert "<th>Duration</th>" in tasks.text
         assert "<th>Next execution</th>" in tasks.text
+        assert 'data-testid="search-wanted-sweep-progress"' in tasks.text
+        assert "Paused between batches" in tasks.text
 
         assert 'data-testid="system-backups-table"' in backups.text
         assert 'data-testid="system-restore-recovery-banner"' in backups.text

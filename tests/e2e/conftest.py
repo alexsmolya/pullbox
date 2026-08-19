@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -411,7 +412,12 @@ async def _seed_series_library_data() -> None:
             if title == "Batman":
                 (series_path / "cover.png").write_bytes(_TEST_COVER_PNG)
                 (series_path / "issue_001.png").write_bytes(_TEST_COVER_PNG)
-                (series_path / "Batman 001 (2016).cbz").write_bytes(b"cbz")
+                with zipfile.ZipFile(
+                    series_path / "Batman 001 (2016).cbz", "w", zipfile.ZIP_DEFLATED
+                ) as comic:
+                    comic.writestr("001.png", _TEST_COVER_PNG)
+                    comic.writestr("002.png", _TEST_COVER_PNG)
+                    comic.writestr("003.png", _TEST_COVER_PNG)
                 (series_path / "library-context-test.cbr").write_bytes(b"rar-ish")
                 series.cover_path = f"/api/v1/series/{series.id}/cover"
 
@@ -545,6 +551,27 @@ async def _seed_series_library_data() -> None:
                                 "indexer_name": "NZBGeek",
                             },
                             status=PendingMatchStatus.PENDING,
+                        ),
+                        PendingMatch(
+                            issue_id=owned_issue.id,
+                            release_title="Batman 001 (2016) [Digital] Approved.cbz",
+                            download_url="https://indexer.example.com/dl/batman-001-approved",
+                            is_torrent=False,
+                            file_size=52_428_800,
+                            confidence="high",
+                            match_details={
+                                "parsed_series": "Batman",
+                                "parsed_issue": 1.0,
+                                "parsed_year": 2016,
+                                "series_similarity": 1.0,
+                                "issue_match": True,
+                                "year_match": True,
+                                "type_match": True,
+                                "indexer_name": "NZBGeek",
+                            },
+                            status=PendingMatchStatus.APPROVED,
+                            resolved_at=datetime.now(tz=UTC),
+                            resolved_by="e2e",
                         ),
                     ]
                 )

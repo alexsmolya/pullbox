@@ -14,15 +14,21 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy.exc import OperationalError
 
 from pullbox.composition.events import build_domain_event_bus
+from pullbox.config import get_settings
 from pullbox.core.config_resolver import get_int_setting, load_system_config_values, parse_bool
 from pullbox.core.log_deduper import log_deduped_warning
-from pullbox.core.scheduler import get_current_task_trigger_type
+from pullbox.core.scheduler import (
+    TaskExecutionResult,
+    get_current_task_trigger_type,
+    get_scheduler,
+)
 from pullbox.core.sqlite_lock import (
     SQLITE_LOCK_RETRY_ATTEMPTS,
     is_sqlite_locked_error,
@@ -41,12 +47,15 @@ from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series
 from pullbox.services import search_runtime as _search_runtime
 from pullbox.services.blocklist_service import BlocklistService
+from pullbox.services.direct_acquisition_planner_service import plan_direct_acquisition
+from pullbox.services.direct_discovery_retention import prune_unstarted_direct_discoveries
 from pullbox.services.download_service import DownloadService
 from pullbox.services.intervention_service import InterventionService
 from pullbox.services.release_validator import (
     ReleaseValidator,
     ValidationResult,
 )
+from pullbox.services.search_acquisition_router import route_search_acquisition
 from pullbox.services.search_service import (
     _TYPE_QUERY_KEYWORDS,
     DEFAULT_TYPE_THRESHOLDS,
@@ -58,8 +67,20 @@ from pullbox.services.search_service import (
     build_eval_kwargs,
     load_series_wanted_search_targets,
     load_wanted_issue_search_targets,
-    should_auto_grab,
 )
+from pullbox.services.search_source_selection import select_search_source
+from pullbox.services.wanted_search_sweep import (
+    WantedSearchSweepState,
+    checkpoint_wanted_search_items,
+    complete_wanted_search_batch,
+    create_wanted_search_sweep,
+    load_wanted_search_batch,
+    load_wanted_search_sweep,
+    mark_wanted_search_batch_running,
+    pause_wanted_search_sweep,
+    save_wanted_search_sweep,
+)
+from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
 
 logger = structlog.get_logger(__name__)
 _ORIGINAL_SEARCH_SERVICE = SearchService
@@ -68,7 +89,7 @@ _ORIGINAL_SEARCH_WANTED = SearchService.search_wanted
 _SEARCH_TWO_PASS_CONFIG_KEY = "search_two_pass_enabled"
 _SEARCH_LOG_RETENTION_CONFIG_KEY = "search_log_retention_days"
 _SEARCH_WANTED_CURSOR_CONFIG_KEY = "search_wanted_cursor"
-_SEARCH_WANTED_BATCH_LIMIT = 50
+_SEARCH_WANTED_BATCH_LIMIT = 100
 _DEFAULT_SEARCH_LOG_RETENTION_DAYS = 7
 
 
@@ -259,32 +280,13 @@ async def _persist_wanted_search_outcome(
     issue_grabbed = 0
     issue_queued = 0
     best_confidence: str | None = None
-    action_status = "no_results" if not outcome.raw_results else "no_match"
+    direct_outcome = outcome.direct_outcome
+    direct_results = (
+        len(direct_outcome.matched) + len(direct_outcome.rejected) if direct_outcome else 0
+    )
+    total_results = len(outcome.raw_results) + direct_results
+    action_status = "no_results" if total_results == 0 else "no_match"
     try:
-        if outcome.best_validation is not None and outcome.best_release is not None:
-            validation = outcome.best_validation
-            best = outcome.best_release
-            best_confidence = validation.confidence.value
-            if should_auto_grab(
-                validation.confidence,
-                target.issue_type,
-                runtime.type_thresholds,
-            ):
-                await download_svc.send_to_client(session, best, target.issue_id)
-                issue_grabbed = 1
-                action_status = "downloading"
-            elif not await intervention_svc.has_pending_for_issue(session, target.issue_id):
-                await intervention_svc.create_pending_match(
-                    session,
-                    target.issue_id,
-                    best,
-                    validation,
-                )
-                issue_queued = 1
-                action_status = "queued"
-            else:
-                action_status = "pending_exists"
-
         search_log = await session.get(SearchLog, pending_log_id) if pending_log_id else None
         if search_log is None:
             search_log = SearchLog(
@@ -294,20 +296,52 @@ async def _persist_wanted_search_outcome(
                 search_type=SearchType.AUTOMATED,
             )
             session.add(search_log)
+            await session.flush()
 
-        search_log.results_found = len(outcome.raw_results)
+        routed = await route_search_acquisition(
+            session,
+            outcome=outcome,
+            search_log_id=search_log.id,
+            eval_kwargs=runtime.eval_kwargs,
+            type_thresholds=runtime.type_thresholds,
+            download_service=download_svc,
+            intervention_service=intervention_svc,
+            runner=(get_direct_acquisition_runner() if runtime.direct_providers else None),
+            source_priority=runtime.source_priority,
+            planner=plan_direct_acquisition,
+        )
+        issue_grabbed = routed.grabbed
+        issue_queued = routed.queued
+        best_confidence = routed.best_confidence
+        action_status = (
+            "no_results"
+            if total_results == 0 and routed.action_status == "no_match"
+            else routed.action_status
+        )
+        next_details = dict(outcome.search_details)
+        if routed.notices:
+            next_details["notices"] = list(routed.notices)
+            logger.info(
+                "search_source_fallback",
+                issue_id=target.issue_id,
+                notices=list(routed.notices),
+            )
+
+        search_log.results_found = total_results
         search_log.results_grabbed = issue_grabbed
         search_log.results_queued = issue_queued
         search_log.results_rejected = max(
             0,
-            len(outcome.raw_results) - issue_grabbed - issue_queued,
+            total_results - issue_grabbed - issue_queued,
         )
         search_log.details = _merge_search_log_details(
             existing_details=search_log.details or {},
-            next_details=outcome.search_details,
+            next_details=next_details,
             run_state="completed",
             action_status=action_status,
         )
+        if routed.source_kind is not None:
+            search_log.details["acquisition_method"] = routed.source_kind
         search_log.best_confidence = best_confidence
         await _save_search_wanted_cursor(session, target)
         await session.commit()
@@ -332,10 +366,10 @@ async def _persist_wanted_search_outcome(
                     series_title=target.series_title,
                     issue_number=target.issue_number,
                     search_type=SearchType.AUTOMATED,
-                    results_found=len(outcome.raw_results),
+                    results_found=total_results,
                     results_grabbed=0,
                     results_queued=0,
-                    results_rejected=len(outcome.raw_results),
+                    results_rejected=total_results,
                     details=_merge_search_log_details(
                         existing_details=None,
                         next_details=outcome.search_details,
@@ -385,10 +419,24 @@ async def _persist_series_search_outcome(
 
     selected_outcome = primary_outcome
     selected_pass = 1
+    primary_selection = select_search_source(
+        primary_outcome,
+        runtime.eval_kwargs,
+        source_priority=runtime.source_priority,
+    )
+    fallback_selection = (
+        select_search_source(
+            fallback_outcome,
+            runtime.eval_kwargs,
+            source_priority=runtime.source_priority,
+        )
+        if fallback_outcome is not None
+        else None
+    )
     if (
-        primary_outcome.best_validation is None
+        primary_selection is None
         and fallback_outcome is not None
-        and fallback_outcome.best_validation is not None
+        and fallback_selection is not None
     ):
         selected_outcome = fallback_outcome
         selected_pass = 2
@@ -396,46 +444,73 @@ async def _persist_series_search_outcome(
     issue_grabbed = 0
     issue_queued = 0
     try:
-        if selected_outcome.best_validation is None or selected_outcome.best_release is None:
+        search_log = await session.get(SearchLog, pending_log_id) if pending_log_id else None
+        if search_log is None:
+            search_log = SearchLog(
+                issue_id=target.issue_id,
+                series_title=target.series_title,
+                issue_number=target.issue_number,
+                search_type=SearchType.BULK,
+            )
+            session.add(search_log)
+            await session.flush()
+
+        routed = await route_search_acquisition(
+            session,
+            outcome=selected_outcome,
+            search_log_id=search_log.id,
+            eval_kwargs=runtime.eval_kwargs,
+            type_thresholds=runtime.type_thresholds,
+            download_service=download_svc,
+            intervention_service=intervention_svc,
+            runner=(get_direct_acquisition_runner() if runtime.direct_providers else None),
+            source_priority=runtime.source_priority,
+            planner=plan_direct_acquisition,
+        )
+        issue_grabbed = routed.grabbed
+        issue_queued = routed.queued
+        if routed.source_kind is None:
             issue_log.info("search_series_issue_no_match", search_pass=selected_pass)
+        elif routed.source_kind == "direct":
+            issue_log.info(
+                "search_series_issue_direct_routed",
+                action_status=routed.action_status,
+                confidence=routed.best_confidence,
+                search_pass=selected_pass,
+            )
         else:
-            validation = selected_outcome.best_validation
-            best = selected_outcome.best_release
-            if should_auto_grab(
-                validation.confidence,
-                target.issue_type,
-                runtime.type_thresholds,
-            ):
-                await download_svc.send_to_client(session, best, target.issue_id)
-                issue_grabbed = 1
+            selected = select_search_source(
+                selected_outcome,
+                runtime.eval_kwargs,
+                source_priority=runtime.source_priority,
+            )
+            if selected is None:
+                raise RuntimeError("Selected indexer result was not found.")
+            if issue_grabbed:
                 issue_log.info(
                     "search_series_issue_auto_grab",
-                    best_title=best.title,
-                    best_indexer=best.indexer_name,
-                    confidence=validation.confidence.value,
+                    best_title=selected.release.title,
+                    best_indexer=selected.release.indexer_name,
+                    confidence=selected.validation.confidence.value,
                 )
-            elif await intervention_svc.has_pending_for_issue(session, target.issue_id):
+            elif routed.action_status == "pending_exists":
                 issue_log.info(
                     "search_series_issue_pending_exists",
-                    best_title=best.title,
+                    best_title=selected.release.title,
                     search_pass=selected_pass,
                 )
-            else:
-                await intervention_svc.create_pending_match(
-                    session,
-                    target.issue_id,
-                    best,
-                    validation,
-                )
-                issue_queued = 1
+            elif issue_queued:
                 issue_log.info(
                     "search_series_issue_queued",
-                    best_title=best.title,
-                    confidence=validation.confidence.value,
+                    best_title=selected.release.title,
+                    confidence=selected.validation.confidence.value,
                     search_pass=selected_pass,
                 )
 
         details = dict(selected_outcome.search_details)
+        if routed.notices:
+            details["notices"] = list(routed.notices)
+            issue_log.info("search_source_fallback", notices=list(routed.notices))
         if fallback_outcome is not None:
             total_found = len(primary_outcome.raw_results) + len(fallback_outcome.raw_results)
             details["results_count"] = total_found
@@ -453,11 +528,14 @@ async def _persist_series_search_outcome(
                 "search_passes",
                 selected_outcome.search_details.get("search_passes", 1),
             )
-        best_confidence = (
-            selected_outcome.best_validation.confidence.value
-            if selected_outcome.best_validation is not None
-            else None
+        direct_outcome = selected_outcome.direct_outcome
+        direct_results = (
+            len(direct_outcome.matched) + len(direct_outcome.rejected) if direct_outcome else 0
         )
+        total_found += direct_results
+        details["direct_results_count"] = direct_results
+        if routed.source_kind is not None:
+            details["acquisition_method"] = routed.source_kind
 
         await _persist_bulk_search_log(
             session,
@@ -468,9 +546,11 @@ async def _persist_series_search_outcome(
             results_queued=issue_queued,
             results_rejected=max(0, total_found - issue_grabbed - issue_queued),
             details=details,
-            best_confidence=best_confidence,
+            best_confidence=routed.best_confidence,
             action_status=(
-                "downloading" if issue_grabbed else "queued" if issue_queued else "no_results"
+                "no_results"
+                if total_found == 0 and routed.action_status == "no_match"
+                else routed.action_status
             ),
         )
         return issue_grabbed, issue_queued, 0
@@ -557,6 +637,7 @@ async def _build_task_search_runtime(
         registry_builder=build_registry,
         default_type_thresholds=DEFAULT_TYPE_THRESHOLDS,
         eval_kwargs_builder=build_eval_kwargs,
+        include_direct_providers=True,
     )
 
 
@@ -688,9 +769,11 @@ async def _build_mocked_issue_outcome(
             filtered_results,
             wanted_series=target.series_title,
             wanted_issue=target.issue_number,
-            wanted_year=target.series_year,
+            wanted_year=target.search_year,
             wanted_issue_type=target.issue_type,
+            wanted_issue_title=target.issue_title,
             alternate_names=target.alternate_names,
+            source_priority=runtime.source_priority,
             **runtime.eval_kwargs,
         )
 
@@ -703,9 +786,10 @@ async def _build_mocked_issue_outcome(
             [best],
             wanted_series=target.series_title,
             wanted_issue=target.issue_number,
-            wanted_year=target.series_year,
+            wanted_year=target.search_year,
             wanted_issue_type=target.issue_type,
             alternate_names=target.alternate_names,
+            wanted_issue_title=target.issue_title,
         )
         if matched:
             best_validation = matched[0]
@@ -749,9 +833,11 @@ async def _build_mocked_wanted_outcome(
                 filtered_results,
                 wanted_series=target.series_title,
                 wanted_issue=target.issue_number,
-                wanted_year=target.series_year,
+                wanted_year=target.search_year,
                 wanted_issue_type=target.issue_type,
+                wanted_issue_title=target.issue_title,
                 alternate_names=target.alternate_names,
+                source_priority=runtime.source_priority,
                 **runtime.eval_kwargs,
             )
         except Exception as exc:  # pragma: no cover - exercised by integration tests
@@ -773,9 +859,10 @@ async def _build_mocked_wanted_outcome(
             [best],
             wanted_series=target.series_title,
             wanted_issue=target.issue_number,
-            wanted_year=target.series_year,
+            wanted_year=target.search_year,
             wanted_issue_type=target.issue_type,
             alternate_names=target.alternate_names,
+            wanted_issue_title=target.issue_title,
         )
         if matched:
             best_validation = matched[0]
@@ -941,6 +1028,7 @@ async def search_series_issues(
                     search_svc = SearchService(
                         runtime.registry,
                         failure_threshold=runtime.failure_threshold,
+                        direct_providers=runtime.direct_providers,
                     )
                     if _is_mocked_search_service(search_svc):
                         two_pass_enabled = await _load_mocked_two_pass_enabled(session, runtime)
@@ -1046,11 +1134,12 @@ async def search_series_issues(
             return {"wanted": 0, "sent": 0, "queued": 0}
 
 
-async def search_wanted() -> None:
-    """Search indexers for all wanted issues and route matches."""
+async def search_wanted() -> TaskExecutionResult:
+    """Run one bounded batch in a durable complete wanted-issue sweep."""
     factory = get_session_factory()
     trigger_type = get_current_task_trigger_type()
     runtime: SearchRuntime | None = None
+    sweep: WantedSearchSweepState | None = None
     targets: list[IssueSearchTarget] = []
     pending_log_ids: dict[int, int] = {}
     wanted_outcomes: list[IssueSearchOutcome] = []
@@ -1073,12 +1162,77 @@ async def search_wanted() -> None:
                         key="search_wanted_missing_indexers",
                         action_required="Enable at least one indexer to search wanted issues.",
                     )
-                    return
+                    return TaskExecutionResult()
 
-                targets = await _load_rotated_wanted_issue_targets(session)
-                if not targets:
+                now = datetime.now(UTC)
+                sweep = await load_wanted_search_sweep(session)
+                if sweep is None or sweep.state in {"completed", "failed"}:
+                    sweep = await create_wanted_search_sweep(
+                        session,
+                        trigger_type=trigger_type,
+                        now=now,
+                    )
+                elif (
+                    sweep.state == "waiting"
+                    and sweep.next_batch_at is not None
+                    and sweep.next_batch_at > now
+                    and trigger_type != "manual"
+                ):
+                    _schedule_wanted_sweep_continuation(sweep)
+                    await session.commit()
+                    return TaskExecutionResult(status="waiting")
+                else:
+                    sweep = mark_wanted_search_batch_running(sweep)
+                    await save_wanted_search_sweep(session, sweep)
+
+                batch = await load_wanted_search_batch(
+                    session,
+                    sweep,
+                    limit=_SEARCH_WANTED_BATCH_LIMIT,
+                )
+                targets = batch.targets
+                if batch.skipped_issue_ids:
+                    sweep = checkpoint_wanted_search_items(
+                        sweep,
+                        issue_ids=batch.skipped_issue_ids,
+                        searched_count=0,
+                        sent=0,
+                        queued=0,
+                        failed=0,
+                    )
+                    await save_wanted_search_sweep(session, sweep)
+                    await session.commit()
+                if not batch.issue_ids:
+                    completed = complete_wanted_search_batch(
+                        sweep,
+                        issue_ids=[],
+                        searched_count=0,
+                        sent=0,
+                        queued=0,
+                        failed=0,
+                        now=now,
+                    )
+                    await save_wanted_search_sweep(session, completed)
+                    await session.commit()
+                    await _sync_wanted_sweep_schedule(session, completed)
                     logger.debug("search_wanted_no_targets")
-                    return
+                    return TaskExecutionResult()
+                if not targets:
+                    completed = complete_wanted_search_batch(
+                        sweep,
+                        issue_ids=[],
+                        searched_count=0,
+                        sent=0,
+                        queued=0,
+                        failed=0,
+                        now=now,
+                    )
+                    await save_wanted_search_sweep(session, completed)
+                    await session.commit()
+                    await _sync_wanted_sweep_schedule(session, completed)
+                    return TaskExecutionResult(
+                        status="completed" if completed.state == "completed" else "waiting"
+                    )
                 preload_ms = int((time.monotonic() - preload_started_at) * 1000)
                 pending_log_ids = await _create_pending_wanted_search_logs(
                     session,
@@ -1105,12 +1259,13 @@ async def search_wanted() -> None:
                 raise
 
         if runtime is None:
-            return
+            return TaskExecutionResult()
 
         search_svc = SearchService(
             runtime.registry,
             failure_threshold=runtime.failure_threshold,
-            ignore_indexer_backoff=trigger_type == "manual",
+            ignore_indexer_backoff=False,
+            direct_providers=runtime.direct_providers,
         )
         download_svc = _build_download_service(runtime.registry)
         intervention_svc = InterventionService(download_svc)
@@ -1120,7 +1275,7 @@ async def search_wanted() -> None:
         failed = 0
 
         async def _process_outcome(outcome: IssueSearchOutcome) -> None:
-            nonlocal failed, queued, routing_ms, sent
+            nonlocal failed, queued, routing_ms, sent, sweep
             issue_id = outcome.target.issue_id
             if issue_id in processed_issue_ids:
                 return
@@ -1140,6 +1295,18 @@ async def search_wanted() -> None:
             routing_ms += int((time.monotonic() - routing_started_at) * 1000)
             processed_issue_ids.add(issue_id)
             wanted_outcomes.append(outcome)
+            if sweep is None:
+                raise RuntimeError("Wanted search sweep state was not initialized.")
+            sweep = checkpoint_wanted_search_items(
+                sweep,
+                issue_ids=[issue_id],
+                searched_count=1,
+                sent=issue_sent,
+                queued=issue_queued,
+                failed=issue_failed,
+            )
+            await save_wanted_search_sweep(session, sweep)
+            await session.commit()
 
         try:
             search_started_at = time.monotonic()
@@ -1191,20 +1358,64 @@ async def search_wanted() -> None:
                     error_message="Search returned no outcome for this issue.",
                 )
                 failed += len(remaining_log_ids)
+                if sweep is None:
+                    raise RuntimeError("Wanted search sweep state was not initialized.")
+                missing_issue_ids = list(remaining_log_ids)
+                sweep = checkpoint_wanted_search_items(
+                    sweep,
+                    issue_ids=missing_issue_ids,
+                    searched_count=len(missing_issue_ids),
+                    sent=0,
+                    queued=0,
+                    failed=len(missing_issue_ids),
+                )
+                await save_wanted_search_sweep(session, sweep)
+                await session.commit()
 
             total_elapsed_ms = int((time.monotonic() - search_started_at) * 1000)
             search_fanout_ms = max(0, total_elapsed_ms - routing_ms)
 
+            if sweep is None:
+                raise RuntimeError("Wanted search sweep state was not initialized.")
+            completed_sweep = complete_wanted_search_batch(
+                sweep,
+                issue_ids=[],
+                searched_count=0,
+                sent=0,
+                queued=0,
+                failed=0,
+                now=datetime.now(UTC),
+            )
+            await save_wanted_search_sweep(session, completed_sweep)
+            await session.commit()
+            await _sync_wanted_sweep_schedule(session, completed_sweep)
+            log_event = (
+                "search_wanted_complete"
+                if completed_sweep.state == "completed"
+                else "search_wanted_batch_complete"
+            )
             logger.info(
-                "search_wanted_complete",
+                log_event,
                 sent=sent,
                 queued=queued,
                 failed=failed,
                 total=len(wanted_outcomes),
+                sweep_attempted=completed_sweep.attempted_count,
+                sweep_total=completed_sweep.total_targets,
+                sweep_remaining=completed_sweep.remaining_count,
+                batch_number=completed_sweep.batch_number,
+                next_batch_at=(
+                    completed_sweep.next_batch_at.isoformat()
+                    if completed_sweep.next_batch_at
+                    else None
+                ),
                 preload_ms=preload_ms,
                 search_fanout_ms=search_fanout_ms,
                 routing_ms=routing_ms,
                 **_search_outcome_log_diagnostics(wanted_outcomes),
+            )
+            return TaskExecutionResult(
+                status="completed" if completed_sweep.state == "completed" else "waiting"
             )
         except asyncio.CancelledError:
             await session.rollback()
@@ -1220,6 +1431,14 @@ async def search_wanted() -> None:
                 run_state="cancelled",
                 error_message="Search was cancelled before completion.",
             )
+            if sweep is not None:
+                paused = pause_wanted_search_sweep(
+                    sweep,
+                    message="Interrupted; retrying the current batch later",
+                )
+                await save_wanted_search_sweep(session, paused)
+                await session.commit()
+                _schedule_wanted_sweep_continuation(paused)
             raise
         except Exception:
             await session.rollback()
@@ -1235,15 +1454,78 @@ async def search_wanted() -> None:
                 run_state="failed",
                 error_message="Search failed before completion.",
             )
+            if sweep is not None:
+                paused = pause_wanted_search_sweep(
+                    sweep,
+                    message="Batch failed; retrying later",
+                )
+                await save_wanted_search_sweep(session, paused)
+                await session.commit()
+                _schedule_wanted_sweep_continuation(paused)
             logger.exception("search_wanted_failed")
             raise
+
+
+async def recover_wanted_search_sweep_schedule() -> bool:
+    """Restore an interrupted continuation after process startup."""
+    factory = get_session_factory()
+    async with factory() as session:
+        sweep = await load_wanted_search_sweep(session)
+        if (
+            sweep is None
+            or sweep.state not in {"running", "waiting"}
+            or not sweep.pending_issue_ids
+        ):
+            return False
+        if sweep.state == "running":
+            sweep = pause_wanted_search_sweep(
+                sweep,
+                now=datetime.now(UTC) - timedelta(hours=1),
+                message="Resuming interrupted batch",
+            )
+            await save_wanted_search_sweep(session, sweep)
+            await session.commit()
+        _schedule_wanted_sweep_continuation(sweep)
+        return True
+
+
+def _schedule_wanted_sweep_continuation(sweep: WantedSearchSweepState) -> None:
+    run_at = sweep.next_batch_at or datetime.now(UTC)
+    if run_at <= datetime.now(UTC):
+        run_at = datetime.now(UTC) + timedelta(seconds=1)
+    get_scheduler().schedule_task_continuation(
+        "search_wanted",
+        run_at=run_at,
+        interval_seconds=3600,
+    )
+
+
+async def _sync_wanted_sweep_schedule(
+    session: AsyncSession,
+    sweep: WantedSearchSweepState,
+) -> None:
+    scheduler = get_scheduler()
+    if sweep.state == "waiting":
+        _schedule_wanted_sweep_continuation(sweep)
+        return
+    scheduler.clear_task_continuation("search_wanted")
+    configs = await load_system_config_values(session, ("search_interval_hours",))
+    interval_hours = get_int_setting(
+        configs,
+        "search_interval_hours",
+        get_settings().search_interval_hours,
+    )
+    scheduler.delay_task_next_run(
+        "search_wanted",
+        run_at=datetime.now(UTC) + timedelta(hours=max(1, interval_hours)),
+    )
 
 
 async def purge_search_logs() -> None:
     """Delete search log entries older than the configured retention period."""
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import delete
+    from sqlalchemy import delete, select
 
     factory = get_session_factory()
 
@@ -1252,6 +1534,8 @@ async def purge_search_logs() -> None:
             retention_days = await _load_search_log_retention_days(session)
 
             cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+            old_search_log_ids = select(SearchLog.id).where(SearchLog.created_at < cutoff)
+            await prune_unstarted_direct_discoveries(session, old_search_log_ids)
             result = await session.execute(delete(SearchLog).where(SearchLog.created_at < cutoff))
             pruned = result.rowcount  # type: ignore[attr-defined]
             await session.commit()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from pullbox.models.issue import IssueType
 from pullbox.providers.base import ProviderRegistry
 from pullbox.services.search_service import IssueSearchOutcome, IssueSearchTarget
+from pullbox.services.wanted_search_sweep import WantedSearchBatch, WantedSearchSweepState
 from pullbox.tasks import search_task
 
 
@@ -85,6 +87,7 @@ async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch
     )
     runtime = SimpleNamespace(
         registry=ProviderRegistry(),
+        direct_providers=(),
         failure_threshold=3,
         two_pass_enabled=False,
         indexer_configs={},
@@ -118,8 +121,8 @@ async def test_search_series_issues_retries_fanout_after_sqlite_lock(monkeypatch
     )
     monkeypatch.setattr(
         search_task,
-        "_persist_bulk_search_log",
-        AsyncMock(),
+        "_persist_series_search_outcome",
+        AsyncMock(return_value=(0, 0, 0)),
     )
     monkeypatch.setattr(search_task, "_build_download_service", MagicMock())
     monkeypatch.setattr(search_task, "InterventionService", MagicMock())
@@ -154,6 +157,7 @@ async def test_search_wanted_retries_pending_history_before_provider_search(monk
     )
     runtime = SimpleNamespace(
         registry=ProviderRegistry(),
+        direct_providers=(),
         failure_threshold=3,
         two_pass_enabled=False,
         indexer_configs={},
@@ -168,6 +172,10 @@ async def test_search_wanted_retries_pending_history_before_provider_search(monk
         await session.commit()
         return {123: 1}
 
+    async def _persist_outcome(session, **_kwargs):  # type: ignore[no-untyped-def]
+        await session.commit()
+        return 0, 0, 0
+
     monkeypatch.setattr(search_task, "get_session_factory", lambda: factory)
     monkeypatch.setattr(
         search_task,
@@ -176,11 +184,38 @@ async def test_search_wanted_retries_pending_history_before_provider_search(monk
     )
     monkeypatch.setattr(
         search_task,
-        "_load_rotated_wanted_issue_targets",
-        AsyncMock(return_value=[target]),
+        "load_wanted_search_sweep",
+        AsyncMock(return_value=None),
     )
+    monkeypatch.setattr(
+        search_task,
+        "create_wanted_search_sweep",
+        AsyncMock(
+            return_value=WantedSearchSweepState(
+                state="running",
+                trigger_type="scheduled",
+                started_at=datetime(2026, 7, 31, tzinfo=UTC),
+                total_targets=1,
+                pending_issue_ids=[target.issue_id],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_wanted_search_batch",
+        AsyncMock(
+            return_value=WantedSearchBatch(
+                issue_ids=[target.issue_id],
+                targets=[target],
+                skipped_issue_ids=[],
+            )
+        ),
+    )
+    monkeypatch.setattr(search_task, "save_wanted_search_sweep", AsyncMock())
+    monkeypatch.setattr(search_task, "_sync_wanted_sweep_schedule", AsyncMock())
     monkeypatch.setattr(search_task, "_create_pending_wanted_search_logs", _create_pending_logs)
     monkeypatch.setattr(search_task.SearchService, "search_wanted", search_mock)
+    monkeypatch.setattr(search_task, "_persist_wanted_search_outcome", _persist_outcome)
     monkeypatch.setattr(
         search_task.BlocklistService,
         "filter_results",
@@ -191,8 +226,9 @@ async def test_search_wanted_retries_pending_history_before_provider_search(monk
     await search_task.search_wanted()
 
     # One failed pending-row commit, one successful retry, then the completed
-    # no-match history commit. The provider is called only after setup succeeds.
-    assert factory.commit_attempts == 3
+    # no-match history commit, per-item checkpoint, and terminal sweep state.
+    # The provider is called only after setup succeeds.
+    assert factory.commit_attempts == 5
     assert factory.rollback_attempts == 1
     assert factory.session_count == 1
     assert search_mock.await_count == 1

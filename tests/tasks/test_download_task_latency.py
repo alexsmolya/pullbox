@@ -214,6 +214,29 @@ class TestMonitorDownloadsImmediateHandoff:
         poll_clients.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_direct_retry_recovery_runs_without_download_client_registry(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import pullbox.tasks.download_task as download_task
+
+        direct_retry = AsyncMock(return_value=1)
+        monkeypatch.setattr(download_task, "get_session_factory", lambda: db_factory)
+        monkeypatch.setattr(
+            download_task,
+            "_build_download_registry",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(download_task, "_process_direct_retry_pending", direct_retry)
+        monkeypatch.setattr(download_task, "_last_recovery_check", 0.0)
+        monkeypatch.setattr(download_task, "logger", _FakeLogger())
+
+        await download_task.monitor_downloads()
+
+        direct_retry.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_completed_download_triggers_immediate_post_processing(
         self,
         db_factory: async_sessionmaker[AsyncSession],

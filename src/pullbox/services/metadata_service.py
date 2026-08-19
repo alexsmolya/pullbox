@@ -18,9 +18,10 @@ from pullbox.core.exceptions import NotFoundError, ProviderError
 from pullbox.core.name_matcher import NameMatcher
 from pullbox.core.naming import (
     classify_series_type,
-    detect_issue_type,
+    detect_issue_type_from_metadata_title,
     extract_base_series_title,
 )
+from pullbox.core.type_semantics import TypeFamily, issue_type_family
 from pullbox.models.creator import Creator, IssueCreator
 from pullbox.models.issue import Issue, IssueType
 from pullbox.models.publisher import Publisher
@@ -31,13 +32,14 @@ from pullbox.models.series import (
     SeriesStatusOverride,
     SeriesType,
 )
+from pullbox.providers.base import SeriesMetadata
 from pullbox.providers.metadata.comicvine import ComicVineError
 from pullbox.services.cover_cache_service import purge_series_cover_cache
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from pullbox.providers.base import IssueSummary, SeriesMetadata
+    from pullbox.providers.base import IssueSummary
     from pullbox.providers.metadata.comicvine import ComicVineProvider
 
 logger = structlog.get_logger(__name__)
@@ -65,7 +67,7 @@ _ISSUE_TO_SERIES_TYPE: dict[IssueType, SeriesType] = {
     IssueType.SPECIAL: SeriesType.SPECIAL,
     IssueType.DELUXE: SeriesType.DELUXE,
     IssueType.COMPENDIUM: SeriesType.COMPENDIUM,
-    IssueType.VOLUME: SeriesType.TPB,
+    IssueType.VOLUME: SeriesType.VOLUME,
 }
 
 
@@ -82,6 +84,23 @@ _SERIES_TO_ISSUE_TYPE: dict[SeriesType, IssueType] = {
     SeriesType.COMPENDIUM: IssueType.COMPENDIUM,
     SeriesType.VOLUME: IssueType.VOLUME,
 }
+
+_EXPLICIT_IMPORT_METADATA_SOURCES = frozenset({"provisional_import", "import_placeholder"})
+_UNTRUSTED_LEGACY_SERIES_TYPES = frozenset({SeriesType.ONE_SHOT, SeriesType.SPECIAL})
+
+
+def _series_type_from_complete_issue_evidence(
+    issue_types: list[IssueType],
+) -> SeriesType | None:
+    """Return consensus only when every issue supplies non-standard type evidence."""
+    if not issue_types or IssueType.ISSUE in issue_types:
+        return None
+    distinct_types = set(issue_types)
+    if len(distinct_types) == 1:
+        return _ISSUE_TO_SERIES_TYPE.get(next(iter(distinct_types)))
+    if all(issue_type_family(issue_type) == TypeFamily.COLLECTION for issue_type in distinct_types):
+        return SeriesType.VOLUME
+    return None
 
 
 class MetadataService:
@@ -165,8 +184,10 @@ class MetadataService:
                 existing.year_end = meta.year_end
             if meta.status and existing.status_override is None:
                 existing.status = SeriesStatus(meta.status)
-            existing.description = meta.description
-            existing.issue_count = meta.issue_count or 0
+            if meta.description is not None:
+                existing.description = meta.description
+            if meta.issue_count is not None:
+                existing.issue_count = meta.issue_count
             existing.comicvine_url = meta.comicvine_url
             existing.cover_url = meta.cover_url
             existing.publisher_id = publisher_id
@@ -200,6 +221,7 @@ class MetadataService:
             series.cover_path = None
             log.debug("metadata_series_created", series_id=series.id)
 
+        await self.classify_and_link_series(session, series)
         return series
 
     async def get_series_metadata(
@@ -214,6 +236,17 @@ class MetadataService:
             return await self._provider.get_series(str(comicvine_id))
         except ComicVineError as exc:
             raise _provider_error_from_comicvine(exc) from exc
+
+    async def get_cached_series_metadata(
+        self,
+        comicvine_id: int,
+    ) -> SeriesMetadata | None:
+        """Return fresh cached series metadata without starting a provider request."""
+        cached_lookup = getattr(type(self._provider), "get_series_cached", None)
+        if cached_lookup is None:
+            return None
+        cached_metadata = await cached_lookup(self._provider, str(comicvine_id))
+        return cached_metadata if isinstance(cached_metadata, SeriesMetadata) else None
 
     async def get_issue_summaries_for_series(
         self,
@@ -257,19 +290,45 @@ class MetadataService:
         is a variant (annual, TPB, etc.), searches for a matching base series
         in the database and sets ``series.parent_series_id``.
         """
-        detected = classify_series_type(
-            series.title,
-            description=series.description,
-            issue_count=series.issue_count,
-            year_start=series.year_start,
+        previous_type = series.series_type
+        detected = SeriesType(
+            classify_series_type(
+                series.title,
+                description=series.description,
+                issue_count=series.issue_count,
+                year_start=series.year_start,
+            )
         )
-        series.series_type = SeriesType(detected)
+        if detected == SeriesType.STANDARD and previous_type != SeriesType.STANDARD:
+            issue_types = [
+                IssueType(detect_issue_type_from_metadata_title(title))
+                for title in (
+                    await session.execute(select(Issue.title).where(Issue.series_id == series.id))
+                )
+                .scalars()
+                .all()
+            ]
+            issue_consensus = _series_type_from_complete_issue_evidence(issue_types)
+            if issue_consensus is not None:
+                detected = issue_consensus
+            elif previous_type not in _UNTRUSTED_LEGACY_SERIES_TYPES:
+                # Existing collection classifications may come from provider
+                # summary fields that are not represented in local prose.
+                detected = previous_type
+        series.series_type = detected
+        await self._repair_issue_types_after_series_change(
+            session,
+            series,
+            previous_type=previous_type,
+        )
 
-        if detected == "standard":
+        if detected == SeriesType.STANDARD:
+            series.parent_series_id = None
             return  # Nothing to link
 
         # Extract the base title (e.g. "Batman Annual" -> "Batman")
         base_title = extract_base_series_title(series.title)
+        series.parent_series_id = None
         if base_title == series.title:
             return  # Couldn't extract a different base title
 
@@ -286,9 +345,58 @@ class MetadataService:
                 "series_parent_linked",
                 series_id=series.id,
                 parent_series_id=parent.id,
-                series_type=detected,
+                series_type=detected.value,
                 child_title=series.title,
                 parent_title=parent.title,
+            )
+
+    @staticmethod
+    async def _repair_issue_types_after_series_change(
+        session: AsyncSession,
+        series: Series,
+        *,
+        previous_type: SeriesType,
+    ) -> None:
+        """Repair only default/inherited issue types when series evidence changes."""
+        if series.id is None or previous_type == series.series_type:
+            return
+
+        old_inherited = _SERIES_TO_ISSUE_TYPE.get(previous_type)
+        new_inherited = _SERIES_TO_ISSUE_TYPE.get(series.series_type, IssueType.ISSUE)
+        issues = (
+            (await session.execute(select(Issue).where(Issue.series_id == series.id)))
+            .scalars()
+            .all()
+        )
+        repaired = 0
+        for issue in issues:
+            explicit_type = IssueType(detect_issue_type_from_metadata_title(issue.title))
+            if explicit_type != IssueType.ISSUE:
+                if issue.issue_type in {IssueType.ISSUE, old_inherited}:
+                    issue.issue_type = explicit_type
+                    repaired += 1
+                continue
+
+            if (
+                issue.metadata_source in _EXPLICIT_IMPORT_METADATA_SOURCES
+                and issue.issue_type != IssueType.ISSUE
+            ):
+                continue
+            was_old_inherited = old_inherited is not None and issue.issue_type == old_inherited
+            needs_new_inheritance = (
+                issue.issue_type == IssueType.ISSUE and new_inherited != IssueType.ISSUE
+            )
+            if was_old_inherited or needs_new_inheritance:
+                issue.issue_type = new_inherited
+                repaired += 1
+
+        if repaired:
+            logger.info(
+                "series_issue_types_repaired",
+                series_id=series.id,
+                previous_series_type=previous_type.value,
+                series_type=series.series_type.value,
+                repaired=repaired,
             )
 
     @staticmethod
@@ -457,6 +565,7 @@ class MetadataService:
             session,
             series,
             summaries,
+            infer_series_type_from_summaries=True,
         )
 
     async def fetch_recent_issues_for_series(
@@ -482,6 +591,7 @@ class MetadataService:
             session,
             series,
             summaries,
+            infer_series_type_from_summaries=False,
         )
 
     async def upsert_issue_summaries(
@@ -489,6 +599,8 @@ class MetadataService:
         session: AsyncSession,
         series: Series,
         summaries: list[IssueSummary],
+        *,
+        infer_series_type_from_summaries: bool = False,
     ) -> list[Issue]:
         """Create or update local Issue rows from prefetched provider summaries."""
         series_id = series.id
@@ -510,6 +622,7 @@ class MetadataService:
             for issue in existing_provider_issues
             if issue.comicvine_id is not None
         }
+        summary_evidence_types: list[IssueType] = []
         for summary in summaries:
             provider_issue_id = int(summary.provider_id)
             assign_provider_issue_id = True
@@ -543,17 +656,21 @@ class MetadataService:
                     )
                     existing = existing_by_provider
 
-            # Prefer explicit compact-summary type, then detect from ComicVine
-            # title (e.g. "TPB", "Annual"), falling back to the series type.
-            detected_type = IssueType(summary.issue_type)
-            if detected_type == IssueType.ISSUE and summary.title:
-                detected_str = detect_issue_type(summary.title)
+            # Compact provider type and provider title are explicit evidence.
+            # Series inheritance is a fallback and cannot establish consensus.
+            explicit_type = IssueType.ISSUE
+            with contextlib.suppress(ValueError):
+                explicit_type = IssueType(summary.issue_type)
+            if explicit_type == IssueType.ISSUE:
                 with contextlib.suppress(ValueError):
-                    detected_type = IssueType(detected_str)
-            if detected_type == IssueType.ISSUE and series.series_type != SeriesType.STANDARD:
-                inherited = _SERIES_TO_ISSUE_TYPE.get(series.series_type)
-                if inherited:
-                    detected_type = inherited
+                    explicit_type = IssueType(detect_issue_type_from_metadata_title(summary.title))
+            summary_evidence_types.append(explicit_type)
+            detected_type = explicit_type
+            if detected_type == IssueType.ISSUE:
+                detected_type = _SERIES_TO_ISSUE_TYPE.get(
+                    series.series_type,
+                    IssueType.ISSUE,
+                )
 
             if existing:
                 if assign_provider_issue_id:
@@ -564,9 +681,14 @@ class MetadataService:
                     existing.release_date = _parse_date(summary.release_date)
                 if summary.cover_url and not existing.cover_url:
                     existing.cover_url = summary.cover_url
-                if detected_type != IssueType.ISSUE:
+                preserve_explicit_import_type = (
+                    explicit_type == IssueType.ISSUE
+                    and existing.metadata_source in _EXPLICIT_IMPORT_METADATA_SOURCES
+                    and existing.issue_type != IssueType.ISSUE
+                )
+                if not preserve_explicit_import_type:
                     existing.issue_type = detected_type
-                existing.metadata_source = "comicvine"
+                    existing.metadata_source = "comicvine"
             else:
                 issue = Issue(
                     series_id=series_id,
@@ -586,32 +708,31 @@ class MetadataService:
 
         await session.flush()
 
-        # Propagate issue type to series if the series is "standard" or was
-        # heuristically classified as ONE_SHOT (Tier 3 issue-count guess) and
-        # all issues share a single non-standard type.  ComicVine issue titles
-        # (e.g. "HC", "TPB") are a stronger signal than the count heuristic.
-        if series.series_type in (SeriesType.STANDARD, SeriesType.ONE_SHOT):
-            all_issues = (
-                (
-                    await session.execute(
-                        select(Issue.issue_type).where(Issue.series_id == series_id)
-                    )
-                )
-                .scalars()
-                .all()
+        # Only a complete catalog where every summary has explicit non-standard
+        # evidence may infer the series type. Recent/targeted subsets and a mix
+        # of ordinary plus special issues must never reclassify the parent.
+        if (
+            infer_series_type_from_summaries
+            and summaries
+            and classify_series_type(
+                series.title,
+                description=series.description,
+                issue_count=series.issue_count,
+                year_start=series.year_start,
             )
-            non_standard = {t for t in all_issues if t != IssueType.ISSUE}
-            if len(non_standard) == 1:
-                (issue_type,) = non_standard
-                series_type = _ISSUE_TO_SERIES_TYPE.get(issue_type)
-                if series_type:
-                    series.series_type = series_type
-                    log.debug(
-                        "series_type_inferred_from_issues",
-                        series_id=series_id,
-                        series_type=series_type.value,
-                        source_issue_type=issue_type.value,
-                    )
+            == SeriesType.STANDARD.value
+        ):
+            inferred_series_type = _series_type_from_complete_issue_evidence(summary_evidence_types)
+            if inferred_series_type is not None:
+                series.series_type = inferred_series_type
+                log.debug(
+                    "series_type_inferred_from_issues",
+                    series_id=series_id,
+                    series_type=inferred_series_type.value,
+                    source_issue_types=sorted(
+                        {issue_type.value for issue_type in summary_evidence_types}
+                    ),
+                )
 
         log.debug(
             "metadata_issues_synced",

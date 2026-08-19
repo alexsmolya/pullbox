@@ -439,7 +439,7 @@ async def health_indexers_status_partial(
     """Return the split indexer registry partial for HTMX polling."""
     overall_status, health_view = await _load_health_overview(session)
     health_component = _select_health_component_view(health_view, "indexers")
-    prowlarr_row, health_indexer_rows = await _build_indexer_registry_rows(session)
+    health_proxy_rows, health_indexer_rows = await _build_indexer_registry_rows(session)
     response = _templates().TemplateResponse(
         request,
         "partials/health_indexers_content_bundle.html",
@@ -448,7 +448,7 @@ async def health_indexers_status_partial(
             user,
             overall_status=overall_status,
             health_component=health_component,
-            health_prowlarr_row=prowlarr_row,
+            health_proxy_rows=health_proxy_rows,
             health_indexer_rows=health_indexer_rows,
             health_detail_footer_items=_build_health_component_footer_items(health_component),
         ),
@@ -466,7 +466,7 @@ async def health_indexers_page(
     """Render the split indexer registry page."""
     overall_status, health_view = await _load_health_overview(session)
     health_component = _select_health_component_view(health_view, "indexers")
-    prowlarr_row, health_indexer_rows = await _build_indexer_registry_rows(session)
+    health_proxy_rows, health_indexer_rows = await _build_indexer_registry_rows(session)
     return _templates().TemplateResponse(
         request,
         "pages/health_indexers.html",
@@ -475,7 +475,7 @@ async def health_indexers_page(
             user,
             overall_status=overall_status,
             health_component=health_component,
-            health_prowlarr_row=prowlarr_row,
+            health_proxy_rows=health_proxy_rows,
             health_indexer_rows=health_indexer_rows,
             health_detail_footer_items=_build_health_component_footer_items(health_component),
         ),
@@ -764,8 +764,8 @@ async def _build_download_client_registry_rows(
 
 async def _build_indexer_registry_rows(
     session: AsyncSession,
-) -> tuple[HealthSubjectSummaryView | None, tuple[HealthSubjectSummaryView, ...]]:
-    """Build the split proxy/indexer registry rows for the indexers page."""
+) -> tuple[tuple[HealthSubjectSummaryView, ...], tuple[HealthSubjectSummaryView, ...]]:
+    """Build the split search-proxy/indexer registry rows for the indexers page."""
     return await build_indexer_registry_rows(
         session,
         current_time=datetime.now(UTC),

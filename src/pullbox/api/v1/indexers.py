@@ -10,7 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from pullbox.api.deps import DbSession, InteractiveOperatorUser
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
-from pullbox.core.exceptions import NotFoundError
+from pullbox.core.exceptions import NotFoundError, ValidationError
 from pullbox.core.sqlite_lock import (
     SQLITE_LOCK_RETRY_ATTEMPTS,
     is_sqlite_locked_error,
@@ -21,6 +21,8 @@ from pullbox.schemas.indexer import (
     IndexerCreate,
     IndexerResponse,
     IndexerUpdate,
+    JackettSyncRequest,
+    JackettSyncResult,
     ProwlarrSyncRequest,
     ProwlarrSyncResult,
 )
@@ -46,9 +48,12 @@ def _redact_indexer(indexer: IndexerConfig) -> dict[str, object]:
         "categories": indexer.categories,
         "source": indexer.source,
         "prowlarr_indexer_id": indexer.prowlarr_indexer_id,
+        "manager_indexer_id": indexer.manager_indexer_id,
+        "manager_available": indexer.manager_available,
         "enable_rss": indexer.enable_rss,
         "enable_automatic_search": indexer.enable_automatic_search,
         "enable_interactive_search": indexer.enable_interactive_search,
+        "resolver_enabled": indexer.resolver_enabled,
         "last_success_at": indexer.last_success_at,
         "last_failure_at": indexer.last_failure_at,
         "last_error": indexer.last_error,
@@ -126,6 +131,11 @@ async def add_indexer(
     session: DbSession,
 ) -> IndexerResponse:
     """Add a new indexer configuration."""
+    _validate_resolver_scope(
+        indexer_type=body.indexer_type,
+        source="manual",
+        resolver_enabled=body.resolver_enabled,
+    )
     indexer = IndexerConfig(
         name=body.name,
         indexer_type=body.indexer_type,
@@ -138,6 +148,7 @@ async def add_indexer(
         enable_rss=body.enable_rss,
         enable_automatic_search=body.enable_automatic_search,
         enable_interactive_search=body.enable_interactive_search,
+        resolver_enabled=body.resolver_enabled,
     )
     session.add(indexer)
     await session.flush()
@@ -145,7 +156,7 @@ async def add_indexer(
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Prowlarr routes — MUST be before /{indexer_id} to avoid path conflicts
+# Manager routes — MUST be before /{indexer_id} to avoid path conflicts
 # ══════════════════════════════════════════════════════════════════════
 
 
@@ -279,6 +290,9 @@ async def sync_prowlarr_indexers(
             idx.priority = remote_priority
             idx.enabled = remote_enabled
             idx.categories = categories_str
+            idx.manager_indexer_id = str(remote_id)
+            idx.manager_available = True
+            idx.resolver_enabled = False
             updated += 1
         else:
             # Create new
@@ -292,15 +306,19 @@ async def sync_prowlarr_indexers(
                 categories=categories_str,
                 source="prowlarr",
                 prowlarr_indexer_id=remote_id,
+                manager_indexer_id=str(remote_id),
+                manager_available=True,
+                resolver_enabled=False,
             )
             session.add(idx)
             added += 1
 
-    # Remove indexers that no longer exist in Prowlarr
+    # Retain missing manager rows for historical attribution, but remove them
+    # from active search composition until Prowlarr reports them again.
     removed = 0
     for prowlarr_id, idx in existing_by_prowlarr_id.items():
-        if prowlarr_id not in seen_ids:
-            await session.delete(idx)
+        if prowlarr_id not in seen_ids and idx.manager_available:
+            idx.manager_available = False
             removed += 1
 
     await session.flush()
@@ -324,7 +342,12 @@ async def sync_prowlarr_indexers(
 
     # Return updated list
     all_result = await session.execute(
-        select(IndexerConfig).order_by(IndexerConfig.priority, IndexerConfig.name)
+        select(IndexerConfig)
+        .where(
+            IndexerConfig.source == "prowlarr",
+            IndexerConfig.manager_available.is_(True),
+        )
+        .order_by(IndexerConfig.priority, IndexerConfig.name)
     )
     all_indexers = [
         IndexerResponse.model_validate(_redact_indexer(i)) for i in all_result.scalars().all()
@@ -380,6 +403,60 @@ async def resync_prowlarr_indexers(
     return await sync_prowlarr_indexers(body, _user, session)
 
 
+@router.post("/jackett/test", status_code=200)
+async def test_jackett_connection(
+    body: JackettSyncRequest,
+    _user: InteractiveOperatorUser,
+) -> dict[str, object]:
+    """Test connectivity to Jackett and return its configured tracker count."""
+    from pullbox.services.jackett_sync_service import test_jackett_credentials
+
+    return await test_jackett_credentials(body.jackett_url, body.jackett_api_key)
+
+
+@router.post("/jackett/test-stored", status_code=200)
+async def test_jackett_stored(
+    _user: InteractiveOperatorUser,
+    session: DbSession,
+) -> dict[str, object]:
+    """Test Jackett using the encrypted credentials already stored by Pullbox."""
+    from pullbox.services.jackett_sync_service import (
+        load_jackett_credentials,
+        test_jackett_credentials,
+    )
+
+    url, api_key = await load_jackett_credentials(session)
+    return await test_jackett_credentials(url, api_key)
+
+
+@router.post("/jackett/sync", response_model=JackettSyncResult)
+async def sync_jackett_indexers(
+    body: JackettSyncRequest,
+    _user: InteractiveOperatorUser,
+    session: DbSession,
+) -> JackettSyncResult:
+    """Discover Jackett trackers and synchronize individual Torznab feeds."""
+    from pullbox.services.jackett_sync_service import sync_jackett
+
+    return await sync_jackett(
+        session,
+        url=body.jackett_url,
+        api_key=body.jackett_api_key,
+    )
+
+
+@router.post("/jackett/resync", response_model=JackettSyncResult)
+async def resync_jackett_indexers(
+    _user: InteractiveOperatorUser,
+    session: DbSession,
+) -> JackettSyncResult:
+    """Re-sync Jackett trackers using encrypted stored credentials."""
+    from pullbox.services.jackett_sync_service import load_jackett_credentials, sync_jackett
+
+    url, api_key = await load_jackett_credentials(session)
+    return await sync_jackett(session, url=url, api_key=api_key)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Single-indexer routes (parameterized — must come after static routes)
 # ══════════════════════════════════════════════════════════════════════
@@ -417,6 +494,12 @@ async def update_indexer(
         raise NotFoundError("Indexer", indexer_id)
 
     update_data = body.model_dump(exclude_unset=True)
+    if update_data.get("resolver_enabled"):
+        _validate_resolver_scope(
+            indexer_type=indexer.indexer_type,
+            source=str(indexer.source),
+            resolver_enabled=True,
+        )
 
     # Encrypt api_key if provided; omitted → keep existing encrypted value
     if update_data.get("api_key"):
@@ -431,6 +514,20 @@ async def update_indexer(
     await session.flush()
     await session.refresh(indexer)
     return IndexerResponse.model_validate(_redact_indexer(indexer))
+
+
+def _validate_resolver_scope(
+    *,
+    indexer_type: object,
+    source: str,
+    resolver_enabled: bool,
+) -> None:
+    if not resolver_enabled:
+        return
+    if indexer_type != "torznab" or source != "manual":
+        raise ValidationError(
+            "Browser resolver support is available only for a manual Torznab indexer."
+        )
 
 
 # ── Delete ───────────────────────────────────────────────────────────
@@ -466,6 +563,9 @@ async def test_indexer(
     from pullbox.providers.indexer.newznab import NewznabIndexer
     from pullbox.providers.indexer.prowlarr import ProwlarrIndexer
     from pullbox.providers.indexer.torznab import TorznabIndexer
+    from pullbox.services.direct_resolver_service import (
+        build_manual_torznab_resolver_options,
+    )
 
     provider: NewznabIndexer | TorznabIndexer | ProwlarrIndexer
     name = str(indexer.name)
@@ -475,7 +575,14 @@ async def test_indexer(
     if indexer.indexer_type == "prowlarr":
         provider = ProwlarrIndexer(url=url, api_key=api_key)
     elif indexer.indexer_type == "torznab":
-        provider = TorznabIndexer(name=name, url=url, api_key=api_key)
+        resolver_options = await build_manual_torznab_resolver_options(session, indexer)
+        provider = TorznabIndexer(
+            name=name,
+            url=url,
+            api_key=api_key,
+            resolver_enabled=bool(indexer.resolver_enabled),
+            resolver_options=resolver_options,
+        )
     else:
         provider = NewznabIndexer(name=name, url=url, api_key=api_key)
 

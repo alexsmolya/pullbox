@@ -96,7 +96,9 @@ def _safety_blocked_files_filter() -> ColumnElement[bool]:
         select(ImportedFile.id)
         .where(
             ImportedFile.import_series_id == ImportedSeries.id,
-            ImportedFile.status == ImportedFileStatus.SAFETY_BLOCKED,
+            ImportedFile.status.in_(
+                [ImportedFileStatus.SAFETY_BLOCKED, ImportedFileStatus.SAFETY_APPROVED]
+            ),
         )
         .exists()
     )

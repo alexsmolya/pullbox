@@ -106,6 +106,31 @@ class IssueDetailPage(BasePage):
     def library_file_copy(self) -> Locator:
         return self.page.locator("[data-testid='issue-library-file-copy']").first
 
+    @property
+    def read_button(self) -> Locator:
+        return self.page.locator("[data-testid='issue-action-read']").first
+
+    @property
+    def reader_dialog(self) -> Locator:
+        return self.page.locator("[data-testid='comic-reader-dialog']").first
+
+    @property
+    def reader_page(self) -> Locator:
+        return self.page.locator("[data-testid='comic-reader-page']").first
+
+    @property
+    def reader_status(self) -> Locator:
+        return self.page.locator("[data-testid='comic-reader-page-status']").first
+
+    def open_reader(self) -> None:
+        self.read_button.click()
+        self.reader_dialog.wait_for(state="visible", timeout=5000)
+        self.reader_page.wait_for(state="visible", timeout=5000)
+
+    def close_reader(self) -> None:
+        self.page.locator("[data-testid='comic-reader-close']").click()
+        self.reader_dialog.wait_for(state="hidden", timeout=5000)
+
     def open_back_link(self) -> None:
         """Click the back link and wait for the swap to settle."""
         self.back_link.click()

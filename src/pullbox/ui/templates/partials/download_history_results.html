@@ -102,7 +102,7 @@
                 {% endif %}
               </span>
             </td>
-            <td class="downloads-mono-cell">{{ download_client_label(dl.download_client.value) }}</td>
+            <td class="downloads-mono-cell">{{ history_client_labels.get(dl.id, download_client_label(dl.download_client.value)) }}</td>
             <td class="downloads-mono-cell is-right">
               {% if dl.file_size %}
                 {{ dl.file_size|filesize }}

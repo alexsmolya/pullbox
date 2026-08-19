@@ -43,7 +43,9 @@ from pullbox.services.health_filesystem_checks import (
 from pullbox.services.health_indexer_checks import (
     check_indexer_subject,
     check_indexers,
+    check_jackett_subject,
     check_prowlarr_subject,
+    load_jackett_subject_config,
     load_prowlarr_subject_config,
 )
 from pullbox.services.health_persistence import (
@@ -68,7 +70,7 @@ from pullbox.services.health_types import CheckOutcome, SubCheckOutcome
 __all__ = ["CheckOutcome", "HealthService", "SubCheckOutcome"]
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Mapping
+    from collections.abc import Awaitable, Mapping, Sequence
     from datetime import datetime
     from pathlib import Path
 
@@ -81,6 +83,7 @@ if TYPE_CHECKING:
     from pullbox.models.health import HealthIncident as HealthIncidentModel
     from pullbox.models.indexer import IndexerConfig
     from pullbox.providers.base import DownloadClient, ProviderRegistry
+    from pullbox.services.direct_resolver_service import NativeResolverOption
 
 logger = structlog.get_logger(__name__)
 
@@ -347,11 +350,13 @@ class HealthService:
         return download_client_unknown_outcome(config, message=message)
 
     async def _check_indexers(self, session: AsyncSession) -> list[CheckOutcome]:
-        """Test Prowlarr and enabled indexers as a grouped multi-entity component."""
+        """Test configured search managers and enabled indexers as one component."""
         return await check_indexers(
             session,
             load_prowlarr_subject_config=self._load_prowlarr_subject_config,
+            load_jackett_subject_config=self._load_jackett_subject_config,
             check_prowlarr_subject=self._check_prowlarr_subject,
+            check_jackett_subject=self._check_jackett_subject,
             check_indexer_subject=self._check_indexer_subject,
         )
 
@@ -362,6 +367,13 @@ class HealthService:
         """Load and decrypt Prowlarr connection settings for health checks."""
         return await load_prowlarr_subject_config(session)
 
+    async def _load_jackett_subject_config(
+        self,
+        session: AsyncSession,
+    ) -> tuple[str | None, str | None]:
+        """Load and decrypt Jackett connection settings for health checks."""
+        return await load_jackett_subject_config(session)
+
     async def _check_prowlarr_subject(
         self,
         *,
@@ -371,12 +383,22 @@ class HealthService:
         """Build a persisted health summary for the configured Prowlarr proxy."""
         return await check_prowlarr_subject(url=url, api_key=api_key)
 
+    async def _check_jackett_subject(
+        self,
+        *,
+        url: str,
+        api_key: str,
+    ) -> CheckOutcome:
+        """Build a persisted health summary for the configured Jackett proxy."""
+        return await check_jackett_subject(url=url, api_key=api_key)
+
     async def _check_indexer_subject(
         self,
         config: IndexerConfig,
+        resolver_options: Sequence[NativeResolverOption],
     ) -> CheckOutcome:
         """Build a persisted health summary for one configured indexer."""
-        return await check_indexer_subject(config)
+        return await check_indexer_subject(config, resolver_options)
 
     async def _check_scheduler(self) -> CheckOutcome:
         """Verify the scheduler is running and tasks are executing cleanly."""

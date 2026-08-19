@@ -236,6 +236,8 @@ class ReleaseValidator:
         wanted_year: int | None = None,
         wanted_issue_type: IssueType = IssueType.ISSUE,
         alternate_names: list[str] | None = None,
+        wanted_issue_title: str | None = None,
+        wanted_series_issue_count: int | None = None,
     ) -> list[ValidationResult]:
         """Validate a list of search results against a wanted issue.
 
@@ -261,6 +263,8 @@ class ReleaseValidator:
                 wanted_year=wanted_year,
                 wanted_issue_type=wanted_issue_type,
                 alternate_names=alternate_names,
+                wanted_issue_title=wanted_issue_title,
+                wanted_series_issue_count=wanted_series_issue_count,
             )
             if vr.is_match:
                 validated.append(vr)
@@ -313,6 +317,8 @@ class ReleaseValidator:
         wanted_year: int | None = None,
         wanted_issue_type: IssueType = IssueType.ISSUE,
         alternate_names: list[str] | None = None,
+        wanted_issue_title: str | None = None,
+        wanted_series_issue_count: int | None = None,
     ) -> tuple[list[ValidationResult], list[ValidationResult]]:
         """Validate results, returning (matched, rejected) tuples.
 
@@ -343,6 +349,8 @@ class ReleaseValidator:
                 wanted_year=wanted_year,
                 wanted_issue_type=wanted_issue_type,
                 alternate_names=alternate_names,
+                wanted_issue_title=wanted_issue_title,
+                wanted_series_issue_count=wanted_series_issue_count,
             )
             if vr.is_match:
                 matched.append(vr)
@@ -369,6 +377,8 @@ class ReleaseValidator:
         wanted_year: int | None,
         wanted_issue_type: IssueType,
         alternate_names: list[str] | None,
+        wanted_issue_title: str | None = None,
+        wanted_series_issue_count: int | None = None,
     ) -> ValidationResult:
         """Run the validation pipeline on a single result."""
         metadata = self._extractor.from_release_title(result.title)
@@ -459,12 +469,17 @@ class ReleaseValidator:
             wanted_year=wanted_year,
             wanted_issue_type=wanted_issue_type,
             alternate_names=alternate_names,
+            wanted_issue_title=wanted_issue_title,
+            wanted_series_issue_count=wanted_series_issue_count,
         )
         if not decision.is_match:
             return self._reject(
                 result,
                 decision.rejection_reason or "Semantic match rejected",
                 parsed=parsed,
+                series_similarity=float(decision.match_diagnostics.get("series_similarity", 0.0)),
+                match_type=str(decision.match_diagnostics.get("match_type", "none")),
+                issue_type_match=decision.match_method != "type_mismatch",
             )
 
         year_matched: bool | None = None
@@ -546,6 +561,10 @@ class ReleaseValidator:
         result: ReleaseResult,
         reason: str,
         parsed: ParsedRelease | None = None,
+        *,
+        series_similarity: float = 0.0,
+        match_type: str = "none",
+        issue_type_match: bool = False,
     ) -> ValidationResult:
         """Create a rejection ValidationResult."""
         if parsed is None:
@@ -567,4 +586,7 @@ class ReleaseValidator:
             parsed=parsed,
             release=result,
             rejection_reason=reason,
+            series_similarity=series_similarity,
+            match_type=match_type,
+            issue_type_match=issue_type_match,
         )

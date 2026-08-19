@@ -388,6 +388,7 @@ class MatchingService:
                 wanted_issue_type=issue.issue_type,
                 alternate_names=alternates,
                 wanted_issue_cv_id=issue.comicvine_id,
+                wanted_issue_title=issue.title,
             )
             if not decision.is_match:
                 continue

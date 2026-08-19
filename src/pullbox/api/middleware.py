@@ -163,6 +163,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "duration_ms": round(duration_ms, 2),
                 "request_id": request_id,
             }
+            for timing_key in (
+                "auth_config_ms",
+                "sidebar_context_ms",
+                "series_list_query_ms",
+                "series_list_render_ms",
+            ):
+                timing_value = getattr(request.state, timing_key, None)
+                if isinstance(timing_value, int | float):
+                    log_kwargs[timing_key] = timing_value
             if response.status_code >= 500:
                 logger.error("http_request_failed", outcome="server_error", **log_kwargs)
             elif duration_ms > _SLOW_REQUEST_THRESHOLD_MS:
@@ -423,10 +432,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         is_cover_path = (
             path.startswith("/api/v1/series/") or path.startswith("/api/v1/issues/")
         ) and path.endswith("/cover")
+        is_reader_page_path = path.startswith("/api/v1/reader/issues/") and "/pages/" in path
         # Prevent browser from caching authenticated HTML pages so the back
         # button cannot display stale content after logout. Cover endpoints
         # are exempt so the browser can reuse already-fetched artwork.
-        if not path.startswith(("/static/", "/favicon.ico")) and not is_cover_path:
+        if (
+            not path.startswith(("/static/", "/favicon.ico"))
+            and not is_cover_path
+            and not is_reader_page_path
+        ):
             response.headers["Cache-Control"] = "no-store, no-cache, max-age=0, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"

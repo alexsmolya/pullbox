@@ -308,6 +308,37 @@ class DelugeClient:
 
         return torrent_hash
 
+    async def add_torrent_data(
+        self,
+        content: bytes,
+        title: str,
+        category: str | None = None,
+    ) -> str:
+        """Submit descriptor bytes fetched and validated by Pullbox."""
+        import base64
+
+        options: dict[str, Any] = {}
+        if self._move_completed_path:
+            options["move_completed"] = True
+            options["move_completed_path"] = self._move_completed_path
+        if self._max_ratio is not None:
+            options["stop_at_ratio"] = True
+            options["stop_ratio"] = self._max_ratio
+        torrent_name = f"{title}.torrent" if not title.endswith(".torrent") else title
+        result = await self._rpc(
+            "core.add_torrent_file",
+            [torrent_name, base64.standard_b64encode(content).decode("ascii"), options],
+        )
+        if not result:
+            raise DelugeError(
+                "Failed to add torrent - Deluge returned no hash (torrent may already exist)"
+            )
+        torrent_hash = str(result)
+        if self._label:
+            await self._apply_label(torrent_hash, self._label)
+        logger.info("deluge_torrent_data_added", hash=torrent_hash, title=title)
+        return torrent_hash
+
     async def _apply_label(self, torrent_hash: str, label: str) -> None:
         """Apply a label via the Label plugin, creating it if needed."""
         log = logger.bind(hash=torrent_hash, label=label)

@@ -25,6 +25,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt, DirectAcquisitionState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
@@ -330,6 +331,55 @@ class TestInterventionAPI:
         data = resp.json()
         assert data["download_id"] == 42
         assert data["status"] == "sent"
+
+    @pytest.mark.asyncio
+    async def test_approve_direct_does_not_require_download_client(
+        self,
+        client: AsyncClient,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Direct intervention approval bypasses legacy download-client composition."""
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pm_ids[0])
+            assert pending is not None
+            pending.download_url = "pullbox-direct://attempt/12"
+            pending.match_details = {
+                "source_kind": "direct",
+                "direct_attempt_id": 12,
+                "provider_name": "GetComics",
+            }
+            await session.commit()
+
+        attempt = MagicMock(spec=DirectAcquisitionAttempt)
+        attempt.id = 12
+        attempt.issue_id = 1
+        attempt.state = DirectAcquisitionState.PLANNED
+        attempt.candidate_snapshot = {"display_title": "Batman 001 (2016)"}
+
+        with (
+            patch(
+                "pullbox.composition.services.build_domain_download_service",
+                new_callable=AsyncMock,
+            ) as build_download,
+            patch(
+                "pullbox.api.v1.intervention.InterventionService.approve_match",
+                new_callable=AsyncMock,
+                return_value=attempt,
+            ),
+        ):
+            response = await client.post(f"/api/v1/intervention/{pm_ids[0]}/approve")
+
+        assert response.status_code == 201
+        assert response.json() == {
+            "download_id": None,
+            "acquisition_id": 12,
+            "issue_id": 1,
+            "title": "Batman 001 (2016)",
+            "status": "planned",
+            "source_kind": "direct",
+        }
+        build_download.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_reject_updates_status(

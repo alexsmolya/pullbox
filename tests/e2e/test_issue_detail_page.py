@@ -2,17 +2,356 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
+from playwright.sync_api import expect
 
 from tests.e2e.pages.issue_detail import IssueDetailPage
+
+_READER_PAGE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAMCAIAAADQ/GvKAAAAEklEQVR42mMwqfiGFTGMSqAjAJZBnMFc9NzZ"
+    "AAAAAElFTkSuQmCC"
+)
+
+
+def _mock_reader(
+    page,
+    *,
+    initial_page: int = 0,
+    fail_once: set[int] | None = None,
+):  # type: ignore[no-untyped-def]
+    progress_writes: list[dict[str, object]] = []
+    remaining_failures = set(fail_once or set())
+    manifest = {
+        "issue_id": 1,
+        "title": "I Am Gotham",
+        "issue_label": "Batman #1",
+        "format": "cbz",
+        "page_count": 3,
+        "revision": "reader-test-revision",
+        "initial_page_index": initial_page,
+        "page_url_template": (
+            "/api/v1/reader/issues/1/pages/{page_index}?revision=reader-test-revision"
+        ),
+        "progress_url": "/api/v1/reader/issues/1/progress",
+    }
+    page.route(
+        "**/api/v1/reader/issues/1/manifest",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(manifest)
+        ),
+    )
+
+    def serve_page(route) -> None:  # type: ignore[no-untyped-def]
+        page_index = int(route.request.url.split("/pages/", 1)[1].split("?", 1)[0])
+        if page_index in remaining_failures:
+            remaining_failures.remove(page_index)
+            route.fulfill(status=422, content_type="application/json", body="{}")
+            return
+        route.fulfill(status=200, content_type="image/png", body=_READER_PAGE_PNG)
+
+    def save_progress(route) -> None:  # type: ignore[no-untyped-def]
+        payload = json.loads(route.request.post_data or "{}")
+        progress_writes.append(payload)
+        manifest["initial_page_index"] = int(payload["page_index"])
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "page_index": payload["page_index"],
+                    "page_count": 3,
+                    "revision": "reader-test-revision",
+                    "completed_at": (
+                        "2026-08-03T00:00:00Z" if payload["completion_candidate"] else None
+                    ),
+                    "updated_at": "2026-08-03T00:00:00Z",
+                }
+            ),
+        )
+
+    page.route("**/api/v1/reader/issues/1/pages/*", serve_page)
+    page.route(
+        "**/api/v1/reader/issues/1/progress",
+        save_progress,
+    )
+    return progress_writes
+
 
 pytestmark = pytest.mark.e2e
 
 
 class TestIssueDetailPage:
     """Behavior-first E2E coverage for /issues/{id}."""
+
+    def test_reader_opens_seeded_cbz_through_real_backend(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+
+        issue.open_reader()
+
+        assert issue.reader_status.inner_text() == "Page 1 of 3"
+        assert issue.reader_page.get_attribute("src") is not None
+        authed_page.locator("[data-testid='comic-reader-next']").click()
+        expect(issue.reader_status).to_have_text("Page 2 of 3")
+
+    def test_reader_opens_navigates_and_restores_exact_issue_context(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        original_url = authed_page.url
+        authed_page.evaluate("window.scrollTo(0, 180)")
+        original_scroll = authed_page.evaluate("window.scrollY")
+
+        issue.open_reader()
+
+        assert authed_page.url == original_url
+        assert issue.reader_status.inner_text() == "Page 1 of 3"
+        authed_page.locator("[data-testid='comic-reader-next']").click()
+        expect(issue.reader_status).to_have_text("Page 2 of 3")
+        issue.close_reader()
+
+        assert authed_page.url == original_url
+        assert authed_page.evaluate("window.scrollY") == original_scroll
+        assert issue.read_button.evaluate("element => element === document.activeElement")
+
+    def test_reader_keyboard_direction_and_sizing_controls(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        authed_page.keyboard.press("ArrowRight")
+        expect(issue.reader_status).to_have_text("Page 2 of 3")
+        authed_page.keyboard.press("Home")
+        expect(issue.reader_status).to_have_text("Page 1 of 3")
+        authed_page.locator("[data-testid='comic-reader-direction']").click()
+        authed_page.keyboard.press("ArrowLeft")
+        expect(issue.reader_status).to_have_text("Page 2 of 3")
+
+        authed_page.locator("[data-testid='comic-reader-fit-width']").click()
+        assert issue.reader_page.get_attribute("data-fit-mode") == "width"
+        authed_page.locator("[data-testid='comic-reader-zoom-in']").click()
+        assert issue.reader_page.get_attribute("data-fit-mode") == "actual"
+
+    def test_reader_positions_sizing_left_and_navigation_right(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        sizing_box = authed_page.locator(".comic-reader__sizing").bounding_box()
+        navigation_box = authed_page.locator(".comic-reader__navigation").bounding_box()
+
+        assert sizing_box is not None
+        assert navigation_box is not None
+        assert sizing_box["x"] < navigation_box["x"]
+
+    def test_reader_fullscreen_targets_shell_and_tracks_browser_state(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.add_init_script(
+            """
+            (() => {
+                let fullscreenTarget = null;
+                Object.defineProperty(document, "fullscreenElement", {
+                    configurable: true,
+                    get: () => fullscreenTarget,
+                });
+                Element.prototype.requestFullscreen = function () {
+                    fullscreenTarget = this;
+                    window.__readerFullscreenTargetClass = this.className;
+                    document.dispatchEvent(new Event("fullscreenchange"));
+                    return Promise.resolve();
+                };
+                document.exitFullscreen = function () {
+                    fullscreenTarget = null;
+                    document.dispatchEvent(new Event("fullscreenchange"));
+                    return Promise.resolve();
+                };
+            })();
+            """
+        )
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+        fullscreen_button = authed_page.locator("[data-testid='comic-reader-fullscreen']")
+
+        fullscreen_button.click()
+
+        assert authed_page.evaluate("window.__readerFullscreenTargetClass") == (
+            "comic-reader__shell"
+        )
+        assert fullscreen_button.get_attribute("aria-pressed") == "true"
+
+        fullscreen_button.click()
+        assert fullscreen_button.get_attribute("aria-pressed") == "false"
+
+    def test_reader_settles_resumes_and_only_deliberate_final_page_completes(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        progress_writes = _mock_reader(authed_page, initial_page=2)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        authed_page.wait_for_timeout(850)
+        assert progress_writes[-1]["page_index"] == 2
+        assert progress_writes[-1]["completion_candidate"] is False
+
+        authed_page.locator("[data-testid='comic-reader-previous']").click()
+        expect(issue.reader_status).to_have_text("Page 2 of 3")
+        authed_page.locator("[data-testid='comic-reader-next']").click()
+        expect(issue.reader_status).to_have_text("Page 3 of 3")
+        authed_page.wait_for_timeout(850)
+        assert progress_writes[-1]["completion_candidate"] is True
+
+        issue.close_reader()
+        issue.open_reader()
+        expect(issue.reader_status).to_have_text("Page 3 of 3")
+
+    def test_reader_page_jump_input_is_bounded_and_blocks_shortcuts_while_typing(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+        page_input = authed_page.locator(".comic-reader__page-jump input")
+
+        page_input.fill("99")
+        page_input.press("Enter")
+        assert page_input.get_attribute("aria-invalid") == "true"
+        expect(authed_page.locator("#comic-reader-page-input-error")).to_have_text(
+            "Enter a page from 1 to 3."
+        )
+        assert issue.reader_status.inner_text() == "Page 1 of 3"
+
+        page_input.fill("w")
+        assert issue.reader_page.get_attribute("data-fit-mode") == "page"
+        page_input.fill("2")
+        page_input.press("Enter")
+        expect(issue.reader_status).to_have_text("Page 2 of 3")
+
+    def test_reader_page_error_preserves_context_and_retries_in_place(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page, fail_once={2})
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        authed_page.keyboard.press("End")
+        error = authed_page.locator("[data-testid='comic-reader-error']")
+        error.wait_for(state="visible", timeout=5000)
+        assert issue.reader_page.is_visible()
+        expect(error).to_contain_text("Page 3 could not be displayed")
+
+        authed_page.locator("[data-testid='comic-reader-retry']").click()
+        expect(issue.reader_status).to_have_text("Page 3 of 3")
+        error.wait_for(state="hidden", timeout=5000)
+
+    def test_reader_swipe_respects_fit_mode_and_center_zone_toggles_controls(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        authed_page.locator("[data-testid='comic-reader-viewport']").evaluate(
+            """(viewport) => {
+                viewport.dispatchEvent(new PointerEvent('pointerdown', {
+                    bubbles: true, pointerId: 7, pointerType: 'touch', isPrimary: true,
+                    clientX: 300, clientY: 200,
+                }));
+                viewport.dispatchEvent(new PointerEvent('pointerup', {
+                    bubbles: true, pointerId: 7, pointerType: 'touch', isPrimary: true,
+                    clientX: 120, clientY: 205,
+                }));
+            }"""
+        )
+        expect(issue.reader_status).to_have_text("Page 2 of 3")
+
+        authed_page.locator("[data-testid='comic-reader-zoom-in']").click()
+        authed_page.locator("[data-testid='comic-reader-viewport']").evaluate(
+            """(viewport) => {
+                viewport.dispatchEvent(new PointerEvent('pointerdown', {
+                    bubbles: true, pointerId: 8, pointerType: 'touch', isPrimary: true,
+                    clientX: 300, clientY: 200,
+                }));
+                viewport.dispatchEvent(new PointerEvent('pointerup', {
+                    bubbles: true, pointerId: 8, pointerType: 'touch', isPrimary: true,
+                    clientX: 120, clientY: 205,
+                }));
+            }"""
+        )
+        assert issue.reader_status.inner_text() == "Page 2 of 3"
+
+        authed_page.locator(".comic-reader__tap-zone--center").click(position={"x": 2, "y": 2})
+        shell_class = authed_page.locator(".comic-reader__shell").get_attribute("class") or ""
+        assert "is-controls-hidden" in shell_class
+
+    @pytest.mark.parametrize(
+        ("width", "height"),
+        [(390, 844), (844, 390), (820, 1180)],
+    )
+    def test_reader_is_full_viewport_and_controls_remain_reachable(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+        width: int,
+        height: int,
+    ) -> None:
+        authed_page.set_viewport_size({"width": width, "height": height})
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        dialog_box = issue.reader_dialog.bounding_box()
+        close_box = authed_page.locator("[data-testid='comic-reader-close']").bounding_box()
+        next_box = authed_page.locator("[data-testid='comic-reader-next']").bounding_box()
+
+        assert dialog_box is not None
+        assert close_box is not None
+        assert next_box is not None
+        assert dialog_box["width"] == pytest.approx(width, abs=1)
+        assert dialog_box["height"] == pytest.approx(height, abs=1)
+        for control_box in (close_box, next_box):
+            assert control_box["x"] >= 0
+            assert control_box["y"] >= 0
+            assert control_box["x"] + control_box["width"] <= width + 1
+            assert control_box["y"] + control_box["height"] <= height + 1
 
     def test_copy_path_tooltip_renders_on_hover(
         self,

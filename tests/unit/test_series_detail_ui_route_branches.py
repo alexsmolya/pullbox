@@ -327,11 +327,12 @@ async def test_issue_search_results_render_no_runtime_and_runtime_branches(
         issue_number=1,
         issue_type=IssueType.ISSUE,
     )
-    issue_ctx = SimpleNamespace(id=issue.id)
+    issue_ctx = SimpleNamespace(id=issue.id, issue_number=issue.issue_number)
     no_runtime_bundle = SimpleNamespace(
         issue=issue_ctx,
         target=target,
         runtime=None,
+        outcome=None,
         search_time_ms=7,
         matched_items=[],
         rejected_items=[],
@@ -342,6 +343,7 @@ async def test_issue_search_results_render_no_runtime_and_runtime_branches(
         issue=issue_ctx,
         target=target,
         runtime=object(),
+        outcome=None,
         search_time_ms=11,
         matched_items=[matched],
         rejected_items=[rejected],

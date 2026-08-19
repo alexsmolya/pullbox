@@ -179,7 +179,9 @@ async def _load_safety_blocked_files_by_series_id(
         select(ImportedFile)
         .where(
             ImportedFile.import_series_id.in_(visible_series_ids),
-            ImportedFile.status == ImportedFileStatus.SAFETY_BLOCKED,
+            ImportedFile.status.in_(
+                [ImportedFileStatus.SAFETY_BLOCKED, ImportedFileStatus.SAFETY_APPROVED]
+            ),
         )
         .order_by(ImportedFile.import_series_id.asc(), ImportedFile.id.asc())
     )
@@ -210,6 +212,21 @@ async def load_import_review_context(
     conflict_review_ctx: dict[str, object] | None = None
     matched_file_targets_by_series_id: dict[int, list[dict[str, object]]] = {}
     review_file_groups_by_series_id: dict[int, list[dict[str, object]]] = {}
+    safety_rematch_pending = False
+
+    if current_view == "safety_blocked":
+        remaining_safety_rows = (
+            await session.execute(
+                select(func.count(ImportedSeries.id)).where(
+                    ImportedSeries.import_job_id == job_id,
+                    _safety_blocked_files_filter(),
+                )
+            )
+        ).scalar_one()
+        if remaining_safety_rows == 0:
+            # A completed approved-file rematch closes the now-empty transient tab.
+            current_view = "series"
+            requested_series_status = None
 
     if current_view == "conflicts":
         conflict_review_ctx = await _load_import_conflict_review_context(
@@ -245,6 +262,11 @@ async def load_import_review_context(
             session,
             visible_series_ids,
         )
+        safety_rematch_pending = any(
+            imp_file.status == ImportedFileStatus.SAFETY_APPROVED
+            for files in safety_blocked_files_by_series_id.values()
+            for imp_file in files
+        )
         if visible_series_ids:
             matched_file_targets_by_series_id = await _load_import_review_matched_file_targets(
                 session,
@@ -277,6 +299,7 @@ async def load_import_review_context(
             job_id,
         ),
         "safety_blocked_files_by_series_id": safety_blocked_files_by_series_id,
+        "safety_rematch_pending": safety_rematch_pending,
         "matched_file_targets_by_series_id": matched_file_targets_by_series_id,
         "review_file_groups_by_series_id": review_file_groups_by_series_id,
     }

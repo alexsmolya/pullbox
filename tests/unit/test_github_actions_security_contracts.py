@@ -926,8 +926,21 @@ def test_grype_config_tracks_current_dhi_runtime() -> None:
     assert "CVE-2026-7210" in config_text
     assert "CVE-2026-11822" in config_text
     assert "CVE-2026-11824" in config_text
+    assert "CVE-2026-14456" in config_text
     assert "3.14.6" in config_text
     assert config.get("ignore")
+
+    openssl_exceptions = [
+        entry for entry in config["ignore"] if entry.get("vulnerability") == "CVE-2026-14456"
+    ]
+    assert {
+        (entry["package"]["name"], entry["package"]["version"], entry["package"]["type"])
+        for entry in openssl_exceptions
+    } == {
+        ("libssl3t64", "3.5.6-1~deb13u2+dhi1", "deb"),
+        ("openssl", "3.5.6-1~deb13u2+dhi1", "deb"),
+        ("openssl-provider-legacy", "3.5.6-1~deb13u2+dhi1", "deb"),
+    }
 
 
 def test_docker_workflow_signs_and_verifies_published_images() -> None:

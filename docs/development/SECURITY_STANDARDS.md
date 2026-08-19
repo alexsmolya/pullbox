@@ -1,8 +1,8 @@
 # Pullbox Security Standards
 
 **Author:** Adam Hernandez
-**Version:** 1.2
-**Last Modified:** 2026-07-12
+**Version:** 1.3
+**Last Modified:** 2026-07-29
 
 ## Purpose
 
@@ -562,8 +562,8 @@ that lock down important behavior.
 
 - Pullbox integrates with operator-configured peers such as indexers and
   download clients.
-- Download client, indexer, and Prowlarr sync URL schemas use a shared operator
-  peer URL validator.
+- Download client, indexer, Prowlarr sync, and Jackett sync URL schemas use a
+  shared operator peer URL validator.
 - Peer URL validation accepts only `http` and `https`, requires a host, rejects
   embedded credentials, rejects whitespace, and normalizes trailing slashes.
 
@@ -599,8 +599,8 @@ that lock down important behavior.
 
 - Pullbox uses `httpx.AsyncClient`.
 - Provider classes set explicit client-level or request-level timeouts.
-- ComicVine, Prowlarr, download clients, and health/update checks use async HTTP
-  clients.
+- ComicVine, Prowlarr, Jackett, download clients, and health/update checks use
+  async HTTP clients.
 - Static contract tests reject:
   - application `requests` imports
   - `httpx.AsyncClient` construction without explicit timeout

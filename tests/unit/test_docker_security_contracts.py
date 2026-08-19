@@ -44,7 +44,8 @@ def test_dockerfile_uses_expected_dhi_builder_and_runtime_images() -> None:
     """The production image must stay on the approved Python DHI baseline."""
     lines = _dockerfile_lines()
 
-    assert lines[0] == "FROM dhi.io/python:3.14-debian13-dev AS builder"
+    assert lines[0] == "FROM dhi.io/python:3.14-debian13-dev AS mega-builder"
+    assert "FROM dhi.io/python:3.14-debian13-dev AS builder" in lines
     assert "FROM dhi.io/python:3.14-debian13 AS runtime" in lines
 
 

@@ -9,8 +9,9 @@ import structlog
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 
-from pullbox.models.download import DownloadHistory, DownloadState
+from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
+from pullbox.tasks.direct_acquisition_task import get_direct_acquisition_runner
 from pullbox.tasks.download_stall_recovery import _recover_stalled_downloads
 
 if TYPE_CHECKING:
@@ -38,6 +39,7 @@ async def _recover_orphaned_downloads(
             DownloadHistory.state.in_(
                 [DownloadState.SENT, DownloadState.DOWNLOADING, DownloadState.FINALIZING]
             ),
+            DownloadHistory.download_client != DownloadClientType.DIRECT,
             DownloadHistory.external_id.is_(None),
             DownloadHistory.updated_at < stale_cutoff,
         )
@@ -62,6 +64,7 @@ async def _recover_orphaned_downloads(
     result = await session.execute(
         select(DownloadHistory).where(
             DownloadHistory.state == DownloadState.FAILED,
+            DownloadHistory.download_client != DownloadClientType.DIRECT,
             or_(
                 DownloadHistory.error_message.contains("Operation not permitted"),
                 DownloadHistory.error_message.contains("Input/output error"),
@@ -147,6 +150,7 @@ async def _process_retry_pending(
             select(DownloadHistory.id, DownloadHistory.retry_count).where(
                 DownloadHistory.state == DownloadState.RETRY_PENDING,
                 DownloadHistory.next_retry_at <= now,
+                DownloadHistory.download_client != DownloadClientType.DIRECT,
             )
         )
         pending = [(row[0], row[1]) for row in result.all()]
@@ -167,3 +171,16 @@ async def _process_retry_pending(
             log.exception("download_retry_trigger_failed")
 
     return retried
+
+
+async def _process_direct_retry_pending(*, now: datetime | None = None) -> int:
+    """Dispatch due direct retries independently of configured client downloads."""
+    try:
+        return await get_direct_acquisition_runner().dispatch_due_retries(
+            now=now or datetime.now(UTC)
+        )
+    except RuntimeError:
+        logger.debug("direct_download_retry_runner_unavailable")
+    except Exception:
+        logger.exception("direct_download_retry_dispatch_failed")
+    return 0

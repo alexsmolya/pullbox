@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -13,11 +14,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from pullbox.models import Base
 from pullbox.models.config import SystemConfig
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import MatchConfidence
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.base import ProviderRegistry, ReleaseResult
+from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchOutcome,
+    DirectSearchProvider,
+    DirectValidatedCandidate,
+)
+from pullbox.services.release_validator import ReleaseValidator
 from pullbox.services.search_service import (
     IssueSearchOutcome,
     IssueSearchTarget,
@@ -178,11 +193,11 @@ async def test_search_wanted_uses_bounded_fast_search_not_deep_manual_fanout(
 
 
 @pytest.mark.asyncio
-async def test_manual_search_wanted_run_ignores_indexer_backoff(
+async def test_manual_search_wanted_run_respects_indexer_backoff(
     db_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pressing Run on Search Wanted must make a real indexer attempt."""
+    """Bulk manual sweeps must not bypass provider protection backoff."""
     from pullbox.tasks import search_task
 
     target = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=950)
@@ -221,7 +236,7 @@ async def test_manual_search_wanted_run_ignores_indexer_backoff(
 
     await search_task.search_wanted()
 
-    assert ignore_backoff_values == [True]
+    assert ignore_backoff_values == [False]
 
 
 @pytest.mark.asyncio
@@ -287,7 +302,7 @@ async def test_search_wanted_routes_and_finalizes_each_outcome_before_batch_retu
     db_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Completed issue searches must not wait behind the rest of the 50-item batch."""
+    """Completed issue searches must not wait behind the rest of the bounded batch."""
     from pullbox.tasks import search_task
 
     first = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=952)
@@ -487,7 +502,143 @@ async def test_search_wanted_routes_matches_with_per_type_thresholds(
 
 
 @pytest.mark.asyncio
-async def test_search_wanted_records_no_result_attempts_and_advances_cursor(
+async def test_search_wanted_plans_and_dispatches_high_confidence_direct_winner(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Automated direct winners use durable planning instead of DownloadService."""
+    from pullbox.tasks import search_task
+
+    target = await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=960)
+    async with db_factory() as session:
+        config = DirectProviderConfig(
+            provider_id="pullbox.getcomics",
+            display_name="GetComics",
+            endpoint="http://provider:8780",
+            enabled=True,
+            priority=10,
+            state=DirectProviderState.HEALTHY,
+            trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        )
+        session.add(config)
+        await session.flush()
+        provider_id = config.id
+        await session.commit()
+
+    provider = DirectSearchProvider(
+        provider_config_id=provider_id,
+        provider_identity="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="http://provider:8780",
+        bearer_token="provider-token-with-enough-length",
+        provider_priority=10,
+    )
+    release = replace(
+        _release("Absolute Flash #001 (2025) (Digital).cbz"),
+        indexer_name="GetComics",
+    )
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series=target.series_title,
+        wanted_issue=target.issue_number,
+        wanted_year=target.series_year,
+    )[0][0]
+    direct_result = DirectValidatedCandidate(
+        provider=provider,
+        candidate=DirectCandidate(
+            provider_candidate_id="candidate-1",
+            source_reference="https://getcomics.org/post",
+            display_title=release.title,
+            raw_title=release.title,
+            parsed=DirectParsedCandidate(
+                series_title=target.series_title,
+                issue_numbers=["1"],
+                year=target.series_year,
+                format="cbz",
+                quality="digital",
+            ),
+            provider_confidence=0.99,
+        ),
+        release=release,
+        validation=validation,
+    )
+    outcome = replace(
+        _no_result_outcome(target),
+        direct_outcome=DirectSearchOutcome(
+            matched=(direct_result,),
+            rejected=(),
+            failures=(),
+            providers_searched=1,
+            elapsed_ms=4,
+        ),
+    )
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=None,
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+        direct_providers=(provider,),
+    )
+    source = object()
+
+    async def _plan(session: AsyncSession, *, acquisition_id: int, **_kwargs: object):
+        attempt = await session.get(DirectAcquisitionAttempt, acquisition_id)
+        assert attempt is not None
+        assert attempt.search_log_id is not None
+        attempt.state = DirectAcquisitionState.PLANNED
+        return SimpleNamespace(
+            attempt=attempt,
+            selected_artifact=SimpleNamespace(id=44),
+            initial_source=source,
+        )
+
+    runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+    download_svc = AsyncMock()
+    intervention_svc = AsyncMock()
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        search_task,
+        "load_wanted_issue_search_targets",
+        AsyncMock(return_value=[target]),
+    )
+    monkeypatch.setattr(
+        SearchService,
+        "search_targets_quick_first",
+        AsyncMock(return_value=[outcome]),
+    )
+    monkeypatch.setattr(search_task, "_build_download_service", lambda registry: download_svc)
+    monkeypatch.setattr(
+        search_task,
+        "InterventionService",
+        lambda download_service: intervention_svc,
+    )
+    monkeypatch.setattr(search_task, "plan_direct_acquisition", _plan)
+    monkeypatch.setattr(search_task, "get_direct_acquisition_runner", lambda: runner)
+
+    await search_task.search_wanted()
+
+    download_svc.send_to_client.assert_not_awaited()
+    runner.dispatch.assert_awaited_once_with(1, 44, initial_source=source)
+    async with db_factory() as session:
+        attempts = list((await session.execute(select(DirectAcquisitionAttempt))).scalars())
+        logs = list((await session.execute(select(SearchLog))).scalars())
+    assert len(attempts) == 1
+    assert attempts[0].state is DirectAcquisitionState.PLANNED
+    assert len(logs) == 1
+    assert logs[0].results_grabbed == 1
+    assert logs[0].details["acquisition_method"] == "direct"
+
+
+@pytest.mark.asyncio
+async def test_search_wanted_records_no_result_attempts_and_completes_sweep(
     db_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -518,11 +669,6 @@ async def test_search_wanted_records_no_result_attempts_and_advances_cursor(
         elapsed_ms=10,
     )
 
-    async with db_factory() as session:
-        session.add(SystemConfig(key="search_wanted_cursor", value="[9, 99.0, 99]"))
-        await session.commit()
-
-    load_targets = AsyncMock(return_value=[target])
     search_targets_quick_first = AsyncMock(return_value=[no_result_outcome])
 
     monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
@@ -531,7 +677,6 @@ async def test_search_wanted_records_no_result_attempts_and_advances_cursor(
         "_build_task_search_runtime",
         AsyncMock(return_value=runtime),
     )
-    monkeypatch.setattr(search_task, "load_wanted_issue_search_targets", load_targets)
     monkeypatch.setattr(
         SearchService,
         "search_targets_quick_first",
@@ -540,11 +685,14 @@ async def test_search_wanted_records_no_result_attempts_and_advances_cursor(
 
     await search_task.search_wanted()
 
-    assert load_targets.await_count >= 1
-    assert load_targets.await_args_list[0].kwargs == {"limit": 50, "after": (9, 99.0, 99)}
-
     async with db_factory() as session:
+        from pullbox.services.wanted_search_sweep import load_wanted_search_sweep
+
+        sweep = await load_wanted_search_sweep(session)
         cursor = await session.get(SystemConfig, "search_wanted_cursor")
+        assert sweep is not None
+        assert sweep.state == "completed"
+        assert sweep.attempted_count == 1
         assert cursor is not None
         assert cursor.value == f"[{target.series_id}, {target.issue_number}, {target.issue_id}]"
         result = await session.execute(select(SearchLog))
@@ -557,3 +705,74 @@ async def test_search_wanted_records_no_result_attempts_and_advances_cursor(
     assert logs[0].best_confidence is None
     assert logs[0].details["run_state"] == "completed"
     assert logs[0].details["action_status"] == "no_results"
+
+
+@pytest.mark.asyncio
+async def test_search_wanted_continues_durable_batches_until_full_sweep_completes(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bounded invocation must pause, persist, and resume one logical sweep."""
+    from pullbox.core.scheduler import TaskExecutionResult
+    from pullbox.services.wanted_search_sweep import load_wanted_search_sweep
+    from pullbox.tasks import search_task
+
+    await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=981)
+    await _seed_issue(db_factory, issue_type=IssueType.ISSUE, comicvine_id=982)
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=None,
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+    )
+
+    class _NoResultSearchService(SearchService):
+        async def search_targets_quick_first(
+            self,
+            _session: AsyncSession,
+            targets: list[IssueSearchTarget],
+            **_kwargs: object,
+        ) -> list[IssueSearchOutcome]:
+            return [_no_result_outcome(target) for target in targets]
+
+    scheduler = SimpleNamespace(
+        schedule_task_continuation=MagicMock(return_value=True),
+        clear_task_continuation=MagicMock(),
+        delay_task_next_run=MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(search_task, "get_session_factory", lambda: db_factory)
+    monkeypatch.setattr(search_task, "get_current_task_trigger_type", lambda: "manual")
+    monkeypatch.setattr(search_task, "get_scheduler", lambda: scheduler)
+    monkeypatch.setattr(search_task, "_SEARCH_WANTED_BATCH_LIMIT", 1)
+    monkeypatch.setattr(
+        search_task,
+        "_build_task_search_runtime",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(search_task, "SearchService", _NoResultSearchService)
+
+    first_result = await search_task.search_wanted()
+
+    assert first_result == TaskExecutionResult(status="waiting")
+    async with db_factory() as session:
+        waiting = await load_wanted_search_sweep(session)
+    assert waiting is not None
+    assert waiting.state == "waiting"
+    assert waiting.attempted_count == 1
+    assert waiting.total_targets == 2
+    assert waiting.remaining_count == 1
+    scheduler.schedule_task_continuation.assert_called_once()
+
+    second_result = await search_task.search_wanted()
+
+    assert second_result == TaskExecutionResult(status="completed")
+    async with db_factory() as session:
+        completed = await load_wanted_search_sweep(session)
+    assert completed is not None
+    assert completed.state == "completed"
+    assert completed.attempted_count == 2
+    assert completed.remaining_count == 0
+    scheduler.clear_task_continuation.assert_called_once_with("search_wanted")

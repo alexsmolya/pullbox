@@ -10,15 +10,23 @@ Run:
 from __future__ import annotations
 
 from pullbox.providers.base import ReleaseResult
+from pullbox.services.search_scoring import normalize_source_priority
 from pullbox.services.search_service import _sort_by_source_priority
 
 
-def _make_result(title: str, is_torrent: bool) -> ReleaseResult:
+def _make_result(
+    title: str,
+    is_torrent: bool,
+    *,
+    is_direct: bool = False,
+) -> ReleaseResult:
     """Create a minimal ReleaseResult for sorting tests."""
     return ReleaseResult(
         title=title,
         indexer_name="test",
-        download_url=f"http://example.com/{title}",
+        download_url=(
+            f"direct://candidate/{title}" if is_direct else f"http://example.com/{title}"
+        ),
         size_bytes=100,
         age_days=1,
         seeders=10 if is_torrent else None,
@@ -118,19 +126,19 @@ class TestSortBySourcePriority:
         assert not sorted_results[0].is_torrent  # usenet first
         assert sorted_results[1].is_torrent  # torrent sinks
 
-    def test_future_ddl_in_priority_no_effect(self) -> None:
-        """["usenet", "torrent", "ddl"] — ddl has no matching results, no crash."""
+    def test_direct_downloads_can_be_prioritized(self) -> None:
+        """Direct-provider releases participate in protocol priority sorting."""
         results = [
-            _make_result("t1", True),
             _make_result("n1", False),
+            _make_result("d1", False, is_direct=True),
+            _make_result("t1", True),
         ]
         sorted_results = _sort_by_source_priority(
             results,
-            ["usenet", "torrent", "ddl"],
+            ["direct", "usenet", "torrent"],
         )
 
-        assert not sorted_results[0].is_torrent
-        assert sorted_results[1].is_torrent
+        assert [result.title for result in sorted_results] == ["d1", "n1", "t1"]
 
     def test_same_protocol_is_noop(self) -> None:
         """All results same protocol → order unchanged."""
@@ -142,3 +150,19 @@ class TestSortBySourcePriority:
         sorted_results = _sort_by_source_priority(results, ["usenet", "torrent"])
 
         assert [r.title for r in sorted_results] == ["a", "b", "c"]
+
+
+def test_source_priority_adds_direct_to_existing_saved_order() -> None:
+    assert normalize_source_priority(["torrent", "usenet"]) == [
+        "torrent",
+        "usenet",
+        "direct",
+    ]
+
+
+def test_source_priority_migrates_legacy_ddl_key() -> None:
+    assert normalize_source_priority(["ddl", "usenet", "torrent"]) == [
+        "direct",
+        "usenet",
+        "torrent",
+    ]

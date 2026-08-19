@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from sqlalchemy import DateTime, Integer
+from sqlalchemy import DateTime, Integer, Text
 from sqlalchemy import Enum as SQLAlchemyEnum
 
 from pullbox.models import Base
 from pullbox.models.base import UTCDateTime
 from pullbox.models.import_job import ImportJobStatus
+from pullbox.models.indexer import IndexerConfig
 
 MIGRATION_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 
@@ -98,6 +99,11 @@ def test_runtime_enum_columns_use_python_enum_classes() -> None:
                 offenders.append(f"{model.__name__}.{column.name}")
 
     assert offenders == []
+
+
+def test_indexer_categories_support_manager_capability_lists() -> None:
+    """Manager-synced category lists must not be constrained to 255 characters."""
+    assert isinstance(IndexerConfig.__table__.c.categories.type, Text)
 
 
 def test_import_job_status_enum_values_are_covered_by_migrations() -> None:

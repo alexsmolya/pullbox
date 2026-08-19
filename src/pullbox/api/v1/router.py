@@ -8,6 +8,9 @@ from pullbox.api.v1.blocklist import router as blocklist_router
 from pullbox.api.v1.clients import router as clients_router
 from pullbox.api.v1.config import router as config_router
 from pullbox.api.v1.covers import router as covers_router
+from pullbox.api.v1.direct_hosts import router as direct_hosts_router
+from pullbox.api.v1.direct_providers import router as direct_providers_router
+from pullbox.api.v1.direct_resolver import router as direct_resolver_router
 from pullbox.api.v1.downloads import router as downloads_router
 from pullbox.api.v1.filesystem import router as filesystem_router
 from pullbox.api.v1.health import router as health_router
@@ -16,6 +19,7 @@ from pullbox.api.v1.indexers import router as indexers_router
 from pullbox.api.v1.intervention import router as intervention_router
 from pullbox.api.v1.issues import router as issues_router
 from pullbox.api.v1.library import router as library_router
+from pullbox.api.v1.reader import router as reader_router
 from pullbox.api.v1.search import router as search_router
 from pullbox.api.v1.series import router as series_router
 from pullbox.api.v1.suggestions import router as suggestions_router
@@ -31,7 +35,11 @@ v1_router.include_router(auth_router)
 v1_router.include_router(series_router)
 v1_router.include_router(issues_router)
 v1_router.include_router(library_router)
+v1_router.include_router(reader_router)
 v1_router.include_router(downloads_router)
+v1_router.include_router(direct_providers_router)
+v1_router.include_router(direct_hosts_router)
+v1_router.include_router(direct_resolver_router)
 v1_router.include_router(search_router)
 v1_router.include_router(indexers_router)
 v1_router.include_router(clients_router)

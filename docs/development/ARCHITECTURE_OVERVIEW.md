@@ -1,8 +1,8 @@
 # Pullbox Architecture Overview
 
 **Author:** Adam Hernandez
-**Version:** 1.0
-**Last Modified:** 2026-05-15
+**Version:** 1.1
+**Last Modified:** 2026-07-29
 
 ## Purpose
 
@@ -292,7 +292,7 @@ The active implementation includes:
 
 - ComicVine metadata.
 - Pullbox Data public release payloads for What's New and opt-in telemetry.
-- Newznab, Torznab, and Prowlarr-backed indexers.
+- Newznab, Torznab, Prowlarr, and Jackett indexers.
 - SABnzbd, NZBGet, qBittorrent, Transmission, and Deluge download clients.
 
 Provider composition happens through `src/pullbox/composition/providers.py`.
@@ -316,6 +316,10 @@ constructed, and provider instances are registered for service use.
 - Prowlarr-synced Newznab indexers are kept as individual Newznab proxy
   endpoints because the direct proxy behavior can produce better category and
   result fidelity.
+- Jackett is configured through the same test-and-sync workflow as Prowlarr,
+  but each configured tracker is registered as an independent Torznab source.
+  Jackett owns downstream challenge resolution; Pullbox preserves local source
+  policy and retires missing manager rows instead of deleting their history.
 - Download clients may be cached across task cycles when config values have not
   changed.
 - Pullbox Data is not a general metadata proxy. Installed clients default to
@@ -334,9 +338,19 @@ Search and acquisition are coordinated through several focused service modules:
 - `search_indexers.py` calls configured indexers.
 - `release_parser.py` and matching helpers parse release titles.
 - `release_validator.py` rejects mismatches and unsafe candidates.
-- `search_scoring.py` and `search_evaluation.py` rank acceptable releases.
+- `search_scoring.py` and `search_evaluation.py` rank acceptable releases. The
+  configured Search Priority orders the `usenet`, `torrent`, and `direct`
+  source lanes. Within each lane, the deterministic quality score includes the
+  individual indexer or direct-provider priority; lower numeric priority is
+  preferred.
 - `download_service.py` sends selected releases to a configured download
   client.
+- `wanted_search_sweep.py` persists the complete fair-order target snapshot for
+  bounded Search Wanted continuation.
+- `search_source_selection.py` applies the existing deterministic scorer to
+  indexer and direct-provider candidates, including fallback order.
+- `direct_provider_quota.py` owns provider-generic capacity observations and
+  the automatic-download reserve policy.
 - Post-download and library services process completed files into the library.
 
 The normal happy path looks like this:
@@ -348,8 +362,8 @@ Wanted issue or manual search
   -> Search enabled indexers
   -> Parse release titles
   -> Validate against series, issue, year, and type
-  -> Score accepted results
-  -> Grab selected result
+  -> Order accepted results by source lane, then score within each lane
+  -> Grab the selected result, falling through on an expected queue failure
   -> Monitor download
   -> Process completed files
   -> Match or intervene
@@ -363,6 +377,8 @@ Wanted issue or manual search
   behavior.
 - Keep manual and automated search on shared parsing, validation, and scoring
   primitives so behavior does not drift.
+- Apply source and provider priority consistently in manual-result presentation,
+  automated winner selection, and acquisition fallback.
 - Make mode-specific search differences explicit, covered, and visible in
   rejected-result explanations.
 - Prefer targeted query and scoring changes over broad matching looseness.
@@ -373,6 +389,22 @@ Wanted issue or manual search
 - Search behavior is intentionally split into smaller modules so parsing,
   validation, scoring, indexing, and orchestration can be tested separately.
 - Manual search may fan out more broadly than automated wanted search.
+- Search Wanted snapshots every eligible Wanted issue, processes at most 100
+  per batch, and resumes the same restart-safe sweep hourly until complete.
+  Never-searched issues run first, followed by least-recently searched issues;
+  pending intervention rows are excluded from the snapshot.
+- Direct-source quota, authentication, stale-candidate, and temporary-source
+  failures do not create intervention rows. Automatic routing continues through
+  the remaining candidates already accepted by the unchanged matcher. Semantic
+  uncertainty and actionable resolver/host configuration still use
+  intervention.
+- An expected indexer queue failure also advances to the next accepted
+  candidate. Database errors and unexpected programming failures still surface
+  instead of being mistaken for a source failure.
+- Quota-capable providers default to five reserved manual downloads. Automatic
+  search stops at the configured reserve; manual grabs may consume it. Only the
+  latest provider-generic capacity observation is stored, never account download
+  history.
 - Blocklist behavior is part of the search trust model. A blocked release
   should not keep reappearing as a normal candidate.
 

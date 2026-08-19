@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, date, datetime
 
 import pytest
@@ -153,6 +154,50 @@ def _visible_release_titles(page) -> list[str]:  # type: ignore[no-untyped-def]
 
 
 class TestWhatsNewPage:
+    def test_stale_cache_refresh_button_queues_refresh(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _run_async_blocking(_seed_whats_new_current_week())
+        refresh_requests: list[dict[str, str]] = []
+
+        def handle_refresh(route) -> None:  # type: ignore[no-untyped-def]
+            refresh_requests.append(route.request.headers)
+            route.fulfill(
+                status=202,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "status": "queued",
+                        "message": "What's New refresh queued.",
+                    }
+                ),
+            )
+
+        authed_page.route("**/api/v1/whats-new/refresh", handle_refresh)
+        authed_page.goto(f"{seeded_server}/whats-new")
+        authed_page.wait_for_load_state("networkidle")
+
+        refresh_button = authed_page.get_by_test_id("whats-new-refresh-now")
+        assert refresh_button.is_visible()
+        assert refresh_button.is_enabled()
+        assert refresh_button.inner_text().strip() == "Refresh now"
+
+        refresh_button.click()
+        authed_page.wait_for_function(
+            """
+            () => {
+              const button = document.querySelector("[data-testid='whats-new-refresh-now']");
+              return !!button && button.disabled && button.textContent.includes("Refreshing");
+            }
+            """,
+            timeout=5000,
+        )
+
+        assert len(refresh_requests) == 1
+        assert refresh_requests[0].get("x-csrf-token")
+
     def test_pagination_resets_whats_new_content_scroll_to_top(
         self,
         authed_page,

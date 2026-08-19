@@ -57,19 +57,26 @@
         <span class="pill {{ health_component.pill_tone }}">{{ health_component.status_label }}</span>
       </div>
 
-      <button
-        @click="refreshNow()"
-        :disabled="refreshing"
-        class="btn-primary gap-2 shrink-0"
-        data-testid="health-detail-refresh-button"
-        type="button"
-      >
-        <svg class="h-4 w-4" :class="refreshing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round"
-                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
-        </svg>
-        <span x-text="refreshing ? 'Checking...' : 'Recheck'"></span>
-      </button>
+      <div class="flex shrink-0 items-center gap-2">
+        {% if health_component.key == 'database' %}
+          <a href="/utilities/db-check?check=optimize" class="btn-ghost" data-testid="health-detail-optimize-database-link">
+            Optimize database
+          </a>
+        {% endif %}
+        <button
+          @click="refreshNow()"
+          :disabled="refreshing"
+          class="btn-primary gap-2"
+          data-testid="health-detail-refresh-button"
+          type="button"
+        >
+          <svg class="h-4 w-4" :class="refreshing && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/>
+          </svg>
+          <span x-text="refreshing ? 'Checking...' : 'Recheck'"></span>
+        </button>
+      </div>
     </div>
 
     <div class="health-detail-card__stats">

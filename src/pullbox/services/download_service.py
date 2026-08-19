@@ -57,6 +57,9 @@ class DownloadService:
         log = logger.bind(issue_id=issue_id, title=release.title, is_torrent=release.is_torrent)
         log.info("download_send_start")
 
+        if indexer_id is None:
+            indexer_id = release.indexer_id
+
         # Select the appropriate client
         client = self._select_client(release.is_torrent)
         if not client:
@@ -81,7 +84,13 @@ class DownloadService:
         # Send to client
         try:
             if release.is_torrent:
-                external_id = await client.add_torrent(release.download_url, release.title)
+                external_id = await self.add_torrent_to_client(
+                    client,
+                    url=release.download_url,
+                    title=release.title,
+                    indexer_id=indexer_id,
+                    download_id=download.id,
+                )
             else:
                 external_id = await client.add_nzb(release.download_url, release.title)
 
@@ -128,6 +137,7 @@ class DownloadService:
         indexer_name: str,
         is_torrent: bool,
         file_size: int | None = None,
+        indexer_id: int | None = None,
         *,
         replace_existing_file: bool = False,
     ) -> DownloadHistory:
@@ -149,11 +159,13 @@ class DownloadService:
             is_torrent=is_torrent,
             category=None,
             published_at=None,
+            indexer_id=indexer_id,
         )
         return await self.send_to_client(
             session,
             release,
             issue_id,
+            indexer_id=indexer_id,
             replace_existing_file=replace_existing_file,
         )
 
@@ -381,8 +393,12 @@ class DownloadService:
 
         try:
             if is_torrent:
-                external_id = await client.add_torrent(
-                    str(download.download_url), str(download.title)
+                external_id = await self.add_torrent_to_client(
+                    client,
+                    url=str(download.download_url),
+                    title=str(download.title),
+                    indexer_id=download.indexer_id,
+                    download_id=download.id,
                 )
             else:
                 external_id = await client.add_nzb(str(download.download_url), str(download.title))
@@ -399,6 +415,61 @@ class DownloadService:
 
         # noinspection PyTypeChecker
         return download
+
+    async def add_torrent_to_client(
+        self,
+        client: DownloadClient,
+        *,
+        url: str,
+        title: str,
+        indexer_id: int | None,
+        download_id: int,
+    ) -> str | None:
+        """Resolve opted-in Torznab descriptors before handing off to the client."""
+        indexer = self._registry.get_indexer(indexer_id) if indexer_id is not None else None
+        if indexer is None or not bool(getattr(indexer, "browser_resolver_enabled", False)):
+            return await client.add_torrent(url, title)
+
+        from pullbox.tasks.download_progress import (
+            clear_download_progress,
+            record_transient_download_stage,
+        )
+
+        fetch_descriptor = getattr(indexer, "fetch_torrent_descriptor", None)
+        if fetch_descriptor is None:
+            return await client.add_torrent(url, title)
+        record_transient_download_stage(download_id, "Resolving torrent descriptor")
+
+        async def on_attempt(event: object) -> None:
+            attempt = getattr(event, "attempt", None)
+            total = getattr(event, "total", None)
+            resolver_name = getattr(event, "resolver_name", "Browser resolver")
+            record_transient_download_stage(
+                download_id,
+                f"Trying {resolver_name} (resolver {attempt} of {total})",
+            )
+            logger.info(
+                "download_torznab_resolver_attempt",
+                title=title,
+                resolver_name=resolver_name,
+                attempt=attempt,
+                total=total,
+            )
+
+        try:
+            descriptor = await fetch_descriptor(url, on_attempt=on_attempt)
+            record_transient_download_stage(download_id, "Sending torrent to download client")
+            if descriptor.magnet_url:
+                external_id = await client.add_torrent(descriptor.magnet_url, title)
+            else:
+                if descriptor.content is None:
+                    raise ProviderError("download", "Torznab returned no torrent descriptor data")
+                external_id = await client.add_torrent_data(descriptor.content, title)
+            record_transient_download_stage(download_id, "Waiting for download client")
+            return external_id
+        except Exception:
+            clear_download_progress(download_id)
+            raise
 
     def _select_client(self, is_torrent: bool) -> DownloadClient | None:
         """Select the appropriate download client based on release type."""

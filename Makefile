@@ -1,4 +1,4 @@
-.PHONY: help setup dev dev-local dev-docker dev-docker-up dev-docker-down dev-docker-logs dev-docker-shell dev-docker-seed prod-test-pull prod-test-up prod-test-refresh prod-test-down prod-test-logs prod-test-shell run lint format format-fix typecheck test test-unit test-slow test-integration test-api test-providers test-utilities test-a11y test-e2e test-e2e-chrome test-e2e-firefox coverage coverage-check migrate migration seed seed-full reset-db reset-password reset-import import-fixture performance-baseline validate runner-preflight release-changelog-check workflow-hygiene secret-scan security-ci ci-local docker-build-check docker-smoke ci-full ci-clean-room security-check pre-commit css-build css-watch clean
+.PHONY: help setup dev dev-local dev-docker dev-docker-up dev-docker-down dev-docker-logs dev-docker-shell dev-docker-seed prod-test-pull prod-test-up prod-test-refresh prod-test-down prod-test-logs prod-test-shell run lint format format-fix typecheck test test-unit test-slow test-integration test-api test-providers test-utilities test-a11y test-e2e test-e2e-chrome test-e2e-firefox coverage coverage-check migrate migration seed seed-full reset-db reset-password reset-import import-fixture performance-baseline direct-download-baseline validate runner-preflight release-changelog-check workflow-hygiene secret-scan security-ci ci-local docker-build-check docker-smoke ci-full ci-clean-room security-check pre-commit css-build css-watch clean
 
 VENV := .venv
 PYTHON_BOOTSTRAP ?= python3
@@ -335,6 +335,12 @@ performance-baseline: ## Capture a JSON performance baseline for the active dev 
 		--base-url "$(PERFORMANCE_BASELINE_URL)" \
 		$(PERFORMANCE_BASELINE_ARGS) \
 		--output data/performance/baseline.json
+
+direct-download-baseline: ## Capture the offline DD-0 workload baseline
+	@mkdir -p data/performance
+	$(PYTHON) scripts/benchmark_direct_download_readiness.py \
+		$(DIRECT_DOWNLOAD_BASELINE_ARGS) \
+		--output data/performance/direct-download-readiness.json
 
 security-check: ## Run the local GitHub-style security pipeline
 	@$(MAKE) secret-scan

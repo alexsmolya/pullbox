@@ -544,6 +544,11 @@ class TestHandlersDirect:
         assert 'data-testid="intervention-history-panel"' in body
         assert 'data-testid="intervention-history-table"' in body
         assert 'hx-get="/htmx/intervention/history/' in body
+        assert 'hx-trigger="pullbox-intervention-history-detail-' in body
+        assert "pbToggleLazyTableDetail($el, detailRowId," in body
+        assert "detailRowId: 'intervention-history-detail-row-" in body
+        assert "pbLazyTableDetailAfterRequest" in body
+        assert 'aria-expanded="false"' in body
         assert 'data-testid="intervention-history-detail-content"' not in body
         assert "Wrong cover scan" not in body
         assert 'class="table-detail-row"' not in body
@@ -558,6 +563,99 @@ class TestHandlersDirect:
         assert 'data-testid="intervention-history-toolbar"' in body
         assert 'class="series-toolbar-frame downloads-history-toolbar"' in body
         assert "m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201" in body
+
+    @pytest.mark.asyncio
+    async def test_intervention_queue_renders_direct_artifact_match_details(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Direct artifact review shows parsed evidence and the selected host."""
+        from pullbox.ui.routes import intervention_page
+
+        pending_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pending_ids[0])
+            assert pending is not None
+            pending.match_details = {
+                "source_kind": "direct",
+                "provider_identity": "pullbox.getcomics",
+                "provider_name": "pullbox.getcomics",
+                "artifact_host_kind": "datanodes",
+                "parsed_series": "Murder Drones",
+                "parsed_issue": "4",
+                "parsed_year": 2026,
+                "series_match_type": "exact",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            response = await intervention_page(
+                request=_mock_request(),
+                user=MagicMock(),
+                session=session,
+                tab="queue",
+            )
+
+        assert response.status_code == 200
+        body = response.body.decode()
+        assert "GetComics via DataNodes · Direct" in body
+        assert "Murder Drones" in body
+        assert "#4" in body
+        assert "2026" in body
+
+    @pytest.mark.asyncio
+    async def test_intervention_recovery_tab_renders_recovery_actions(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Failed direct routes are actionable without mislabeling them as a bad match."""
+        from pullbox.ui.routes import intervention_page
+
+        pending_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pending_ids[0])
+            assert pending is not None
+            pending.match_details = {
+                "source_kind": "direct",
+                "provider_identity": "pullbox.getcomics",
+                "provider_name": "pullbox.getcomics",
+                "artifact_host_kind": "mega",
+                "failure_class": "permanent_mirror",
+                "failure_code": "provider_mirror_changed",
+                "series_match_type": "exact",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            response = await intervention_page(
+                request=_mock_request(),
+                user=MagicMock(),
+                session=session,
+                tab="recovery",
+            )
+
+        body = response.body.decode()
+        assert 'data-testid="intervention-tab-recovery"' in body
+        assert "MEGA mirror is no longer available" in body
+        assert 'data-testid="intervention-retry-recovery-' in body
+        assert 'data-tip="Dismiss recovery"' in body
+        assert 'data-tip="Approve"' not in body
+        assert "bulkActionsEnabled: false" in body
+        assert re.search(
+            r'data-testid="intervention-select-mode-toggle"[^>]*\sdisabled(?:\s|>|=)', body
+        )
+
+    def test_intervention_selection_controller_respects_recovery_bulk_action_lock(self) -> None:
+        """Recovery rows must never enter the generic approve/reject bulk flow."""
+        script = Path("src/pullbox/ui/static/js/pullbox.js").read_text(encoding="utf-8")
+
+        can_enter_body = re.search(
+            r"canEnterSelectMode: function \(\) \{(?P<body>.*?)\n    \},",
+            script,
+            flags=re.DOTALL,
+        )
+        assert can_enter_body is not None
+        assert "this.bulkActionsEnabled" in can_enter_body.group("body")
 
     @pytest.mark.asyncio
     async def test_intervention_history_detail_loads_only_on_expand(
@@ -782,6 +880,138 @@ class TestHandlersDirect:
         assert "Could Not Approve" in body
 
     @pytest.mark.asyncio
+    async def test_htmx_approve_direct_without_download_clients(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Direct review approval reaches its adapter without legacy clients."""
+        from pullbox.ui.routes import htmx_intervention_approve
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pm_ids[0])
+            assert pending is not None
+            pending.download_url = "pullbox-direct://attempt/17"
+            pending.match_details = {
+                "source_kind": "direct",
+                "direct_attempt_id": 17,
+                "provider_name": "GetComics",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            with (
+                patch(
+                    "pullbox.composition.services.build_domain_download_service",
+                    new_callable=AsyncMock,
+                ) as build_download,
+                patch(
+                    "pullbox.services.intervention_service.InterventionService.approve_match",
+                    new_callable=AsyncMock,
+                ) as approve,
+            ):
+                response = await htmx_intervention_approve(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        assert response.status_code == 200
+        assert "Approved" in response.body.decode()
+        build_download.assert_not_awaited()
+        approve.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_htmx_direct_candidate_not_found_returns_actionable_message(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Unavailable direct candidates explain that a new search is required."""
+        from pullbox.services.direct_acquisition_planner_service import (
+            DirectAcquisitionPlanningError,
+        )
+        from pullbox.ui.routes import htmx_intervention_approve
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pm_ids[0])
+            assert pending is not None
+            pending.download_url = "pullbox-direct://attempt/17"
+            pending.match_details = {
+                "source_kind": "direct",
+                "direct_attempt_id": 17,
+                "provider_name": "Anna's Archive",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            with patch(
+                "pullbox.services.intervention_service.InterventionService.approve_match",
+                new_callable=AsyncMock,
+                side_effect=DirectAcquisitionPlanningError(
+                    "candidate_not_found",
+                    "Candidate unavailable.",
+                    intervention=False,
+                ),
+            ):
+                response = await htmx_intervention_approve(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        body = response.body.decode()
+        assert "Anna&#39;s Archive" in body
+        assert "removed from the queue" in body
+        assert "run a new search" in body
+        assert "Failed to queue" not in body
+
+    @pytest.mark.asyncio
+    async def test_htmx_direct_incomplete_plan_does_not_blame_provider_configuration(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Incomplete artifact coverage reports the safe-planning failure accurately."""
+        from pullbox.services.direct_acquisition_planner_service import (
+            DirectAcquisitionPlanningError,
+        )
+        from pullbox.ui.routes import htmx_intervention_approve
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        async with _db_factory() as session:
+            pending = await session.get(PendingMatch, pm_ids[0])
+            assert pending is not None
+            pending.download_url = "pullbox-direct://attempt/17"
+            pending.match_details = {
+                "source_kind": "direct",
+                "direct_attempt_id": 17,
+                "provider_name": "GetComics",
+            }
+            await session.commit()
+
+        async with _db_factory() as session:
+            with patch(
+                "pullbox.services.intervention_service.InterventionService.approve_match",
+                new_callable=AsyncMock,
+                side_effect=DirectAcquisitionPlanningError(
+                    "no_eligible_complete_plan",
+                    "No enabled artifact route completely covers this issue.",
+                ),
+            ):
+                response = await htmx_intervention_approve(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        body = response.body.decode()
+        assert "complete, eligible download route" in body
+        assert "provider configuration" not in body
+
+    @pytest.mark.asyncio
     async def test_htmx_approve_service_error(
         self,
         _db_factory: async_sessionmaker[AsyncSession],
@@ -839,6 +1069,34 @@ class TestHandlersDirect:
         assert "Rejected" in body
         assert 'data-testid="intervention-item-result-' in body
         assert "added to the blocklist" in body
+
+    @pytest.mark.asyncio
+    async def test_htmx_reject_failed_direct_review_reports_dismissal(
+        self,
+        _db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A stale failed direct review is dismissed without claiming it was blocklisted."""
+        from pullbox.ui.routes import htmx_intervention_reject
+
+        pm_ids = await _seed_pending_matches(_db_factory, count=1)
+        with patch(
+            "pullbox.services.intervention_service.InterventionService.reject_match",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            async with _db_factory() as session:
+                resp = await htmx_intervention_reject(
+                    request=_mock_request(),
+                    pending_id=pm_ids[0],
+                    user=MagicMock(),
+                    session=session,
+                )
+
+        assert resp.status_code == 200
+        body = resp.body.decode()
+        assert "Dismissed" in body
+        assert "without blocklisting" in body
+        assert "added to the blocklist" not in body
 
     @pytest.mark.asyncio
     async def test_htmx_reject_queue_refresh_sets_blocklist_toast(

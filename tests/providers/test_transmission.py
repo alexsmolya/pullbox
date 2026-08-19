@@ -213,6 +213,18 @@ class TestAddTorrent:
         ):
             await client.add_torrent("http://example.com/t.torrent", "Test")
 
+    async def test_add_torrent_data_sends_base64_metainfo(self) -> None:
+        client = _make_client()
+        client._rpc = AsyncMock(
+            return_value={"torrent-added": {"hashString": "ABC123", "name": "Test"}}
+        )
+
+        result = await client.add_torrent_data(b"torrent-bytes", "Test")
+
+        assert result == "abc123"
+        assert client._rpc.await_args.args[0] == "torrent-add"
+        assert client._rpc.await_args.args[1]["metainfo"] == "dG9ycmVudC1ieXRlcw=="
+
 
 # ── add_nzb ──────────────────────────────────────────────────────
 

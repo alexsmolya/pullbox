@@ -23,6 +23,7 @@ from pullbox.models.series import (
     Series,
     SeriesStatus,
     SeriesStatusOverride,
+    SeriesType,
 )
 from pullbox.providers.base import IssueSummary, SeriesMetadata
 from pullbox.services.cover_cache_service import purge_series_cover_cache
@@ -50,6 +51,25 @@ if TYPE_CHECKING:
     from pullbox.services.metadata_service import MetadataService
 
 logger = structlog.get_logger(__name__)
+
+
+def _targeted_import_folder_type_hint(
+    series: Series,
+    issue_summaries: list[IssueSummary],
+) -> SeriesType | None:
+    """Return source-only folder naming evidence for a standalone one-shot.
+
+    ComicVine can model a one-shot as issue #1 of an otherwise standard volume.
+    Keep that catalog classification intact, but retain an explicit source hint
+    in the initial folder name when the selected volume contains only that item.
+    """
+    if series.series_type != SeriesType.STANDARD or series.issue_count != 1:
+        return None
+    if len(issue_summaries) != 1:
+        return None
+    return (
+        SeriesType.ONE_SHOT if issue_summaries[0].issue_type.strip().lower() == "one_shot" else None
+    )
 
 
 async def _cancel_download_on_client(download: DownloadHistory, session: AsyncSession) -> None:
@@ -168,8 +188,15 @@ class SeriesService:
             issue_count=getattr(import_series, "cv_issue_count", None),
             comicvine_url=getattr(import_series, "cv_url", None),
         )
+        # Step 2 may already have fetched the complete series record. Reuse it
+        # before folder creation so type-aware naming has the same metadata as
+        # the later hydration pass, without adding a cold ComicVine request.
+        cached_lookup = getattr(type(self._metadata), "get_cached_series_metadata", None)
+        if cached_lookup is not None:
+            cached_meta = await cached_lookup(self._metadata, cv_id)
+            if cached_meta is not None:
+                series_meta = cached_meta
         series = await self._metadata.upsert_series_metadata(session, cv_id, series_meta)
-        await self._metadata.classify_and_link_series(session, series)
         series.monitored = search_on_add
         series.issue_catalog_state = IssueCatalogState.HYDRATING
         series.issue_catalog_error = None
@@ -178,7 +205,13 @@ class SeriesService:
         series.metadata_source = "comicvine_partial"
 
         if library_root_id is not None and not series.path:
-            await self._create_series_folder(session, series, library_root_id, cv_id)
+            await self._create_series_folder(
+                session,
+                series,
+                library_root_id,
+                cv_id,
+                folder_series_type=_targeted_import_folder_type_hint(series, issue_summaries),
+            )
 
         if issue_summaries:
             await self._metadata.upsert_issue_summaries(session, series, issue_summaries)
@@ -257,9 +290,6 @@ class SeriesService:
             series_meta,
         )
 
-        # Classify series type from CV title and link to parent
-        await self._metadata.classify_and_link_series(session, series)
-
         # Set monitoring — driven by search_on_add
         series.monitored = search_on_add
 
@@ -278,6 +308,7 @@ class SeriesService:
             session,
             series,
             issue_summaries,
+            infer_series_type_from_summaries=True,
         )
         await session.flush()
 
@@ -323,6 +354,8 @@ class SeriesService:
         series: Series,
         library_root_id: int,
         comicvine_id: int,
+        *,
+        folder_series_type: SeriesType | None = None,
     ) -> None:
         """Create a series folder on disk inside the given library root.
 
@@ -354,7 +387,9 @@ class SeriesService:
             year=series.year_start,
             publisher=publisher_name,
             comicvine_id=comicvine_id,
-            series_type=series.series_type.value if series.series_type else None,
+            series_type=(folder_series_type or series.series_type).value
+            if (folder_series_type or series.series_type)
+            else None,
             template=template,
             replace_illegal=replace_illegal,
             colon_replacement=colon_replacement,

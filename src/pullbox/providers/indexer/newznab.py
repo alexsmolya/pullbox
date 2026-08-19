@@ -29,7 +29,7 @@ from pullbox.providers.base import (
 
 logger = structlog.get_logger(__name__)
 
-_REQUEST_TIMEOUT = 10.0
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 
 # Newznab / Torznab XML namespaces
 # noinspection HttpUrlsUsage — XML namespace URIs, not HTTP links
@@ -50,7 +50,7 @@ class NewznabIndexer:
     Args:
         name: Human-readable indexer name.
         url: Base URL of the Newznab-compatible API.
-        api_key: API key for authentication.
+        api_key: Optional API key for authentication.
         rate_limit_per_minute: Maximum requests per minute (default 5).
     """
 
@@ -60,11 +60,13 @@ class NewznabIndexer:
         url: str,
         api_key: str,
         rate_limit_per_minute: int = 5,
+        *,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         self._name = name
         self._base_url = url.rstrip("/")
         self._api_key = api_key
-        self._client = httpx.AsyncClient(timeout=_REQUEST_TIMEOUT)
+        self._client = httpx.AsyncClient(timeout=request_timeout)
         self._min_interval = 60.0 / rate_limit_per_minute
         self._last_request_time = 0.0
 
@@ -102,7 +104,9 @@ class NewznabIndexer:
         """Make a rate-limited GET request, returning raw XML text."""
         await self._wait_for_rate_limit()
 
-        request_params: dict[str, Any] = {"apikey": self._api_key, **params}
+        request_params: dict[str, Any] = (
+            {"apikey": self._api_key, **params} if self._api_key else dict(params)
+        )
         url = f"{self._base_url}/api"
 
         log = logger.bind(indexer=self._name, function=params.get("t"))

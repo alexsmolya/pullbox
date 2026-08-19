@@ -28,12 +28,26 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pullbox.models import Base
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+)
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import MatchConfidence
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.models.user import APIKey, User
 from pullbox.providers.base import ReleaseResult
+from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
 from pullbox.services.auth_service import AuthService
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchDiscovery,
+    DirectSearchOutcome,
+    DirectSearchProvider,
+    DirectValidatedCandidate,
+)
 from pullbox.services.release_validator import ReleaseValidator
 from pullbox.services.search_service import IssueSearchTarget
 
@@ -55,6 +69,7 @@ def _make_release(
     size_bytes: int | None = 100_000_000,
     age_days: int | None = 5,
     is_torrent: bool = False,
+    ranking_priority: int = 25,
 ) -> ReleaseResult:
     return ReleaseResult(
         title=title,
@@ -68,6 +83,7 @@ def _make_release(
         is_torrent=is_torrent,
         category="comics",
         published_at=None,
+        ranking_priority=ranking_priority,
     )
 
 
@@ -290,6 +306,139 @@ async def test_build_interactive_results_matched_and_rejected() -> None:
     assert data["rejected"][0]["download_url"] == results[1].download_url
 
 
+async def test_build_direct_interactive_results_uses_attempt_identity_not_url() -> None:
+    from pullbox.api.v1.issues import build_direct_interactive_results
+
+    provider = DirectSearchProvider(
+        provider_config_id=9,
+        provider_identity="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="http://getcomics-provider:8780",
+        bearer_token="provider-token-with-enough-length",
+        allow_private_http=True,
+    )
+    candidate = DirectCandidate(
+        provider_candidate_id="getcomics:batman-1",
+        source_reference="https://getcomics.org/batman-1",
+        display_title="Batman 001 (2016) (Digital)",
+        raw_title="Batman 001 (2016) (Digital).cbz",
+        parsed=DirectParsedCandidate(
+            series_title="Batman",
+            issue_numbers=["1"],
+            year=2016,
+            format="cbz",
+            quality="digital",
+        ),
+        provider_confidence=0.97,
+    )
+    release = _make_release(
+        "Batman 001 (2016) (Digital).cbz",
+        indexer_name="GetComics",
+    )
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )[0][0]
+    discovery = DirectSearchDiscovery(
+        attempt_id=42,
+        result=DirectValidatedCandidate(provider, candidate, release, validation),
+    )
+
+    matched, rejected = build_direct_interactive_results(
+        (discovery,),
+        eval_kwargs={},
+        issue_type=IssueType.ISSUE,
+    )
+
+    assert rejected == []
+    assert matched[0].source_kind == "direct"
+    assert matched[0].method == "Direct"
+    assert matched[0].direct_attempt_id == 42
+    assert matched[0].download_url is None
+    assert matched[0].coverage == ["1"]
+    assert matched[0].format == "cbz"
+    assert matched[0].quality == "digital"
+    assert "getcomics.org" not in repr(matched[0])
+
+
+def test_interactive_results_respect_direct_source_priority() -> None:
+    from pullbox.api.v1.issues import (
+        build_interactive_results,
+        sort_interactive_results_by_source_priority,
+    )
+
+    release = _make_release("Batman 001 (2016) (Digital).cbz")
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )[0][0]
+    indexer_item = build_interactive_results([validation], [], {})[0][0]
+    direct_item = indexer_item.model_copy(
+        update={
+            "indexer_name": "GetComics",
+            "source_kind": "direct",
+            "method": "Direct",
+        }
+    )
+
+    ordered = sort_interactive_results_by_source_priority(
+        [indexer_item, direct_item],
+        ["direct", "usenet", "torrent"],
+    )
+
+    assert [item.source_kind for item in ordered] == ["direct", "indexer"]
+
+
+def test_interactive_direct_results_prefer_configured_provider_before_quality() -> None:
+    from pullbox.api.v1.issues import (
+        build_interactive_results,
+        sort_interactive_results_by_source_priority,
+    )
+
+    getcomics_release = _make_release(
+        "Batman 001 (2016)",
+        "GetComics",
+        size_bytes=None,
+        age_days=None,
+        ranking_priority=10,
+    )
+    annas_release = _make_release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Anna's Archive",
+        size_bytes=None,
+        age_days=None,
+        ranking_priority=20,
+    )
+    matched, rejected = ReleaseValidator().validate_all_results(
+        [getcomics_release, annas_release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )
+    items, _ = build_interactive_results(
+        matched,
+        rejected,
+        {},
+        source_priority=["direct", "usenet", "torrent"],
+    )
+    direct_items = [item.model_copy(update={"source_kind": "direct"}) for item in items]
+
+    # Anna's richer filename wins the generic quality score, but the user's
+    # explicit direct-provider preference must be authoritative after matching.
+    assert direct_items[0].indexer_name == "Anna's Archive"
+    ordered = sort_interactive_results_by_source_priority(
+        direct_items,
+        ["direct", "usenet", "torrent"],
+    )
+
+    assert [item.indexer_name for item in ordered] == ["GetComics", "Anna's Archive"]
+    assert "ranking_priority" not in ordered[0].model_dump()
+
+
 @pytest.mark.asyncio
 async def test_build_interactive_results_auto_grabbable_logic() -> None:
     """Interactive auto-grabbable mirrors per-type automated routing thresholds."""
@@ -374,6 +523,36 @@ async def test_build_interactive_results_custom_eval_kwargs() -> None:
     assert items_default[0].quality_score != items_custom[0].quality_score
 
 
+def test_interactive_results_rank_indexers_within_the_selected_source_lane() -> None:
+    from pullbox.api.v1.issues import build_interactive_results
+
+    lower_priority = _make_release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Lower priority",
+        ranking_priority=50,
+    )
+    higher_priority = _make_release(
+        "Batman 001 (2016) (Digital).cbz",
+        "Higher priority",
+        ranking_priority=1,
+    )
+    matched, rejected = ReleaseValidator().validate_all_results(
+        [lower_priority, higher_priority],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )
+
+    items, _ = build_interactive_results(
+        matched,
+        rejected,
+        {},
+        source_priority=["usenet", "torrent", "direct"],
+    )
+
+    assert [item.indexer_name for item in items] == ["Higher priority", "Lower priority"]
+
+
 # ── API Tests ──────────────────────────────────────────────────────────
 
 
@@ -420,6 +599,173 @@ async def test_returns_matched_and_rejected(
     for item in [*data["matched"], *data["rejected"]]:
         assert "query" not in item
         assert "reason_summary" not in item
+
+
+async def test_direct_only_search_persists_server_identity_without_download_url(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    issue_id = await _create_issue(_db_factory)
+    async with _db_factory() as session:
+        config = DirectProviderConfig(
+            provider_id="pullbox.getcomics",
+            display_name="GetComics",
+            endpoint="http://getcomics-provider:8780",
+            enabled=True,
+            priority=10,
+            state=DirectProviderState.HEALTHY,
+            trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        )
+        session.add(config)
+        await session.flush()
+        provider_id = config.id
+        await session.commit()
+
+    provider = DirectSearchProvider(
+        provider_config_id=provider_id,
+        provider_identity="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="http://getcomics-provider:8780",
+        bearer_token="provider-token-with-enough-length",
+        allow_private_http=True,
+        source_domains=("getcomics.org",),
+    )
+    candidate = DirectCandidate(
+        provider_candidate_id="getcomics:batman-1",
+        source_reference="https://getcomics.org/batman-1",
+        display_title="Batman 001 (2016)",
+        raw_title="Batman 001 (2016) (Digital).cbz",
+        parsed=DirectParsedCandidate(
+            series_title="Batman",
+            issue_numbers=["1"],
+            year=2016,
+            format="cbz",
+            quality="digital",
+        ),
+        provider_confidence=0.98,
+    )
+    release = _make_release(candidate.raw_title, indexer_name="GetComics")
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )[0][0]
+    direct_outcome = DirectSearchOutcome(
+        matched=(DirectValidatedCandidate(provider, candidate, release, validation),),
+        rejected=(),
+        failures=(),
+        providers_searched=1,
+        elapsed_ms=5,
+    )
+
+    with (
+        patch(
+            "pullbox.composition.providers.build_registry",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "pullbox.services.direct_search_coordinator.load_direct_search_providers",
+            new_callable=AsyncMock,
+            return_value=(provider,),
+        ),
+        patch(
+            "pullbox.services.search_service.SearchService._search_direct_safely",
+            new_callable=AsyncMock,
+            return_value=direct_outcome,
+        ),
+    ):
+        response = await client.get(f"/api/v1/issues/{issue_id}/search-results")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["matched"]) == 1
+    item = payload["matched"][0]
+    assert item["source_kind"] == "direct"
+    assert item["download_url"] is None
+    assert isinstance(item["direct_attempt_id"], int)
+    assert payload["search_log_id"] is not None
+
+    async with _db_factory() as session:
+        attempt = await session.get(DirectAcquisitionAttempt, item["direct_attempt_id"])
+        assert attempt is not None
+        assert attempt.search_log_id == payload["search_log_id"]
+        assert "getcomics.org" not in repr(attempt.candidate_snapshot)
+
+
+async def test_direct_grab_plans_commits_and_dispatches_ephemeral_source(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    issue_id = await _create_issue(_db_factory)
+    async with _db_factory() as session:
+        config = DirectProviderConfig(
+            provider_id="pullbox.getcomics",
+            display_name="GetComics",
+            endpoint="http://getcomics-provider:8780",
+            enabled=True,
+            priority=10,
+            state=DirectProviderState.HEALTHY,
+            trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        )
+        session.add(config)
+        await session.flush()
+        attempt = DirectAcquisitionAttempt(
+            request_key="direct-grab-api-test",
+            issue_id=issue_id,
+            provider_config_id=config.id,
+            provider_identity=config.provider_id,
+            provider_candidate_id="candidate-1",
+            state=DirectAcquisitionState.DISCOVERED,
+            requested_coverage={"issue_numbers": ["1"]},
+            candidate_snapshot={"display_title": "Batman 001 (2016)"},
+            plan_snapshot={},
+            progress_snapshot={},
+        )
+        session.add(attempt)
+        await session.flush()
+        attempt_id = attempt.id
+        await session.commit()
+
+    ephemeral_source = object()
+
+    async def plan(session: AsyncSession, *, acquisition_id: int, **_kwargs: object):
+        planned_attempt = await session.get(DirectAcquisitionAttempt, acquisition_id)
+        assert planned_attempt is not None
+        planned_attempt.state = DirectAcquisitionState.PLANNED
+        return SimpleNamespace(
+            attempt=planned_attempt,
+            selected_artifact=SimpleNamespace(id=77),
+            initial_source=ephemeral_source,
+        )
+
+    runner = SimpleNamespace(dispatch=AsyncMock(return_value=True))
+    with (
+        patch("pullbox.api.v1.issues.plan_direct_acquisition", side_effect=plan),
+        patch(
+            "pullbox.api.v1.issues.get_direct_acquisition_runner",
+            return_value=runner,
+        ),
+    ):
+        response = await client.post(
+            f"/api/v1/issues/{issue_id}/direct-grab",
+            json={"direct_attempt_id": attempt_id},
+        )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "issue_id": issue_id,
+        "acquisition_id": attempt_id,
+        "artifact_id": 77,
+        "title": "Batman 001 (2016)",
+        "status": "queued",
+    }
+    runner.dispatch.assert_awaited_once_with(
+        attempt_id,
+        77,
+        initial_source=ephemeral_source,
+    )
 
 
 @pytest.mark.asyncio
@@ -596,6 +942,7 @@ async def test_issue_interactive_search_ignores_indexer_backoff(
         source_priority=None,
         type_thresholds={},
         two_pass_enabled=False,
+        direct_providers=(),
     )
     constructor_args: dict[str, object] = {}
 
@@ -604,7 +951,12 @@ async def test_issue_interactive_search_ignores_indexer_backoff(
             constructor_args.update(kwargs)
 
         async def search_issue_target(self, *args: object, **kwargs: object) -> object:
-            return SimpleNamespace(matched=[object()], rejected=[], search_details={})
+            return SimpleNamespace(
+                matched=[object()],
+                rejected=[],
+                direct_outcome=None,
+                search_details={},
+            )
 
     session = AsyncMock()
     monkeypatch.setattr(issues_api, "load_issue_search_target", AsyncMock(return_value=target))

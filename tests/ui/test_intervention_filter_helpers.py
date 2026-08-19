@@ -12,6 +12,7 @@ def test_intervention_filter_normalizers_keep_invalid_values_safe() -> None:
     from pullbox.ui.intervention_filter_helpers import (
         normalize_intervention_confidence_filter,
         normalize_intervention_history_sort,
+        normalize_intervention_lane,
         normalize_intervention_outcome_filter,
         normalize_intervention_protocol_filter,
         normalize_intervention_reason_filter,
@@ -25,12 +26,15 @@ def test_intervention_filter_normalizers_keep_invalid_values_safe() -> None:
     assert normalize_intervention_reason_filter("size_warning") == "size_warning"
     assert normalize_intervention_reason_filter("needs_review") == ""
     assert normalize_intervention_protocol_filter("TORRENT") == "torrent"
+    assert normalize_intervention_protocol_filter("DIRECT") == "direct"
     assert normalize_intervention_protocol_filter("magnet") == ""
     assert normalize_intervention_outcome_filter("APPROVED") == "approved"
     assert normalize_intervention_outcome_filter("pending") == ""
     assert normalize_intervention_history_sort("title") == "title"
     assert normalize_intervention_history_sort("-confidence") == "-confidence"
     assert normalize_intervention_history_sort("created_at") == "-resolved_at"
+    assert normalize_intervention_lane("recovery") == "recovery"
+    assert normalize_intervention_lane("unexpected") == "review"
 
 
 def test_intervention_review_reason_labels_and_summaries() -> None:
@@ -93,6 +97,8 @@ def test_build_intervention_item_meta_formats_protocol_outcome_and_source() -> N
         "similarity_pct": 94.6,
         "source_label": "Prowlarr Source",
         "rejection_reason": "Wrong year",
+        "lane": "review",
+        "recovery_summary": "",
     }
 
 
@@ -118,3 +124,50 @@ def test_build_intervention_item_meta_falls_back_to_match_details_source() -> No
     assert meta["match_type_label"] == "Fuzzy series match"
     assert meta["source_label"] == "NZBgeek"
     assert meta["review_reason_summary"] == "Fuzzy series match · Issue mismatch"
+
+
+def test_build_intervention_item_meta_labels_direct_provider() -> None:
+    """Direct adapter rows identify their provider and selected artifact host."""
+    from pullbox.ui.intervention_filter_helpers import build_intervention_item_meta
+
+    pending_match = SimpleNamespace(
+        is_torrent=False,
+        status="pending",
+        indexer=None,
+        match_details={
+            "source_kind": "direct",
+            "provider_name": "pullbox.getcomics",
+            "provider_identity": "pullbox.getcomics",
+            "artifact_host_kind": "datanodes",
+            "series_match_type": "exact",
+        },
+    )
+
+    meta = build_intervention_item_meta(pending_match)
+
+    assert meta["protocol_label"] == "Direct"
+    assert meta["source_label"] == "GetComics via DataNodes"
+
+
+def test_build_intervention_item_meta_identifies_direct_acquisition_recovery() -> None:
+    """Failed direct acquisition is not presented as an ambiguous match review."""
+    from pullbox.ui.intervention_filter_helpers import build_intervention_item_meta
+
+    pending_match = SimpleNamespace(
+        is_torrent=False,
+        status="pending",
+        indexer=None,
+        match_details={
+            "source_kind": "direct",
+            "provider_name": "pullbox.getcomics",
+            "artifact_host_kind": "terabox",
+            "failure_class": "artifact_host_auth_required",
+            "failure_code": "artifact_host_auth_required",
+            "series_match_type": "exact",
+        },
+    )
+
+    meta = build_intervention_item_meta(pending_match)
+
+    assert meta["lane"] == "recovery"
+    assert meta["recovery_summary"] == "TeraBox authentication required"

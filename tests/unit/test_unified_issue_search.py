@@ -1,0 +1,252 @@
+"""Unified issue search keeps direct and legacy source behavior isolated."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import replace
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
+
+from pullbox.models.direct_acquisition import DirectResolverKind
+from pullbox.models.issue import IssueType
+from pullbox.providers.base import ProviderRegistry, ReleaseResult
+from pullbox.services.blocklist_service import BlocklistService
+from pullbox.services.direct_resolver_service import ResolverAttemptProgress
+from pullbox.services.direct_search_coordinator import (
+    DirectSearchOutcome,
+    DirectSearchProvider,
+)
+from pullbox.services.search_service import SearchService
+from pullbox.services.search_targets import IssueSearchTarget
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _target() -> IssueSearchTarget:
+    return IssueSearchTarget(
+        issue_id=71,
+        series_id=17,
+        series_title="Absolute Superman",
+        issue_number=9,
+        issue_type=IssueType.ISSUE,
+        series_year=2025,
+    )
+
+
+def _provider() -> DirectSearchProvider:
+    return DirectSearchProvider(
+        provider_config_id=1,
+        provider_identity="pullbox.getcomics",
+        display_name="GetComics",
+        endpoint="http://getcomics-provider:8780",
+        bearer_token="provider-token-with-enough-length",
+        allow_private_http=True,
+    )
+
+
+async def test_unified_search_runs_direct_and_indexers_concurrently(
+    db_session: AsyncSession,
+) -> None:
+    indexer_started = asyncio.Event()
+    direct_started = asyncio.Event()
+
+    async def run_indexers(*_args: object, **_kwargs: object):
+        indexer_started.set()
+        await asyncio.wait_for(direct_started.wait(), timeout=1)
+        return [], {}, []
+
+    direct_outcome = DirectSearchOutcome((), (), (), 1, 4)
+
+    async def run_direct(*_args: object, **_kwargs: object) -> DirectSearchOutcome:
+        direct_started.set()
+        await asyncio.wait_for(indexer_started.wait(), timeout=1)
+        return direct_outcome
+
+    service = SearchService(
+        ProviderRegistry(),
+        direct_providers=(_provider(),),
+        direct_search_func=run_direct,
+    )
+    service._run_query_batch_with_provenance = run_indexers  # type: ignore[method-assign]
+
+    outcome = await service.search_issue_target(db_session, _target(), mode="fast")
+
+    assert outcome.direct_outcome is direct_outcome
+
+
+async def test_quick_first_deep_fallback_searches_direct_provider_only_once(
+    db_session: AsyncSession,
+) -> None:
+    direct_calls = 0
+    indexer_calls = 0
+
+    async def run_indexers(*_args: object, **_kwargs: object):
+        nonlocal indexer_calls
+        indexer_calls += 1
+        return [], {}, []
+
+    async def run_direct(*_args: object, **_kwargs: object) -> DirectSearchOutcome:
+        nonlocal direct_calls
+        direct_calls += 1
+        return DirectSearchOutcome((), (), (), 1, 2)
+
+    service = SearchService(
+        ProviderRegistry(),
+        direct_providers=(_provider(),),
+        direct_search_func=run_direct,
+    )
+    service._run_query_batch_with_provenance = run_indexers  # type: ignore[method-assign]
+
+    outcome = await service.search_issue_target_quick_first(db_session, _target())
+
+    assert outcome.search_details["search_strategy"] == "quick_first_deep_fallback"
+    assert indexer_calls == 3
+    assert direct_calls == 1
+    assert outcome.direct_outcome is not None
+
+
+async def test_collection_quick_first_does_not_stop_on_standard_issue_false_positive(
+    db_session: AsyncSession,
+) -> None:
+    target = IssueSearchTarget(
+        issue_id=72,
+        series_id=18,
+        series_title="Immortal Thor",
+        issue_number=3,
+        issue_type=IssueType.VOLUME,
+        issue_title="Vol. 3: The End of All Songs",
+        series_year=2024,
+        release_year=2024,
+    )
+    wrong_issue = ReleaseResult(
+        title="Immortal Thor 003 (2023) (Digital-HD) (Shan-Empire)",
+        indexer_name="NZBgeek",
+        download_url="https://example.test/wrong",
+        size_bytes=100_000_000,
+        age_days=1,
+        seeders=None,
+        leechers=None,
+        grabs=10,
+        is_torrent=False,
+        category="7030",
+        published_at=None,
+    )
+    correct_volume = replace(
+        wrong_issue,
+        title="Immortal Thor Vol. 3 - The End Of All Songs (TPB) (2025)",
+        download_url="https://example.test/correct",
+    )
+    calls = 0
+
+    async def run_indexers(*_args: object, **_kwargs: object):
+        nonlocal calls
+        calls += 1
+        return ([wrong_issue] if calls == 1 else [correct_volume]), {}, []
+
+    service = SearchService(ProviderRegistry())
+    service._run_query_batch_with_provenance = run_indexers  # type: ignore[method-assign]
+
+    outcome = await service.search_issue_target_quick_first(db_session, target)
+
+    assert calls == 2
+    assert outcome.search_details["search_strategy"] == "quick_first_deep_fallback"
+    assert [item.release.download_url for item in outcome.matched] == [
+        "https://example.test/correct"
+    ]
+
+
+async def test_unified_search_persists_secret_free_direct_resolver_diagnostics(
+    db_session: AsyncSession,
+) -> None:
+    resolver_attempt = ResolverAttemptProgress(
+        resolver_id=2,
+        resolver_name="Byparr",
+        resolver_kind=DirectResolverKind.BYPARR,
+        attempt=2,
+        total=3,
+        scope="provider:pullbox.getcomics:search",
+    )
+
+    async def run_indexers(*_args: object, **_kwargs: object):
+        return [], {}, []
+
+    async def run_direct(*_args: object, **_kwargs: object) -> DirectSearchOutcome:
+        return DirectSearchOutcome(
+            (),
+            (),
+            (),
+            1,
+            12,
+            resolver_attempts=(resolver_attempt,),
+        )
+
+    service = SearchService(
+        ProviderRegistry(),
+        direct_providers=(_provider(),),
+        direct_search_func=run_direct,
+    )
+    service._run_query_batch_with_provenance = run_indexers  # type: ignore[method-assign]
+
+    outcome = await service.search_issue_target(db_session, _target(), mode="fast")
+
+    assert outcome.search_details["direct_search"] == {
+        "providers_searched": 1,
+        "elapsed_ms": 12,
+        "failures": [],
+        "resolver_attempts": [
+            {
+                "resolver_id": 2,
+                "resolver_name": "Byparr",
+                "resolver_kind": "byparr",
+                "attempt": 2,
+                "total": 3,
+                "scope": "provider:pullbox.getcomics:search",
+            }
+        ],
+    }
+
+
+async def test_unified_search_applies_title_blocklist_to_direct_results(
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    release = ReleaseResult(
+        title="Blocked Direct Result 001 (2026)",
+        indexer_name="GetComics",
+        download_url="direct://candidate/blocked",
+        size_bytes=None,
+        age_days=None,
+        seeders=None,
+        leechers=None,
+        grabs=None,
+        is_torrent=False,
+        category="Books/Comics",
+        published_at=None,
+    )
+    direct_result = SimpleNamespace(release=release)
+
+    async def run_indexers(*_args: object, **_kwargs: object):
+        return [], {}, []
+
+    async def run_direct(*_args: object, **_kwargs: object) -> DirectSearchOutcome:
+        return DirectSearchOutcome((direct_result,), (), (), 1, 2)  # type: ignore[arg-type]
+
+    async def filter_results(
+        _session: AsyncSession,
+        results: list[ReleaseResult],
+    ) -> list[ReleaseResult]:
+        return [item for item in results if item is not release]
+
+    monkeypatch.setattr(BlocklistService, "filter_results", filter_results)
+    service = SearchService(
+        ProviderRegistry(),
+        direct_providers=(_provider(),),
+        direct_search_func=run_direct,
+    )
+    service._run_query_batch_with_provenance = run_indexers  # type: ignore[method-assign]
+
+    outcome = await service.search_issue_target(db_session, _target(), mode="fast")
+
+    assert outcome.direct_outcome is not None
+    assert outcome.direct_outcome.matched == ()

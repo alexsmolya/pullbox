@@ -71,7 +71,8 @@ class SearchResultItem(BaseModel):
 
     title: str = Field(description="Release title from the indexer")
     indexer_name: str = Field(description="Display name of the indexer")
-    download_url: str = Field(description="NZB/torrent download URL")
+    indexer_id: int | None = Field(default=None, description="Originating indexer config ID")
+    download_url: str | None = Field(description="NZB/torrent URL for legacy results only")
     info_url: str | None = Field(None, description="Link to release page on indexer website")
     size_bytes: int | None = Field(None, description="File size in bytes")
     age_days: int | None = Field(None, description="Release age in days")
@@ -83,6 +84,20 @@ class SearchResultItem(BaseModel):
     quality_score: float = Field(description="Quality score (0-100)")
     auto_grabbable: bool = Field(description="Whether this result would be auto-grabbed")
     match_details: MatchDetails = Field(description="Details of how the release matched")
+    source_kind: str = Field(default="indexer", description="Indexer or direct provider source")
+    method: str = Field(default="Indexer", description="Acquisition method")
+    direct_attempt_id: int | None = Field(
+        default=None,
+        description="Server-issued direct candidate identity",
+    )
+    coverage: list[str] = Field(default_factory=list, description="Issues covered by the result")
+    format: str | None = Field(default=None, description="Parsed artifact format")
+    quality: str | None = Field(default=None, description="Parsed artifact quality")
+    preferred_route: str | None = Field(
+        default=None,
+        description="How Pullbox will select an artifact route",
+    )
+    ranking_priority: int = Field(default=25, exclude=True, repr=False)
 
 
 class RejectedResultItem(BaseModel):
@@ -90,7 +105,8 @@ class RejectedResultItem(BaseModel):
 
     title: str = Field(description="Release title from the indexer")
     indexer_name: str = Field(description="Display name of the indexer")
-    download_url: str = Field(description="NZB/torrent download URL")
+    indexer_id: int | None = Field(default=None, description="Originating indexer config ID")
+    download_url: str | None = Field(description="NZB/torrent URL for legacy results only")
     info_url: str | None = Field(None, description="Link to release page on indexer website")
     size_bytes: int | None = Field(None, description="File size in bytes")
     age_days: int | None = Field(None, description="Release age in days")
@@ -100,6 +116,20 @@ class RejectedResultItem(BaseModel):
     category: str | None = Field(None, description="Newznab category ID or name")
     rejection_reason: str = Field(description="Why this result was rejected")
     confidence: str | None = Field(None, description="Match confidence level if partially matched")
+    source_kind: str = Field(default="indexer", description="Indexer or direct provider source")
+    method: str = Field(default="Indexer", description="Acquisition method")
+    direct_attempt_id: int | None = Field(
+        default=None,
+        description="Server-issued direct candidate identity",
+    )
+    coverage: list[str] = Field(default_factory=list, description="Issues covered by the result")
+    format: str | None = Field(default=None, description="Parsed artifact format")
+    quality: str | None = Field(default=None, description="Parsed artifact quality")
+    preferred_route: str | None = Field(
+        default=None,
+        description="How Pullbox will select an artifact route",
+    )
+    ranking_priority: int = Field(default=25, exclude=True, repr=False)
 
 
 class InteractiveSearchIssue(BaseModel):
@@ -134,6 +164,7 @@ class GrabReleaseRequest(BaseModel):
     download_url: str = Field(description="NZB/torrent download URL")
     title: str = Field(description="Release title")
     indexer_name: str = Field(description="Display name of the indexer")
+    indexer_id: int | None = Field(default=None, description="Originating indexer config ID")
     is_torrent: bool = Field(False, description="Whether this is a torrent release")
     file_size: int | None = Field(None, description="File size in bytes")
     search_log_id: int | None = Field(
@@ -149,3 +180,25 @@ class GrabReleaseResponse(BaseModel):
     download_id: int = Field(description="Created download history record ID")
     title: str = Field(description="Release title that was grabbed")
     status: str = Field(description="Download status")
+
+
+class DirectGrabRequest(BaseModel):
+    """Plan and queue one server-issued direct search result."""
+
+    direct_attempt_id: int = Field(gt=0, description="Server-issued direct candidate identity")
+    pinned_route_identity: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description="Optional server-issued mirror route identity",
+    )
+
+
+class DirectGrabResponse(BaseModel):
+    """Durable queue acknowledgement for a direct acquisition."""
+
+    issue_id: int
+    acquisition_id: int
+    artifact_id: int
+    title: str
+    status: str

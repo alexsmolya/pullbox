@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from pullbox.models import Base
 from pullbox.models.download import DownloadHistory, DownloadState
+from pullbox.models.indexer import IndexerConfig, IndexerSource, IndexerType
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
 from pullbox.models.search_log import SearchLog, SearchType
@@ -234,6 +235,7 @@ def _mock_torrent_client() -> AsyncMock:
     client.name = "qBittorrent"
     client.client_type = "qbittorrent"
     client.add_torrent = AsyncMock(return_value="qbt-hash-abc")
+    client.add_torrent_data = AsyncMock(return_value="qbt-hash-data")
     return client
 
 
@@ -242,6 +244,7 @@ def _mock_registry(*, nzb: AsyncMock | None = None, torrent: AsyncMock | None = 
     registry = AsyncMock()
     registry.get_nzb_client = lambda: nzb
     registry.get_torrent_client = lambda: torrent
+    registry.get_indexer = lambda _config_id: None
     return registry
 
 
@@ -279,6 +282,59 @@ async def test_grab_release_constructs_release_result(
     assert download.title == "Batman 001 (2016).cbz"
     assert download.file_size == 50_000_000
     nzb_client.add_nzb.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_grab_resolver_enabled_torznab_fetches_descriptor_inside_pullbox(
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A challenged Torznab descriptor is uploaded as bytes, not leaked to the client."""
+    from pullbox.core.events import EventBus
+    from pullbox.providers.indexer.torznab_transport import TorznabDescriptor
+    from pullbox.services.download_service import DownloadService
+
+    torrent_client = _mock_torrent_client()
+    indexer = AsyncMock()
+    indexer.browser_resolver_enabled = True
+    indexer.fetch_torrent_descriptor = AsyncMock(
+        return_value=TorznabDescriptor(content=b"torrent-bytes", magnet_url=None)
+    )
+    registry = _mock_registry(torrent=torrent_client)
+    registry.get_indexer = lambda config_id: indexer if config_id == 42 else None
+    svc = DownloadService(registry=registry, event_bus=EventBus())
+
+    async with _db_factory() as session:
+        issue_id = await _create_issue(_db_factory)
+        session.add(
+            IndexerConfig(
+                id=42,
+                name="Manual Torznab",
+                indexer_type=IndexerType.TORZNAB,
+                source=IndexerSource.MANUAL,
+                url="https://indexer.example",
+                api_key="encrypted",
+                enabled=True,
+                resolver_enabled=True,
+            )
+        )
+        await session.flush()
+        download = await svc.grab_release(
+            session,
+            issue_id=issue_id,
+            download_url="https://indexer.example/api?t=get&id=7&apikey=secret",
+            title="Ubuntu fixture",
+            indexer_name="Manual Torznab",
+            indexer_id=42,
+            is_torrent=True,
+        )
+
+    assert download.indexer_id == 42
+    indexer.fetch_torrent_descriptor.assert_awaited_once()
+    torrent_client.add_torrent_data.assert_awaited_once_with(b"torrent-bytes", "Ubuntu fixture")
+    torrent_client.add_torrent.assert_not_awaited()
+    from pullbox.tasks.download_progress import clear_download_progress
+
+    clear_download_progress(download.id)
 
 
 # ── API Tests ──────────────────────────────────────────────────────────
@@ -392,6 +448,33 @@ async def test_grab_with_torrent(
 
     assert resp.status_code == 201
     torrent_client.add_torrent.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_grab_rejects_unknown_originating_indexer(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A stale or forged result cannot create a download with an invalid FK."""
+    issue_id = await _create_issue(_db_factory)
+    torrent_client = _mock_torrent_client()
+    registry = _mock_registry(torrent=torrent_client)
+
+    with patch(
+        "pullbox.composition.providers.build_registry",
+        new_callable=AsyncMock,
+        return_value=(registry, {}),
+    ):
+        resp = await client.post(
+            f"/api/v1/issues/{issue_id}/grab",
+            json={**GRAB_BODY_TORRENT, "indexer_id": 999_999},
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["message"] == (
+        "The originating indexer is no longer available. Run the search again."
+    )
+    torrent_client.add_torrent.assert_not_awaited()
 
 
 @pytest.mark.asyncio

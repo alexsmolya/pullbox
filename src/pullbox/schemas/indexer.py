@@ -14,15 +14,17 @@ class IndexerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Display name")
     indexer_type: IndexerType = Field(description="Indexer protocol type")
     url: str = Field(..., min_length=1, max_length=500, description="Base URL of the indexer")
-    api_key: str = Field(
-        ..., min_length=1, max_length=255, description="API key for authentication"
-    )
+    api_key: str = Field("", max_length=255, description="Optional API key for authentication")
     enabled: bool = Field(True, description="Whether this indexer is active")
     priority: int = Field(50, ge=1, le=100, description="Priority (lower = higher priority)")
-    categories: str | None = Field(None, max_length=255, description="Comma-separated category IDs")
+    categories: str | None = Field(None, description="Comma-separated category IDs")
     enable_rss: bool = Field(True, description="Enable RSS sync")
     enable_automatic_search: bool = Field(True, description="Enable automatic search")
     enable_interactive_search: bool = Field(True, description="Enable interactive (manual) search")
+    resolver_enabled: bool = Field(
+        False,
+        description="Allow a manual Torznab indexer to use the ranked browser resolver chain",
+    )
 
     @field_validator("url")
     @classmethod
@@ -39,11 +41,15 @@ class IndexerUpdate(BaseModel):
     api_key: str | None = Field(None, min_length=1, max_length=255, description="API key")
     enabled: bool | None = Field(None, description="Whether this indexer is active")
     priority: int | None = Field(None, ge=1, le=100, description="Priority")
-    categories: str | None = Field(None, max_length=255, description="Comma-separated category IDs")
+    categories: str | None = Field(None, description="Comma-separated category IDs")
     enable_rss: bool | None = Field(None, description="Enable RSS sync")
     enable_automatic_search: bool | None = Field(None, description="Enable automatic search")
     enable_interactive_search: bool | None = Field(
         None, description="Enable interactive (manual) search"
+    )
+    resolver_enabled: bool | None = Field(
+        None,
+        description="Allow a manual Torznab indexer to use the ranked browser resolver chain",
     )
 
     @field_validator("url")
@@ -70,9 +76,12 @@ class IndexerResponse(BaseModel):
     categories: str | None = None
     source: str = "manual"
     prowlarr_indexer_id: int | None = None
+    manager_indexer_id: str | None = None
+    manager_available: bool = True
     enable_rss: bool = True
     enable_automatic_search: bool = True
     enable_interactive_search: bool = True
+    resolver_enabled: bool = False
     last_success_at: datetime | None = None
     last_failure_at: datetime | None = None
     last_error: str | None = None
@@ -101,5 +110,29 @@ class ProwlarrSyncResult(BaseModel):
     added: int = 0
     updated: int = 0
     removed: int = 0
+    total: int = 0
+    indexers: list[IndexerResponse] = []
+
+
+class JackettSyncRequest(BaseModel):
+    """Request to discover configured trackers from a Jackett instance."""
+
+    jackett_url: str = Field(..., min_length=1, description="Jackett base URL")
+    jackett_api_key: str = Field(..., min_length=1, description="Jackett API key")
+
+    @field_validator("jackett_url")
+    @classmethod
+    def validate_jackett_url(cls, value: str) -> str:
+        """Normalize and validate the configured Jackett URL."""
+        return normalize_peer_base_url(value)
+
+
+class JackettSyncResult(BaseModel):
+    """Result of a Jackett tracker sync operation."""
+
+    added: int = 0
+    updated: int = 0
+    retired: int = 0
+    reactivated: int = 0
     total: int = 0
     indexers: list[IndexerResponse] = []

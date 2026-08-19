@@ -9,6 +9,7 @@ qBittorrent API docs: https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-
 
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any
 
@@ -16,12 +17,20 @@ import httpx
 import structlog
 
 from pullbox.core.config_resolver import resolve_runtime_service_url
+from pullbox.core.url_validation import normalize_peer_base_url
 from pullbox.providers.base import ClientOptions, DownloadStatus, ProviderHealthResult
 
 logger = structlog.get_logger(__name__)
 
 _REQUEST_TIMEOUT = 10.0
 _HTTP_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_QBITTORRENT_API_ROUTES = {
+    "/app/version": "api/v2/app/version",
+    "/torrents/add": "api/v2/torrents/add",
+    "/torrents/categories": "api/v2/torrents/categories",
+    "/torrents/delete": "api/v2/torrents/delete",
+    "/torrents/info": "api/v2/torrents/info",
+}
 
 
 class QBittorrentError(Exception):
@@ -51,14 +60,21 @@ class QBittorrentClient:
         ratio_limit: float | None = None,
         seeding_time_limit: int | None = None,
     ) -> None:
-        self._base_url = resolve_runtime_service_url(url).rstrip("/")
+        runtime_url = resolve_runtime_service_url(url)
+        self._base_url = normalize_peer_base_url(
+            runtime_url,
+            reject_query_or_fragment=True,
+        )
         self._username = username
         self._password = password
         self._default_category = category
         self._content_layout = content_layout
         self._ratio_limit = ratio_limit
         self._seeding_time_limit = seeding_time_limit
-        self._client = httpx.AsyncClient(timeout=_REQUEST_TIMEOUT)
+        self._client = httpx.AsyncClient(
+            base_url=f"{self._base_url}/",
+            timeout=_REQUEST_TIMEOUT,
+        )
         self._authenticated = False
 
     @property
@@ -78,7 +94,7 @@ class QBittorrentClient:
 
         try:
             response = await self._client.post(
-                f"{self._base_url}/api/v2/auth/login",
+                "api/v2/auth/login",
                 data={"username": self._username, "password": self._password},
             )
             response.raise_for_status()
@@ -110,6 +126,7 @@ class QBittorrentClient:
         endpoint: str,
         data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> httpx.Response:
         """Make an authenticated request to the qBittorrent API.
 
@@ -117,13 +134,21 @@ class QBittorrentClient:
         """
         await self._ensure_auth()
 
-        url = f"{self._base_url}/api/v2{endpoint}"
+        api_route = _QBITTORRENT_API_ROUTES.get(endpoint)
+        if api_route is None:
+            raise ValueError("Unsupported qBittorrent API endpoint.")
         log = logger.bind(endpoint=endpoint)
         log.debug("qbittorrent_request")
 
         for attempt in range(2):
             try:
-                response = await self._client.request(method, url, data=data, params=params)
+                response = await self._client.request(
+                    method,
+                    api_route,
+                    data=data,
+                    params=params,
+                    files=files,
+                )
             except httpx.TimeoutException:
                 log.error("qbittorrent_timeout")
                 raise QBittorrentError(f"Request timed out: {endpoint}") from None
@@ -367,6 +392,78 @@ class QBittorrentClient:
         )
         return None
 
+    async def add_torrent_data(
+        self,
+        content: bytes,
+        title: str,
+        category: str | None = None,
+    ) -> str | None:
+        """Upload descriptor bytes that Pullbox already fetched and validated."""
+        import asyncio
+
+        log = logger.bind(title=title, category=category)
+        log.info("qbittorrent_add_torrent_data")
+        expected_hashes = _torrent_info_hashes(content)
+        before_resp = await self._request(
+            "GET",
+            "/torrents/info",
+            params={"sort": "added_on", "reverse": "true", "limit": "50"},
+        )
+        existing_hashes = {
+            str(torrent_hash).lower()
+            for torrent in before_resp.json()
+            if (torrent_hash := torrent.get("hash"))
+        }
+        form_data: dict[str, Any] = {"rename": title}
+        cat = category or self._default_category
+        if cat:
+            form_data["category"] = cat
+        if self._content_layout:
+            form_data["contentLayout"] = self._content_layout
+        if self._ratio_limit is not None and self._ratio_limit > 0:
+            form_data["ratioLimit"] = str(self._ratio_limit)
+        if self._seeding_time_limit is not None and self._seeding_time_limit > 0:
+            form_data["seedingTimeLimit"] = str(self._seeding_time_limit)
+
+        filename = f"{title}.torrent" if not title.endswith(".torrent") else title
+        await self._request(
+            "POST",
+            "/torrents/add",
+            data=form_data,
+            files={"torrents": (filename, content, "application/x-bittorrent")},
+        )
+
+        torrents: list[dict[str, Any]] = []
+        for attempt in range(6):
+            await asyncio.sleep(0.3 if attempt < 2 else 1.0)
+            response = await self._request(
+                "GET",
+                "/torrents/info",
+                params={"sort": "added_on", "reverse": "true", "limit": "50"},
+            )
+            torrents = response.json()
+            for torrent in torrents:
+                torrent_hash = str(torrent.get("hash", "")).lower()
+                if torrent_hash in expected_hashes:
+                    return torrent_hash
+
+        current_hashes = {
+            str(torrent_hash).lower()
+            for torrent in torrents
+            if (torrent_hash := torrent.get("hash"))
+        }
+        if current_hashes == existing_hashes:
+            raise QBittorrentError(
+                "Torrent was not added to qBittorrent. The descriptor may already exist."
+            )
+        log.warning(
+            "qbittorrent_descriptor_hash_not_yet_visible",
+            expected_hashes=sorted(expected_hashes),
+            hint="Other torrents appeared while the uploaded descriptor was still unavailable; "
+            "monitor_downloads will match it by title without adopting an unrelated hash.",
+        )
+        return None
+
     async def find_torrent_by_title(self, title: str) -> str | None:
         """Search for a torrent by its name/title. Returns hash or None."""
         response = await self._request(
@@ -559,6 +656,95 @@ def _extract_magnet_hash(url: str) -> str | None:
             return raw.lower()
 
     return None
+
+
+def _torrent_info_hashes(content: bytes) -> frozenset[str]:
+    """Return exact v1/v2 info hashes from one bounded bencoded descriptor."""
+    try:
+        info_start, info_end = _top_level_info_span(content)
+    except ValueError as exc:
+        raise QBittorrentError(
+            "Invalid torrent descriptor: missing valid bencoded info data"
+        ) from exc
+    info = content[info_start:info_end]
+    return frozenset(
+        (
+            hashlib.sha1(info, usedforsecurity=False).hexdigest(),
+            hashlib.sha256(info).hexdigest(),
+        )
+    )
+
+
+def _top_level_info_span(content: bytes) -> tuple[int, int]:
+    if not content or content[0] != ord("d"):
+        raise ValueError("torrent descriptor must be a dictionary")
+    index = 1
+    info_span: tuple[int, int] | None = None
+    while index < len(content) and content[index] != ord("e"):
+        key, index = _parse_bencoded_bytes(content, index)
+        value_start = index
+        index = _skip_bencoded_value(content, index, depth=1)
+        if key == b"info":
+            if info_span is not None:
+                raise ValueError("torrent descriptor has duplicate info dictionaries")
+            info_span = (value_start, index)
+    if index >= len(content) or content[index] != ord("e") or index + 1 != len(content):
+        raise ValueError("torrent descriptor is truncated or has trailing data")
+    if info_span is None or content[info_span[0]] != ord("d"):
+        raise ValueError("torrent descriptor has no info dictionary")
+    return info_span
+
+
+def _skip_bencoded_value(content: bytes, index: int, *, depth: int) -> int:
+    if depth > 100 or index >= len(content):
+        raise ValueError("invalid bencode nesting")
+    marker = content[index]
+    if 48 <= marker <= 57:
+        _, end = _parse_bencoded_bytes(content, index)
+        return end
+    if marker == ord("i"):
+        end = content.find(b"e", index + 1)
+        if end < 0:
+            raise ValueError("unterminated bencoded integer")
+        value = content[index + 1 : end]
+        digits = value[1:] if value.startswith(b"-") else value
+        if (
+            not digits
+            or not digits.isdigit()
+            or (len(digits) > 1 and digits.startswith(b"0"))
+            or value == b"-0"
+        ):
+            raise ValueError("invalid bencoded integer")
+        return end + 1
+    if marker not in {ord("l"), ord("d")}:
+        raise ValueError("invalid bencoded value")
+    cursor = index + 1
+    while cursor < len(content) and content[cursor] != ord("e"):
+        if marker == ord("d"):
+            _, cursor = _parse_bencoded_bytes(content, cursor)
+        cursor = _skip_bencoded_value(content, cursor, depth=depth + 1)
+    if cursor >= len(content):
+        raise ValueError("unterminated bencoded collection")
+    return cursor + 1
+
+
+def _parse_bencoded_bytes(content: bytes, index: int) -> tuple[bytes, int]:
+    colon = content.find(b":", index)
+    if colon < 0:
+        raise ValueError("invalid bencoded byte string")
+    raw_length = content[index:colon]
+    if (
+        not raw_length
+        or not raw_length.isdigit()
+        or (len(raw_length) > 1 and raw_length.startswith(b"0"))
+    ):
+        raise ValueError("invalid bencoded byte-string length")
+    length = int(raw_length)
+    start = colon + 1
+    end = start + length
+    if end > len(content):
+        raise ValueError("truncated bencoded byte string")
+    return content[start:end], end
 
 
 def _map_torrent_state(state: str) -> str:

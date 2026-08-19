@@ -125,8 +125,57 @@ def test_issue_search_benchmark_exits_cleanly() -> None:
     assert report["indexer_count"] == 2
     assert report["result_count_per_query"] == 25
     assert report["query_count"] > 0
+    assert report["indexer_request_count"] >= report["query_count"]
     assert report["raw_results_count"] > 0
     assert report["filtered_results_count"] == report["raw_results_count"]
     assert report["matched_count"] >= 1
     assert report["rejected_count"] >= 1
     assert report["best_release_title"].startswith("Benchmark Series")
+
+
+def test_download_progress_benchmark_exits_cleanly() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/benchmark_download_progress.py",
+            "--updates",
+            "100",
+        ],
+        cwd=_repo_root(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["final_status"] == "completed"
+    assert report["progress_update_count"] == 100
+    assert report["in_memory_write_count"] == 100
+    assert report["database_write_count"] == 0
+
+
+def test_file_transfer_benchmark_exits_cleanly() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/benchmark_file_transfer.py",
+            "--size-mib",
+            "1",
+        ],
+        cwd=_repo_root(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["final_status"] == "completed"
+    assert report["bytes_transferred"] == 1024 * 1024
+    assert report["progress_callback_count"] >= 2
+    assert report["progress_monotonic"] is True
+    assert report["cancel_supported"] is False
+    assert report["idle_detection_supported"] is False

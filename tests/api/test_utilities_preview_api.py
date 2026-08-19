@@ -701,6 +701,51 @@ async def test_db_check_preview_returns_orphan_and_stale_findings(
 
 
 @pytest.mark.asyncio
+async def test_db_check_preview_reports_database_optimization_capacity(
+    authenticated_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # type: ignore[no-untyped-def]
+    class FakeOptimizationService:
+        def __init__(self, _path: Path) -> None:
+            pass
+
+        def preview(self) -> object:
+            return type(
+                "Preview",
+                (),
+                {
+                    "reclaimable_bytes": 52 * 1024 * 1024,
+                    "free_pages": 13_312,
+                    "required_free_bytes": 120 * 1024 * 1024,
+                    "available_free_bytes": 900 * 1024 * 1024,
+                    "integrity_result": "ok",
+                },
+            )()
+
+    monkeypatch.setattr(
+        "pullbox.utilities.router._sqlite_database_path",
+        lambda _session: Path("/data/pullbox.db"),
+    )
+    monkeypatch.setattr(
+        "pullbox.utilities.router.DatabaseOptimizationService",
+        FakeOptimizationService,
+    )
+
+    response = await authenticated_client.post(
+        "/api/v1/utilities/db-check/preview",
+        json={"checks": ["optimize"]},
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert response.status_code == 200
+    finding = response.json()["findings"][0]
+    assert finding["check_type"] == "optimize"
+    assert finding["suggested_action"] == "optimize"
+    assert finding["allowed_actions"] == ["optimize", "skip"]
+    assert finding["context"]["reclaimable_bytes"] == 52 * 1024 * 1024
+
+
+@pytest.mark.asyncio
 async def test_db_check_preview_rejects_stale_scan_outside_library_roots(
     authenticated_client,
     preview_paths: dict[str, str],

@@ -6,7 +6,8 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pullbox.core.name_matcher import NameMatcher
+from pullbox.core.issue_title import collection_title_number, collection_title_subtitle
+from pullbox.core.name_matcher import NameMatcher, NameMatchResult
 from pullbox.core.naming import extract_base_series_title
 from pullbox.core.release_parser import issues_match, normalize_issue_number
 from pullbox.core.source_metadata import MetadataSignal
@@ -27,6 +28,10 @@ if TYPE_CHECKING:
 _matcher = NameMatcher()
 _PART_TITLE_RE = re.compile(
     r"\bpart\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+    re.IGNORECASE,
+)
+_COLLECTION_ORDINAL_RE = re.compile(
+    r"\b(?:book|v|vol(?:ume)?)\.?\s*#?0*(?P<number>\d+(?:\.\d+)?)\b",
     re.IGNORECASE,
 )
 
@@ -150,24 +155,9 @@ class SemanticMatchEngine:
         alternate_names: list[str] | None = None,
         wanted_issue_cv_id: int | None = None,
         wanted_issue_title: str | None = None,
+        wanted_series_issue_count: int | None = None,
     ) -> IssueMatchDecision:
         """Return a workflow-aware semantic match decision for one issue target."""
-        compatibility = issue_type_compatibility(
-            parsed_type=metadata.issue_type,
-            wanted_type=wanted_issue_type,
-            policy=self._policy,
-        )
-        if not compatibility.compatible:
-            return IssueMatchDecision(
-                is_match=False,
-                confidence=MatchConfidence.LOW,
-                match_method="type_mismatch",
-                rejection_reason=(
-                    f"Issue type mismatch: {metadata.issue_type} vs {wanted_issue_type}"
-                ),
-                match_diagnostics={"type_mode": compatibility.mode},
-            )
-
         series_name = metadata.series_name or ""
         match_result = _matcher.match(
             series_name,
@@ -205,6 +195,44 @@ class SemanticMatchEngine:
                 )
                 if combined_match.similarity > match_result.similarity:
                     match_result = combined_match
+
+        compatibility = issue_type_compatibility(
+            parsed_type=metadata.issue_type,
+            wanted_type=wanted_issue_type,
+            policy=self._policy,
+        )
+        if not compatibility.compatible:
+            return IssueMatchDecision(
+                is_match=False,
+                confidence=MatchConfidence.LOW,
+                match_method="type_mismatch",
+                rejection_reason=(
+                    f"Issue type mismatch: {metadata.issue_type} vs {wanted_issue_type}"
+                ),
+                match_diagnostics={
+                    "type_mode": compatibility.mode,
+                    "series_similarity": round(match_result.similarity, 4),
+                    "match_type": match_result.match_type,
+                },
+            )
+
+        single_word_collection_prefix = False
+        if not match_result.is_match and _is_safe_single_word_collection_prefix(
+            policy=self._policy,
+            metadata=metadata,
+            wanted_series=wanted_series,
+            wanted_issue=wanted_issue,
+            wanted_year=wanted_year,
+            wanted_issue_type=wanted_issue_type,
+            wanted_series_issue_count=wanted_series_issue_count,
+        ):
+            match_result = NameMatchResult(
+                is_match=True,
+                similarity=0.95,
+                match_type="starts_with",
+                matched_against=wanted_series,
+            )
+            single_word_collection_prefix = True
         if not match_result.is_match:
             return IssueMatchDecision(
                 is_match=False,
@@ -216,6 +244,16 @@ class SemanticMatchEngine:
                 ),
                 match_diagnostics={"type_mode": compatibility.mode},
             )
+
+        if compatibility.mode == "issue_to_collection_inference":
+            inference_rejection = _validate_issue_to_collection_inference(
+                metadata=metadata,
+                wanted_issue=wanted_issue,
+                wanted_issue_title=wanted_issue_title,
+                wanted_series_issue_count=wanted_series_issue_count,
+            )
+            if inference_rejection is not None:
+                return inference_rejection
 
         issue_check_skipped = False
         issue_confirmed = False
@@ -253,13 +291,23 @@ class SemanticMatchEngine:
 
             wanted_is_collection = issue_type_family(wanted_issue_type) == TypeFamily.COLLECTION
             issue_omitted_ok = effective_issue is None and wanted_issue == 1.0
+            subtitle_corroboration_required = (
+                self._policy.require_volume_subtitle_corroboration
+                or collection_title_subtitle(wanted_issue_title) is not None
+                or _is_single_issue_subtitle_collection_target(
+                    metadata=metadata,
+                    wanted_series=wanted_series,
+                    wanted_issue=wanted_issue,
+                    wanted_series_issue_count=wanted_series_issue_count,
+                )
+            )
 
             if (
                 wanted_is_collection
                 and compatibility.prefer_volume_number
                 and _has_volume_subtitle_hint(metadata)
                 and issues_match(wanted_issue, effective_issue)
-                and self._policy.require_volume_subtitle_corroboration
+                and subtitle_corroboration_required
             ):
                 issue_confirmed = True
                 match_method = "issue_number"
@@ -271,17 +319,30 @@ class SemanticMatchEngine:
                 if subtitle_check is not None:
                     return subtitle_check
             elif wanted_is_collection:
-                if effective_issue is None:
-                    issue_check_skipped = True
+                if _explicit_collection_ordinal_matches(
+                    metadata=metadata,
+                    wanted_issue_title=wanted_issue_title,
+                ) and not _has_volume_subtitle_hint(metadata):
                     issue_confirmed = True
-                    match_method = "collection_series_match"
+                    match_method = "collection_title_ordinal"
+                elif effective_issue is None:
+                    issue_confirmed = True
+                    if _is_explicit_single_collection_match(
+                        metadata=metadata,
+                        wanted_issue=wanted_issue,
+                        wanted_issue_type=wanted_issue_type,
+                        wanted_series_issue_count=wanted_series_issue_count,
+                        compatibility_mode=compatibility.mode,
+                        title_match_type=match_result.match_type,
+                    ):
+                        match_method = "explicit_single_collection"
+                    else:
+                        issue_check_skipped = True
+                        match_method = "collection_series_match"
                 elif issues_match(wanted_issue, effective_issue):
                     issue_confirmed = True
                     match_method = "issue_number"
-                    if (
-                        compatibility.prefer_volume_number
-                        and self._policy.require_volume_subtitle_corroboration
-                    ):
+                    if compatibility.prefer_volume_number and subtitle_corroboration_required:
                         subtitle_check = _validate_volume_subtitle_hint(
                             metadata=metadata,
                             wanted_series=wanted_series,
@@ -292,7 +353,7 @@ class SemanticMatchEngine:
                 elif (
                     wanted_issue == 1.0
                     and _has_volume_subtitle_hint(metadata)
-                    and self._policy.require_volume_subtitle_corroboration
+                    and subtitle_corroboration_required
                 ):
                     subtitle_check = _validate_volume_subtitle_hint(
                         metadata=metadata,
@@ -372,6 +433,7 @@ class SemanticMatchEngine:
                 "issue_check_skipped": issue_check_skipped,
                 "series_similarity": round(match_result.similarity, 4),
                 "match_type": match_result.match_type,
+                "single_word_collection_prefix": single_word_collection_prefix,
             },
         )
 
@@ -498,6 +560,39 @@ def _lower_confidence(confidence: MatchConfidence) -> MatchConfidence:
     return MatchConfidence.LOW
 
 
+def _is_safe_single_word_collection_prefix(
+    *,
+    policy: WorkflowPolicy,
+    metadata: SourceMetadata,
+    wanted_series: str,
+    wanted_issue: float,
+    wanted_year: int | None,
+    wanted_issue_type: IssueType,
+    wanted_series_issue_count: int | None,
+) -> bool:
+    """Allow a subtitle-bearing one-word title only for an exact-year singleton collection."""
+    if (
+        policy.name != "search"
+        or issue_type_family(wanted_issue_type) != TypeFamily.COLLECTION
+        or wanted_issue != 1.0
+        or wanted_series_issue_count != 1
+        or metadata.issue_number is not None
+        or metadata.volume is not None
+        or wanted_year is None
+        or metadata.year != wanted_year
+    ):
+        return False
+
+    normalized_target = NameMatcher.normalize(wanted_series)
+    normalized_candidate = NameMatcher.normalize(metadata.series_name or "")
+    if len(normalized_target.split()) != 1:
+        return False
+    prefix = f"{normalized_target} "
+    if not normalized_candidate.startswith(prefix):
+        return False
+    return len(normalized_candidate.removeprefix(prefix).split()) >= 2
+
+
 def _normalize_volume_number(volume: str) -> float | None:
     normalized = normalize_issue_number(volume)
     if normalized is not None:
@@ -551,9 +646,109 @@ def _validate_volume_subtitle_hint(
     )
 
 
+def _validate_issue_to_collection_inference(
+    *,
+    metadata: SourceMetadata,
+    wanted_issue: float,
+    wanted_issue_title: str | None,
+    wanted_series_issue_count: int | None,
+) -> IssueMatchDecision | None:
+    """Require title evidence before treating a numbered standard issue as a collection."""
+    if _explicit_collection_ordinal_matches(
+        metadata=metadata,
+        wanted_issue_title=wanted_issue_title,
+    ):
+        return None
+    subtitle = collection_title_subtitle(wanted_issue_title)
+    if subtitle is None and wanted_series_issue_count == 1 and metadata.issue_number is not None:
+        return IssueMatchDecision(
+            is_match=False,
+            confidence=MatchConfidence.LOW,
+            match_method="numbered_issue_collection_mismatch",
+            rejection_reason=(
+                "Numbered standard issue cannot satisfy a single-record collection target."
+            ),
+            match_diagnostics={"type_mode": "issue_to_collection_inference"},
+        )
+    if not subtitle:
+        return None
+
+    subtitle_tokens = _subtitle_tokens(subtitle)
+    candidate_tokens = _subtitle_tokens(metadata.original_title)
+    if subtitle_tokens and subtitle_tokens.issubset(candidate_tokens):
+        return None
+
+    if wanted_issue == 1.0 and metadata.issue_number is None:
+        return None
+
+    return IssueMatchDecision(
+        is_match=False,
+        confidence=MatchConfidence.LOW,
+        match_method="ambiguous_issue_collection_type",
+        rejection_reason=(
+            "Ambiguous issue-vs-volume result: standard issue lacks collection title evidence."
+        ),
+        match_diagnostics={"type_mode": "issue_to_collection_inference"},
+    )
+
+
+def _explicit_collection_ordinal_matches(
+    *,
+    metadata: SourceMetadata,
+    wanted_issue_title: str | None,
+) -> bool:
+    """Match an explicit Book/Volume ordinal without trusting a bare issue number."""
+    wanted_ordinal = normalize_issue_number(collection_title_number(wanted_issue_title))
+    if wanted_ordinal is None:
+        return False
+    return any(
+        issues_match(wanted_ordinal, normalize_issue_number(match.group("number")))
+        for match in _COLLECTION_ORDINAL_RE.finditer(metadata.original_title)
+    )
+
+
+def _is_explicit_single_collection_match(
+    *,
+    metadata: SourceMetadata,
+    wanted_issue: float,
+    wanted_issue_type: IssueType,
+    wanted_series_issue_count: int | None,
+    compatibility_mode: str,
+    title_match_type: str,
+) -> bool:
+    """Trust a numberless collection when its explicit identity is otherwise exact."""
+    return (
+        wanted_issue == 1.0
+        and wanted_series_issue_count == 1
+        and issue_type_family(wanted_issue_type) == TypeFamily.COLLECTION
+        and metadata.issue_type == wanted_issue_type
+        and metadata.signals.get("issue_type") == MetadataSignal.RELEASE_TITLE
+        and compatibility_mode == "exact"
+        and title_match_type == "exact"
+    )
+
+
 def _has_volume_subtitle_hint(metadata: SourceMetadata) -> bool:
     """Return True when parsed metadata carries a volume subtitle hint."""
     return isinstance(metadata.diagnostics.get("volume_subtitle_hint"), dict)
+
+
+def _is_single_issue_subtitle_collection_target(
+    *,
+    metadata: SourceMetadata,
+    wanted_series: str,
+    wanted_issue: float,
+    wanted_series_issue_count: int | None,
+) -> bool:
+    """Identify ComicVine series that model one titled collection volume as issue one."""
+    if wanted_issue != 1.0 or wanted_series_issue_count != 1:
+        return False
+    hint = metadata.diagnostics.get("volume_subtitle_hint")
+    if not isinstance(hint, dict):
+        return False
+    base_series = NameMatcher.normalize(str(hint.get("base_series") or ""))
+    target_series = NameMatcher.normalize(wanted_series)
+    return bool(base_series and target_series.startswith(f"{base_series} "))
 
 
 def _subtitle_tokens(value: str) -> set[str]:

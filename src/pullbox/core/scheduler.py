@@ -56,6 +56,7 @@ from pullbox.core.scheduler_run_context import (
     reset_scheduler_run_context,
 )
 from pullbox.core.scheduler_stats import (
+    TaskExecutionResult,
     TaskStats,
     merge_stats_into,
     resolve_interval_seconds,
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
 __all__ = [
     "PullboxScheduler",
     "RegisteredTask",
+    "TaskExecutionResult",
     "TaskStats",
     "_task_registry",
     "get_current_task_run_id",
@@ -319,18 +321,70 @@ class PullboxScheduler:
 
     def get_jobs(self) -> list[dict[str, str]]:
         """Return summary info for all scheduled jobs."""
-        return build_job_summaries(self._scheduler.get_jobs())
+        return build_job_summaries(self._visible_jobs())
 
     def get_scheduled_tasks(self) -> list[dict[str, Any]]:
         """Return detailed info for all scheduled tasks for the UI."""
         return build_scheduled_task_views(
-            self._scheduler.get_jobs(),
+            self._visible_jobs(),
             task_stats=self._task_stats,
             display_names=self._display_names,
             running_counts=self._running_counts,
             queued_task_ids=self._manual_queue_set,
             manual_queue_position=self._manual_queue_position,
         )
+
+    def schedule_task_continuation(
+        self,
+        task_id: str,
+        *,
+        run_at: datetime,
+        interval_seconds: int = 3600,
+    ) -> bool:
+        """Schedule a hidden recurring continuation for a durable logical task."""
+        task = self._registered_tasks.get(task_id)
+        if task is None:
+            task = next((item for item in _task_registry if item.task_id == task_id), None)
+        if task is None:
+            return False
+        job_id = self._continuation_job_id(task_id)
+        wrapped = self._wrap_task(
+            task.func,
+            task_id,
+            trigger_type="scheduled",
+            exclusive=task.exclusive,
+        )
+        self._scheduler.add_job(
+            wrapped,
+            "interval",
+            id=job_id,
+            name=job_id,
+            replace_existing=True,
+            seconds=max(1, interval_seconds),
+            next_run_time=run_at,
+        )
+        return True
+
+    def clear_task_continuation(self, task_id: str) -> None:
+        """Remove a hidden continuation if it is currently registered."""
+        job_id = self._continuation_job_id(task_id)
+        if self._scheduler.get_job(job_id) is not None:
+            self._scheduler.remove_job(job_id)
+
+    def delay_task_next_run(self, task_id: str, *, run_at: datetime) -> bool:
+        """Move a recurring task's next execution without changing its interval."""
+        if self._scheduler.get_job(task_id) is None:
+            return False
+        self._scheduler.modify_job(task_id, next_run_time=run_at)
+        return True
+
+    def _visible_jobs(self) -> list[Any]:
+        """Return user-facing jobs without internal continuation plumbing."""
+        return [job for job in self._scheduler.get_jobs() if not job.id.endswith("__continuation")]
+
+    @staticmethod
+    def _continuation_job_id(task_id: str) -> str:
+        return f"{task_id}__continuation"
 
     # ── Private ────────────────────────────────────────────────
 
@@ -414,23 +468,30 @@ class PullboxScheduler:
             try:
                 stats = scheduler._task_stats.setdefault(task_id, TaskStats())
                 stats.running_since = started
-                await func()
+                result = await func()
                 elapsed = time.monotonic() - start
                 ended_dt = datetime.now(UTC)
                 ended = ended_dt.isoformat()
 
                 stats.last_execution = ended
                 stats.last_duration_seconds = round(elapsed, 2)
-                stats.last_status = "completed"
+                completed_status = (
+                    result.status if isinstance(result, TaskExecutionResult) else "completed"
+                )
+                stats.last_status = completed_status
                 stats.running_since = None
                 await scheduler._persist_task_stat(
                     task_id,
                     stats,
                     trigger_type=trigger_type,
-                    reason="completed",
+                    reason=completed_status,
                 )
 
-                log.debug("task_completed", duration_seconds=round(elapsed, 2))
+                log.debug(
+                    "task_completed",
+                    duration_seconds=round(elapsed, 2),
+                    logical_status=completed_status,
+                )
             except asyncio.CancelledError:
                 elapsed = time.monotonic() - start
                 ended_dt = datetime.now(UTC)
@@ -491,6 +552,29 @@ class PullboxScheduler:
 
     async def _defer_task_for_import(self, task_id: str, log: Any, *, trigger_type: str) -> bool:
         """Skip scheduler-managed background work while an import owns the runtime."""
+        from pullbox.database import database_maintenance_reason
+
+        maintenance_reason = database_maintenance_reason()
+        if maintenance_reason:
+            stats = self._task_stats.setdefault(task_id, TaskStats())
+            ended = datetime.now(UTC).isoformat()
+            stats.last_execution = ended
+            stats.last_duration_seconds = 0.0
+            stats.last_status = "deferred"
+            stats.running_since = None
+            await self._persist_task_stat(
+                task_id,
+                stats,
+                trigger_type=trigger_type,
+                reason="database_maintenance",
+            )
+            log.info(
+                "task_deferred_database_maintenance",
+                trigger_type=trigger_type,
+                maintenance_reason=maintenance_reason,
+            )
+            return True
+
         if self._import_protection_check_disabled:
             return False
 

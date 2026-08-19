@@ -36,6 +36,24 @@ class TestProwlarrIndexerParams:
         p = ProwlarrIndexer(url="http://prowlarr:9696", api_key="test")
         assert p._indexer_ids is None
 
+    def test_aggregate_result_keeps_local_id_and_priority(self) -> None:
+        results = ProwlarrIndexer._parse_api_results(
+            [
+                {
+                    "title": "Batman 001 (2025)",
+                    "indexer": "1337x",
+                    "indexerId": 101,
+                    "protocol": "torrent",
+                    "downloadUrl": "https://prowlarr.test/download/1",
+                    "categories": [{"name": "Books/Comics"}],
+                }
+            ],
+            {101: (7, 3)},
+        )
+
+        assert results[0].indexer_id == 7
+        assert results[0].ranking_priority == 3
+
     @pytest.mark.asyncio
     async def test_search_sends_categories_as_list(self) -> None:
         """categories param should be a list of ints for repeated query params."""
@@ -108,6 +126,7 @@ class TestRegisterIndexersAggregation:
             cfg.url = f"http://prowlarr:9696/{100 + i}"
             cfg.api_key = "encrypted_key"
             cfg.enabled = True
+            cfg.priority = i * 10
             configs.append(cfg)
 
         mock_session = AsyncMock()
@@ -139,6 +158,11 @@ class TestRegisterIndexersAggregation:
         assert config_id == _PROWLARR_AGGREGATE_CONFIG_ID
         assert isinstance(indexer, ProwlarrIndexer)
         assert indexer._indexer_ids == [101, 102, 103]
+        assert getattr(indexer, "_indexer_rankings", None) == {
+            101: (1, 10),
+            102: (2, 20),
+            103: (3, 30),
+        }
 
     @pytest.mark.asyncio
     async def test_prowlarr_newznab_registered_individually(self) -> None:
@@ -204,6 +228,124 @@ class TestRegisterIndexersAggregation:
         assert len(items) == 1
         assert items[0][0] == 42
         assert not isinstance(items[0][1], ProwlarrIndexer)
+
+    @pytest.mark.asyncio
+    async def test_manual_torznab_receives_only_its_opted_in_resolver_chain(self) -> None:
+        """Composition wires ranked resolvers only into a manual Torznab instance."""
+        from pullbox.composition.providers import register_indexers
+        from pullbox.providers.base import ProviderRegistry
+
+        cfg = MagicMock()
+        cfg.id = 43
+        cfg.name = "Manual 1337x proxy"
+        cfg.source = "manual"
+        cfg.prowlarr_indexer_id = None
+        cfg.indexer_type = "torznab"
+        cfg.url = "https://torznab.example"
+        cfg.api_key = "encrypted_key"
+        cfg.enabled = True
+        cfg.resolver_enabled = True
+        options = (MagicMock(name="resolver-option"),)
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [cfg]
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        registry = ProviderRegistry()
+
+        with (
+            patch("pullbox.composition.providers.decrypt_secret", return_value="decrypted_key"),
+            patch(
+                "pullbox.composition.providers.build_manual_torznab_resolver_options",
+                AsyncMock(return_value=options),
+            ) as build_options,
+            patch("pullbox.composition.providers.TorznabIndexer") as torznab_cls,
+        ):
+            await register_indexers(mock_session, registry)
+
+        build_options.assert_awaited_once_with(mock_session, cfg)
+        torznab_cls.assert_called_once_with(
+            name="Manual 1337x proxy",
+            url="https://torznab.example",
+            api_key="decrypted_key",
+            resolver_enabled=True,
+            resolver_options=options,
+            cache_namespace="manual-torznab:43",
+        )
+
+    @pytest.mark.asyncio
+    async def test_jackett_tracker_is_registered_individually_without_pullbox_resolver(
+        self,
+    ) -> None:
+        """Jackett owns challenge solving and each tracker keeps its own identity."""
+        from pullbox.composition.providers import register_indexers
+        from pullbox.providers.base import ProviderRegistry
+
+        cfg = MagicMock()
+        cfg.id = 44
+        cfg.name = "1337x (Jackett)"
+        cfg.source = "jackett"
+        cfg.manager_indexer_id = "1337x"
+        cfg.manager_available = True
+        cfg.prowlarr_indexer_id = None
+        cfg.indexer_type = "torznab"
+        cfg.url = "http://jackett:9117/api/v2.0/indexers/1337x/results/torznab"
+        cfg.api_key = "encrypted_key"
+        cfg.enabled = True
+        cfg.resolver_enabled = True
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [cfg]
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        registry = ProviderRegistry()
+
+        with (
+            patch("pullbox.composition.providers.decrypt_secret", return_value="decrypted_key"),
+            patch(
+                "pullbox.composition.providers.build_manual_torznab_resolver_options",
+                AsyncMock(),
+            ) as build_options,
+            patch("pullbox.composition.providers.TorznabIndexer") as torznab_cls,
+        ):
+            configs_map = await register_indexers(mock_session, registry)
+
+        assert configs_map == {44: cfg}
+        build_options.assert_not_awaited()
+        torznab_cls.assert_called_once_with(
+            name="1337x (Jackett)",
+            url="http://jackett:9117/api/v2.0/indexers/1337x/results/torznab",
+            api_key="decrypted_key",
+            resolver_enabled=False,
+            resolver_options=(),
+            cache_namespace="jackett-torznab:44",
+            rate_limit_per_minute=60,
+            request_timeout=60.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_retired_manager_tracker_is_not_registered(self) -> None:
+        """A tracker missing from its manager remains historical but cannot search."""
+        from pullbox.composition.providers import register_indexers
+        from pullbox.providers.base import ProviderRegistry
+
+        cfg = MagicMock()
+        cfg.id = 45
+        cfg.source = "jackett"
+        cfg.manager_available = False
+        cfg.indexer_type = "torznab"
+        cfg.enabled = True
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [cfg]
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        registry = ProviderRegistry()
+
+        configs_map = await register_indexers(mock_session, registry)
+
+        assert configs_map == {}
+        assert registry.get_indexer_items() == []
 
     @pytest.mark.asyncio
     async def test_mixed_newznab_and_torznab_prowlarr(self) -> None:

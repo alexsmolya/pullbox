@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sqlite3
 import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -29,6 +30,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Imported for direct handler tests
@@ -46,8 +48,23 @@ from pullbox.models.import_job import (
 )
 from pullbox.models.series import Series
 from pullbox.models.user import APIKey, User
-from pullbox.schemas.import_job import ImportJobCreate, OrphanRecoveryProgressResponse
+from pullbox.schemas.import_job import (
+    ImportJobCreate,
+    ImportSelectionBulkUpdateResponse,
+    OrphanRecoveryProgressResponse,
+    SeriesSelectionBulkUpdateRequest,
+)
 from pullbox.services.auth_service import AuthService
+
+
+def _sqlite_database_locked_error() -> SQLAlchemyOperationalError:
+    """Build the SQLAlchemy wrapper shape raised by SQLite busy writes."""
+    return SQLAlchemyOperationalError(
+        "UPDATE imported_series SET selected_for_import=?",
+        {},
+        sqlite3.OperationalError("database is locked"),
+    )
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -789,6 +806,31 @@ class TestConfirmImport:
 
 class TestSeriesSelection:
     """Test server-owned matched-series review selection endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_bulk_selection_retries_transient_sqlite_locks(self) -> None:
+        """A rematch checkpoint must not surface a transient write lock to Step 3."""
+        from pullbox.api.v1.import_jobs import _bulk_update_series_selection_with_retry
+
+        body = SeriesSelectionBulkUpdateRequest(include_in_import=True)
+        session = AsyncMock()
+        session.commit.side_effect = [_sqlite_database_locked_error(), None]
+        expected = MagicMock(spec=ImportSelectionBulkUpdateResponse)
+
+        with (
+            patch(
+                "pullbox.api.v1.import_jobs.bulk_update_series_selection_response",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as response_action,
+            patch("pullbox.api.v1.import_jobs.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        ):
+            result = await _bulk_update_series_selection_with_retry(session, 9, body)
+
+        assert result is expected
+        assert response_action.await_count == 2
+        session.rollback.assert_awaited_once()
+        sleep.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_update_series_selection(

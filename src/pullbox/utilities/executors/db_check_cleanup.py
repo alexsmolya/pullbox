@@ -33,7 +33,7 @@ logger = structlog.get_logger(__name__)
 
 _COMIC_EXTENSIONS = frozenset({".cbz", ".cbr", ".cb7", ".cbt", ".pdf", ".epub"})
 
-_VALID_CHECKS = frozenset({"orphans", "stale", "referential", "reindex"})
+_VALID_CHECKS = frozenset({"orphans", "stale", "referential", "reindex", "optimize"})
 _IGNORED_STALE_DIR_NAMES = frozenset({".trash"})
 
 

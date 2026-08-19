@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from types import MethodType, SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -71,6 +72,7 @@ def _make_target(
     issue_type: IssueType = IssueType.ISSUE,
     issue_title: str | None = "Issue #1",
     series_year: int | None = 2025,
+    release_year: int | None = None,
     alternate_names: list[str] | None = None,
 ) -> IssueSearchTarget:
     return IssueSearchTarget(
@@ -81,6 +83,7 @@ def _make_target(
         issue_type=issue_type,
         issue_title=issue_title,
         series_year=series_year,
+        release_year=release_year,
         alternate_names=alternate_names,
     )
 
@@ -162,6 +165,7 @@ async def _seed_search_rows(
             comicvine_id=201,
             issue_number=9.0,
             title="Vol. 1: All Weather Turns To Storm",
+            release_date=date(2024, 12, 4),
             status=IssueStatus.WANTED,
             issue_type=IssueType.TPB,
         )
@@ -202,7 +206,9 @@ async def test_load_issue_and_wanted_targets_filter_and_shape(
         assert target is not None
         assert target.series_title == "Absolute Superman"
         assert target.issue_type == IssueType.TPB
+        assert target.release_year == 2024
         assert target.alternate_names == ["AS"]
+        assert target.series_issue_count == 2
 
         assert await load_issue_search_target(session, 99999) is None
 
@@ -354,7 +360,9 @@ def test_issue_query_builders_cover_fast_deep_and_fallback_variants() -> None:
 
     fast_queries = service._build_issue_queries(collection_target, mode="fast")
     assert [(query.series_title, query.issue_number) for query in fast_queries] == [
-        ("Absolute Superman", 1.0)
+        ("Absolute Superman Vol 1 All Weather Turns To Storm", None),
+        ("Absolute Superman TPB 1", None),
+        ("Absolute Superman Vol 1", None),
     ]
 
     deep_queries = service._build_issue_queries(collection_target, mode="deep")
@@ -426,8 +434,45 @@ def test_fast_wanted_queries_keep_typed_and_collection_searches_bounded() -> Non
         ("Batman Annual", 1.0)
     ]
     assert [(query.series_title, query.issue_number) for query in tpb_queries] == [
-        ("Absolute Superman", 1.0)
+        ("Absolute Superman Vol 1 All Weather Turns To Storm", None),
+        ("Absolute Superman TPB 1", None),
+        ("Absolute Superman Vol 1", None),
     ]
+
+
+def test_collection_queries_use_release_year_and_ignore_generic_issue_titles() -> None:
+    service = SearchService(ProviderRegistry())
+    immortal_thor = _make_target(
+        series_title="Immortal Thor",
+        issue_number=3.0,
+        issue_type=IssueType.VOLUME,
+        issue_title="Vol. 3: The End of All Songs",
+        series_year=2024,
+        release_year=2025,
+    )
+    generic_title = _make_target(
+        series_title="Immortal Thor",
+        issue_number=3.0,
+        issue_type=IssueType.TPB,
+        issue_title="HC/TPB",
+        series_year=2024,
+        release_year=2025,
+    )
+
+    title_queries = service._build_issue_queries(immortal_thor, mode="fast")
+    generic_queries = service._build_issue_queries(generic_title, mode="fast")
+
+    assert [query.series_title for query in title_queries] == [
+        "Immortal Thor Vol 3 The End of All Songs",
+        "Immortal Thor Vol 3",
+        "Immortal Thor Volume 3",
+    ]
+    assert {query.year for query in title_queries} == {2025}
+    assert [query.series_title for query in generic_queries] == [
+        "Immortal Thor TPB 3",
+        "Immortal Thor Vol 3",
+    ]
+    assert all("HC/TPB" not in query.series_title for query in generic_queries)
 
 
 def test_deduping_and_min_score_filtering_cover_edge_cases() -> None:
@@ -839,6 +884,7 @@ async def test_manual_search_bypasses_backoff_and_automated_empty_cache() -> Non
         indexer_type=IndexerType.NEWZNAB,
         url="https://prowlarr.test/15",
         api_key="encrypted",
+        priority=7,
         failure_count=3,
     )
     config.disabled_until = datetime.now(UTC) + timedelta(hours=2)
@@ -851,7 +897,8 @@ async def test_manual_search_bypasses_backoff_and_automated_empty_cache() -> Non
     manual = SearchService(registry, ignore_indexer_backoff=True)
     results = await manual.search(query, indexer_configs=indexer_configs)
 
-    assert results == [release]
+    assert results == [replace(release, indexer_id=1, ranking_priority=7)]
+    assert getattr(results[0], "ranking_priority", None) == 7
     indexer.search.assert_awaited_once()
     assert config.failure_count == 0
     assert config.disabled_until is None
@@ -1152,3 +1199,59 @@ async def test_build_search_runtime_parses_config_and_respects_registry_flag(
     assert runtime.eval_kwargs["warn_collection_mb"] == 80
     assert runtime.failure_threshold == 5
     assert build_registry_mock.await_args.kwargs["include_download_clients"] is False
+
+
+async def test_build_search_runtime_can_support_direct_only_search(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_registry_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        __import__("pullbox.composition.providers", fromlist=["build_registry"]),
+        "build_registry",
+        build_registry_mock,
+    )
+
+    async with db_factory() as session:
+        runtime = await build_search_runtime(
+            session,
+            include_download_clients=False,
+            allow_empty_registry=True,
+        )
+
+    assert runtime is not None
+    assert runtime.registry.get_indexer_items() == []
+    assert runtime.indexer_configs == {}
+
+
+async def test_build_search_runtime_loads_direct_providers_when_requested(
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = SimpleNamespace(provider_identity="pullbox.getcomics")
+    build_registry_mock = AsyncMock(return_value=None)
+    load_direct_mock = AsyncMock(return_value=(provider,))
+    monkeypatch.setattr(
+        __import__("pullbox.composition.providers", fromlist=["build_registry"]),
+        "build_registry",
+        build_registry_mock,
+    )
+    monkeypatch.setattr(
+        __import__(
+            "pullbox.services.direct_search_coordinator",
+            fromlist=["load_direct_search_providers"],
+        ),
+        "load_direct_search_providers",
+        load_direct_mock,
+    )
+
+    async with db_factory() as session:
+        runtime = await build_search_runtime(
+            session,
+            include_download_clients=False,
+            include_direct_providers=True,
+        )
+
+    assert runtime is not None
+    assert runtime.direct_providers == (provider,)
+    load_direct_mock.assert_awaited_once()

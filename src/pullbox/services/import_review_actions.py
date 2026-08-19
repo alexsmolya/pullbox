@@ -313,7 +313,9 @@ async def allow_safety_blocked_file_once(
         "allowed_at": datetime.now(UTC).isoformat(),
         "previous_block": previous_block,
     }
-    imp_file.status = ImportedFileStatus.CONFIRMED if retry_import else ImportedFileStatus.PENDING
+    imp_file.status = (
+        ImportedFileStatus.CONFIRMED if retry_import else ImportedFileStatus.SAFETY_APPROVED
+    )
     imp_file.include_in_import = bool(retry_import)
     imp_file.error_message = None
     imp_file.diagnostics = diagnostics

@@ -100,7 +100,7 @@
                 <th class="w-[180px]">Progress</th>
                 <th class="w-[92px]">Speed</th>
                 <th class="w-[72px]">ETA</th>
-                <th class="is-right w-[72px]"></th>
+                <th class="is-right w-[116px]"></th>
               </tr>
             </thead>
             <tbody>
@@ -115,13 +115,17 @@
                   </td>
                   <td>
                     {% if dl.issue and dl.issue.series %}
-                      <a href="/issues/{{ dl.issue.id }}" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+                      <a href="/issues/{{ dl.issue.id }}" hx-boost="false" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
                     {% else %}
                       <span class="downloads-muted-text">No linked issue</span>
                     {% endif %}
                   </td>
                   <td>
-                    <span class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight" data-testid="downloads-queue-item-status">
+                    <span
+                      class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight"
+                      data-testid="downloads-queue-item-status"
+                      {% if row.status_detail %}data-tip="{{ row.status_detail }}" data-tip-pos="top"{% endif %}
+                    >
                       {{ row.primary_phase }}
                     </span>
                   </td>
@@ -130,8 +134,8 @@
                     <div class="downloads-progress-cell">
                       <span class="downloads-progress-track">
                         <span
-                          class="downloads-progress-fill {{ row.progress_tone }}"
-                          style="width: {{ row.progress_pct }}%"
+                          class="downloads-progress-fill {{ row.progress_tone }}{% if row.progress_indeterminate %} is-indeterminate{% endif %}"
+                          style="width: {% if row.progress_indeterminate %}45{% else %}{{ row.progress_pct }}{% endif %}%"
                         ></span>
                       </span>
                       <span class="downloads-progress-pct{% if row.progress_tone == 'is-amber' %} downloads-progress-pct-warning{% endif %}" data-testid="downloads-queue-item-progress-label">{{ row.progress_label }}</span>
@@ -148,19 +152,51 @@
                     {{ row.eta_text or "—" }}
                   </td>
                   <td class="is-right">
-                    <button
-                      @click="cancelDownload({{ dl.id }}, $el)"
-                      data-testid="downloads-queue-cancel-{{ dl.id }}"
-                      class="downloads-action-btn is-danger"
-                      data-tip="Cancel download"
-                      data-tip-pos="left"
-                      aria-label="Cancel download"
-                      type="button"
-                    >
-                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-                      </svg>
-                    </button>
+                    <div class="inline-flex items-center justify-end gap-1">
+                      {% if dl.download_client.value == "direct" %}
+                        <button
+                          @click="tryNextSource({{ dl.id }}, $el)"
+                          data-testid="downloads-queue-try-next-source-{{ dl.id }}"
+                          class="downloads-action-btn"
+                          data-tip="Try next source"
+                          data-tip-pos="left"
+                          aria-label="Try next source"
+                          :disabled="sourceSwitching"
+                          type="button"
+                        >
+                          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 5v14l10-7L5 5zm11 0v14"/>
+                          </svg>
+                        </button>
+                        <button
+                          @click="openSourceModal({{ dl.id }}, $el)"
+                          data-testid="downloads-queue-choose-source-{{ dl.id }}"
+                          class="downloads-action-btn"
+                          data-tip="Choose source"
+                          data-tip-pos="left"
+                          aria-label="Choose source"
+                          :disabled="sourceSwitching"
+                          type="button"
+                        >
+                          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>
+                          </svg>
+                        </button>
+                      {% endif %}
+                      <button
+                        @click="cancelDownload({{ dl.id }}, $el)"
+                        data-testid="downloads-queue-cancel-{{ dl.id }}"
+                        class="downloads-action-btn is-danger"
+                        data-tip="Cancel download"
+                        data-tip-pos="left"
+                        aria-label="Cancel download"
+                        type="button"
+                      >
+                        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               {% endfor %}
@@ -193,7 +229,7 @@
                 <th class="w-[180px]">Progress</th>
                 <th class="w-[92px]">Size</th>
                 <th class="w-[90px]">Sent</th>
-                <th class="is-right w-[72px]"></th>
+                <th class="is-right w-[116px]"></th>
               </tr>
             </thead>
             <tbody>
@@ -212,13 +248,17 @@
                   </td>
                   <td>
                     {% if dl.issue and dl.issue.series %}
-                      <a href="/issues/{{ dl.issue.id }}" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
+                      <a href="/issues/{{ dl.issue.id }}" hx-boost="false" class="downloads-issue-link">{{ dl.issue.series.title }} #{{ dl.issue.issue_number|issue_num }}</a>
                     {% else %}
                       <span class="downloads-muted-text">No linked issue</span>
                     {% endif %}
                   </td>
                   <td>
-                    <span class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight" data-testid="downloads-queue-item-status">
+                    <span
+                      class="pill {{ row.status_pill }} max-w-full justify-center text-center leading-tight"
+                      data-testid="downloads-queue-item-status"
+                      {% if row.status_detail %}data-tip="{{ row.status_detail }}" data-tip-pos="top"{% endif %}
+                    >
                       {{ row.primary_phase }}
                     </span>
                   </td>
@@ -255,19 +295,51 @@
                     {% endif %}
                   </td>
                   <td class="is-right">
-                    <button
-                      @click="cancelDownload({{ dl.id }}, $el)"
-                      data-testid="downloads-queue-cancel-{{ dl.id }}"
-                      class="downloads-action-btn is-danger"
-                      data-tip="Cancel download"
-                      data-tip-pos="left"
-                      aria-label="Cancel download"
-                      type="button"
-                    >
-                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-                      </svg>
-                    </button>
+                    <div class="inline-flex items-center justify-end gap-1">
+                      {% if dl.download_client.value == "direct" %}
+                        <button
+                          @click="tryNextSource({{ dl.id }}, $el)"
+                          data-testid="downloads-queue-try-next-source-{{ dl.id }}"
+                          class="downloads-action-btn"
+                          data-tip="Try next source"
+                          data-tip-pos="left"
+                          aria-label="Try next source"
+                          :disabled="sourceSwitching"
+                          type="button"
+                        >
+                          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 5v14l10-7L5 5zm11 0v14"/>
+                          </svg>
+                        </button>
+                        <button
+                          @click="openSourceModal({{ dl.id }}, $el)"
+                          data-testid="downloads-queue-choose-source-{{ dl.id }}"
+                          class="downloads-action-btn"
+                          data-tip="Choose source"
+                          data-tip-pos="left"
+                          aria-label="Choose source"
+                          :disabled="sourceSwitching"
+                          type="button"
+                        >
+                          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>
+                          </svg>
+                        </button>
+                      {% endif %}
+                      <button
+                        @click="cancelDownload({{ dl.id }}, $el)"
+                        data-testid="downloads-queue-cancel-{{ dl.id }}"
+                        class="downloads-action-btn is-danger"
+                        data-tip="Cancel download"
+                        data-tip-pos="left"
+                        aria-label="Cancel download"
+                        type="button"
+                      >
+                        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               {% endfor %}

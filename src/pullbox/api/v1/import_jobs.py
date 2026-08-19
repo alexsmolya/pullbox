@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse  # noqa: TC002
+from sqlalchemy.exc import OperationalError
 
 from pullbox.api.deps import AuthenticatedStreamUser, AuthenticatedUser, DbSession  # noqa: TC001
 from pullbox.api.v1.import_job_control_actions import (
@@ -60,6 +62,11 @@ from pullbox.api.v1.import_job_streams import (
     load_initial_import_progress_sse as _load_initial_import_progress_sse,
 )
 from pullbox.core.exceptions import ValidationError
+from pullbox.core.sqlite_lock import (
+    SQLITE_LOCK_RETRY_ATTEMPTS,
+    is_sqlite_locked_error,
+    sqlite_lock_retry_delay,
+)
 from pullbox.schemas.import_job import (
     ConfirmImportRequest,
     ConflictGroupsResponse,
@@ -130,6 +137,35 @@ def _make_import_service() -> Any:
     from pullbox.composition.services import build_import_control_service
 
     return build_import_control_service()
+
+
+async def _bulk_update_series_selection_with_retry(
+    session: AsyncSession,
+    job_id: int,
+    body: SeriesSelectionBulkUpdateRequest,
+) -> ImportSelectionBulkUpdateResponse:
+    """Retry a small Step 3 selection write after transient SQLite contention."""
+    service = _make_import_service()
+    for attempt in range(1, SQLITE_LOCK_RETRY_ATTEMPTS + 1):
+        try:
+            response = await bulk_update_series_selection_response(service, session, job_id, body)
+            await session.commit()
+            return response
+        except OperationalError as exc:
+            await session.rollback()
+            if not is_sqlite_locked_error(exc) or attempt == SQLITE_LOCK_RETRY_ATTEMPTS:
+                raise
+            delay_seconds = sqlite_lock_retry_delay(attempt)
+            logger.info(
+                "import_review_selection_retrying_after_sqlite_lock",
+                job_id=job_id,
+                attempt=attempt,
+                max_attempts=SQLITE_LOCK_RETRY_ATTEMPTS,
+                delay_seconds=delay_seconds,
+            )
+            await asyncio.sleep(delay_seconds)
+
+    raise RuntimeError("SQLite selection retry loop exhausted unexpectedly")
 
 
 # ── Log Level Filtering ──────────────────────────────────────────────────
@@ -625,10 +661,7 @@ async def bulk_update_series_selection(
     body: SeriesSelectionBulkUpdateRequest,
 ) -> ImportSelectionBulkUpdateResponse:
     """Persist include/exclude state for matched review series in the current scope."""
-    service = _make_import_service()
-    response = await bulk_update_series_selection_response(service, session, job_id, body)
-    await session.commit()
-    return response
+    return await _bulk_update_series_selection_with_retry(session, job_id, body)
 
 
 @router.put(

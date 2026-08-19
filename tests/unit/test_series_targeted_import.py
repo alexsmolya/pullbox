@@ -10,9 +10,13 @@ from sqlalchemy import select
 
 from pullbox.core.events import EventBus, SeriesAdded
 from pullbox.core.exceptions import NotFoundError, ValidationError
+from pullbox.core.naming import classify_series_type
+from pullbox.models.config import SystemConfig
 from pullbox.models.import_job import ImportedSeries
 from pullbox.models.issue import Issue, IssueStatus
-from pullbox.models.series import IssueCatalogState, Series, SeriesStatus
+from pullbox.models.library import LibraryRoot
+from pullbox.models.publisher import Publisher
+from pullbox.models.series import IssueCatalogState, Series, SeriesStatus, SeriesType
 from pullbox.providers.base import IssueSummary, SeriesMetadata
 from pullbox.services.series_service import SeriesService
 
@@ -25,6 +29,14 @@ async def _fake_upsert_series(
     cv_id: int,
     meta: SeriesMetadata,
 ) -> Series:
+    publisher: Publisher | None = None
+    if meta.publisher:
+        publisher = await session.scalar(select(Publisher).where(Publisher.name == meta.publisher))
+        if publisher is None:
+            publisher = Publisher(name=meta.publisher)
+            session.add(publisher)
+            await session.flush()
+
     existing = await session.scalar(select(Series).where(Series.comicvine_id == cv_id))
     if existing is not None:
         existing.title = meta.title
@@ -32,6 +44,15 @@ async def _fake_upsert_series(
         existing.year_start = meta.year_start
         existing.issue_count = meta.issue_count or 0
         existing.comicvine_url = meta.comicvine_url
+        existing.publisher_id = publisher.id if publisher is not None else None
+        existing.series_type = SeriesType(
+            classify_series_type(
+                meta.title,
+                description=meta.description,
+                issue_count=meta.issue_count or 0,
+                year_start=meta.year_start,
+            )
+        )
         await session.flush()
         return existing
 
@@ -43,17 +64,39 @@ async def _fake_upsert_series(
         status=SeriesStatus.CONTINUING,
         issue_count=meta.issue_count or 0,
         comicvine_url=meta.comicvine_url,
+        publisher_id=publisher.id if publisher is not None else None,
+        series_type=SeriesType(
+            classify_series_type(
+                meta.title,
+                description=meta.description,
+                issue_count=meta.issue_count or 0,
+                year_start=meta.year_start,
+            )
+        ),
     )
     session.add(series)
     await session.flush()
     return series
 
 
+async def _seed_folder_naming_config(session: AsyncSession, template: str) -> None:
+    for key, value, value_type in (
+        ("series_folder_template", template, "string"),
+        ("replace_illegal_characters", "true", "bool"),
+        ("colon_replacement", "dash", "string"),
+    ):
+        session.add(SystemConfig(key=key, value=value, value_type=value_type))
+    await session.flush()
+
+
 async def _fake_upsert_issue_summaries(
     session: AsyncSession,
     series: Series,
     summaries: list[IssueSummary],
+    *,
+    infer_series_type_from_summaries: bool = False,
 ) -> list[Issue]:
+    del infer_series_type_from_summaries
     created: list[Issue] = []
     for summary in summaries:
         issue = Issue(
@@ -115,6 +158,107 @@ async def test_targeted_import_creates_partial_catalog_without_emitting_series_a
     assert emitted == []
     issues = (await db_session.scalars(select(Issue).where(Issue.series_id == series.id))).all()
     assert [(issue.issue_number, issue.comicvine_id) for issue in issues] == [(4.0, 120004)]
+
+
+@pytest.mark.asyncio
+async def test_targeted_import_uses_cached_metadata_for_type_aware_folder_name(
+    db_session: AsyncSession,
+    tmp_path,
+) -> None:
+    """Targeted placement honors all folder tokens without a cold metadata fetch."""
+    root = LibraryRoot(name="Comics", path=str(tmp_path), enabled=True)
+    db_session.add(root)
+    await db_session.flush()
+    await _seed_folder_naming_config(
+        db_session,
+        "{Publisher} - {Series} ({Year}) [{Type}] [cv-{ComicVineId}]",
+    )
+
+    class CachedMetadata:
+        async def get_cached_series_metadata(self, comicvine_id: int) -> SeriesMetadata | None:
+            assert comicvine_id == 111396
+            return SeriesMetadata(
+                provider_id="111396",
+                title="About Betty's Boob",
+                sort_title="About Betty's Boob",
+                year_start=2018,
+                year_end=None,
+                status="ended",
+                publisher="Archaia",
+                description="A hardcover graphic novel.",
+                cover_url=None,
+                issue_count=1,
+                comicvine_url="https://comicvine.gamespot.com/about-bettys-boob/4050-111396/",
+            )
+
+    metadata = CachedMetadata()
+    metadata.upsert_series_metadata = AsyncMock(side_effect=_fake_upsert_series)
+    metadata.upsert_issue_summaries = AsyncMock(side_effect=_fake_upsert_issue_summaries)
+    service = SeriesService(metadata_service=metadata, event_bus=EventBus())
+    import_series = ImportedSeries(
+        raw_series_name="About Betty's Boob",
+        cv_id=111396,
+        cv_title="About Betty's Boob",
+        cv_year=2018,
+        cv_publisher="Archaia",
+        cv_issue_count=1,
+        cv_url="https://comicvine.gamespot.com/about-bettys-boob/4050-111396/",
+    )
+
+    series = await service.add_from_import_review_targeted(
+        db_session,
+        import_series=import_series,
+        library_root_id=root.id,
+        issue_summaries=[],
+    )
+
+    assert series.series_type == SeriesType.HARDCOVER
+    assert series.path == str(tmp_path / "Archaia - About Betty's Boob (2018) [HC] [cv-111396]")
+
+
+@pytest.mark.asyncio
+async def test_targeted_import_uses_explicit_single_one_shot_as_folder_hint(
+    db_session: AsyncSession,
+    tmp_path,
+) -> None:
+    """A source one-shot hint names a one-issue folder without reclassifying its series."""
+    root = LibraryRoot(name="Comics", path=str(tmp_path), enabled=True)
+    db_session.add(root)
+    await db_session.flush()
+    await _seed_folder_naming_config(db_session, "{Series} ({Year}) [{Type}]")
+
+    metadata = MagicMock()
+    metadata.upsert_series_metadata = AsyncMock(side_effect=_fake_upsert_series)
+    metadata.upsert_issue_summaries = AsyncMock(side_effect=_fake_upsert_issue_summaries)
+    service = SeriesService(metadata_service=metadata, event_bus=EventBus())
+    import_series = ImportedSeries(
+        raw_series_name="Black Mass Rising",
+        cv_id=144914,
+        cv_title="Black Mass Rising",
+        cv_year=2022,
+        cv_publisher="TKO Studios",
+        cv_issue_count=1,
+        cv_url="https://comicvine.gamespot.com/black-mass-rising/4050-144914/",
+    )
+
+    series = await service.add_from_import_review_targeted(
+        db_session,
+        import_series=import_series,
+        library_root_id=root.id,
+        issue_summaries=[
+            IssueSummary(
+                provider_id="945536",
+                issue_number=1.0,
+                title=None,
+                release_date=None,
+                cover_url=None,
+                issue_type="one_shot",
+            )
+        ],
+    )
+
+    assert series.series_type == SeriesType.STANDARD
+    assert series.path == str(tmp_path / "Black Mass Rising (2022) [One-Shot]")
 
 
 @pytest.mark.asyncio

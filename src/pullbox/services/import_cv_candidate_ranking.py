@@ -83,7 +83,7 @@ def build_selected_candidate_summary(
     score: float,
     match_method: str,
     match_type: str,
-    year_delta: int | None | object = _OMIT,
+    year_delta: int | object | None = _OMIT,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the shared selected-candidate diagnostics payload."""

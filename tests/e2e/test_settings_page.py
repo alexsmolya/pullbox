@@ -307,6 +307,7 @@ class TestSettingsPage:
 
         panel = settings.panel("indexers")
         assert panel.locator("[data-testid='settings-indexers-prowlarr-card']").first.is_visible()
+        assert panel.locator("[data-testid='settings-indexers-jackett-card']").first.is_visible()
         assert panel.locator("[data-testid='settings-indexers-registry-card']").first.is_visible()
         assert panel.locator("[data-testid='settings-indexers-test-all']").first.is_visible()
         assert panel.locator("[data-testid='settings-indexers-add-indexer']").first.is_visible()
@@ -318,6 +319,35 @@ class TestSettingsPage:
         assert panel.get_by_text("Add another source", exact=True).count() == 0
         assert panel.get_by_text("Before you raise the threshold", exact=True).count() == 0
         assert panel.get_by_text("When this helps most", exact=True).count() == 0
+
+    def test_settings_indexer_cards_keep_standard_vertical_gap(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("indexers")
+
+        gaps = authed_page.evaluate(
+            """
+            () => {
+              const box = (testId) => document
+                .querySelector(`[data-testid='${testId}']`)
+                ?.getBoundingClientRect();
+              const registry = box("settings-indexers-registry-card");
+              const priority = box("settings-indexers-priority-card");
+              const failure = box("settings-indexers-failure-card");
+              if (!registry || !priority || !failure) return null;
+              return {
+                registryToPriority: Math.round(priority.top - registry.bottom),
+                priorityToFailure: Math.round(failure.top - priority.bottom),
+              };
+            }
+            """
+        )
+
+        assert gaps is not None
+        assert gaps["registryToPriority"] == gaps["priorityToFailure"] == 24
 
     def test_settings_indexers_prowlarr_save_sync_requires_dirty_state(
         self,
@@ -348,6 +378,37 @@ class TestSettingsPage:
             """
             () => {
               const button = document.querySelector("[data-testid='settings-indexers-prowlarr-save-sync']");
+              return !!button && !button.disabled;
+            }
+            """,
+            timeout=5000,
+        )
+        assert save_button.is_enabled()
+
+    def test_settings_indexers_jackett_save_sync_requires_dirty_state(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("indexers")
+
+        save_button = authed_page.locator(
+            "[data-testid='settings-indexers-jackett-save-sync']"
+        ).first
+        url_input = authed_page.locator("[data-testid='settings-indexers-jackett-url']").first
+        api_key_input = authed_page.locator(
+            "[data-testid='settings-indexers-jackett-api-key']"
+        ).first
+
+        assert save_button.is_disabled()
+        url_input.fill("http://127.0.0.1:9117")
+        api_key_input.fill("test-api-key")
+
+        authed_page.wait_for_function(
+            """
+            () => {
+              const button = document.querySelector("[data-testid='settings-indexers-jackett-save-sync']");
               return !!button && !button.disabled;
             }
             """,
@@ -396,6 +457,42 @@ class TestSettingsPage:
         assert backdrop_box is not None
         assert backdrop_box["y"] <= 1
         assert backdrop_box["height"] >= 1098
+
+    def test_settings_torznab_add_modal_uses_torznab_field_examples(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("indexers")
+
+        authed_page.locator("[data-testid='settings-indexers-add-indexer']").first.click()
+        modal = authed_page.locator("[data-testid='settings-indexers-modal']").first
+        modal.wait_for(state="visible", timeout=5000)
+        torznab_card = modal.locator("button").filter(has_text="Torznab")
+        assert torznab_card.get_by_text("Torrent indexer (1337x, etc.)", exact=True).is_visible()
+        torznab_card.click()
+
+        assert modal.locator('input[x-model="form.name"]').get_attribute("placeholder") == "Torznab"
+        assert (
+            modal.locator('input[x-model="form.url"]').get_attribute("placeholder")
+            == "https://api.torznab.com"
+        )
+        modal.locator('input[x-model="form.name"]').fill("Public Torznab")
+        modal.locator('input[x-model="form.url"]').fill("https://indexer.example")
+        assert modal.get_by_role("button", name="Add Indexer", exact=True).is_enabled()
+        modal.get_by_role("button", name="Advanced Settings", exact=True).click()
+        resolver_option = modal.locator("[data-testid='settings-indexers-manual-torznab-resolver']")
+        resolver_option.wait_for(state="visible", timeout=5000)
+        resolver_toggle = resolver_option.locator('input[x-model="form.resolver_enabled"]')
+        assert resolver_option.get_by_text("Ranked browser resolver chain", exact=True).is_visible()
+        assert resolver_option.get_by_text(
+            "Only available for manually added torznab providers. Pullbox tries ordinary HTTP "
+            "first and never sends the API key or search query to a resolver.",
+            exact=True,
+        ).is_visible()
+        assert resolver_toggle.is_disabled()
+        assert "toggle-input" in (resolver_toggle.get_attribute("class") or "")
 
     def test_settings_footer_save_buttons_share_same_height(
         self,
@@ -487,7 +584,17 @@ class TestSettingsPage:
         general_box = general_card.bounding_box()
         assert general_box is not None
 
-        for tab in ("media", "clients", "indexers", "metadata", "search", "utilities", "ui"):
+        for tab in (
+            "media",
+            "clients",
+            "indexers",
+            "resolvers",
+            "direct",
+            "metadata",
+            "search",
+            "utilities",
+            "ui",
+        ):
             settings.switch_tab(tab)
             target_card = authed_page.locator(
                 f"[data-testid='settings-panel-{tab}'] .section-card"
@@ -498,6 +605,73 @@ class TestSettingsPage:
             assert abs(target_box["y"] - general_box["y"]) <= 2, (
                 f"{tab} top card y={target_box['y']} does not match general y={general_box['y']}"
             )
+
+    def test_direct_download_provider_registration_modal_is_native_and_closable(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        page_errors: list[str] = []
+        authed_page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("direct")
+
+        assert authed_page.locator("[data-testid='settings-direct-trust-warning']").is_visible()
+        authed_page.locator("[data-testid='settings-direct-add-provider']").click()
+
+        modal = authed_page.locator("[data-testid='settings-direct-modal']")
+        authed_page.wait_for_timeout(100)
+        component_data = authed_page.locator("[x-data^='directProviderSettings']").get_attribute(
+            "x-data"
+        )
+        assert not page_errors, {"errors": page_errors, "x_data": component_data}
+        modal.wait_for(state="visible", timeout=5000)
+        assert modal.is_visible()
+        assert modal.get_by_label("Provider endpoint").is_visible()
+        assert modal.get_by_label("Bearer token").is_visible()
+        assert modal.get_by_role("button", name="Register Provider").is_visible()
+
+        modal.get_by_role("button", name="Cancel").click()
+        modal.wait_for(state="hidden")
+
+    def test_challenge_resolver_modal_uses_connection_contract_and_fits_viewport(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.set_viewport_size({"width": 900, "height": 720})
+        settings = SettingsPage(authed_page, seeded_server)
+        settings.goto("resolvers")
+
+        authed_page.locator("[data-testid='settings-resolver-add']").click()
+
+        modal = authed_page.locator("[data-testid='settings-resolver-modal']")
+        panel = modal.locator(".modal-panel")
+        modal.wait_for(state="visible", timeout=5000)
+        panel_box = panel.bounding_box()
+
+        assert panel_box is not None
+        assert panel_box["x"] > 0
+        assert panel_box["y"] > 0
+        assert panel_box["x"] + panel_box["width"] <= 900
+        assert panel_box["y"] + panel_box["height"] <= 720
+        assert abs((panel_box["x"] + (panel_box["width"] / 2)) - 450) <= 2
+        assert modal.get_by_test_id("settings-resolver-modal-enabled").is_visible()
+        assert modal.get_by_test_id("settings-resolver-modal-private-http").is_visible()
+        type_dropdown = modal.get_by_test_id("settings-resolver-type-select")
+        type_dropdown.locator("[data-dropdown-select-trigger]").click()
+        type_panel = authed_page.get_by_test_id("settings-resolver-type-panel")
+        type_panel.wait_for(state="visible", timeout=5000)
+        type_panel.locator("[data-dropdown-option][data-value='trawl']").click()
+        assert type_dropdown.locator("[data-dropdown-select-input]").input_value() == "trawl"
+        assert (
+            type_dropdown.locator("[data-dropdown-select-trigger-label]").text_content() == "TRAWL"
+        )
+        assert modal.get_by_role("button", name="Cancel").is_visible()
+        assert modal.get_by_role("button", name="Save Resolver").is_visible()
+
+        modal.get_by_role("button", name="Cancel").click()
+        modal.wait_for(state="hidden")
 
     def test_settings_tab_switch_resets_scroll_to_top(
         self,
@@ -596,6 +770,7 @@ class TestSettingsPage:
         settings.switch_tab("clients")
         settings.switch_tab("utilities")
         settings.switch_tab("indexers")
+        settings.switch_tab("resolvers")
         settings.switch_tab("metadata")
         settings.switch_tab("general")
 
@@ -907,6 +1082,54 @@ class TestSettingsPage:
         assert settings.panel("utilities").is_visible()
         assert settings.dropdown_value("settings-utilities-log-level-select") == "ERROR"
         assert settings.dropdown_label("settings-utilities-log-level-select") == "Error"
+
+    def test_settings_search_language_dropdown_selects_and_resets(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        settings = SettingsPage(authed_page, seeded_server)
+        saved_payloads: list[dict[str, Any]] = []
+
+        def handle_config_update(route) -> None:  # type: ignore[no-untyped-def]
+            payload = route.request.post_data_json or {}
+            saved_payloads.append(payload)
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"updated": sorted(payload.get("values", {}).keys())}),
+            )
+
+        authed_page.route("**/api/v1/config", handle_config_update)
+        settings.goto("search")
+
+        settings.select_dropdown_option(
+            "settings-search-preferred-language-select",
+            "es",
+        )
+
+        assert settings.dropdown_value("settings-search-preferred-language-select") == "es"
+        assert settings.dropdown_label("settings-search-preferred-language-select") == "Spanish"
+
+        modifiers_card = (
+            settings.panel("search")
+            .locator(".section-card")
+            .filter(has=authed_page.get_by_text("Scoring modifiers", exact=True))
+            .first
+        )
+        modifiers_card.get_by_role("button", name="Reset to Defaults").click()
+
+        authed_page.wait_for_function(
+            """
+            () => document
+              .querySelector("[data-testid='settings-search-preferred-language-select']")
+              ?.getAttribute("data-dropdown-value") === "en"
+            """,
+            timeout=5000,
+        )
+        assert settings.dropdown_value("settings-search-preferred-language-select") == "en"
+        assert settings.dropdown_label("settings-search-preferred-language-select") == "English"
+        assert saved_payloads[-1]["values"]["preferred_language"] == "en"
 
     def test_settings_floating_dropdown_preserves_control_metrics(
         self,

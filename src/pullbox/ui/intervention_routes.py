@@ -15,6 +15,7 @@ from pullbox.models.indexer import IndexerConfig
 from pullbox.models.issue import Issue
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.series import Series
+from pullbox.services.direct_acquisition_planner_service import DirectAcquisitionPlanningError
 from pullbox.ui.intervention_context_loaders import (
     build_intervention_queue_filters,
     load_intervention_context,
@@ -218,7 +219,7 @@ async def intervention_page(
 
     hx_target = request.headers.get("HX-Target")
     if request.headers.get("HX-Request"):
-        if normalized_tab == "queue" and hx_target == "intervention-queue-results":
+        if normalized_tab in {"queue", "recovery"} and hx_target == "intervention-queue-results":
             return _templates().TemplateResponse(
                 request,
                 "partials/intervention_queue_results_bundle.html",
@@ -283,7 +284,7 @@ async def htmx_intervention_content(
         ),
     )
     hx_target = request.headers.get("HX-Target")
-    if normalized_tab == "queue" and hx_target == "intervention-queue-results":
+    if normalized_tab in {"queue", "recovery"} and hx_target == "intervention-queue-results":
         return _templates().TemplateResponse(
             request,
             "partials/intervention_queue_results_bundle.html",
@@ -499,16 +500,7 @@ async def htmx_intervention_bulk_approve(
     from pullbox.services.intervention_service import InterventionService
 
     built = await build_domain_download_service(session)
-    if built is None:
-        error_html = (
-            '<div class="rounded-xl bg-red-500/10 border border-red-500/30'
-            ' p-4 text-sm text-red-400">'
-            "No download clients configured. Cannot approve."
-            "</div>"
-        )
-        return Response(content=error_html, media_type="text/html")
-
-    download_svc, _configs = built
+    download_svc = built[0] if built is not None else None
     svc = InterventionService(download_service=download_svc)
 
     for pm_id in pm_ids:
@@ -572,10 +564,12 @@ async def htmx_intervention_bulk_reject(
 
     svc = InterventionService()
     successful_rejects = 0
+    blocklisted_rejects = 0
     for pm_id in pm_ids:
         try:
-            await svc.reject_match(session, pm_id)
+            blocklisted = await svc.reject_match(session, pm_id)
             successful_rejects += 1
+            blocklisted_rejects += int(blocklisted)
         except (ValueError, Exception):
             logger.warning("htmx_bulk_reject_item_failed", pending_id=pm_id)
 
@@ -607,15 +601,51 @@ async def htmx_intervention_bulk_reject(
 
     if successful_rejects > 0:
         noun = "release" if successful_rejects == 1 else "releases"
+        dismissed_rejects = successful_rejects - blocklisted_rejects
+        if blocklisted_rejects == successful_rejects:
+            message = (
+                f"Rejected {successful_rejects} {noun} and added "
+                + ("it" if successful_rejects == 1 else "them")
+                + " to the blocklist."
+            )
+        elif blocklisted_rejects == 0:
+            message = f"Dismissed {successful_rejects} failed {noun} without blocklisting."
+        else:
+            message = (
+                f"Resolved {successful_rejects} {noun}: {blocklisted_rejects} blocklisted "
+                f"and {dismissed_rejects} failed reviews dismissed."
+            )
         _toast_response(
             response,
-            f"Rejected {successful_rejects} {noun} and added "
-            + ("it" if successful_rejects == 1 else "them")
-            + " to the blocklist.",
+            message,
             "success",
         )
 
     return response
+
+
+def _direct_approval_failure_message(
+    pending_match: PendingMatch,
+    error: DirectAcquisitionPlanningError,
+) -> str:
+    provider_name = str((pending_match.match_details or {}).get("provider_name") or "Provider")
+    if error.code == "candidate_not_found":
+        return (
+            f"{provider_name} no longer offers a downloadable file for this result. "
+            "It was removed from the queue; run a new search to try another source."
+        )
+    if error.code == "source_quota_limited":
+        return f"{provider_name} has no download quota available right now. Try again later."
+    if error.code == "source_authentication_required":
+        return f"{provider_name} authentication needs attention before this result can download."
+    if error.retryable or error.code in {"source_unavailable", "provider_timed_out"}:
+        return f"{provider_name} is temporarily unavailable. Try approving this result again soon."
+    if error.code == "no_eligible_complete_plan":
+        return (
+            "Pullbox could not verify a complete, eligible download route for the requested "
+            "issue. Check the result or artifact-host settings, then try again."
+        )
+    return "This direct result cannot be queued until its provider configuration is corrected."
 
 
 @router.post(
@@ -643,32 +673,43 @@ async def htmx_intervention_approve(
     search = str(form.get("search", "") or "")
     requested_page = int(str(form.get("page", "1") or "1") or "1")
 
-    from pullbox.composition.services import build_domain_download_service
-    from pullbox.services.intervention_service import InterventionService
+    from pullbox.services.intervention_service import (
+        InterventionService,
+        is_direct_pending_match,
+    )
 
-    built = await build_domain_download_service(session)
-    if built is None:
-        return _templates().TemplateResponse(
-            request,
-            "partials/intervention_action_result.html",
-            _ctx(
+    if is_direct_pending_match(pm):
+        svc = InterventionService()
+    else:
+        from pullbox.composition.services import build_domain_download_service
+
+        built = await build_domain_download_service(session)
+        if built is None:
+            return _templates().TemplateResponse(
                 request,
-                user,
-                pending_id=pending_id,
-                heading="Could Not Approve",
-                title=release_title,
-                message="No download clients are configured for this Pullbox instance.",
-                tone="error",
-            ),
-        )
+                "partials/intervention_action_result.html",
+                _ctx(
+                    request,
+                    user,
+                    pending_id=pending_id,
+                    heading="Could Not Approve",
+                    title=release_title,
+                    message="No download clients are configured for this Pullbox instance.",
+                    tone="error",
+                ),
+            )
 
-    download_svc, _configs = built
-    svc = InterventionService(download_service=download_svc)
+        download_svc, _configs = built
+        svc = InterventionService(download_service=download_svc)
 
     try:
         await svc.approve_match(session, pending_id)
-    except (ValueError, Exception):
-        logger.exception("htmx_intervention_approve_failed", pending_id=pending_id)
+    except DirectAcquisitionPlanningError as exc:
+        logger.warning(
+            "htmx_direct_intervention_approve_unavailable",
+            pending_id=pending_id,
+            failure_code=exc.code,
+        )
         return _templates().TemplateResponse(
             request,
             "partials/intervention_action_result.html",
@@ -678,7 +719,27 @@ async def htmx_intervention_approve(
                 pending_id=pending_id,
                 heading="Could Not Approve",
                 title=release_title,
-                message="Failed to send this release to the configured download client.",
+                message=_direct_approval_failure_message(pm, exc),
+                tone="error",
+            ),
+        )
+    except Exception:
+        logger.exception("htmx_intervention_approve_failed", pending_id=pending_id)
+        failure_message = (
+            "Failed to queue this direct release for acquisition."
+            if is_direct_pending_match(pm)
+            else "Failed to send this release to the configured download client."
+        )
+        return _templates().TemplateResponse(
+            request,
+            "partials/intervention_action_result.html",
+            _ctx(
+                request,
+                user,
+                pending_id=pending_id,
+                heading="Could Not Approve",
+                title=release_title,
+                message=failure_message,
                 tone="error",
             ),
         )
@@ -743,12 +804,13 @@ async def htmx_intervention_reject(
     protocol = str(form.get("protocol", "") or "")
     search = str(form.get("search", "") or "")
     requested_page = int(str(form.get("page", "1") or "1") or "1")
+    tab = str(form.get("tab", "queue") or "queue")
 
     from pullbox.services.intervention_service import InterventionService
 
     svc = InterventionService()
     try:
-        await svc.reject_match(session, pending_id)
+        blocklisted = await svc.reject_match(session, pending_id)
     except ValueError:
         logger.exception("htmx_intervention_reject_failed", pending_id=pending_id)
         return Response(status_code=404)
@@ -759,7 +821,7 @@ async def htmx_intervention_reject(
             user,
             **await load_intervention_context(
                 session,
-                tab="queue",
+                tab=tab,
                 reason_filter=reason,
                 confidence_filter=confidence,
                 protocol_filter=protocol,
@@ -774,7 +836,11 @@ async def htmx_intervention_reject(
         )
         return _toast_response(
             _templates().TemplateResponse(request, template_name, ctx),
-            "Release rejected and added to the blocklist.",
+            (
+                "Release rejected and added to the blocklist."
+                if blocklisted
+                else "Failed release dismissed without blocklisting."
+            ),
             "success",
         )
 
@@ -785,9 +851,83 @@ async def htmx_intervention_reject(
             request,
             user,
             pending_id=pending_id,
-            heading="Rejected",
+            heading="Rejected" if blocklisted else "Dismissed",
             title=release_title,
-            message="Release removed from the intervention queue and added to the blocklist.",
+            message=(
+                "Release removed from the intervention queue and added to the blocklist."
+                if blocklisted
+                else "Failed release removed from the intervention queue without blocklisting."
+            ),
             tone="neutral",
         ),
+    )
+
+
+@router.post(
+    "/htmx/intervention/{pending_id}/retry-recovery",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def htmx_intervention_retry_recovery(
+    request: Request,
+    pending_id: int,
+    user: AuthenticatedUser,
+    session: DbSession,
+) -> Response:
+    """Refresh direct download routes after automatic fallback has been exhausted."""
+    pending_match = await session.get(PendingMatch, pending_id)
+    if pending_match is None:
+        return Response(status_code=404)
+    form_getter = getattr(request, "form", None)
+    form = await form_getter() if callable(form_getter) else {}
+    reason = str(form.get("reason", "") or "")
+    confidence = str(form.get("confidence", "") or "")
+    protocol = str(form.get("protocol", "") or "")
+    search = str(form.get("search", "") or "")
+    requested_page = int(str(form.get("page", "1") or "1") or "1")
+
+    from pullbox.services.intervention_service import InterventionService
+
+    try:
+        await InterventionService().retry_direct_recovery(session, pending_id)
+    except (DirectAcquisitionPlanningError, ValueError) as exc:
+        logger.warning("htmx_direct_recovery_retry_failed", pending_id=pending_id, error=str(exc))
+        return _templates().TemplateResponse(
+            request,
+            "partials/intervention_action_result.html",
+            _ctx(
+                request,
+                user,
+                pending_id=pending_id,
+                heading="Could Not Refresh Download Routes",
+                title=pending_match.release_title,
+                message=(
+                    "Pullbox could not find a fresh eligible route. Check provider or "
+                    "artifact-host settings, then try again."
+                ),
+                tone="error",
+            ),
+        )
+
+    ctx = _ctx(
+        request,
+        user,
+        **await load_intervention_context(
+            session,
+            tab="recovery",
+            reason_filter=reason,
+            confidence_filter=confidence,
+            protocol_filter=protocol,
+            search_query=search,
+            requested_page=requested_page,
+        ),
+    )
+    return _toast_response(
+        _templates().TemplateResponse(
+            request,
+            "partials/intervention_queue_results_bundle.html",
+            ctx,
+        ),
+        "Download routes refreshed and acquisition queued.",
+        "success",
     )

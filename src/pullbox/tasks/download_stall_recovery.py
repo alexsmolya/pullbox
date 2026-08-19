@@ -10,7 +10,7 @@ import structlog
 from sqlalchemy import select
 
 from pullbox.core.config_resolver import get_int_setting, load_system_config_values
-from pullbox.models.download import DownloadHistory, DownloadState
+from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.tasks.download_failure import (
     auto_blocklist_on_download_failure,
@@ -86,6 +86,7 @@ async def _recover_stalled_downloads(
     result = await session.execute(
         select(DownloadHistory).where(
             DownloadHistory.state.in_([DownloadState.DOWNLOADING, DownloadState.FINALIZING]),
+            DownloadHistory.download_client != DownloadClientType.DIRECT,
             DownloadHistory.external_id.isnot(None),
             DownloadHistory.updated_at < stall_cutoff,
         )

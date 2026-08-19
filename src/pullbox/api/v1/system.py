@@ -662,6 +662,12 @@ async def get_comics_dir(
 
 async def _task_manual_run_disabled_reason() -> str | None:
     """Return why manual task runs are unavailable, if imports are protected."""
+    from pullbox.database import database_maintenance_reason
+
+    maintenance_reason = database_maintenance_reason()
+    if maintenance_reason:
+        return "Manual runs are disabled while database maintenance is in progress."
+
     try:
         active_import = await has_active_import_scheduler_protection()
     except Exception as exc:
@@ -689,8 +695,16 @@ async def list_tasks(
     await scheduler.load_persisted_stats(session)
     manual_run_disabled_reason = await _task_manual_run_disabled_reason()
     scheduled_tasks = scheduler.get_scheduled_tasks()
+    from pullbox.services.wanted_search_sweep import (
+        load_wanted_search_sweep,
+        wanted_search_sweep_view,
+    )
+
+    wanted_sweep = await load_wanted_search_sweep(session)
     for task in scheduled_tasks:
         task["manual_run_disabled_reason"] = manual_run_disabled_reason
+        if task.get("task_id") == "search_wanted" and wanted_sweep is not None:
+            task["sweep_progress"] = wanted_search_sweep_view(wanted_sweep)
     return {
         "scheduled": scheduled_tasks,
     }

@@ -1,6 +1,6 @@
 """Unit tests for DownloadClientType enum expansion (DCE-M.1).
 
-Tests all 5 enum values, is_usenet/is_torrent helper properties,
+Tests all 6 enum values, protocol classification helper properties,
 StrEnum string comparison behavior, and SQLAlchemy round-trip persistence.
 
 Run:
@@ -75,14 +75,19 @@ class TestDownloadClientTypeValues:
         assert DownloadClientType.DELUGE == "deluge"
         assert DownloadClientType.DELUGE.value == "deluge"
 
-    def test_all_five_members_exist(self) -> None:
+    def test_direct_value(self) -> None:
+        assert DownloadClientType.DIRECT == "direct"
+        assert DownloadClientType.DIRECT.value == "direct"
+
+    def test_all_six_members_exist(self) -> None:
         members = list(DownloadClientType)
-        assert len(members) == 5
+        assert len(members) == 6
 
     def test_construction_from_string(self) -> None:
         assert DownloadClientType("nzbget") is DownloadClientType.NZBGET
         assert DownloadClientType("transmission") is DownloadClientType.TRANSMISSION
         assert DownloadClientType("deluge") is DownloadClientType.DELUGE
+        assert DownloadClientType("direct") is DownloadClientType.DIRECT
 
     def test_invalid_value_raises(self) -> None:
         with pytest.raises(ValueError, match="rtorrent"):
@@ -129,11 +134,13 @@ class TestDownloadClientTypeValues:
         assert members[2] is DownloadClientType.QBITTORRENT
         assert members[3] is DownloadClientType.TRANSMISSION
         assert members[4] is DownloadClientType.DELUGE
+        assert members[5] is DownloadClientType.DIRECT
 
     def test_membership_check_with_in(self) -> None:
         """The 'in' operator works with string values against the enum."""
         assert "nzbget" in [ct.value for ct in DownloadClientType]
         assert "transmission" in [ct.value for ct in DownloadClientType]
+        assert "direct" in [ct.value for ct in DownloadClientType]
         assert "rtorrent" not in [ct.value for ct in DownloadClientType]
 
     def test_hashable_for_set_and_dict_use(self) -> None:
@@ -163,6 +170,9 @@ class TestIsUsenet:
     def test_deluge_not_usenet(self) -> None:
         assert DownloadClientType.DELUGE.is_usenet is False
 
+    def test_direct_not_usenet(self) -> None:
+        assert DownloadClientType.DIRECT.is_usenet is False
+
 
 class TestIsTorrent:
     """Tests for the is_torrent helper property."""
@@ -182,14 +192,28 @@ class TestIsTorrent:
     def test_deluge_is_torrent(self) -> None:
         assert DownloadClientType.DELUGE.is_torrent is True
 
+    def test_direct_not_torrent(self) -> None:
+        assert DownloadClientType.DIRECT.is_torrent is False
 
-class TestMutualExclusivity:
-    """Verify is_usenet and is_torrent are mutually exclusive and exhaustive."""
+
+class TestIsDirect:
+    """Tests for the is_direct helper property."""
+
+    def test_direct_is_direct(self) -> None:
+        assert DownloadClientType.DIRECT.is_direct is True
+
+    @pytest.mark.parametrize("member", list(DownloadClientType)[:-1])
+    def test_client_backed_types_are_not_direct(self, member: DownloadClientType) -> None:
+        assert member.is_direct is False
+
+
+class TestProtocolClassification:
+    """Verify every client-history type has exactly one protocol classification."""
 
     def test_every_member_is_exactly_one_type(self) -> None:
         for member in DownloadClientType:
-            assert member.is_usenet ^ member.is_torrent, (
-                f"{member.name} must be exactly one of usenet or torrent"
+            assert sum((member.is_usenet, member.is_torrent, member.is_direct)) == 1, (
+                f"{member.name} must have exactly one protocol classification"
             )
 
     def test_no_member_is_both(self) -> None:
@@ -197,13 +221,6 @@ class TestMutualExclusivity:
         for member in DownloadClientType:
             assert not (member.is_usenet and member.is_torrent), (
                 f"{member.name} cannot be both usenet and torrent"
-            )
-
-    def test_no_member_is_neither(self) -> None:
-        """Every member must be categorized as either usenet or torrent."""
-        for member in DownloadClientType:
-            assert member.is_usenet or member.is_torrent, (
-                f"{member.name} must be either usenet or torrent"
             )
 
     def test_usenet_count(self) -> None:
@@ -214,11 +231,16 @@ class TestMutualExclusivity:
         torrent = [m for m in DownloadClientType if m.is_torrent]
         assert len(torrent) == 3
 
+    def test_direct_count(self) -> None:
+        direct = [m for m in DownloadClientType if m.is_direct]
+        assert direct == [DownloadClientType.DIRECT]
+
     def test_property_returns_bool_not_truthy(self) -> None:
         """Properties must return actual bool, not just truthy/falsy values."""
         for member in DownloadClientType:
             assert type(member.is_usenet) is bool
             assert type(member.is_torrent) is bool
+            assert type(member.is_direct) is bool
 
 
 @pytest.mark.asyncio
@@ -275,8 +297,8 @@ class TestSQLAlchemyRoundTrip:
         loaded = result.scalar_one()
         assert DownloadClientType(loaded.client_type) is DownloadClientType.QBITTORRENT
 
-    async def test_all_five_types_coexist_in_one_table(self, session: AsyncSession) -> None:
-        """All 5 client types can be stored and queried in the same table."""
+    async def test_all_six_types_coexist_in_one_table(self, session: AsyncSession) -> None:
+        """All 6 client types can be stored and queried in the same table."""
         for i, ct in enumerate(DownloadClientType, start=10):
             session.add(_ClientTypeRecord(id=i, client_type=ct.value))
         await session.flush()
@@ -284,7 +306,14 @@ class TestSQLAlchemyRoundTrip:
         result = await session.execute(select(_ClientTypeRecord).where(_ClientTypeRecord.id >= 10))
         rows = list(result.scalars().all())
         stored_types = {r.client_type for r in rows}
-        assert stored_types == {"sabnzbd", "nzbget", "qbittorrent", "transmission", "deluge"}
+        assert stored_types == {
+            "sabnzbd",
+            "nzbget",
+            "qbittorrent",
+            "transmission",
+            "deluge",
+            "direct",
+        }
 
     async def test_round_trip_preserves_helper_properties(self, session: AsyncSession) -> None:
         """After round-tripping through DB, reconstructed enum has correct properties."""

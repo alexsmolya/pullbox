@@ -40,18 +40,19 @@ def test_health_attention_label_prioritizes_unhealthy_then_degraded() -> None:
     )
 
 
-def test_health_component_sublabel_counts_indexer_proxy_and_indexers() -> None:
+def test_health_component_sublabel_counts_configured_search_proxies_and_indexers() -> None:
     from pullbox.ui.health_component_stats import health_component_sublabel
 
     details = {
         "checks": [
             {"subject_kind": "proxy", "subject_key": "prowlarr"},
+            {"subject_kind": "proxy", "subject_key": "jackett"},
             {"subject_kind": "indexer", "subject_key": "1"},
             {"subject_kind": "indexer", "subject_key": "2"},
         ]
     }
 
-    assert health_component_sublabel("indexers", (), details) == "1 proxy + 2 indexers"
+    assert health_component_sublabel("indexers", (), details) == "2 proxies + 2 indexers"
     assert (
         health_component_sublabel("filesystem", (_check("disk", "healthy"),), {})
         == "1 paths checked"
@@ -61,7 +62,7 @@ def test_health_component_sublabel_counts_indexer_proxy_and_indexers() -> None:
     )
 
 
-def test_health_component_card_stats_keep_specialized_indexer_summary() -> None:
+def test_health_component_card_stats_summarize_all_search_proxies() -> None:
     from pullbox.ui.health_component_stats import health_component_card_stats
 
     current_time = datetime(2026, 6, 6, 12, 5, tzinfo=UTC)
@@ -72,6 +73,12 @@ def test_health_component_card_stats_keep_specialized_indexer_summary() -> None:
                 "subject_key": "prowlarr",
                 "status": "degraded",
                 "response_time_ms": 250.0,
+            },
+            {
+                "subject_kind": "proxy",
+                "subject_key": "jackett",
+                "status": "healthy",
+                "response_time_ms": 120.0,
             },
             {"subject_kind": "indexer", "subject_key": "1", "status": "healthy"},
             {"subject_kind": "indexer", "subject_key": "2", "status": "unhealthy"},
@@ -92,8 +99,41 @@ def test_health_component_card_stats_keep_specialized_indexer_summary() -> None:
     )
 
     assert [(stat.label, stat.value_label, stat.tone) for stat in stats] == [
-        ("Prowlarr", "250ms", "warning"),
+        ("Search Proxies", "1/2 OK", "warning"),
         ("Indexers", "1/2 OK", "default"),
+    ]
+
+
+def test_health_component_detail_stats_summarize_all_search_proxies() -> None:
+    from pullbox.ui.health_component_stats import health_component_detail_stats
+
+    current_time = datetime(2026, 6, 6, 12, 5, tzinfo=UTC)
+    details = {
+        "checks": [
+            {"subject_kind": "proxy", "subject_key": "prowlarr", "status": "healthy"},
+            {"subject_kind": "proxy", "subject_key": "jackett", "status": "unhealthy"},
+            {"subject_kind": "indexer", "subject_key": "1", "status": "healthy"},
+        ]
+    }
+
+    stats = health_component_detail_stats(
+        "indexers",
+        checks=(_check("one", "healthy"), _check("two", "unhealthy")),
+        response_ms=99.0,
+        last_checked=current_time - timedelta(minutes=1),
+        current_time=current_time,
+        details=details,
+        message="Jackett needs attention",
+        relative_time_label=lambda value, reference: (
+            f"{int((reference - value).total_seconds() // 60)}m ago"
+        ),
+    )
+
+    assert [(stat.label, stat.value_label, stat.tone) for stat in stats] == [
+        ("Status", "Jackett needs attention", "default"),
+        ("Search Proxies", "1/2 OK", "danger"),
+        ("Indexers", "1 active", "danger"),
+        ("Last Check", "1m ago", "default"),
     ]
 
 

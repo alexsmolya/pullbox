@@ -638,6 +638,7 @@ async def utilities_db_check(
     request: Request,
     user: AuthenticatedUser,
     session: DbSession,
+    check: str | None = Query(default=None),
 ) -> Response:
     """Render the DB check & cleanup workflow page."""
     default_root = await session.scalar(
@@ -651,6 +652,7 @@ async def utilities_db_check(
             request,
             user,
             db_check_default_root=default_root or configs.get("comics_directory", ""),
+            db_check_initial_optimize=check == "optimize",
         ),
     )
 

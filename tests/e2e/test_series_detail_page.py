@@ -94,6 +94,41 @@ class TestSeriesDetailPage:
         assert series.monitor_label.text_content() == "Monitored"
         assert not series.monitor_toggle.is_checked()
 
+    def test_monitoring_toggle_updates_in_place_without_reloading_the_detail_page(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series = SeriesDetailPage(authed_page, seeded_server)
+        series.goto(2)
+        authed_page.evaluate(
+            """() => {
+                document.querySelector("[data-testid='series-detail-page']")
+                    ?.setAttribute("data-monitor-toggle-shell", "preserved");
+            }"""
+        )
+
+        with authed_page.expect_response(
+            lambda response: "/htmx/series/2/issues" in response.url and response.ok,
+            timeout=5000,
+        ):
+            series.monitor_toggle.locator("xpath=..").click()
+
+        assert authed_page.url.endswith("/series/2")
+        assert series.page_shell.get_attribute("data-monitor-toggle-shell") == "preserved"
+        assert series.monitor_toggle.is_checked()
+        status_row = authed_page.locator("[data-testid='series-detail-status-row']")
+        assert "Monitored" in (status_row.text_content() or "")
+
+        # Restore the session-scoped seed so later E2E tests retain their fixture contract.
+        with authed_page.expect_response(
+            lambda response: "/htmx/series/2/issues" in response.url and response.ok,
+            timeout=5000,
+        ):
+            series.monitor_toggle.locator("xpath=..").click()
+
+        assert not series.monitor_toggle.is_checked()
+
     def test_status_row_uses_real_pill_contracts(
         self,
         authed_page,
@@ -184,6 +219,33 @@ class TestSeriesDetailPage:
         assert "/series" in authed_page.url
         assert authed_page.locator("[data-testid='series-page']").first.is_visible()
         assert authed_page.locator("[data-testid='page-footer-dock']").first.is_visible()
+
+    def test_delete_returns_to_originating_series_page_and_sort(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        series_list = SeriesListPage(authed_page, seeded_server)
+        series_list.goto("sort=-year&per_page=2&page=2")
+        series_list.open_first_series()
+
+        back_link = authed_page.locator("[data-testid='series-detail-back-link']").first
+        assert back_link.get_attribute("href") == "/series?sort=-year&per_page=2&page=2"
+
+        authed_page.route(
+            "**/htmx/series/*/delete",
+            lambda route: route.fulfill(status=204),
+        )
+        detail = SeriesDetailPage(authed_page, seeded_server)
+        detail.open_delete_modal()
+        authed_page.locator("[data-testid='series-delete-submit']").first.click()
+
+        authed_page.wait_for_url("**/series?sort=-year&per_page=2&page=2", timeout=5000)
+        series_list.wait_until_ready()
+
+        assert series_list.query_param("sort") == "-year"
+        assert series_list.query_param("per_page") == "2"
+        assert series_list.query_param("page") == "2"
 
     def test_back_link_returns_to_pull_list_when_opened_from_pull_list(
         self,

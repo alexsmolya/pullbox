@@ -12,6 +12,7 @@ from sqlalchemy.orm import joinedload
 
 from pullbox.api.deps import AuthenticatedUser, DbSession  # noqa: TC001
 from pullbox.core.exceptions import NotFoundError
+from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
 from pullbox.models.issue import Issue
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.schemas.intervention import (
@@ -25,7 +26,10 @@ from pullbox.schemas.intervention import (
     PendingMatchResponse,
     RejectRequest,
 )
-from pullbox.services.intervention_service import InterventionService
+from pullbox.services.intervention_service import (
+    InterventionService,
+    is_direct_pending_match,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -150,12 +154,7 @@ async def bulk_approve(
     from pullbox.composition.services import build_domain_download_service
 
     built = await build_domain_download_service(session)
-    if built is None:
-        from pullbox.core.exceptions import ProviderError
-
-        raise ProviderError("download", "No download clients configured")
-
-    download_svc, _configs = built
+    download_svc = built[0] if built is not None else None
     svc = InterventionService(download_service=download_svc)
 
     results: list[BulkActionResult] = []
@@ -248,19 +247,22 @@ async def approve_pending_match(
     if pm is None:
         raise NotFoundError("PendingMatch", pending_id)
 
-    from pullbox.composition.services import build_domain_download_service
+    if is_direct_pending_match(pm):
+        svc = InterventionService()
+    else:
+        from pullbox.composition.services import build_domain_download_service
 
-    built = await build_domain_download_service(session)
-    if built is None:
-        from pullbox.core.exceptions import ProviderError
+        built = await build_domain_download_service(session)
+        if built is None:
+            from pullbox.core.exceptions import ProviderError
 
-        raise ProviderError("download", "No download clients configured")
+            raise ProviderError("download", "No download clients configured")
 
-    download_svc, _configs = built
-    svc = InterventionService(download_service=download_svc)
+        download_svc, _configs = built
+        svc = InterventionService(download_service=download_svc)
 
     try:
-        download = await svc.approve_match(session, pending_id)
+        approved = await svc.approve_match(session, pending_id)
     except ValueError as exc:
         raise NotFoundError("PendingMatch", pending_id) from exc
 
@@ -271,11 +273,19 @@ async def approve_pending_match(
         user=user.username,
     )
 
+    if isinstance(approved, DirectAcquisitionAttempt):
+        return ApproveResponse(
+            acquisition_id=approved.id,
+            issue_id=approved.issue_id,
+            title=str(approved.candidate_snapshot.get("display_title") or pm.release_title),
+            status=str(approved.state),
+            source_kind="direct",
+        )
     return ApproveResponse(
-        download_id=download.id,
-        issue_id=download.issue_id,
-        title=download.title,
-        status=str(download.state),
+        download_id=approved.id,
+        issue_id=approved.issue_id,
+        title=approved.title,
+        status=str(approved.state),
     )
 
 

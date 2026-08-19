@@ -81,6 +81,7 @@ class ImportedFileStatus(enum.StrEnum):
     PENDING = "pending"
     MATCHED = "matched"
     SAFETY_BLOCKED = "safety_blocked"
+    SAFETY_APPROVED = "safety_approved"
     DUPLICATE_FILE = "duplicate_file"
     ALREADY_OWNED = "already_owned"
     CONFLICT = "conflict"

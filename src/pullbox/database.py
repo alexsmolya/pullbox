@@ -36,6 +36,7 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 _maintenance_gate = asyncio.Event()
 _maintenance_gate.set()
 _maintenance_lock = asyncio.Lock()
+_maintenance_reason: str | None = None
 _SQLITE_BUSY_TIMEOUT_MS = 15000
 _SQLITE_BUSY_TIMEOUT_PRAGMA = "PRAGMA busy_timeout=15000"
 _SQLITE_ALLOWED_JOURNAL_MODES = frozenset({"WAL", "DELETE"})
@@ -353,6 +354,11 @@ async def wait_for_database_ready() -> None:
     await _maintenance_gate.wait()
 
 
+def database_maintenance_reason() -> str | None:
+    """Return the active exclusive-maintenance reason, if any."""
+    return _maintenance_reason
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Yield an async database session for FastAPI dependency injection.
 
@@ -382,7 +388,10 @@ async def dispose_engine() -> None:
 @asynccontextmanager
 async def database_maintenance_window(*, reason: str) -> AsyncGenerator[None, None]:
     """Temporarily pause new DB sessions for exclusive maintenance work."""
+    global _maintenance_reason
+
     async with _maintenance_lock:
+        _maintenance_reason = reason
         _maintenance_gate.clear()
         try:
             await dispose_engine()
@@ -390,4 +399,5 @@ async def database_maintenance_window(*, reason: str) -> AsyncGenerator[None, No
             yield
         finally:
             _maintenance_gate.set()
+            _maintenance_reason = None
             logger.info("database_maintenance_finished", reason=reason)

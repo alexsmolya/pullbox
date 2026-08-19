@@ -36,6 +36,7 @@ from pullbox.ui.health_registry_rows import (
     indexer_content_type_label,
     indexer_endpoint_summary,
     indexer_kind_detail_label,
+    load_jackett_route_config,
     load_prowlarr_route_config,
 )
 from pullbox.ui.health_subject_history import load_health_subject_history
@@ -167,7 +168,7 @@ async def build_indexer_detail_view(
     history_search: str,
     relative_time_label: Callable[[datetime, datetime], str],
 ) -> HealthComponentView:
-    """Build a detail-page presenter for Prowlarr or one indexer subject."""
+    """Build a detail-page presenter for a search proxy or one indexer subject."""
     latest_rows = await _load_latest_health_subject_summary_rows(session, "indexers")
     latest_row = latest_rows.get(subject_key)
     details = _parse_health_details_json(getattr(latest_row, "details_json", None))
@@ -196,9 +197,10 @@ async def build_indexer_detail_view(
     )
     response_ms = latest_row.response_time_ms if latest_row is not None else None
 
-    if subject_key == "prowlarr":
-        return await _build_prowlarr_detail_view(
+    if subject_key in {"prowlarr", "jackett"}:
+        return await _build_search_proxy_detail_view(
             session,
+            subject_key=subject_key,
             current_time=current_time,
             details=details,
             latest_row_exists=latest_row is not None,
@@ -285,9 +287,10 @@ async def build_indexer_detail_view(
     )
 
 
-async def _build_prowlarr_detail_view(
+async def _build_search_proxy_detail_view(
     session: AsyncSession,
     *,
+    subject_key: str,
     current_time: datetime,
     details: object,
     latest_row_exists: bool,
@@ -298,11 +301,16 @@ async def _build_prowlarr_detail_view(
     history: tuple[HealthHistoryRowView, ...],
     relative_time_label: Callable[[datetime, datetime], str],
 ) -> HealthComponentView:
-    prowlarr_url = await load_prowlarr_route_config(session)
-    if not prowlarr_url:
-        raise HTTPException(status_code=404, detail="Prowlarr not configured")
+    proxy_name = "Prowlarr" if subject_key == "prowlarr" else "Jackett"
+    proxy_url = (
+        await load_prowlarr_route_config(session)
+        if subject_key == "prowlarr"
+        else await load_jackett_route_config(session)
+    )
+    if not proxy_url:
+        raise HTTPException(status_code=404, detail=f"{proxy_name} not configured")
 
-    _, host, port = indexer_endpoint_summary(prowlarr_url)
+    _, host, port = indexer_endpoint_summary(proxy_url)
     checks = (
         build_health_checks_from_details(details)
         if latest_row_exists
@@ -337,10 +345,10 @@ async def _build_prowlarr_detail_view(
         ),
     )
     return HealthComponentView(
-        key="prowlarr",
+        key=subject_key,
         component_key="indexers",
-        display_name="Prowlarr",
-        detail_title="PROWLARR DETAILS",
+        display_name=proxy_name,
+        detail_title=f"{proxy_name.upper()} DETAILS",
         status=status,
         status_label=status.capitalize(),
         pill_tone=_health_pill_tone(status),
@@ -358,8 +366,8 @@ async def _build_prowlarr_detail_view(
         history_total_count=subject_history.total_count,
         history_sort=subject_history.normalized_sort,
         history_search_query=subject_history.normalized_search,
-        subject_key="prowlarr",
-        history_base_path="/health/indexers/prowlarr",
+        subject_key=subject_key,
+        history_base_path=f"/health/indexers/{subject_key}",
         back_href="/health/indexers",
         back_label="Back to indexers",
     )

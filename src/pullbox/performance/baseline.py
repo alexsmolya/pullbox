@@ -180,6 +180,18 @@ def summarize_numbers(values: Sequence[float]) -> dict[str, float | int]:
     }
 
 
+def current_process_peak_rss_bytes() -> int | None:
+    """Return this process's peak resident memory using platform rusage units."""
+
+    try:
+        import resource
+    except ImportError:  # pragma: no cover - resource is unavailable on Windows
+        return None
+
+    peak_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak_rss if sys.platform == "darwin" else peak_rss * 1024
+
+
 def resolve_endpoint_url(base_url: str, target: str) -> str:
     """Resolve a path-like endpoint target against a base URL."""
 

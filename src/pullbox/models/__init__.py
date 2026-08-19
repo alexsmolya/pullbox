@@ -11,6 +11,25 @@ from pullbox.models.client import DownloadClientConfig
 from pullbox.models.config import SystemConfig
 from pullbox.models.creator import Creator, IssueCreator
 from pullbox.models.dashboard import DashboardMetricRollup, DashboardStorageSnapshot
+from pullbox.models.direct_acquisition import (
+    DirectAcquisitionAttempt,
+    DirectAcquisitionState,
+    DirectArtifactAttempt,
+    DirectArtifactFailureClass,
+    DirectArtifactHostKind,
+    DirectArtifactRouteKind,
+    DirectArtifactState,
+    DirectHostAccountState,
+    DirectHostConfig,
+    DirectHostOperationalResult,
+    DirectHostReachabilityState,
+    DirectProviderConfig,
+    DirectProviderState,
+    DirectProviderTrustLevel,
+    DirectResolverConfig,
+    DirectResolverKind,
+    DirectResolverState,
+)
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.health import (
     HealthCheckResult,
@@ -35,6 +54,7 @@ from pullbox.models.matching_suggestion import MatchingSuggestion, SuggestionSta
 from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
 from pullbox.models.provider_cache import MetadataProviderCacheEntry
 from pullbox.models.publisher import Publisher
+from pullbox.models.reader import IssueReaderState
 from pullbox.models.scheduler_task_stat import ScheduledTaskStat
 from pullbox.models.search_log import SearchLog, SearchType
 from pullbox.models.series import (
@@ -67,6 +87,23 @@ __all__ = [
     "Creator",
     "DashboardMetricRollup",
     "DashboardStorageSnapshot",
+    "DirectAcquisitionAttempt",
+    "DirectAcquisitionState",
+    "DirectArtifactAttempt",
+    "DirectArtifactFailureClass",
+    "DirectArtifactHostKind",
+    "DirectArtifactRouteKind",
+    "DirectArtifactState",
+    "DirectHostAccountState",
+    "DirectHostConfig",
+    "DirectHostOperationalResult",
+    "DirectHostReachabilityState",
+    "DirectProviderConfig",
+    "DirectProviderState",
+    "DirectProviderTrustLevel",
+    "DirectResolverConfig",
+    "DirectResolverKind",
+    "DirectResolverState",
     "DownloadClientConfig",
     "DownloadClientType",
     "DownloadHistory",
@@ -91,6 +128,7 @@ __all__ = [
     "Issue",
     "IssueCatalogState",
     "IssueCreator",
+    "IssueReaderState",
     "IssueStatus",
     "IssueStoryArc",
     "IssueType",

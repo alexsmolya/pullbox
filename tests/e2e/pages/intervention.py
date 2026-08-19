@@ -100,6 +100,18 @@ class InterventionPage(BasePage):
     def history_panel(self) -> Locator:
         return self.page.locator("[data-testid='intervention-history-panel']").first
 
+    @property
+    def first_history_details_toggle(self) -> Locator:
+        return self.history_panel.locator(
+            "[data-testid^='intervention-history-details-toggle-']"
+        ).first
+
+    @property
+    def first_history_detail(self) -> Locator:
+        return self.history_panel.locator(
+            "[data-testid='intervention-history-detail-content']"
+        ).first
+
     def item(self, pending_id: int) -> Locator:
         return self.page.locator(f"[data-testid='intervention-item-{pending_id}']").first
 

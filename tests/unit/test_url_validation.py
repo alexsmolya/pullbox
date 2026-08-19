@@ -32,3 +32,11 @@ def test_normalize_peer_base_url_rejects_unsafe_or_incomplete_urls(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         normalize_peer_base_url(raw_url)
+
+
+def test_normalize_peer_base_url_can_reject_route_suffixes_for_fixed_api_peers() -> None:
+    with pytest.raises(ValueError, match="query or fragment"):
+        normalize_peer_base_url(
+            "https://peer.local?target=https://other.local",
+            reject_query_or_fragment=True,
+        )

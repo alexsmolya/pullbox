@@ -688,9 +688,9 @@ class TestImportShellRouteContracts:
             "src/pullbox/ui/templates/partials/import_step_review.html"
         ).read_text()
 
-        assert 'e.detail.target.id === "import-step-review"' in script
-        assert 'e.detail.target.id === "conflicts-content"' in script
-        assert "window.htmx.process(e.detail.target);" in script
+        assert 'settledTarget.id === "import-step-review"' in script
+        assert 'settledTarget.id === "conflicts-content"' in script
+        assert "window.htmx.process(settledTarget);" in script
         assert "reviewData.rehydrateAfterShellSwap();" in script
         assert "currentConflictPanelData: function () {" in script
         assert "await panel.saveAllResolutions();" in script
@@ -2445,6 +2445,60 @@ class TestImportShellRouteContracts:
         assert 'data-testid="import-review-skip-safety-file"' in response.text
         assert "/safety/skip?status=safety_blocked" in response.text
 
+    async def test_import_review_keeps_approved_file_in_safety_view_while_rematching(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.models.import_job import ImportedFile, ImportedFileStatus, ImportedSeries
+
+        job_id = await _seed_import_review_job(sec_db)
+        async with sec_db() as session:
+            series = await session.get(ImportedSeries, 1)
+            assert series is not None
+            series.files_matched = 0
+            series.diagnostics = {"safety_blocked_files": 1, "rematch_pending": True}
+            session.add(
+                ImportedFile(
+                    import_job_id=job_id,
+                    import_series_id=series.id,
+                    file_path="/tmp/review-1/oversized.cbz",
+                    file_name="Oversized Omnibus.cbz",
+                    file_size=4_248_712_282,
+                    file_format="cbz",
+                    status=ImportedFileStatus.SAFETY_APPROVED,
+                    diagnostics={"safety_exception": {"allowed_once": True}},
+                )
+            )
+            await session.commit()
+
+        response = await authenticated_client.get(
+            f"/import/{job_id}/review-partial?status=safety_blocked"
+        )
+
+        assert response.status_code == 200
+        assert "Preparing this file for matching" in response.text
+        assert "Preparing match" in response.text
+        assert 'data-testid="import-review-safety-rematch-spinner"' in response.text
+        assert 'hx-trigger="every 2s [window.pullboxLiveUpdatesEnabled()]"' in response.text
+        assert 'data-testid="import-review-allow-safety-file"' not in response.text
+        assert 'data-testid="import-review-skip-safety-file"' not in response.text
+
+    async def test_import_review_returns_to_all_when_safety_tab_becomes_empty(
+        self,
+        authenticated_client,
+        sec_db,
+    ) -> None:  # type: ignore[no-untyped-def]
+        job_id = await _seed_import_review_job(sec_db)
+
+        response = await authenticated_client.get(
+            f"/import/{job_id}/review-partial?status=safety_blocked"
+        )
+
+        assert response.status_code == 200
+        assert 'name="review_status_filter" value=""' in response.text
+        assert 'data-import-review-view="series"' in response.text
+
     async def test_import_review_allow_safety_file_post_refreshes_review(
         self,
         authenticated_client,
@@ -2513,7 +2567,7 @@ class TestImportShellRouteContracts:
         async with sec_db() as session:
             refreshed_file = await session.get(ImportedFile, blocked_file_id)
             assert refreshed_file is not None
-            assert refreshed_file.status == ImportedFileStatus.PENDING
+            assert refreshed_file.status == ImportedFileStatus.SAFETY_APPROVED
             assert refreshed_file.include_in_import is False
             assert refreshed_file.diagnostics["safety_exception"]["allowed_once"] is True
 
