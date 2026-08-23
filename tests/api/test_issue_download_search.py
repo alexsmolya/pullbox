@@ -394,3 +394,82 @@ async def test_issue_download_routes_direct_only_match_through_shared_acquisitio
     assert route.await_args is not None
     assert route.await_args.kwargs["outcome"] is outcome
     assert route.await_args.kwargs["source_priority"] == ["direct", "usenet", "torrent"]
+
+
+@pytest.mark.asyncio
+async def test_issue_download_returns_the_source_metadata_selected_after_fallback(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    issue_id = await _create_issue(_db_factory)
+    initial_release = _make_release("Initial Direct Candidate")
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=["direct", "usenet", "torrent"],
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+        direct_providers=(SimpleNamespace(),),
+    )
+    target = IssueSearchTarget(
+        issue_id=issue_id,
+        series_id=1,
+        series_title="Absolute Superman",
+        issue_number=9.0,
+        issue_type=IssueType.ISSUE,
+        issue_title="Issue #9",
+        series_year=2025,
+    )
+    outcome = IssueSearchOutcome(
+        target=target,
+        mode="deep",
+        query_count=1,
+        raw_results=[initial_release],
+        filtered_results=[initial_release],
+        matched=[],
+        rejected=[],
+        best_release=None,
+        best_validation=None,
+        search_details={},
+        elapsed_ms=0,
+    )
+    routed = SearchAcquisitionRoutingResult(
+        grabbed=1,
+        queued=0,
+        action_status="downloading",
+        best_confidence="high",
+        source_kind="indexer",
+        release_title="Fallback Indexer Candidate",
+    )
+
+    with (
+        patch(
+            "pullbox.api.v1.issues._run_issue_search",
+            new_callable=AsyncMock,
+            return_value=_bundle(issue_id, runtime=runtime, outcome=outcome),
+        ),
+        patch(
+            "pullbox.api.v1.issues.route_search_acquisition",
+            new_callable=AsyncMock,
+            return_value=routed,
+        ),
+        patch(
+            "pullbox.api.v1.issues.select_search_source",
+            return_value=SimpleNamespace(
+                release=initial_release,
+                validation=SimpleNamespace(confidence=MatchConfidence.HIGH),
+            ),
+        ),
+        patch(
+            "pullbox.api.v1.issues.get_direct_acquisition_runner",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = await client.post(f"/api/v1/issues/{issue_id}/download")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_kind"] == "indexer"
+    assert payload["release_title"] == "Fallback Indexer Candidate"

@@ -47,7 +47,7 @@ def extract_same_series_issue_files(
     *,
     destination: Path,
     expected_issue_numbers: frozenset[str],
-    expected_series_title: str,
+    expected_series_titles: frozenset[str],
 ) -> dict[float, Path]:
     """Extract separately packaged issues from one contiguous direct-download pack.
 
@@ -58,8 +58,12 @@ def extract_same_series_issue_files(
         return {}
 
     expected = _normalized_issue_numbers(expected_issue_numbers)
-    normalized_series_title = NameMatcher.normalize(expected_series_title)
-    if not normalized_series_title:
+    normalized_series_titles = {
+        normalized
+        for title in expected_series_titles
+        if (normalized := NameMatcher.normalize(title))
+    }
+    if not normalized_series_titles:
         raise DirectArtifactPackError(
             code="direct_pack_series_invalid",
             message="The direct-download pack has no reliable series identity.",
@@ -102,7 +106,7 @@ def extract_same_series_issue_files(
         if issue_number is None or issue_number not in expected:
             continue
         parsed_series_title = NameMatcher.normalize(parsed.series_name or "") if parsed else ""
-        if parsed_series_title != normalized_series_title:
+        if parsed_series_title not in normalized_series_titles:
             raise DirectArtifactPackError(
                 code="direct_pack_mixed_series",
                 message="The direct-download pack contains files for a different series.",

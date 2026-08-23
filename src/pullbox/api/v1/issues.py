@@ -961,7 +961,7 @@ async def download_issue(
         payload: dict[str, object] = {
             "issue_id": issue_id,
             "status": "downloading",
-            "release_title": selection.release.title,
+            "release_title": routed.release_title or selection.release.title,
             "source_kind": routed.source_kind,
         }
         if routed.download_id is not None:
@@ -974,8 +974,8 @@ async def download_issue(
         return {
             "issue_id": issue_id,
             "status": "queued",
-            "release_title": selection.release.title,
-            "confidence": selection.validation.confidence.value,
+            "release_title": routed.release_title or selection.release.title,
+            "confidence": routed.best_confidence or selection.validation.confidence.value,
             "source_kind": routed.source_kind,
             **(
                 {"message": "Already queued for review"}

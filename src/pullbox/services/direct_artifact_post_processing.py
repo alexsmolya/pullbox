@@ -151,7 +151,9 @@ async def run_direct_artifact_pack_post_processing(
         source_path,
         destination=source_path.parent / "pack-members",
         expected_issue_numbers=expected_issue_numbers,
-        expected_series_title=initiating_issue.series.title,
+        expected_series_titles=frozenset(
+            (initiating_issue.series.title, *(initiating_issue.series.alternate_names or []))
+        ),
     )
     issues_result = await session.execute(
         select(Issue)
@@ -167,8 +169,7 @@ async def run_direct_artifact_pack_post_processing(
         candidate = issue_by_number.get(issue_number)
         if candidate is None:
             continue
-        is_explicit_replacement = candidate.id == issue_id and replace_existing_file
-        if not is_explicit_replacement and candidate.status not in {
+        if candidate.id != issue_id and candidate.status not in {
             IssueStatus.WANTED,
             IssueStatus.DOWNLOADING,
         }:
