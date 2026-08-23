@@ -25,6 +25,12 @@ def _write_cbz(path: Path, *, entry: str = "001.jpg") -> None:
         archive.writestr(entry, b"synthetic image fixture")
 
 
+def _write_nested_pack(path: Path) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Alien 005.cbz", b"issue five")
+        archive.writestr("Alien 006.cbz", b"issue six")
+
+
 def test_quarantine_uses_private_deterministic_attempt_paths(tmp_path: Path) -> None:
     quarantine = DirectArtifactQuarantine(tmp_path / "direct")
 
@@ -67,6 +73,23 @@ async def test_direct_artifact_reuses_existing_safety_and_integrity_checks(
     assert result.page_count == 1
     assert result.file_size == final_path.stat().st_size
     assert result.file_hash
+
+
+@pytest.mark.asyncio
+async def test_direct_artifact_accepts_a_valid_separable_issue_pack(
+    tmp_path: Path,
+) -> None:
+    quarantine = DirectArtifactQuarantine(tmp_path / "direct")
+    workspace = quarantine.prepare(acquisition_id=1, artifact_id=2)
+    _write_nested_pack(workspace.partial_path)
+    final_path = quarantine.finalize(workspace, filename_hint="pack.cbz")
+    session = AsyncMock()
+    session.get.return_value = None
+
+    result = await validate_direct_artifact(session, final_path)
+
+    assert result.page_count is None
+    assert result.file_size == final_path.stat().st_size
 
 
 @pytest.mark.asyncio

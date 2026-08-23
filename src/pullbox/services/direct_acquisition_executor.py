@@ -60,8 +60,10 @@ from pullbox.services.direct_acquisition_state import (
     transition_acquisition,
     transition_artifact,
 )
+from pullbox.services.direct_artifact_pack import DirectArtifactPackError
 from pullbox.services.direct_artifact_post_processing import (
     DirectPostProcessingResult,
+    run_direct_artifact_pack_post_processing,
     run_direct_artifact_post_processing,
 )
 from pullbox.services.direct_artifact_quarantine import (
@@ -568,14 +570,41 @@ class DirectAcquisitionExecutor:
         acquisition_id = attempt.id
         artifact_id = artifact.id
         try:
-            processed = await self._post_processor(
-                session,
-                acquisition_id=attempt.id,
-                issue_id=attempt.issue_id,
-                source_path=final_path,
-                replace_existing_file=attempt.replace_existing_file,
-                allow_resource_safety_exception=_resource_safety_override_allowed(attempt),
-            )
+            pack_coverage = _selected_pack_coverage(attempt)
+            if len(pack_coverage) > 1:
+                processed = await run_direct_artifact_pack_post_processing(
+                    session,
+                    acquisition_id=attempt.id,
+                    issue_id=attempt.issue_id,
+                    source_path=final_path,
+                    expected_issue_numbers=pack_coverage,
+                    replace_existing_file=attempt.replace_existing_file,
+                    allow_resource_safety_exception=_resource_safety_override_allowed(attempt),
+                )
+            else:
+                processed = await self._post_processor(
+                    session,
+                    acquisition_id=attempt.id,
+                    issue_id=attempt.issue_id,
+                    source_path=final_path,
+                    replace_existing_file=attempt.replace_existing_file,
+                    allow_resource_safety_exception=_resource_safety_override_allowed(attempt),
+                )
+        except DirectArtifactPackError as exc:
+            await session.rollback()
+            attempt, artifact = await _load_attempt(session, acquisition_id, artifact_id)
+            progress = _ProgressWriter(session, attempt, artifact, now=self._now)
+            attempt.failure_class = DirectArtifactFailureClass.POST_PROCESS
+            attempt.failure_code = exc.code
+            attempt.error_message = str(exc)
+            artifact.failure_class = DirectArtifactFailureClass.POST_PROCESS
+            artifact.failure_code = exc.code
+            artifact.error_message = str(exc)
+            transition_artifact(artifact, DirectArtifactState.FAILED, at=self._now())
+            transition_acquisition(attempt, DirectAcquisitionState.FAILED, at=self._now())
+            self._quarantine.cleanup(workspace)
+            await progress.write(stage="failed", force=True)
+            return _result(attempt, artifact)
         except Exception:
             await session.rollback()
             attempt, artifact = await _load_attempt(session, acquisition_id, artifact_id)
@@ -720,6 +749,20 @@ class DirectAcquisitionExecutor:
 def _raise_if_cancelled(cancel_event: asyncio.Event | None) -> None:
     if cancel_event is not None and cancel_event.is_set():
         raise ArtifactTransferCancelledError
+
+
+def _selected_pack_coverage(attempt: DirectAcquisitionAttempt) -> frozenset[str]:
+    """Return provider-declared selected content coverage, if durably available."""
+    snapshot = attempt.plan_snapshot or {}
+    coverage = snapshot.get("coverage")
+    if not isinstance(coverage, dict):
+        return frozenset()
+    raw_numbers = coverage.get("selected_content_issue_numbers")
+    if not isinstance(raw_numbers, list):
+        return frozenset()
+    return frozenset(
+        value.strip() for value in raw_numbers if isinstance(value, str) and value.strip()
+    )
 
 
 async def _await_with_cancel[T](

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -422,17 +422,12 @@ async def _search_provider(
             continue
         seen_candidate_ids.add(candidate.provider_candidate_id)
         release = _candidate_release(provider, candidate)
-        accepted, declined = validator.validate_all_results(
-            [release],
-            wanted_series=target.series_title,
-            wanted_issue=target.issue_number,
-            wanted_year=target.search_year,
-            wanted_issue_type=target.issue_type,
-            alternate_names=_validation_alternate_names(target, candidate),
-            wanted_issue_title=target.issue_title,
-            wanted_series_issue_count=target.series_issue_count,
+        validation = _validate_direct_candidate(
+            validator,
+            release=release,
+            candidate=candidate,
+            target=target,
         )
-        validation = accepted[0] if accepted else declined[0]
         result = DirectValidatedCandidate(
             provider=provider,
             candidate=candidate,
@@ -441,6 +436,76 @@ async def _search_provider(
         )
         (matched if validation.is_match else rejected).append(result)
     return matched, rejected, None
+
+
+def _validate_direct_candidate(
+    validator: ReleaseValidator,
+    *,
+    release: ReleaseResult,
+    candidate: DirectCandidate,
+    target: IssueSearchTarget,
+) -> ValidationResult:
+    """Validate a direct candidate, allowing only explicitly-covered issue packs.
+
+    Generic torrent and Usenet releases remain conservative: their contents cannot
+    be safely assumed to be separable. Direct candidates carry provider-parsed
+    coverage and pass a dedicated nested-archive validation path before import.
+    """
+
+    def validate(
+        candidate_release: ReleaseResult,
+    ) -> tuple[list[ValidationResult], list[ValidationResult]]:
+        return validator.validate_all_results(
+            [candidate_release],
+            wanted_series=target.series_title,
+            wanted_issue=target.issue_number,
+            wanted_year=target.search_year,
+            wanted_issue_type=target.issue_type,
+            alternate_names=_validation_alternate_names(target, candidate),
+            wanted_issue_title=target.issue_title,
+            wanted_series_issue_count=target.series_issue_count,
+        )
+
+    accepted, declined = validate(release)
+    validation = accepted[0] if accepted else declined[0]
+    if validation.is_match or not _is_explicit_direct_pack_for_target(candidate, target):
+        return validation
+    rejection_reason = validation.rejection_reason or ""
+    if not (
+        rejection_reason.startswith("Multi-issue pack")
+        or rejection_reason.startswith("Issue mismatch")
+    ):
+        return validation
+
+    # Validate title, type, and year with the requested member as a synthetic
+    # single-issue title, then retain the original range evidence for display.
+    pack_member_release = replace(
+        release,
+        title=_direct_pack_member_title(candidate, target),
+    )
+    accepted, _declined = validate(pack_member_release)
+    if not accepted:
+        return validation
+    return replace(accepted[0], parsed=validation.parsed, release=release)
+
+
+def _is_explicit_direct_pack_for_target(
+    candidate: DirectCandidate,
+    target: IssueSearchTarget,
+) -> bool:
+    target_issue = f"{target.issue_number:g}"
+    return (
+        len(candidate.parsed.issue_numbers) > 1 and target_issue in candidate.parsed.issue_numbers
+    )
+
+
+def _direct_pack_member_title(
+    candidate: DirectCandidate,
+    target: IssueSearchTarget,
+) -> str:
+    year = candidate.parsed.year or target.search_year
+    suffix = f" ({year})" if year is not None else ""
+    return f"{candidate.parsed.series_title} #{target.issue_number:g}{suffix}"
 
 
 def _validation_alternate_names(

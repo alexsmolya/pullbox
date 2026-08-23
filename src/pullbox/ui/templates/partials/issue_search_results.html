@@ -166,7 +166,13 @@
               <td><span class="pill{% if item.source_kind == 'direct' %} pill-info{% else %} pill-muted{% endif %}">{{ item.method }}</span></td>
               <td>
                 {% if item.coverage %}
-                  <span class="pill pill-success">Issue {{ item.coverage|join(', ') }}</span>
+                  <span class="pill pill-success">
+                    {% if item.coverage|length > 1 %}
+                      Pack: issues {{ item.coverage|join(', ') }}
+                    {% else %}
+                      Issue {{ item.coverage|join(', ') }}
+                    {% endif %}
+                  </span>
                 {% else %}
                   <span class="pill pill-muted">Issue {{ issue.issue_number|issue_num }}</span>
                 {% endif %}
@@ -247,7 +253,15 @@
               <td class="downloads-mono-cell">{{ item.indexer_name }}</td>
               <td><span class="pill pill-muted opacity-60">{{ item.method }}</span></td>
               <td>
-                {% if item.coverage %}<span class="pill pill-muted opacity-60">Issue {{ item.coverage|join(', ') }}</span>{% else %}—{% endif %}
+                {% if item.coverage %}
+                  <span class="pill pill-muted opacity-60">
+                    {% if item.coverage|length > 1 %}
+                      Pack: issues {{ item.coverage|join(', ') }}
+                    {% else %}
+                      Issue {{ item.coverage|join(', ') }}
+                    {% endif %}
+                  </span>
+                {% else %}—{% endif %}
               </td>
               <td>
                 {% if item.format %}<span class="pill pill-muted opacity-60">{{ item.format|upper }}</span>{% endif %}

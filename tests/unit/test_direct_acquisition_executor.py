@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import pullbox.services.direct_acquisition_executor as direct_executor_module
 from pullbox.models import Base
 from pullbox.models.blocklist import BlocklistEntry
 from pullbox.models.config import SystemConfig
@@ -491,6 +492,52 @@ async def test_executor_completes_with_durable_redacted_progress(
     assert refreshed_history.final_path == "/library/Issue 1.cbz"
     assert refreshed_history.imported_at == NOW
     assert refreshed_history.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_executor_routes_contiguous_pack_to_pack_post_processor(
+    session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt = _attempt()
+    attempt.plan_snapshot = {
+        "coverage": {"selected_content_issue_numbers": ["1", "2"]},
+    }
+    session.add(attempt)
+    await session.commit()
+    observed: dict[str, Any] = {}
+
+    async def pack_post_processor(*_args: Any, **kwargs: Any) -> DirectPostProcessingResult:
+        observed.update(kwargs)
+        return DirectPostProcessingResult(
+            library_file_id=77,
+            final_path=Path("/library/Issue 1.cbz"),
+            imported_issue_ids=(attempt.issue_id, 2),
+        )
+
+    async def single_post_processor(*_args: Any, **_kwargs: Any) -> DirectPostProcessingResult:
+        raise AssertionError("A contiguous pack must not use the one-file post-processor.")
+
+    monkeypatch.setattr(
+        direct_executor_module,
+        "run_direct_artifact_pack_post_processing",
+        pack_post_processor,
+    )
+    artifact = attempt.artifact_attempts[0]
+    result = await _executor(
+        tmp_path,
+        transport=_SuccessfulTransport(),
+        post_processor=single_post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=lambda: _async_value(_source_request()),
+    )
+
+    assert result.state is DirectAcquisitionState.COMPLETED
+    assert observed["expected_issue_numbers"] == frozenset({"1", "2"})
 
 
 @pytest.mark.asyncio
