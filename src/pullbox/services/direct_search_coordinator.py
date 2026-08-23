@@ -470,7 +470,11 @@ def _validate_direct_candidate(
     validation = accepted[0] if accepted else declined[0]
     if validation.is_match or not _is_explicit_direct_pack_for_target(candidate, target):
         return validation
-    if not (validation.rejection_reason or "").startswith("Multi-issue pack"):
+    rejection_reason = validation.rejection_reason or ""
+    if not (
+        rejection_reason.startswith("Multi-issue pack")
+        or rejection_reason.startswith("Issue mismatch")
+    ):
         return validation
 
     # Validate title, type, and year with the requested member as a synthetic

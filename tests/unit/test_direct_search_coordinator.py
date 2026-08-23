@@ -100,8 +100,8 @@ def _contiguous_pack_candidate(provider: DirectSearchProvider) -> DirectCandidat
     return DirectCandidate(
         provider_candidate_id=f"pack:{provider.provider_identity}",
         source_reference=f"https://{provider.provider_identity}.example/pack",
-        display_title="Absolute Superman #5-10 (2025)",
-        raw_title="Absolute Superman #5-10 (2025)",
+        display_title="Absolute Superman #5 \N{EN DASH} 10 (2025)",
+        raw_title="Absolute Superman #5 \N{EN DASH} 10 (2025)",
         parsed=DirectParsedCandidate(
             series_title="Absolute Superman",
             issue_numbers=["5", "6", "7", "8", "9", "10"],
