@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import pullbox.services.direct_artifact_post_processing as post_processing
+from pullbox.models.issue import IssueStatus
 from pullbox.services.direct_artifact_post_processing import (
+    run_direct_artifact_pack_post_processing,
     run_direct_artifact_post_processing,
 )
 
@@ -123,3 +126,70 @@ async def test_direct_handoff_materializes_library_symlink_before_quarantine_cle
     assert library_path.is_symlink() is False
     assert library_path.read_bytes() == b"direct artifact"
     assert source.exists()
+
+
+@pytest.mark.asyncio
+async def test_direct_pack_always_imports_the_explicitly_selected_skipped_issue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_issue = SimpleNamespace(
+        id=7,
+        issue_number=5.0,
+        status=IssueStatus.SKIPPED,
+        series_id=3,
+        series=SimpleNamespace(title="Alien", alternate_names=[]),
+    )
+    wanted_issue = SimpleNamespace(
+        id=8,
+        issue_number=6.0,
+        status=IssueStatus.WANTED,
+        series_id=3,
+        series=target_issue.series,
+    )
+    initiating_result = SimpleNamespace(
+        unique=lambda: SimpleNamespace(scalar_one_or_none=lambda: target_issue)
+    )
+    issues_result = SimpleNamespace(
+        unique=lambda: SimpleNamespace(scalars=lambda: [target_issue, wanted_issue])
+    )
+    session = AsyncMock()
+    session.execute.side_effect = [initiating_result, issues_result]
+    extracted_path = tmp_path / "issue-5.cbz"
+    extracted_path.write_bytes(b"issue")
+    prepared_issue_ids: list[int] = []
+
+    monkeypatch.setattr(
+        post_processing.asyncio,
+        "to_thread",
+        AsyncMock(return_value={5.0: extracted_path}),
+    )
+
+    async def fake_prepare(_session: Any, *, issue_id: int, **_kwargs: Any) -> SimpleNamespace:
+        prepared_issue_ids.append(issue_id)
+        return SimpleNamespace(issue_id=issue_id)
+
+    async def fake_execute(
+        _session: Any,
+        prepared: SimpleNamespace,
+        **_kwargs: Any,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            issue_id=prepared.issue_id,
+            library_file=SimpleNamespace(id=prepared.issue_id, file_path=str(extracted_path)),
+        )
+
+    monkeypatch.setattr(post_processing, "prepare_manual_issue_import", fake_prepare)
+    monkeypatch.setattr(post_processing, "execute_manual_issue_import", fake_execute)
+
+    result = await run_direct_artifact_pack_post_processing(
+        session,
+        acquisition_id=1,
+        issue_id=target_issue.id,
+        source_path=tmp_path / "pack.cbz",
+        expected_issue_numbers=frozenset({"5"}),
+        replace_existing_file=False,
+    )
+
+    assert prepared_issue_ids == [target_issue.id]
+    assert result.imported_issue_ids == (target_issue.id,)

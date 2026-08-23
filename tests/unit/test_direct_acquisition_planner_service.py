@@ -324,6 +324,28 @@ async def test_planning_accepts_matching_volume_only_coverage_for_collection(
 
 
 @pytest.mark.asyncio
+async def test_planning_persists_selected_contiguous_pack_coverage(
+    session: AsyncSession,
+) -> None:
+    attempt = await session.get(DirectAcquisitionAttempt, 1)
+    assert attempt is not None
+    attempt.requested_coverage = {"issue_numbers": ["5"], "issue_type": "issue"}
+    response = _response()
+    response.artifacts[0].coverage = DirectArtifactCoverage(issue_numbers=["5", "6"])
+    await session.flush()
+
+    result = await plan_direct_acquisition(
+        session,
+        acquisition_id=1,
+        provider_client_factory=lambda **_kwargs: _ResolveClient(response),
+        provider_secret_loader=lambda _config: _provider_material(),
+        now=lambda: NOW,
+    )
+
+    assert result.attempt.plan_snapshot["coverage"]["selected_content_issue_numbers"] == ["5", "6"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("requested_coverage", "artifact_volume"),
     [

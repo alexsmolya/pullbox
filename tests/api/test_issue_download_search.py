@@ -21,6 +21,8 @@ from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.models.user import APIKey, User
 from pullbox.providers.base import ProviderRegistry, ReleaseResult
 from pullbox.services.auth_service import AuthService
+from pullbox.services.direct_search_coordinator import DirectSearchOutcome
+from pullbox.services.search_acquisition_router import SearchAcquisitionRoutingResult
 from pullbox.services.search_service import IssueSearchOutcome, IssueSearchTarget, SearchRuntime
 
 if TYPE_CHECKING:
@@ -308,3 +310,166 @@ async def test_issue_download_auto_grabs_high_confidence_match(
     assert logs[0].results_grabbed == 1
     assert logs[0].results_queued == 0
     assert (logs[0].details or {}).get("action_status") == "downloading"
+
+
+@pytest.mark.asyncio
+async def test_issue_download_routes_direct_only_match_through_shared_acquisition_router(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """One-click download honors a direct-only winner and source priority."""
+    issue_id = await _create_issue(_db_factory)
+    release = _make_release("Absolute Superman 009 Direct")
+    direct_match = SimpleNamespace(
+        release=release,
+        validation=SimpleNamespace(confidence=MatchConfidence.HIGH),
+    )
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=["direct", "usenet", "torrent"],
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+        direct_providers=(SimpleNamespace(),),
+    )
+    target = IssueSearchTarget(
+        issue_id=issue_id,
+        series_id=1,
+        series_title="Absolute Superman",
+        issue_number=9.0,
+        issue_type=IssueType.ISSUE,
+        issue_title="Issue #9",
+        series_year=2025,
+    )
+    outcome = IssueSearchOutcome(
+        target=target,
+        mode="deep",
+        query_count=1,
+        raw_results=[],
+        filtered_results=[],
+        matched=[],
+        rejected=[],
+        best_release=None,
+        best_validation=None,
+        search_details={},
+        elapsed_ms=0,
+        direct_outcome=DirectSearchOutcome((direct_match,), (), (), 1, 0),  # type: ignore[arg-type]
+    )
+    routed = SearchAcquisitionRoutingResult(
+        grabbed=1,
+        queued=0,
+        action_status="downloading",
+        best_confidence="high",
+        source_kind="direct",
+    )
+
+    with (
+        patch(
+            "pullbox.api.v1.issues._run_issue_search",
+            new_callable=AsyncMock,
+            return_value=_bundle(issue_id, runtime=runtime, outcome=outcome),
+        ),
+        patch(
+            "pullbox.api.v1.issues.route_search_acquisition",
+            new_callable=AsyncMock,
+            return_value=routed,
+        ) as route,
+        patch(
+            "pullbox.api.v1.issues.select_search_source",
+            return_value=direct_match,
+        ),
+        patch(
+            "pullbox.api.v1.issues.get_direct_acquisition_runner",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        resp = await client.post(f"/api/v1/issues/{issue_id}/download")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "downloading"
+    assert resp.json()["release_title"] == release.title
+    assert resp.json()["source_kind"] == "direct"
+    assert route.await_args is not None
+    assert route.await_args.kwargs["outcome"] is outcome
+    assert route.await_args.kwargs["source_priority"] == ["direct", "usenet", "torrent"]
+
+
+@pytest.mark.asyncio
+async def test_issue_download_returns_the_source_metadata_selected_after_fallback(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    issue_id = await _create_issue(_db_factory)
+    initial_release = _make_release("Initial Direct Candidate")
+    runtime = SearchRuntime(
+        registry=ProviderRegistry(),
+        indexer_configs={},
+        source_priority=["direct", "usenet", "torrent"],
+        eval_kwargs={},
+        validator_kwargs={},
+        type_thresholds={"issue": "high"},
+        failure_threshold=3,
+        direct_providers=(SimpleNamespace(),),
+    )
+    target = IssueSearchTarget(
+        issue_id=issue_id,
+        series_id=1,
+        series_title="Absolute Superman",
+        issue_number=9.0,
+        issue_type=IssueType.ISSUE,
+        issue_title="Issue #9",
+        series_year=2025,
+    )
+    outcome = IssueSearchOutcome(
+        target=target,
+        mode="deep",
+        query_count=1,
+        raw_results=[initial_release],
+        filtered_results=[initial_release],
+        matched=[],
+        rejected=[],
+        best_release=None,
+        best_validation=None,
+        search_details={},
+        elapsed_ms=0,
+    )
+    routed = SearchAcquisitionRoutingResult(
+        grabbed=1,
+        queued=0,
+        action_status="downloading",
+        best_confidence="high",
+        source_kind="indexer",
+        release_title="Fallback Indexer Candidate",
+    )
+
+    with (
+        patch(
+            "pullbox.api.v1.issues._run_issue_search",
+            new_callable=AsyncMock,
+            return_value=_bundle(issue_id, runtime=runtime, outcome=outcome),
+        ),
+        patch(
+            "pullbox.api.v1.issues.route_search_acquisition",
+            new_callable=AsyncMock,
+            return_value=routed,
+        ),
+        patch(
+            "pullbox.api.v1.issues.select_search_source",
+            return_value=SimpleNamespace(
+                release=initial_release,
+                validation=SimpleNamespace(confidence=MatchConfidence.HIGH),
+            ),
+        ),
+        patch(
+            "pullbox.api.v1.issues.get_direct_acquisition_runner",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = await client.post(f"/api/v1/issues/{issue_id}/download")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_kind"] == "indexer"
+    assert payload["release_title"] == "Fallback Indexer Candidate"

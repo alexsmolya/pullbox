@@ -441,18 +441,23 @@ class InterventionService:
         elif is_safety_intervention:
             raise ValueError("This direct artifact safety failure cannot be overridden")
 
-        pending_match.status = PendingMatchStatus.APPROVED
-        pending_match.resolved_at = datetime.now(UTC)
-        pending_match.resolved_by = "user"
+        # Persist the planned attempt before the runner opens its own session,
+        # but keep the user review pending until dispatch has accepted it.
         await session.commit()
 
         runner_getter = self._direct_runner_getter or _get_direct_runner
         runner = runner_getter()
-        await runner.dispatch(
+        dispatched = await runner.dispatch(
             attempt.id,
             artifact.id,
             initial_source=initial_source,
         )
+        if not dispatched:
+            raise RuntimeError("Direct acquisition dispatch was not accepted")
+        pending_match.status = PendingMatchStatus.APPROVED
+        pending_match.resolved_at = datetime.now(UTC)
+        pending_match.resolved_by = "user"
+        await session.commit()
         logger.info(
             "direct_pending_match_approved",
             pending_id=pending_match.id,
@@ -501,6 +506,18 @@ class InterventionService:
             await session.flush()
             raise
 
+        # Persist the fresh plan before dispatch while retaining the recovery
+        # row when the runner rejects or cannot start the attempt.
+        await session.commit()
+
+        runner_getter = self._direct_runner_getter or _get_direct_runner
+        dispatched = await runner_getter().dispatch(
+            planned.attempt.id,
+            planned.selected_artifact.id,
+            initial_source=planned.initial_source,
+        )
+        if not dispatched:
+            raise RuntimeError("Direct acquisition dispatch was not accepted")
         details = dict(pending_match.match_details or {})
         details["resolution_reason"] = "recovery_replanned"
         details["recovery_attempt_id"] = fresh.id
@@ -509,13 +526,6 @@ class InterventionService:
         pending_match.resolved_at = datetime.now(UTC)
         pending_match.resolved_by = "user"
         await session.commit()
-
-        runner_getter = self._direct_runner_getter or _get_direct_runner
-        await runner_getter().dispatch(
-            planned.attempt.id,
-            planned.selected_artifact.id,
-            initial_source=planned.initial_source,
-        )
         logger.info(
             "direct_acquisition_recovery_replanned",
             pending_id=pending_id,

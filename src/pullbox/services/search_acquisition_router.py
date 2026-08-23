@@ -100,6 +100,9 @@ class SearchAcquisitionRoutingResult:
     best_confidence: str | None
     source_kind: Literal["indexer", "direct"] | None
     notices: tuple[str, ...] = ()
+    download_id: int | None = None
+    acquisition_id: int | None = None
+    release_title: str | None = None
 
 
 async def route_search_acquisition(
@@ -157,7 +160,14 @@ async def route_search_acquisition(
                     notices.append(_indexer_failure_notice(selected.release.indexer_name))
                     continue
                 return SearchAcquisitionRoutingResult(
-                    1, 0, "downloading", confidence, "indexer", tuple(notices)
+                    1,
+                    0,
+                    "downloading",
+                    confidence,
+                    "indexer",
+                    tuple(notices),
+                    download_id=getattr(download, "id", None),
+                    release_title=selected.release.title,
                 )
             if not await intervention_service.has_pending_for_issue(session, target.issue_id):
                 await intervention_service.create_pending_match(
@@ -167,10 +177,22 @@ async def route_search_acquisition(
                     selected.validation,
                 )
                 return SearchAcquisitionRoutingResult(
-                    0, 1, "queued", confidence, "indexer", tuple(notices)
+                    0,
+                    1,
+                    "queued",
+                    confidence,
+                    "indexer",
+                    tuple(notices),
+                    release_title=selected.release.title,
                 )
             return SearchAcquisitionRoutingResult(
-                0, 0, "pending_exists", confidence, "indexer", tuple(notices)
+                0,
+                0,
+                "pending_exists",
+                confidence,
+                "indexer",
+                tuple(notices),
+                release_title=selected.release.title,
             )
 
         direct_result = selected.direct_result
@@ -186,7 +208,13 @@ async def route_search_acquisition(
                 intervention_service,
             )
             return SearchAcquisitionRoutingResult(
-                0, 1, "intervention", confidence, "direct", tuple(notices)
+                0,
+                1,
+                "intervention",
+                confidence,
+                "direct",
+                tuple(notices),
+                release_title=selected.release.title,
             )
 
         provider = await session.get(
@@ -220,7 +248,13 @@ async def route_search_acquisition(
                 )
                 await session.commit()
                 return SearchAcquisitionRoutingResult(
-                    0, 1, "intervention", confidence, "direct", tuple(notices)
+                    0,
+                    1,
+                    "intervention",
+                    confidence,
+                    "direct",
+                    tuple(notices),
+                    release_title=selected.release.title,
                 )
             notices.append(_provider_failure_notice(direct_result.provider.display_name, exc))
             await session.commit()
@@ -234,7 +268,14 @@ async def route_search_acquisition(
             initial_source=planned.initial_source,
         )
         return SearchAcquisitionRoutingResult(
-            1, 0, "downloading", confidence, "direct", tuple(notices)
+            1,
+            0,
+            "downloading",
+            confidence,
+            "direct",
+            tuple(notices),
+            acquisition_id=planned.attempt.id,
+            release_title=selected.release.title,
         )
 
     return SearchAcquisitionRoutingResult(

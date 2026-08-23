@@ -96,6 +96,23 @@ def _candidate(provider: DirectSearchProvider, title: str) -> DirectCandidate:
     )
 
 
+def _contiguous_pack_candidate(provider: DirectSearchProvider) -> DirectCandidate:
+    return DirectCandidate(
+        provider_candidate_id=f"pack:{provider.provider_identity}",
+        source_reference=f"https://{provider.provider_identity}.example/pack",
+        display_title="Absolute Superman #5 \N{EN DASH} 10 (2025)",
+        raw_title="Absolute Superman #5 \N{EN DASH} 10 (2025)",
+        parsed=DirectParsedCandidate(
+            series_title="Absolute Superman",
+            issue_numbers=["5", "6", "7", "8", "9", "10"],
+            year=2025,
+            format="cbz",
+        ),
+        provider_confidence=0.95,
+        provenance={"fixture": "contiguous-pack"},
+    )
+
+
 class _Client:
     delays: ClassVar[dict[str, float]] = {}
     responses: ClassVar[dict[str, list[DirectCandidate]]] = {}
@@ -239,6 +256,22 @@ async def test_duplicate_provider_candidate_identity_is_returned_once() -> None:
 
     assert len(outcome.matched) == 1
     assert outcome.matched[0].candidate.provider_candidate_id == candidate.provider_candidate_id
+
+
+async def test_direct_search_accepts_contiguous_pack_for_interior_issue() -> None:
+    _reset()
+    provider = _provider("pullbox.getcomics", 10)
+    _Client.responses = {provider.provider_identity: [_contiguous_pack_candidate(provider)]}
+
+    outcome = await search_direct_issue_target(
+        _target(),
+        [provider],
+        client_factory=_factory,
+    )
+
+    assert len(outcome.matched) == 1
+    assert outcome.rejected == ()
+    assert outcome.matched[0].candidate.parsed.issue_numbers == ["5", "6", "7", "8", "9", "10"]
 
 
 async def test_provider_search_tries_ordinary_http_then_ranked_resolvers() -> None:

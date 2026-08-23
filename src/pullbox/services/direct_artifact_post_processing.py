@@ -12,9 +12,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from pullbox.models.download import DownloadState
+from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile
+from pullbox.models.series import Series
+from pullbox.services.direct_artifact_pack import extract_same_series_issue_files
+from pullbox.services.issue_import_service import (
+    ManualIssueImportResult,
+    execute_manual_issue_import,
+    prepare_manual_issue_import,
+)
 from pullbox.tasks.download_task import _run_post_processing
 
 if TYPE_CHECKING:
@@ -64,6 +73,7 @@ class DirectPostProcessingResult:
 
     library_file_id: int
     final_path: Path
+    imported_issue_ids: tuple[int, ...] = ()
 
 
 async def run_direct_artifact_post_processing(
@@ -112,6 +122,93 @@ async def run_direct_artifact_post_processing(
     return DirectPostProcessingResult(
         library_file_id=library_file.id,
         final_path=final_path,
+        imported_issue_ids=(issue_id,),
+    )
+
+
+async def run_direct_artifact_pack_post_processing(
+    session: AsyncSession,
+    *,
+    acquisition_id: int,
+    issue_id: int,
+    source_path: Path,
+    expected_issue_numbers: frozenset[str],
+    replace_existing_file: bool,
+    allow_resource_safety_exception: bool = False,
+) -> DirectPostProcessingResult:
+    """Import separable same-series pack members through normal issue ingestion."""
+    initiating_issue_result = await session.execute(
+        select(Issue)
+        .options(joinedload(Issue.series).joinedload(Series.publisher))
+        .where(Issue.id == issue_id)
+    )
+    initiating_issue = initiating_issue_result.unique().scalar_one_or_none()
+    if initiating_issue is None:
+        raise RuntimeError("The target issue for this direct-download pack no longer exists.")
+
+    extracted_paths = await asyncio.to_thread(
+        extract_same_series_issue_files,
+        source_path,
+        destination=source_path.parent / "pack-members",
+        expected_issue_numbers=expected_issue_numbers,
+        expected_series_titles=frozenset(
+            (initiating_issue.series.title, *(initiating_issue.series.alternate_names or []))
+        ),
+    )
+    issues_result = await session.execute(
+        select(Issue)
+        .options(
+            joinedload(Issue.series).joinedload(Series.publisher),
+            joinedload(Issue.library_file),
+        )
+        .where(Issue.series_id == initiating_issue.series_id)
+    )
+    issue_by_number = {issue.issue_number: issue for issue in issues_result.unique().scalars()}
+    prepared_imports = []
+    for issue_number, file_path in sorted(extracted_paths.items()):
+        candidate = issue_by_number.get(issue_number)
+        if candidate is None:
+            continue
+        if candidate.id != issue_id and candidate.status not in {
+            IssueStatus.WANTED,
+            IssueStatus.DOWNLOADING,
+        }:
+            continue
+        prepared_imports.append(
+            await prepare_manual_issue_import(
+                session,
+                issue_id=candidate.id,
+                file_path=str(file_path),
+                move_to_library=True,
+            )
+        )
+    if not prepared_imports:
+        raise RuntimeError("No wanted issues in this direct-download pack can be imported.")
+
+    imported_results: list[ManualIssueImportResult] = []
+    try:
+        for prepared in prepared_imports:
+            imported_results.append(
+                await execute_manual_issue_import(
+                    session,
+                    prepared,
+                    allow_resource_safety_exception=allow_resource_safety_exception,
+                )
+            )
+    except Exception:
+        # The executor rolls database state back. Remove any files copied before a later
+        # member failed so a rejected pack never leaves partial library artifacts behind.
+        for result in imported_results:
+            await asyncio.to_thread(Path(result.library_file.file_path).unlink, missing_ok=True)
+        raise
+    primary_import_result = next(
+        (result for result in imported_results if result.issue_id == issue_id),
+        imported_results[0],
+    )
+    return DirectPostProcessingResult(
+        library_file_id=primary_import_result.library_file.id,
+        final_path=Path(primary_import_result.library_file.file_path),
+        imported_issue_ids=tuple(result.issue_id for result in imported_results),
     )
 
 

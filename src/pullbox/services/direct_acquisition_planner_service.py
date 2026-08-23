@@ -755,6 +755,7 @@ def _build_durable_snapshot(
     )
     snapshot["coverage"] = {
         "requested": sorted(plan.requested),
+        "selected_content_issue_numbers": sorted(selected.option.coverage),
         "uncovered": sorted(plan.uncovered),
         "complete": plan.complete,
         "explanation_code": plan.explanation_code,

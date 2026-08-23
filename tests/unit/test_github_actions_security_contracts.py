@@ -927,6 +927,7 @@ def test_grype_config_tracks_current_dhi_runtime() -> None:
     assert "CVE-2026-11822" in config_text
     assert "CVE-2026-11824" in config_text
     assert "CVE-2026-14456" in config_text
+    assert "CVE-2026-66046" in config_text
     assert "3.14.6" in config_text
     assert config.get("ignore")
 
@@ -937,9 +938,20 @@ def test_grype_config_tracks_current_dhi_runtime() -> None:
         (entry["package"]["name"], entry["package"]["version"], entry["package"]["type"])
         for entry in openssl_exceptions
     } == {
-        ("libssl3t64", "3.5.6-1~deb13u2+dhi1", "deb"),
-        ("openssl", "3.5.6-1~deb13u2+dhi1", "deb"),
-        ("openssl-provider-legacy", "3.5.6-1~deb13u2+dhi1", "deb"),
+        ("libssl3t64", "3.5.6-1~deb13u2+dhi2", "deb"),
+        ("openssl", "3.5.6-1~deb13u2+dhi2", "deb"),
+        ("openssl-provider-legacy", "3.5.6-1~deb13u2+dhi2", "deb"),
+    }
+
+    expat_exceptions = [
+        entry for entry in config["ignore"] if entry.get("vulnerability") == "CVE-2026-66046"
+    ]
+    assert {
+        (entry["package"]["name"], entry["package"]["version"], entry["package"]["type"])
+        for entry in expat_exceptions
+    } == {
+        ("libexpat1", "2.8.3-1~deb13u1+dhi2", "deb"),
+        ("libexpat1-dev", "2.8.3-1~deb13u1+dhi2", "deb"),
     }
 
 

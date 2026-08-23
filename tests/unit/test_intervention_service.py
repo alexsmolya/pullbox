@@ -592,6 +592,46 @@ class TestApproveMatch:
             runner.dispatch.assert_awaited_once_with(fresh_attempt.id, 77, initial_source=None)
 
     @pytest.mark.asyncio
+    async def test_retry_direct_recovery_keeps_review_pending_when_dispatch_fails(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A failed recovery dispatch must leave the original recovery item actionable."""
+        from pullbox.services.intervention_service import InterventionService
+
+        runner = SimpleNamespace(dispatch=AsyncMock(side_effect=RuntimeError("runner unavailable")))
+        svc = InterventionService(direct_runner_getter=lambda: runner)
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            prior = await _seed_direct_attempt(session, issue.id)
+            prior.failure_class = DirectArtifactFailureClass.PERMANENT_MIRROR
+            prior.failure_code = "artifact_host_contract_changed"
+            pending = _make_direct_pending(issue.id, prior.id)
+            pending.match_details.update({"failure_class": "permanent_mirror"})
+            session.add(pending)
+            await session.commit()
+            pending_id = pending.id
+
+            async def plan_fresh(_session, *, acquisition_id: int):  # type: ignore[no-untyped-def]
+                fresh = await _session.get(DirectAcquisitionAttempt, acquisition_id)
+                assert fresh is not None
+                return SimpleNamespace(
+                    attempt=fresh,
+                    selected_artifact=SimpleNamespace(id=77),
+                    initial_source=None,
+                )
+
+            svc._direct_planner = plan_fresh  # type: ignore[assignment]
+            with pytest.raises(RuntimeError, match="runner unavailable"):
+                await svc.retry_direct_recovery(session, pending_id)
+
+        async with db_factory() as session:
+            persisted = await session.get(PendingMatch, pending_id)
+            assert persisted is not None
+            assert persisted.status == PendingMatchStatus.PENDING
+            assert persisted.resolved_at is None
+
+    @pytest.mark.asyncio
     async def test_approve_direct_match_plans_and_dispatches_without_download_client(
         self, db_factory: async_sessionmaker[AsyncSession]
     ) -> None:
@@ -627,6 +667,42 @@ class TestApproveMatch:
         )
         assert result is attempt
         assert pending.status == PendingMatchStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_approve_direct_match_keeps_review_pending_when_dispatch_fails(
+        self, db_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A dispatch failure must leave the review actionable for a user retry."""
+        from pullbox.services.intervention_service import InterventionService
+
+        planner = AsyncMock()
+        runner = SimpleNamespace(dispatch=AsyncMock(side_effect=RuntimeError("runner unavailable")))
+        svc = InterventionService(
+            direct_planner=planner,
+            direct_runner_getter=lambda: runner,
+        )
+
+        async with db_factory() as session:
+            issue = await _seed_issue(session)
+            attempt = await _seed_direct_attempt(session, issue.id)
+            pending = _make_direct_pending(issue.id, attempt.id)
+            session.add(pending)
+            await session.commit()
+            pending_id = pending.id
+            planner.return_value = SimpleNamespace(
+                attempt=attempt,
+                selected_artifact=SimpleNamespace(id=91),
+                initial_source=None,
+            )
+
+            with pytest.raises(RuntimeError, match="runner unavailable"):
+                await svc.approve_match(session, pending_id)
+
+        async with db_factory() as session:
+            persisted = await session.get(PendingMatch, pending_id)
+            assert persisted is not None
+            assert persisted.status == PendingMatchStatus.PENDING
+            assert persisted.resolved_at is None
 
     @pytest.mark.asyncio
     async def test_approve_direct_match_replans_pre_plan_provider_failure(

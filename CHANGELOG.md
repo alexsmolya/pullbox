@@ -7,11 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-18
+
+Minor release introducing native direct acquisition, an embedded comic reader,
+and significant operational resilience improvements for large libraries and
+long-running imports.
+
 ### Added
 
 - Added native Jackett indexer management with Prowlarr-consistent test and
   synchronization controls, one independently managed Torznab source per
   configured tracker, and duplicate-manager warnings.
+- Added direct acquisition as a first-class search and download path, with
+  GetComics and Anna's Archive provider support, source-aware matching, and
+  user-controlled provider priority.
+- Added configured artifact-host support for PixelDrain, MEGA, MediaFire,
+  TeraBox, DataNodes, Rootz, and generic HTTPS routes, including encrypted
+  credentials, reachability checks, fallback routing, per-host blocklisting,
+  and manual source switching.
+- Added browser challenge resolvers with ranked FlareSolverr, ByParr, and TRAWL
+  support for direct providers and manually configured Torznab indexers.
+- Added a lightweight embedded comic reader with private reading progress,
+  bounded page caching, responsive controls, and operational cache limits.
+- Added direct-download recovery entries to the Intervention Queue so users can
+  retry failed mirrors with a newly planned route instead of reusing a stale
+  artifact.
+- Added a database optimization utility and expanded health detail for direct
+  acquisition routes, Jackett indexers, and database maintenance.
+- Added manual refresh for stale What's New release data.
 
 ### Changed
 
@@ -20,16 +43,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timeout and request cadence while Jackett retains challenge ownership.
 - Allow Anna's Archive users to edit the configured official URL while limiting
   the accepted values to the supported `.gl`, `.pk`, and `.gd` domains.
+- Reworked direct-download settings into consistent provider, artifact-host,
+  and challenge-resolver configuration surfaces with connection status and
+  ordered preference controls.
+- Extended matching for collected editions, graphic novels, omnibuses, titled
+  trade volumes, one-shots, and subtitle-bearing releases while preserving the
+  review-first path for uncertain matches.
+- Improved download and intervention history with direct-provider and artifact
+  host context, parsed release details, and clearer recovery actions.
 
 ### Fixed
 
+- Corrected direct acquisition planning when a release exposes multiple
+  artifact mirrors, including unavailable or unsafe routes, stale landing
+  pages, host fallback, and source-specific retries.
+- Routed one-click issue downloads through the same cross-source acquisition
+  path as scheduled searches, so direct results honor source priority and work
+  when no indexer result is available.
+- Kept direct-review and direct-recovery entries actionable when background
+  dispatch cannot start, instead of resolving them before a transfer is queued.
+- Prevented direct downloads from appearing stalled during slow transfers and
+  report a clear slow-source status after sustained low throughput.
+- Preserved direct-download issue state as downloading throughout acquisition
+  and corrected post-processing source resolution across mounted paths.
+- Kept recovery-only Intervention Queue rows out of generic bulk approve and
+  reject actions, and report untested enabled direct routes as needing
+  attention rather than falsely healthy.
+- Improved import safety-review rematching, folder naming tokens, targeted
+  import type classification, and rematch review refresh behavior.
+- Preserved in-place series monitoring changes, list state after deletion, and
+  interactive cursor affordances across the application.
+- Prevented reader worker, progress-write, cache-budget, fullscreen, and image
+  validation edge cases from disrupting reading sessions.
+
 ### Performance
 
+- Reduced sidebar navigation query work and kept manual monitoring changes
+  reactive without full-page reloads.
+- Improved database contention handling for concurrent imports, scheduled work,
+  health checks, and direct acquisition recovery.
+
 ### Testing
+
+- Expanded direct acquisition, reader, health, intervention, import, and
+  browser workflow regression coverage.
 
 ### Documentation
 
 ### CI / Build
+
+- Updated GitHub Actions and axe-core dependencies and recorded the reviewed
+  base-image OpenSSL CVE triage.
 
 ### Internal
 
