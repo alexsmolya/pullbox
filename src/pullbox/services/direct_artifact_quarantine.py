@@ -19,6 +19,7 @@ from pullbox.core.file_safety import (
     run_safety_checks,
 )
 from pullbox.models.direct_acquisition import DirectArtifactFailureClass
+from pullbox.services.direct_artifact_pack import is_separable_issue_pack
 from pullbox.utilities.executors.integrity_checker import check_file_integrity
 
 if TYPE_CHECKING:
@@ -175,7 +176,11 @@ async def validate_direct_artifact(
         ) from exc
 
     integrity = await check_file_integrity(path, deep=False)
-    if integrity.status == "corrupt":
+    is_pack = integrity.status == "corrupt" and await asyncio.to_thread(
+        is_separable_issue_pack,
+        path,
+    )
+    if integrity.status == "corrupt" and not is_pack:
         raise DirectArtifactValidationError(
             code="artifact_integrity_failed",
             message="The downloaded artifact failed Pullbox integrity checks.",
@@ -192,8 +197,8 @@ async def validate_direct_artifact(
     return DirectArtifactValidationResult(
         path=path,
         file_size=file_size,
-        page_count=integrity.page_count,
-        file_hash=integrity.file_hash,
+        page_count=None if is_pack else integrity.page_count,
+        file_hash=None if is_pack else integrity.file_hash,
     )
 
 

@@ -20,6 +20,28 @@ class DirectArtifactPackError(RuntimeError):
         self.code = code
 
 
+def is_separable_issue_pack(source_path: Path) -> bool:
+    """Return whether an archive safely presents multiple named comic members.
+
+    This is deliberately structural only. Series identity and complete claimed
+    coverage are enforced by ``extract_same_series_issue_files`` before import.
+    """
+    try:
+        members = ArchiveReader(source_path).list_members()
+    except ArchiveError:
+        return False
+    candidates = [
+        member
+        for member in members
+        if member.is_regular_file
+        and not member.is_link
+        and Path(member.name).suffix.lower() in _COMIC_FILE_SUFFIXES
+        and not has_archive_member_path_traversal(member.name)
+        and _issue_number_from_member(member.name) is not None
+    ]
+    return len(candidates) >= 2
+
+
 def extract_same_series_issue_files(
     source_path: Path,
     *,
@@ -126,3 +148,8 @@ def _normalized_issue_numbers(issue_numbers: frozenset[str]) -> set[float]:
 
 def _issue_path_token(issue_number: float) -> str:
     return str(issue_number).replace(".", "_")
+
+
+def _issue_number_from_member(name: str) -> float | None:
+    parsed = parse_release_title(Path(name).name)
+    return parsed.issue_number if parsed is not None else None
