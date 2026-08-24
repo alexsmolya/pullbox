@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-23
+
+Patch release improving direct-download reliability for collected issue packs.
+
+### Fixed
+
+- Accept safe, separately packaged contiguous direct-download issue packs when
+  their declared coverage includes the requested issue; extract and import the
+  explicitly selected issue plus any other wanted members without replacing
+  existing files.
+- Preserve direct-acquisition fallback source metadata and accept configured
+  alternate series names when validating extracted pack members.
+
+### CI / Build
+
+- Refreshed narrow Docker Hardened Image vulnerability exceptions for the
+  current Debian 13 package revisions that have no upstream fix.
+
 ## [1.1.0] - 2026-08-18
 
 Minor release introducing native direct acquisition, an embedded comic reader,

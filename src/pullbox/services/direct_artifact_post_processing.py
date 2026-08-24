@@ -19,6 +19,7 @@ from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile
 from pullbox.models.series import Series
 from pullbox.services.direct_artifact_pack import extract_same_series_issue_files
+from pullbox.services.direct_artifact_quarantine import validate_direct_artifact
 from pullbox.services.issue_import_service import (
     ManualIssueImportResult,
     execute_manual_issue_import,
@@ -169,11 +170,15 @@ async def run_direct_artifact_pack_post_processing(
         candidate = issue_by_number.get(issue_number)
         if candidate is None:
             continue
+        has_existing_file = getattr(candidate, "library_file", None) is not None
+        if has_existing_file and (candidate.id != issue_id or not replace_existing_file):
+            continue
         if candidate.id != issue_id and candidate.status not in {
             IssueStatus.WANTED,
             IssueStatus.DOWNLOADING,
         }:
             continue
+        await validate_direct_artifact(session, file_path)
         prepared_imports.append(
             await prepare_manual_issue_import(
                 session,
@@ -188,12 +193,16 @@ async def run_direct_artifact_pack_post_processing(
     imported_results: list[ManualIssueImportResult] = []
     try:
         for prepared in prepared_imports:
-            imported_results.append(
-                await execute_manual_issue_import(
-                    session,
-                    prepared,
-                    allow_resource_safety_exception=allow_resource_safety_exception,
-                )
+            imported = await execute_manual_issue_import(
+                session,
+                prepared,
+                allow_resource_safety_exception=allow_resource_safety_exception,
+            )
+            imported_results.append(imported)
+            await asyncio.to_thread(
+                _materialize_library_symlink,
+                Path(imported.library_file.file_path),
+                prepared.source_path,
             )
     except Exception:
         # The executor rolls database state back. Remove any files copied before a later
