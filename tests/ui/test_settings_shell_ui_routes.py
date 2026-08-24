@@ -579,6 +579,8 @@ class TestSettingsRouteContracts:
         assert "Official URL" in response.text
         assert "https://annas-archive.gl" in response.text
         assert "control.input_format === 'uri'" in response.text
+        assert "control.choices.length || control.suggestions.length" in response.text
+        assert "control.suggestions.length ? control.suggestions : control.choices" in response.text
         assert "toggleConfigurationChoices(control.name)" in response.text
         assert "selectConfigurationChoice(control.name, choice)" in response.text
         assert "settings-direct-provider-control-${control.name}-toggle" in response.text

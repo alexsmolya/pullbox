@@ -277,6 +277,8 @@ def build_direct_interactive_results(
     matched_items: list[SearchResultItem] = []
     rejected_items: list[RejectedResultItem] = []
     for discovery in discoveries:
+        if not discovery.visible:
+            continue
         result = discovery.result
         candidate = result.candidate
         common = {

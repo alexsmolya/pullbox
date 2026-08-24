@@ -363,6 +363,53 @@ async def test_build_direct_interactive_results_uses_attempt_identity_not_url() 
     assert "getcomics.org" not in repr(matched[0])
 
 
+async def test_build_direct_interactive_results_hides_fingerprint_alternates() -> None:
+    from pullbox.api.v1.issues import build_direct_interactive_results
+
+    provider = DirectSearchProvider(
+        provider_config_id=9,
+        provider_identity="pullbox.libgen",
+        display_name="LibGen",
+        endpoint="http://libgen-provider:8780",
+        bearer_token="provider-token-with-enough-length",
+        allow_private_http=True,
+    )
+    candidate = DirectCandidate(
+        provider_candidate_id="libgen:batman-1",
+        source_reference="https://libgen.gl/book/1",
+        display_title="Batman 001 (2016) (Digital)",
+        raw_title="Batman 001 (2016) (Digital).cbz",
+        parsed=DirectParsedCandidate(
+            series_title="Batman",
+            issue_numbers=["1"],
+            year=2016,
+            format="cbz",
+        ),
+        provider_confidence=0.97,
+    )
+    release = _make_release("Batman 001 (2016) (Digital).cbz", indexer_name="LibGen")
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )[0][0]
+    hidden = DirectSearchDiscovery(
+        attempt_id=43,
+        result=DirectValidatedCandidate(provider, candidate, release, validation),
+        visible=False,
+    )
+
+    matched, rejected = build_direct_interactive_results(
+        (hidden,),
+        eval_kwargs={},
+        issue_type=IssueType.ISSUE,
+    )
+
+    assert matched == []
+    assert rejected == []
+
+
 def test_interactive_results_respect_direct_source_priority() -> None:
     from pullbox.api.v1.issues import (
         build_interactive_results,

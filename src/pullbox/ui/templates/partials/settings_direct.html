@@ -491,7 +491,7 @@
                       </select>
                     </template>
 
-                    <template x-if="control.input_format === 'uri' && control.choices.length && !control.secret">
+                    <template x-if="control.input_format === 'uri' && (control.choices.length || control.suggestions.length) && !control.secret">
                       <div
                         class="direct-provider-uri-control"
                         @click.outside="if (configurationChoiceOpen === control.name) configurationChoiceOpen = null"
@@ -545,7 +545,7 @@
                           :aria-label="`${control.title} options`"
                           :data-testid="`settings-direct-provider-control-${control.name}-options`"
                         >
-                          <template x-for="choice in control.choices" :key="String(choice)">
+                          <template x-for="choice in (control.suggestions.length ? control.suggestions : control.choices)" :key="String(choice)">
                             <button
                               type="button"
                               class="direct-provider-uri-option"
@@ -573,7 +573,7 @@
                       </div>
                     </template>
 
-                    <template x-if="!control.secret && control.value_type !== 'boolean' && !control.choices.length">
+                    <template x-if="!control.secret && control.value_type !== 'boolean' && !control.choices.length && !control.suggestions.length">
                       <div>
                         <input
                           class="input-pb"
