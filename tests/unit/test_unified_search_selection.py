@@ -281,6 +281,39 @@ def test_direct_provider_priority_precedes_filename_quality_for_automatic_search
     assert [item.direct_result for item in ranked[:2]] == [getcomics, annas]
 
 
+def test_fingerprint_alternate_remains_available_for_acquisition_fallback() -> None:
+    indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
+    primary = _direct_result(
+        _release("Batman 001 (2016) (Digital).cbz", "LibGen"),
+        provider_identity="pullbox.libgen",
+        provider_priority=10,
+    )
+    alternate = _direct_result(
+        _release("Batman 001 (2016) (Digital).cbz", "Anna's Archive"),
+        provider_identity="pullbox.annas_archive",
+        provider_priority=20,
+    )
+    primary = replace(primary, alternate_results=(alternate,))
+    outcome = replace(
+        _outcome(indexer, primary),
+        direct_outcome=DirectSearchOutcome(
+            matched=(primary,),
+            rejected=(),
+            failures=(),
+            providers_searched=2,
+            elapsed_ms=1,
+        ),
+    )
+
+    ranked = rank_search_sources(
+        outcome,
+        {},
+        source_priority=["direct", "usenet", "torrent"],
+    )
+
+    assert [item.direct_result for item in ranked[:2]] == [primary, alternate]
+
+
 def test_direct_semantic_confidence_precedes_provider_priority() -> None:
     indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
     lower_confidence_getcomics = _direct_result(

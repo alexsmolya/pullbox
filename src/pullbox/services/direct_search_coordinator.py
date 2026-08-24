@@ -33,6 +33,9 @@ from pullbox.providers.direct.contract import (
     DirectSearchResponse,
 )
 from pullbox.services.direct_provider_quota import refresh_expired_provider_quota
+from pullbox.services.direct_provider_source_origin import (
+    effective_direct_provider_source_domains,
+)
 from pullbox.services.release_validator import ReleaseValidator, ValidationResult
 from pullbox.services.search_scoring import match_confidence_rank
 
@@ -93,6 +96,7 @@ class DirectValidatedCandidate:
     candidate: DirectCandidate
     release: ReleaseResult
     validation: ValidationResult
+    alternate_results: tuple[DirectValidatedCandidate, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +117,7 @@ class DirectSearchDiscovery:
 
     attempt_id: int
     result: DirectValidatedCandidate
+    visible: bool = True
 
 
 class DirectSearchClient(Protocol):
@@ -191,13 +196,6 @@ async def load_direct_search_providers(
         metadata = config.configuration_metadata or {}
         raw_public = metadata.get("public_values", {})
         public_config = dict(raw_public) if isinstance(raw_public, dict) else {}
-        manifest = config.manifest_snapshot or {}
-        raw_domains = manifest.get("source_domains", [])
-        source_domains = (
-            tuple(str(domain) for domain in raw_domains if isinstance(domain, str))
-            if isinstance(raw_domains, list)
-            else ()
-        )
         providers.append(
             DirectSearchProvider(
                 provider_config_id=config.id,
@@ -211,7 +209,7 @@ async def load_direct_search_providers(
                 provider_config=public_config,
                 source_credentials=material.configuration,
                 resolver_options=await build_provider_resolver_profiles(session, config),
-                source_domains=source_domains,
+                source_domains=effective_direct_provider_source_domains(config),
             )
         )
     return tuple(providers)
@@ -225,36 +223,41 @@ async def persist_direct_search_discoveries(
     search_log_id: int | None = None,
 ) -> tuple[DirectSearchDiscovery, ...]:
     """Persist redacted candidate evidence and return server-issued IDs."""
-    pending: list[tuple[DirectAcquisitionAttempt, DirectValidatedCandidate]] = []
+    pending: list[tuple[DirectAcquisitionAttempt, DirectValidatedCandidate, bool]] = []
     issue_number = f"{target.issue_number:g}"
     volume = _target_volume(target)
-    for result in (*outcome.matched, *outcome.rejected):
-        attempt = DirectAcquisitionAttempt(
-            request_key=f"direct-search:{uuid4().hex}",
-            issue_id=target.issue_id,
-            search_log_id=search_log_id,
-            provider_config_id=result.provider.provider_config_id,
-            provider_identity=result.provider.provider_identity,
-            provider_candidate_id=result.candidate.provider_candidate_id,
-            state=DirectAcquisitionState.DISCOVERED,
-            requested_coverage={
-                "issue_numbers": [issue_number],
-                "issue_type": target.issue_type.value,
-                "volume": volume,
-            },
-            candidate_snapshot=_candidate_snapshot(result),
-            plan_snapshot={},
-            progress_snapshot={
-                "schema_version": 1,
-                "stage": "discovered",
-            },
-        )
-        session.add(attempt)
-        pending.append((attempt, result))
+    for primary in (*outcome.matched, *outcome.rejected):
+        for result, visible in (
+            (primary, True),
+            *((alternate, False) for alternate in primary.alternate_results),
+        ):
+            attempt = DirectAcquisitionAttempt(
+                request_key=f"direct-search:{uuid4().hex}",
+                issue_id=target.issue_id,
+                search_log_id=search_log_id,
+                provider_config_id=result.provider.provider_config_id,
+                provider_identity=result.provider.provider_identity,
+                provider_candidate_id=result.candidate.provider_candidate_id,
+                state=DirectAcquisitionState.DISCOVERED,
+                requested_coverage={
+                    "issue_numbers": [issue_number],
+                    "issue_type": target.issue_type.value,
+                    "volume": volume,
+                },
+                candidate_snapshot=_candidate_snapshot(result),
+                plan_snapshot={},
+                progress_snapshot={
+                    "schema_version": 1,
+                    "stage": "discovered",
+                },
+            )
+            session.add(attempt)
+            pending.append((attempt, result, visible))
     if pending:
         await session.flush()
     return tuple(
-        DirectSearchDiscovery(attempt_id=attempt.id, result=result) for attempt, result in pending
+        DirectSearchDiscovery(attempt_id=attempt.id, result=result, visible=visible)
+        for attempt, result, visible in pending
     )
 
 
@@ -332,6 +335,8 @@ async def search_direct_issue_target(
 
     matched.sort(key=_matched_order_key)
     rejected.sort(key=_rejected_order_key)
+    matched = _group_fingerprint_alternates(matched)
+    rejected = _group_fingerprint_alternates(rejected)
     failures.sort(key=lambda item: (item.provider_identity, item.code))
     return DirectSearchOutcome(
         matched=tuple(matched),
@@ -692,3 +697,27 @@ def _rejected_order_key(item: DirectValidatedCandidate) -> tuple[object, ...]:
         item.provider.provider_identity,
         item.candidate.provider_candidate_id,
     )
+
+
+def _group_fingerprint_alternates(
+    results: list[DirectValidatedCandidate],
+) -> list[DirectValidatedCandidate]:
+    """Collapse identical content only after semantic accept/reject decisions."""
+    grouped: list[DirectValidatedCandidate] = []
+    primary_indexes: dict[str, int] = {}
+    for result in results:
+        fingerprint = result.candidate.content_fingerprint
+        if fingerprint is None:
+            grouped.append(result)
+            continue
+        primary_index = primary_indexes.get(fingerprint)
+        if primary_index is None:
+            primary_indexes[fingerprint] = len(grouped)
+            grouped.append(result)
+            continue
+        primary = grouped[primary_index]
+        grouped[primary_index] = replace(
+            primary,
+            alternate_results=(*primary.alternate_results, result),
+        )
+    return grouped

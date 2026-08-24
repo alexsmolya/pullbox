@@ -58,7 +58,15 @@ def rank_search_sources(
     if limit is not None and limit <= 0:
         return ()
 
-    direct_matches = outcome.direct_outcome.matched if outcome.direct_outcome else ()
+    direct_matches = (
+        tuple(
+            result
+            for primary in outcome.direct_outcome.matched
+            for result in (primary, *primary.alternate_results)
+        )
+        if outcome.direct_outcome
+        else ()
+    )
     ranked: list[SearchSourceSelection] = []
     indexer_matches = outcome.matched
     if (
