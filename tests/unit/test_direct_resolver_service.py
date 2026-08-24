@@ -606,6 +606,54 @@ async def test_provider_profile_includes_only_its_configured_effective_source_or
     assert await build_provider_resolver_profile(db_session, provider) is None
 
 
+async def test_provider_profile_bounds_domains_and_keeps_configured_source_origin(
+    db_session: AsyncSession,
+) -> None:
+    resolver = DirectResolverConfig(
+        name="default",
+        endpoint="http://resolver:8191",
+        enabled=True,
+        state=DirectResolverState.HEALTHY,
+        allow_private_http=True,
+    )
+    manifest_domains = [f"source-{index}.example" for index in range(100)]
+    provider = DirectProviderConfig(
+        provider_id="pullbox.libgen",
+        display_name="LibGen",
+        endpoint="http://provider:8780",
+        enabled=True,
+        state=DirectProviderState.HEALTHY,
+        negotiated_protocol=DIRECT_PROVIDER_PROTOCOL_V1,
+        trust_level=DirectProviderTrustLevel.VERIFIED_PULLBOX,
+        encrypted_bearer_token="enc:not-used",
+        resolver_enabled=True,
+        configuration_metadata={"public_values": {"source_url": "https://custom-source.example"}},
+        manifest_snapshot={
+            **_manifest(browser_challenge=True, domains=manifest_domains),
+            "configuration_schema": {
+                "type": "object",
+                "properties": {
+                    "source_url": {
+                        "type": "string",
+                        "format": "uri",
+                        "x-pullbox-source-origin": True,
+                    }
+                },
+                "additionalProperties": False,
+            },
+        },
+    )
+    db_session.add_all([resolver, provider])
+    await db_session.commit()
+
+    profile = await build_provider_resolver_profile(db_session, provider)
+
+    assert profile is not None
+    assert len(profile.declared_domains) == 100
+    assert profile.declared_domains[-1] == "custom-source.example"
+    assert "source-99.example" not in profile.declared_domains
+
+
 async def test_provider_profiles_follow_resolver_priority(
     db_session: AsyncSession,
 ) -> None:

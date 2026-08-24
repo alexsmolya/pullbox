@@ -25,6 +25,9 @@ class DirectProviderSourceOriginError(ValueError):
     """A provider source origin is unsafe or cannot be resolved."""
 
 
+_MAX_EFFECTIVE_SOURCE_DOMAINS = 100
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedDirectProviderSourceOrigin:
     url: str
@@ -102,9 +105,24 @@ def effective_direct_provider_source_domains(config: DirectProviderConfig) -> tu
     try:
         manifest = DirectManifestResponse.model_validate(raw_manifest)
     except ValueError:
-        return tuple(dict.fromkeys(domain for domain in domains if domain))
-    domains.extend(_configured_source_origin_domains(config, manifest))
-    return tuple(dict.fromkeys(domain for domain in domains if domain))
+        unique_domains = tuple(dict.fromkeys(domain for domain in domains if domain))
+        return unique_domains[:_MAX_EFFECTIVE_SOURCE_DOMAINS]
+
+    manifest_domains = list(dict.fromkeys(domain for domain in domains if domain))
+    configured_domains = list(dict.fromkeys(_configured_source_origin_domains(config, manifest)))
+    merged = list(dict.fromkeys([*manifest_domains, *configured_domains]))
+    if len(merged) <= _MAX_EFFECTIVE_SOURCE_DOMAINS:
+        return tuple(merged)
+
+    configured_set = set(configured_domains)
+    retained_manifest = [domain for domain in manifest_domains if domain not in configured_set]
+    manifest_limit = max(0, _MAX_EFFECTIVE_SOURCE_DOMAINS - len(configured_domains))
+    return tuple(
+        [
+            *retained_manifest[:manifest_limit],
+            *configured_domains[:_MAX_EFFECTIVE_SOURCE_DOMAINS],
+        ]
+    )
 
 
 def configured_direct_provider_source_domain(config: DirectProviderConfig) -> str | None:

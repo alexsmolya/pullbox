@@ -24,6 +24,7 @@ SUPPORTED_DIRECT_PROVIDER_PROTOCOLS = (DIRECT_PROVIDER_PROTOCOL_V1,)
 MAX_DIRECT_PROVIDER_RESULTS = 100
 
 _FIELD_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _ALLOWED_SCHEMA_KEYS = {
     "type",
     "title",
@@ -489,6 +490,14 @@ def _is_safe_https_origin(raw: str) -> bool:
 
 def is_public_source_hostname_syntax(hostname: str) -> bool:
     """Reject IP literals, legacy numeric forms, and special-use namespaces."""
+    labels = hostname.split(".")
+    if (
+        len(hostname) > 253
+        or len(labels) < 2
+        or any(_DNS_LABEL.fullmatch(label) is None for label in labels)
+        or not any(character.isalpha() for character in labels[-1])
+    ):
+        return False
     if any(
         hostname == suffix or hostname.endswith(f".{suffix}")
         for suffix in _SPECIAL_USE_SOURCE_SUFFIXES

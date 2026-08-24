@@ -598,6 +598,11 @@ async def test_open_source_origin_accepts_safe_custom_url_and_rejects_private_dn
         "https://source.onion",
         "https://source.internal",
         "https://source.home.arpa",
+        "https://bad host.example",
+        "https://-bad.example",
+        "https://bad-.example",
+        "https://bad..example",
+        "https://singlelabel",
     ],
 )
 async def test_open_source_origin_rejects_unsafe_url_shapes(
