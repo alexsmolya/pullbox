@@ -85,6 +85,7 @@ def _candidate(
     title: str,
     *,
     content_fingerprint: str | None = None,
+    provider_confidence: float = 0.95,
 ) -> DirectCandidate:
     return DirectCandidate(
         provider_candidate_id=f"candidate:{provider.provider_identity}",
@@ -97,7 +98,7 @@ def _candidate(
             year=2025,
             format="cbz",
         ),
-        provider_confidence=0.95,
+        provider_confidence=provider_confidence,
         content_fingerprint=content_fingerprint,
         provenance={"fixture": True},
     )
@@ -258,6 +259,41 @@ async def test_cross_provider_fingerprint_collapses_to_one_result_with_alternate
     assert len(outcome.matched) == 1
     assert outcome.matched[0].provider is preferred
     assert [item.provider for item in outcome.matched[0].alternate_results] == [alternate]
+
+
+async def test_fingerprint_primary_prefers_candidate_confidence_before_provider_priority() -> None:
+    _reset()
+    configured_first = _provider("pullbox.getcomics", 10)
+    stronger_candidate = _provider("pullbox.libgen", 20)
+    fingerprint = f"md5:{'4' * 32}"
+    _Client.responses = {
+        configured_first.provider_identity: [
+            _candidate(
+                configured_first,
+                "Absolute Superman 009 (2025) (Digital)",
+                content_fingerprint=fingerprint,
+                provider_confidence=0.80,
+            )
+        ],
+        stronger_candidate.provider_identity: [
+            _candidate(
+                stronger_candidate,
+                "Absolute Superman 009 (2025) (Digital)",
+                content_fingerprint=fingerprint,
+                provider_confidence=0.99,
+            )
+        ],
+    }
+
+    outcome = await search_direct_issue_target(
+        _target(),
+        [configured_first, stronger_candidate],
+        client_factory=_factory,
+    )
+
+    assert len(outcome.matched) == 1
+    assert outcome.matched[0].provider is stronger_candidate
+    assert [item.provider for item in outcome.matched[0].alternate_results] == [configured_first]
 
 
 async def test_different_fingerprints_remain_distinct_results() -> None:
@@ -898,3 +934,12 @@ async def test_fingerprint_alternates_are_persisted_but_only_primary_is_visible(
         "pullbox.libgen",
         "pullbox.annas_archive",
     ]
+    primary = await db_session.get(DirectAcquisitionAttempt, discoveries[0].attempt_id)
+    alternate = await db_session.get(DirectAcquisitionAttempt, discoveries[1].attempt_id)
+    assert primary is not None
+    assert alternate is not None
+    assert primary.candidate_snapshot["visible"] is True
+    assert primary.candidate_snapshot["alternate_attempt_ids"] == [alternate.id]
+    assert alternate.candidate_snapshot["visible"] is False
+    assert alternate.candidate_snapshot["primary_attempt_id"] == primary.id
+    assert fingerprint not in json.dumps(primary.candidate_snapshot, sort_keys=True)

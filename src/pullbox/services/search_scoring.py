@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 DEFAULT_MIN_SIZE_MB = 50
 DEFAULT_MAX_SIZE_MB = 2000
+DIRECT_PROVIDER_NEUTRAL_PRIORITY = 25
 PREFERRED_FORMATS: dict[str, int] = {"cbz": 100, "cbr": 80, "cb7": 60}
 DEFAULT_SOURCE_PRIORITY: tuple[str, ...] = ("usenet", "torrent", "direct", "dc")
 

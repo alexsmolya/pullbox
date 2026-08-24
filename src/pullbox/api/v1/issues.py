@@ -50,6 +50,7 @@ from pullbox.services.airdcpp_route_tokens import get_airdcpp_route_token_store
 from pullbox.services.direct_acquisition_planner_service import (
     DirectAcquisitionPlanningError,
     plan_direct_acquisition,
+    plan_direct_acquisition_with_provider_fallback,
 )
 from pullbox.services.direct_search_coordinator import (
     DirectSearchDiscovery,
@@ -68,7 +69,11 @@ from pullbox.services.release_validator import (
     ValidationResult,
 )
 from pullbox.services.search_acquisition_router import route_search_acquisition
-from pullbox.services.search_scoring import match_confidence_rank, normalize_source_priority
+from pullbox.services.search_scoring import (
+    DIRECT_PROVIDER_NEUTRAL_PRIORITY,
+    match_confidence_rank,
+    normalize_source_priority,
+)
 from pullbox.services.search_service import (
     DEFAULT_TYPE_THRESHOLDS,
     IssueSearchOutcome,
@@ -180,6 +185,7 @@ def build_interactive_results(
     *,
     issue_type: IssueType = IssueType.ISSUE,
     type_thresholds: dict[str, str] | None = None,
+    scoring_priority: int | None = None,
 ) -> tuple[list[SearchResultItem], list[RejectedResultItem]]:
     """Build schema objects from validation results with quality scoring.
 
@@ -202,6 +208,7 @@ def build_interactive_results(
     for vr in matched_vr:
         quality = score_release(
             vr.release,
+            scoring_priority,
             min_size_mb=int(str(min_size_mb)) if min_size_mb else 50,
             max_size_mb=int(str(max_size_mb)) if max_size_mb else 2000,
             preferred_format=str(preferred_format) if preferred_format else None,
@@ -306,6 +313,7 @@ def build_direct_interactive_results(
                 eval_kwargs,
                 issue_type=issue_type,
                 type_thresholds=type_thresholds,
+                scoring_priority=DIRECT_PROVIDER_NEUTRAL_PRIORITY,
             )
             matched_items.append(direct_matched[0].model_copy(update=common))
         else:
@@ -315,6 +323,7 @@ def build_direct_interactive_results(
                 eval_kwargs,
                 issue_type=issue_type,
                 type_thresholds=type_thresholds,
+                scoring_priority=DIRECT_PROVIDER_NEUTRAL_PRIORITY,
             )
             rejected_items.append(direct_rejected[0].model_copy(update=common))
     return matched_items, rejected_items
@@ -339,11 +348,11 @@ def sort_interactive_results_by_source_priority[
 
     def _rank(
         item: SearchResultItem | RejectedResultItem,
-    ) -> tuple[int, int, float, int, float]:
+    ) -> tuple[int, int, float, float, int]:
         score = getattr(item, "quality_score", None)
         source_rank = priority_map.get(_source(item), 0)
         if item.source_kind != "direct" or normalized is None:
-            return source_rank, 0, 0.0, 0, -float(score) if score is not None else 0.0
+            return source_rank, 0, 0.0, -float(score) if score is not None else 0.0, 0
         similarity = (
             item.match_details.series_similarity if isinstance(item, SearchResultItem) else 0.0
         )
@@ -351,8 +360,8 @@ def sort_interactive_results_by_source_priority[
             source_rank,
             match_confidence_rank(item.confidence),
             -similarity,
-            item.ranking_priority,
             -float(score) if score is not None else 0.0,
+            item.ranking_priority,
         )
 
     return sorted(items, key=_rank)
@@ -822,10 +831,11 @@ async def grab_direct_release(
     attempt.replace_existing_file = issue.library_file is not None
 
     try:
-        planned = await plan_direct_acquisition(
+        planned = await plan_direct_acquisition_with_provider_fallback(
             session,
             acquisition_id=attempt.id,
             pinned_route_identity=body.pinned_route_identity,
+            planner=plan_direct_acquisition,
         )
     except DirectAcquisitionPlanningError as exc:
         await session.commit()
@@ -834,27 +844,27 @@ async def grab_direct_release(
     await _increment_search_log_grabbed(
         session,
         issue_id=issue_id,
-        search_log_id=attempt.search_log_id,
+        search_log_id=planned.attempt.search_log_id,
     )
     await session.commit()
 
     runner = get_direct_acquisition_runner()
     await runner.dispatch(
-        attempt.id,
+        planned.attempt.id,
         planned.selected_artifact.id,
         initial_source=planned.initial_source,
     )
-    title = str(attempt.candidate_snapshot.get("display_title") or "Direct download")
+    title = str(planned.attempt.candidate_snapshot.get("display_title") or "Direct download")
     logger.info(
         "issue_manual_direct_grab",
         issue_id=issue_id,
-        acquisition_id=attempt.id,
+        acquisition_id=planned.attempt.id,
         artifact_id=planned.selected_artifact.id,
-        provider_id=attempt.provider_identity,
+        provider_id=planned.attempt.provider_identity,
     )
     return DirectGrabResponse(
         issue_id=issue_id,
-        acquisition_id=attempt.id,
+        acquisition_id=planned.attempt.id,
         artifact_id=planned.selected_artifact.id,
         title=title,
         status="queued",

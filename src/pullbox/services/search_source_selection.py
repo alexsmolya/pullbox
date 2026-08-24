@@ -9,6 +9,7 @@ from pullbox.services.search_evaluation import DEFAULT_MIN_SCORE, _select_best_v
 from pullbox.services.search_scoring import (
     DEFAULT_MAX_SIZE_MB,
     DEFAULT_MIN_SIZE_MB,
+    DIRECT_PROVIDER_NEUTRAL_PRIORITY,
     match_confidence_rank,
     normalize_source_priority,
 )
@@ -160,30 +161,46 @@ def rank_search_sources(
         | None
     ):
         direct_items = [item for item in items if item[2] is not None]
-        semantic_provider_keys = sorted(
+        semantic_keys = sorted(
             {
                 (
                     match_confidence_rank(item[1].confidence),
                     -item[1].series_similarity,
-                    item[2].provider.provider_priority,
                 )
                 for item in direct_items
                 if item[2] is not None
             }
         )
-        for key in semantic_provider_keys:
-            group = [
-                item
-                for item in direct_items
-                if item[2] is not None
-                and (
-                    match_confidence_rank(item[1].confidence),
-                    -item[1].series_similarity,
-                    item[2].provider.provider_priority,
-                )
-                == key
-            ]
-            selected = _select([item[1] for item in group])
+        for key in semantic_keys:
+            group = sorted(
+                [
+                    item
+                    for item in direct_items
+                    if item[2] is not None
+                    and (
+                        match_confidence_rank(item[1].confidence),
+                        -item[1].series_similarity,
+                    )
+                    == key
+                ],
+                key=lambda item: item[2].provider.provider_priority if item[2] is not None else 0,
+            )
+            selected = _select_best_validation(
+                [item[1] for item in group],
+                min_score=eval_kwargs.get("min_score", DEFAULT_MIN_SCORE),
+                confidence_blend=eval_kwargs.get("confidence_blend", 0.40),
+                indexer_priority=DIRECT_PROVIDER_NEUTRAL_PRIORITY,
+                min_size_mb=eval_kwargs.get("min_size_mb", DEFAULT_MIN_SIZE_MB),
+                max_size_mb=eval_kwargs.get("max_size_mb", DEFAULT_MAX_SIZE_MB),
+                preferred_format=eval_kwargs.get("preferred_format"),
+                seeder_tiers=eval_kwargs.get("seeder_tiers"),
+                score_weights=eval_kwargs.get("score_weights"),
+                grabs_weight=eval_kwargs.get("grabs_weight", 0),
+                pack_penalty=eval_kwargs.get("pack_penalty", -20),
+                max_file_count=eval_kwargs.get("max_file_count", 5),
+                preferred_language=eval_kwargs.get("preferred_language", "en"),
+                digital_bonus=eval_kwargs.get("digital_bonus", 10),
+            )
             if selected is not None:
                 return next(item for item in group if item[1] is selected)
         return None
