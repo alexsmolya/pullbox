@@ -17,6 +17,7 @@ from sqlalchemy.orm import joinedload
 
 from pullbox.core.library_root_resolution import resolve_path_inside_roots
 from pullbox.core.page_sources import (
+    SUPPORTED_READER_FORMATS,
     PageSource,
     PageSourceError,
     PageSourceErrorCode,
@@ -31,9 +32,6 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-_READABLE_FORMATS = frozenset(
-    {FileFormat.CBZ, FileFormat.CBR, FileFormat.CB7, FileFormat.CBT, FileFormat.PDF}
-)
 _MEDIA_SUFFIXES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -140,7 +138,7 @@ async def load_reader_source_record(session: AsyncSession, issue_id: int) -> Rea
             "This issue does not have a readable downloaded file.",
         )
     library_file = issue.library_file
-    if library_file.file_format not in _READABLE_FORMATS:
+    if library_file.file_format not in SUPPORTED_READER_FORMATS:
         raise PageSourceError(
             PageSourceErrorCode.UNSUPPORTED_FORMAT,
             "This downloaded format is not supported by the reader.",

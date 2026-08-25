@@ -128,7 +128,7 @@ async def load_reader_state(
         )
     )
     state = result.scalar_one_or_none()
-    return _snapshot(state) if state is not None else None
+    return snapshot_reader_state(state) if state is not None else None
 
 
 def _reader_state_insert(session: AsyncSession) -> Any:
@@ -152,7 +152,7 @@ async def _execute_state_command(
     )
     state = result.scalar_one_or_none()
     if state is not None:
-        return _snapshot(state), True
+        return snapshot_reader_state(state), True
     after = await load_reader_state(
         session,
         user_id=user_id,
@@ -461,7 +461,8 @@ def _validate_update(
         )
 
 
-def _snapshot(state: IssueReaderState) -> ReaderStateSnapshot:
+def snapshot_reader_state(state: IssueReaderState) -> ReaderStateSnapshot:
+    """Detach an ORM reader-state row for domain and projection services."""
     return ReaderStateSnapshot(
         user_id=state.user_id,
         issue_id=state.issue_id,
