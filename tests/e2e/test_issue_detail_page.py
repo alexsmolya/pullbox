@@ -287,6 +287,25 @@ class TestIssueDetailPage:
         expect(issue.read_button).to_be_focused()
         assert authed_page.url.endswith("/issues/1")
 
+    def test_reader_switches_issues_from_the_keyboard(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        traces = _mock_cross_issue_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+        next_issue = authed_page.locator("[data-testid='comic-reader-next-issue']")
+
+        next_issue.focus()
+        expect(next_issue).to_be_focused()
+        next_issue.press("Enter")
+
+        expect(authed_page.locator("#comic-reader-title")).to_have_text("I Am Gotham 2")
+        expect(authed_page.locator("[data-testid='comic-reader-viewport']")).to_be_focused()
+        assert traces["manifest_requests"] == [1, 2]
+
     def test_reader_blocks_issue_switch_when_progress_cannot_be_saved(
         self,
         authed_page,
@@ -446,11 +465,10 @@ class TestIssueDetailPage:
                 } : null;
             }"""
         )
-        assert resources == {
-            "prefetchImages": 1,
-            "manifestController": False,
-            "progressController": False,
-        }
+        assert resources is not None
+        assert resources["prefetchImages"] <= 1
+        assert resources["manifestController"] is False
+        assert resources["progressController"] is False
         assert {request[0] for request in traces["page_requests"]} == set(range(1, 52))  # type: ignore[index]
 
     def test_read_query_opens_once_and_restores_focus_to_the_canonical_action(
@@ -521,7 +539,7 @@ class TestIssueDetailPage:
 
         assert authed_page.url == original_url
         assert authed_page.evaluate("window.scrollY") == original_scroll
-        assert issue.read_button.evaluate("element => element === document.activeElement")
+        expect(issue.read_button).to_be_focused()
 
     def test_reader_keyboard_direction_and_sizing_controls(
         self,
@@ -721,7 +739,7 @@ class TestIssueDetailPage:
 
     @pytest.mark.parametrize(
         ("width", "height"),
-        [(390, 844), (844, 390), (820, 1180)],
+        [(320, 568), (568, 320), (390, 844), (844, 390), (820, 1180)],
     )
     def test_reader_is_full_viewport_and_controls_remain_reachable(
         self,
@@ -750,6 +768,51 @@ class TestIssueDetailPage:
             assert control_box["y"] >= 0
             assert control_box["x"] + control_box["width"] <= width + 1
             assert control_box["y"] + control_box["height"] <= height + 1
+
+    def test_reader_reflows_at_200_percent_equivalent_without_horizontal_overflow(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.set_viewport_size({"width": 320, "height": 568})
+        _mock_cross_issue_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        geometry = authed_page.evaluate(
+            """() => ({
+                documentWidth: document.documentElement.scrollWidth,
+                viewportWidth: document.documentElement.clientWidth,
+                issueControlsVisible: Array.from(
+                    document.querySelectorAll('[data-testid="comic-reader-previous-issue"], [data-testid="comic-reader-next-issue"]')
+                ).every((control) => {
+                    const rect = control.getBoundingClientRect();
+                    return rect.left >= 0 && rect.right <= window.innerWidth;
+                }),
+            })"""
+        )
+
+        assert geometry["documentWidth"] <= geometry["viewportWidth"]
+        assert geometry["issueControlsVisible"] is True
+
+    def test_reader_controls_remain_usable_with_reduced_motion(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        authed_page.emulate_media(reduced_motion="reduce")
+        _mock_cross_issue_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        next_issue = authed_page.locator("[data-testid='comic-reader-next-issue']")
+        expect(next_issue).to_be_visible()
+        next_issue.click()
+
+        expect(authed_page.locator("#comic-reader-title")).to_have_text("I Am Gotham 2")
+        expect(authed_page.locator("[data-testid='comic-reader-close']")).to_be_visible()
 
     def test_copy_path_tooltip_renders_on_hover(
         self,

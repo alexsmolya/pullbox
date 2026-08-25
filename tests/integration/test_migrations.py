@@ -366,6 +366,28 @@ class TestMigrationChain:
             "page_count": False,
         }
 
+    def test_reader_query_join_index_round_trip(self, alembic_cfg) -> None:
+        """The measured library-file issue join index upgrades and downgrades cleanly."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            indexes = {index["name"] for index in inspect(engine).get_indexes("library_files")}
+        finally:
+            engine.dispose()
+        assert "ix_library_files_issue" in indexes
+
+        command.downgrade(cfg, "p1q2r3s4t567")
+        engine = create_engine(sync_url)
+        try:
+            indexes = {index["name"] for index in inspect(engine).get_indexes("library_files")}
+        finally:
+            engine.dispose()
+        assert "ix_library_files_issue" not in indexes
+
+        command.upgrade(cfg, "head")
+
     def test_import_jobs_has_materialization_audit_fields(self, alembic_cfg) -> None:
         """Import jobs record the effective materialization policy for auditability."""
         cfg, sync_url = alembic_cfg

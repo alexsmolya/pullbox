@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a private Reading workspace with Continue, Want to Read, and Read views,
+  plus dashboard, issue, series-detail, and series-registry reading state.
+- Added safe previous/next issue navigation inside the embedded reader with
+  awaited progress saves, final-page actions, and failure-safe context retention.
+
+### Changed
+
+- Evolved reading progress into independent resume, completion, and Want to Read
+  dimensions keyed to the signed-in user and canonical issue.
+- Preserved reading state across rename, relocation, conversion, replacement,
+  file removal, and re-import, with page-count-aware resume reconciliation.
+
+### Performance
+
+- Added the measured `library_files.issue_id` join index so bounded reading
+  shelves remain fast on large libraries.
+
+### Testing
+
+- Added file-continuity, 10,000-issue query-scale, 50-switch resource,
+  cross-browser, keyboard, reduced-motion, and responsive reader regressions.
+
 ## [1.1.1] - 2026-08-23
 
 Patch release improving direct-download reliability for collected issue packs.

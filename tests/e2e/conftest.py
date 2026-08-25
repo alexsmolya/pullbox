@@ -1119,6 +1119,12 @@ def _running_live_server() -> Generator[str, None, None]:
         "PULLBOX_TEMP_DIR": str(temp_dir),
         "PULLBOX_BACKUP_DIR": str(backup_dir),
         "PULLBOX_LIBRARY_ROOT": str(library_root),
+        # The session-scoped browser suite intentionally sends far more traffic
+        # than one real client would within a minute. Keep rate limiting active
+        # while preventing unrelated E2E modules from exhausting shared quotas.
+        "PULLBOX_RATE_LIMIT_TIER1": "10000",
+        "PULLBOX_RATE_LIMIT_TIER2": "10000",
+        "PULLBOX_RATE_LIMIT_TIER3": "10000",
     }
     original_env = {}
     for key, val in env_overrides.items():
