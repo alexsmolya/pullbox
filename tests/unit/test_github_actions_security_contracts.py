@@ -938,9 +938,9 @@ def test_grype_config_tracks_current_dhi_runtime() -> None:
         (entry["package"]["name"], entry["package"]["version"], entry["package"]["type"])
         for entry in openssl_exceptions
     } == {
-        ("libssl3t64", "3.5.6-1~deb13u2+dhi2", "deb"),
-        ("openssl", "3.5.6-1~deb13u2+dhi2", "deb"),
-        ("openssl-provider-legacy", "3.5.6-1~deb13u2+dhi2", "deb"),
+        ("libssl3t64", "3.5.6-1~deb13u2+dhi3", "deb"),
+        ("openssl", "3.5.6-1~deb13u2+dhi3", "deb"),
+        ("openssl-provider-legacy", "3.5.6-1~deb13u2+dhi3", "deb"),
     }
 
     expat_exceptions = [
