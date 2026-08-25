@@ -32,7 +32,7 @@ from pullbox.services.reader_content_service import (
 from pullbox.services.reader_state_service import (
     ReaderStateValidationError,
     load_reader_state,
-    update_reader_state,
+    update_reader_progress,
 )
 
 router = APIRouter(prefix="/reader", tags=["reader"], include_in_schema=False)
@@ -208,7 +208,7 @@ async def reader_progress(
     factory = get_request_session_factory(request)
     try:
         async with factory() as session:
-            snapshot = await update_reader_state(
+            transition = await update_reader_progress(
                 session,
                 user_id=user.id,
                 issue_id=issue_id,
@@ -226,6 +226,7 @@ async def reader_progress(
             status_code=status_code,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+    snapshot = transition.after
     return ReaderProgressResponse(
         page_index=snapshot.last_page_index,
         page_count=snapshot.page_count,
