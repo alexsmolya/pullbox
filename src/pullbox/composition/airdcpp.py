@@ -231,14 +231,24 @@ async def _reconcile_ready_client(config_id: int) -> None:
     if (
         reconciler is None
         or supervisor is None
-        or not isinstance(supervisor, AirDcppSupervisor)
         or supervisor.state is not AirDcppSupervisorState.READY
     ):
         return
-    await reconciler.reconcile_client(
+    result = await reconciler.reconcile_client(
         config_id,
         cast("AirDcppReconciliationApi", supervisor.api_client),
     )
+    if result.completed:
+        from pullbox.core.scheduler import get_scheduler
+
+        try:
+            get_scheduler().run_task_now("process_completed")
+        except Exception:
+            logger.warning(
+                "airdcpp_post_processing_trigger_failed",
+                client_config_id=config_id,
+                exc_info=True,
+            )
 
 
 async def _run_periodic_reconciliation() -> None:

@@ -101,6 +101,11 @@ class DownloadHistory(Base, IdentityMixin, TimestampMixin):
             "download_client_config_id",
             "state",
         ),
+        Index(
+            "ix_download_history_post_processing_claim",
+            "state",
+            "post_processing_claimed_at",
+        ),
     )
 
     issue_id: Mapped[int] = mapped_column(
@@ -155,6 +160,8 @@ class DownloadHistory(Base, IdentityMixin, TimestampMixin):
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     imported_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    post_processing_claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    post_processing_claim_token: Mapped[str | None] = mapped_column(String(64))
 
     # Relationships
     issue: Mapped[Issue] = relationship()

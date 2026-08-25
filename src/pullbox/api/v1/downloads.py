@@ -475,6 +475,8 @@ async def retry_post_processing(
         )
 
     download.state = DownloadState.COMPLETED
+    download.post_processing_claim_token = None
+    download.post_processing_claimed_at = None
     await session.flush()
 
     # Trigger post-processing immediately

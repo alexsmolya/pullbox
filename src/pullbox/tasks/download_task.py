@@ -22,6 +22,7 @@ from sqlalchemy import select
 from pullbox.composition.events import build_domain_event_bus
 from pullbox.composition.providers import register_download_clients
 from pullbox.database import get_session_factory
+from pullbox.models.download import DownloadClientType
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series
 from pullbox.providers.base import ProviderRegistry
@@ -429,7 +430,11 @@ async def _run_post_processing(
 
     log.debug(
         "post_processing_start",
-        downloaded_path=download.downloaded_path,
+        downloaded_path=(
+            None
+            if download.download_client is DownloadClientType.AIRDCPP
+            else download.downloaded_path
+        ),
         client_type=str(download.download_client.value),
     )
     _set_post_processing_phase(download.id, PostProcessingPhase.RESOLVING_SOURCE)

@@ -226,10 +226,16 @@ async def test_reconciliation_maps_stable_status_fields_without_localized_text(
         acquisition = await session.get(AirDcppAcquisition, acquisition_id)
         assert history is not None and acquisition is not None
         assert history.state is expected
+        assert history.downloaded_path == (
+            "/Downloads/Example Comic 001 (2026).cbz"
+            if expected is DownloadState.COMPLETED
+            else None
+        )
         assert acquisition.client_state == bundle.status.id
         assert acquisition.remote_target == "/Downloads/Example Comic 001 (2026).cbz"
         assert acquisition.last_reconciled_at is not None
         assert result.processed == 1
+        assert result.completed == int(expected is DownloadState.COMPLETED)
 
 
 @pytest.mark.asyncio

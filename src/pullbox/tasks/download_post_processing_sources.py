@@ -163,6 +163,35 @@ async def _resolve_local_path(
         return None
 
     from pullbox.models.client import DownloadClientConfig
+    from pullbox.models.download import DownloadClientType
+
+    if download.download_client is DownloadClientType.AIRDCPP:
+        from pullbox.services.airdcpp_path_mapping import map_airdcpp_completed_path
+
+        config_id = download.download_client_config_id
+        if config_id is None:
+            raise ValueError("AirDC++ completed download has no exact client identity")
+        result = await session.execute(
+            select(DownloadClientConfig).where(
+                DownloadClientConfig.id == config_id,
+                DownloadClientConfig.client_type == DownloadClientType.AIRDCPP,
+            )
+        )
+        client_cfg = result.scalar_one_or_none()
+        if client_cfg is None or not client_cfg.remote_path or not client_cfg.download_dir:
+            raise ValueError("AirDC++ completed download path mapping is incomplete")
+        mapped = await asyncio.to_thread(
+            map_airdcpp_completed_path,
+            remote_target=raw_path,
+            remote_root=client_cfg.remote_path,
+            local_root=client_cfg.download_dir,
+            require_file=False,
+        )
+        logger.info(
+            "airdcpp_path_mapping_applied",
+            client_config_id=config_id,
+        )
+        return str(mapped)
 
     result = await session.execute(
         select(DownloadClientConfig).where(

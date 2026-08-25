@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import httpx
 import structlog
 from fastapi import APIRouter
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import selectinload
 
@@ -402,7 +402,13 @@ async def delete_client(
             select(DownloadHistory.id)
             .where(
                 DownloadHistory.download_client_config_id == client_id,
-                DownloadHistory.state.in_(active_state_values),
+                or_(
+                    DownloadHistory.state.in_(active_state_values),
+                    and_(
+                        DownloadHistory.state == DownloadState.COMPLETED,
+                        DownloadHistory.imported_at.is_(None),
+                    ),
+                ),
             )
             .limit(1)
         )

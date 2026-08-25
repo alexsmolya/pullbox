@@ -213,10 +213,15 @@ async def test_airdcpp_create_requires_password_and_default_off_flag_blocks_acti
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "active_state",
+    [DownloadState.DOWNLOADING, DownloadState.COMPLETED],
+)
 async def test_airdcpp_delete_rejects_active_exact_client_history(
     authenticated_client: AsyncClient,
     sec_db: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
+    active_state: DownloadState,
 ) -> None:
     monkeypatch.setattr(
         clients_api,
@@ -245,7 +250,7 @@ async def test_airdcpp_delete_rejects_active_exact_client_history(
                 download_client=DownloadClientType.AIRDCPP,
                 protocol=AcquisitionProtocol.DC,
                 download_client_config_id=client_id,
-                state=DownloadState.DOWNLOADING,
+                state=active_state,
             )
         )
         await session.commit()

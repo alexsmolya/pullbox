@@ -210,3 +210,30 @@ async def test_automatic_search_composition_requires_per_client_opt_in() -> None
     )
 
     assert [operation.config_id for operation in operations] == [2]
+
+
+@pytest.mark.asyncio
+async def test_completed_reconciliation_triggers_immediate_post_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pullbox.composition.airdcpp as composition
+
+    calls: list[object] = []
+
+    class _Reconciler:
+        async def reconcile_client(self, config_id: int, _api: object) -> object:
+            calls.append(config_id)
+            return SimpleNamespace(completed=1)
+
+    scheduler = SimpleNamespace(run_task_now=lambda task_id: calls.append(task_id))
+    supervisor = SimpleNamespace(
+        state=AirDcppSupervisorState.READY,
+        api_client=object(),
+    )
+    monkeypatch.setattr(composition, "_reconciler", _Reconciler())
+    monkeypatch.setattr(composition, "_registry", SimpleNamespace(get=lambda _id: supervisor))
+    monkeypatch.setattr("pullbox.core.scheduler.get_scheduler", lambda: scheduler)
+
+    await composition._reconcile_ready_client(12)
+
+    assert calls == [12, "process_completed"]

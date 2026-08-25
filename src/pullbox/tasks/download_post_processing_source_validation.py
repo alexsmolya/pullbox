@@ -76,7 +76,11 @@ async def resolve_and_validate_source(
         log.warning(
             "post_processing_source_missing",
             path=str(probe_root),
-            raw_client_path=download.downloaded_path,
+            raw_client_path=(
+                None
+                if getattr(download.download_client, "value", None) == "airdcpp"
+                else download.downloaded_path
+            ),
             attempts=source_probe.attempts,
             hint=(
                 "Completed download folder was visible, but no readable comic file "

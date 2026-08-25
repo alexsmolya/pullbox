@@ -54,6 +54,7 @@ class AirDcppReconciliationResult:
     processed: int
     changed: int
     missing: int
+    completed: int
     partial: bool
     pages: int
 
@@ -107,7 +108,7 @@ class AirDcppReconciler:
             )
             await session.commit()
         if not snapshots:
-            return AirDcppReconciliationResult(0, 0, 0, False, 0)
+            return AirDcppReconciliationResult(0, 0, 0, 0, False, 0)
 
         adopted: dict[int, AirDcppQueueFile] = {}
         pre_id = [snapshot for snapshot in snapshots if snapshot.bundle_id is None]
@@ -141,6 +142,7 @@ class AirDcppReconciler:
 
         changed = 0
         missing = 0
+        completed = 0
         now = datetime.now(UTC)
         async with self._session_factory() as session:
             result = await session.execute(
@@ -155,7 +157,14 @@ class AirDcppReconciler:
                     continue
                 bundle = bundles.get(snapshot.bundle_id) if snapshot.bundle_id else None
                 if bundle is not None:
+                    was_completed = (
+                        DownloadState(acquisition.download_history.state) is DownloadState.COMPLETED
+                    )
                     changed += int(apply_airdcpp_bundle(acquisition, bundle, at=now))
+                    completed += int(
+                        not was_completed
+                        and acquisition.download_history.state is DownloadState.COMPLETED
+                    )
                 elif snapshot.acquisition_id in adopted:
                     changed += int(
                         _apply_adopted_file(
@@ -173,6 +182,7 @@ class AirDcppReconciler:
             processed=len(snapshots),
             changed=changed,
             missing=missing,
+            completed=completed,
             partial=not complete_snapshot,
             pages=pages,
         )
@@ -262,6 +272,7 @@ def apply_airdcpp_bundle(
         history.state = next_state
         if next_state is DownloadState.COMPLETED:
             history.completed_at = history.completed_at or at
+            history.downloaded_path = bundle.target.get_secret_value()
             history.error_message = None
         elif next_state is DownloadState.FAILED:
             history.error_message = _failure_summary(bundle)
