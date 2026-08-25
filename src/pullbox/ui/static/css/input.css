@@ -1968,6 +1968,16 @@
     color: var(--pb-text-secondary);
     font-variant-numeric: tabular-nums;
   }
+  .series-mission-control-reading {
+    display: block;
+    margin-top: 0.22rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.58rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--pb-interactive);
+    white-space: nowrap;
+  }
   .dashboard-table__link {
     @apply text-xs font-semibold text-pb-interactive transition-colors;
   }
@@ -4345,6 +4355,43 @@
     font-size: 0.8rem;
     color: var(--pb-text-tertiary);
   }
+  .series-domain-issue-reading {
+    min-width: 9.5rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.7rem;
+    color: var(--pb-text-secondary);
+  }
+  .series-domain-issue-reading-mobile {
+    margin-top: 0.3rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.65rem;
+    color: var(--pb-interactive);
+  }
+  .series-domain-reading-progress {
+    display: grid;
+    gap: 0.28rem;
+    max-width: 8.5rem;
+  }
+  .series-domain-reading-progress-track {
+    display: block;
+    height: 3px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pb-border-default) 68%, transparent);
+  }
+  .series-domain-reading-progress-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--pb-interactive);
+  }
+  .series-domain-reading-queue {
+    display: block;
+    margin-top: 0.3rem;
+    font-family: "DM Sans", sans-serif;
+    font-size: 0.62rem;
+    color: var(--pb-text-tertiary);
+  }
   .series-domain-issue-status {
     white-space: nowrap;
   }
@@ -4353,6 +4400,7 @@
   }
   .series-domain-issue-actions {
     display: inline-flex;
+    align-items: center;
     gap: 0.25rem;
   }
   .series-domain-issue-action-btn {
@@ -4370,6 +4418,32 @@
   .series-domain-issue-action-btn:hover {
     color: var(--pb-interactive);
     background: color-mix(in srgb, var(--pb-interactive) 6%, transparent);
+  }
+  .series-domain-reading-menu {
+    position: absolute;
+    z-index: 60;
+    right: 0;
+    top: calc(100% + 0.3rem);
+    display: grid;
+    min-width: 10.5rem;
+    overflow: hidden;
+    border: 1px solid var(--pb-border-default);
+    border-radius: 10px;
+    background: var(--pb-surface-raised);
+    box-shadow: var(--pb-shadow-2);
+  }
+  .series-domain-reading-menu button {
+    min-height: 2.5rem;
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--pb-text-secondary);
+  }
+  .series-domain-reading-menu button:hover,
+  .series-domain-reading-menu button:focus-visible {
+    color: var(--pb-text-primary);
+    background: color-mix(in srgb, var(--pb-interactive) 9%, transparent);
   }
   .series-domain-table-footer {
     margin-top: 0.75rem;

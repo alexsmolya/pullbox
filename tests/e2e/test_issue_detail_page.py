@@ -96,10 +96,56 @@ class TestIssueDetailPage:
 
         issue.open_reader()
 
-        assert issue.reader_status.inner_text() == "Page 1 of 3"
+        assert issue.reader_status.inner_text() == "Page 2 of 3"
         assert issue.reader_page.get_attribute("src") is not None
         authed_page.locator("[data-testid='comic-reader-next']").click()
         expect(issue.reader_status).to_have_text("Page 2 of 3")
+
+    def test_read_query_opens_once_and_restores_focus_to_the_canonical_action(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        _mock_reader(authed_page)
+        issue = IssueDetailPage(authed_page, seeded_server)
+
+        issue.navigate("/issues/1?read=1")
+        issue.wait_until_ready()
+        issue.reader_dialog.wait_for(state="visible", timeout=5000)
+        issue.reader_page.wait_for(state="visible", timeout=5000)
+
+        assert authed_page.url.endswith("/issues/1")
+        issue.close_reader()
+        expect(issue.read_button).to_be_focused()
+
+    def test_reading_state_action_refreshes_only_the_issue_hero(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        authed_page.evaluate(
+            """() => document.querySelector('[data-testid="issue-detail-page"]')
+                ?.setAttribute('data-reading-shell', 'preserved')"""
+        )
+
+        completion = authed_page.locator("[data-testid='issue-action-completion']").first
+        expect(completion).to_have_text("Mark read")
+        completion.click()
+
+        expect(authed_page.locator("[data-testid='issue-reading-state']").first).to_have_text(
+            "Read"
+        )
+        expect(authed_page.locator("[data-testid='issue-action-completion']").first).to_have_text(
+            "Mark unread"
+        )
+        assert issue.page_shell.get_attribute("data-reading-shell") == "preserved"
+
+        authed_page.locator("[data-testid='issue-action-completion']").first.click()
+        expect(authed_page.locator("[data-testid='issue-action-completion']").first).to_have_text(
+            "Mark read"
+        )
 
     def test_reader_opens_navigates_and_restores_exact_issue_context(
         self,

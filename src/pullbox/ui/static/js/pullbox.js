@@ -800,6 +800,7 @@ function readCsrfTokenFromBody() {
 function readingStateActions() {
   return {
     busy: false,
+    readingMenuOpen: false,
     statusMessage: "",
     statusIsError: false,
 
@@ -14859,6 +14860,23 @@ function readerMixin(config) {
         }
       };
       document.addEventListener("visibilitychange", self.readerVisibilityHandler);
+      if (cfg.openReaderOnLoad && typeof self.$nextTick === "function") {
+        cfg.openReaderOnLoad = false;
+        self.$nextTick(function () {
+          var opener = self.$root
+            ? self.$root.querySelector("[data-testid='issue-action-read']")
+            : null;
+          if (!opener || !self.$refs.readerDialog) return;
+          var currentUrl = new URL(window.location.href);
+          currentUrl.searchParams.delete("read");
+          window.history.replaceState(
+            window.history.state,
+            "",
+            currentUrl.pathname + currentUrl.search + currentUrl.hash
+          );
+          self.openReader({ currentTarget: opener });
+        });
+      }
     },
 
     destroy: function () {
@@ -16382,6 +16400,16 @@ function seriesIssuesPanel() {
     },
   };
 }
+
+window.pullboxSeriesIssuesCanPoll = function () {
+  if (!window.pullboxLiveUpdatesEnabled()) return false;
+  var active = document.activeElement;
+  return !(
+    active &&
+    active.closest &&
+    active.closest("#series-issues-panel [data-reading-interaction]")
+  );
+};
 
 function issueSearchModal() {
   return {

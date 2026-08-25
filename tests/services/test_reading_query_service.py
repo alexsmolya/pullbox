@@ -460,8 +460,21 @@ async def test_series_aggregates_count_only_readable_owned_issues_in_one_query(
         await load_series_reading_aggregates(
             db_session,
             user_id=user.id,
-            series_ids=tuple(range(101)),
+            series_ids=tuple(range(501)),
         )
+
+
+@pytest.mark.asyncio
+async def test_series_aggregate_bound_matches_the_existing_registry_page_contract(
+    db_session: AsyncSession,
+) -> None:
+    aggregates = await load_series_reading_aggregates(
+        db_session,
+        user_id=1,
+        series_ids=tuple(range(500)),
+    )
+
+    assert aggregates == {}
 
 
 @pytest.mark.asyncio

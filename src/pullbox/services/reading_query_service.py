@@ -252,8 +252,8 @@ async def load_series_reading_aggregates(
 ) -> dict[int, SeriesReadingAggregate]:
     if not series_ids:
         return {}
-    if len(series_ids) > 100:
-        raise ValueError("Visible series aggregate queries are limited to 100 series.")
+    if len(series_ids) > 500:
+        raise ValueError("Visible series aggregate queries are limited to 500 series.")
 
     completed_issue = case((IssueReaderState.completed_at.is_not(None), Issue.id))
     in_progress_issue = case(
