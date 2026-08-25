@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 from alembic.config import Config
 from sqlalchemy import MetaData, Table, create_engine, func, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 _ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"
 _DIRECT_ACQUISITION_PARENT_REVISION = "d9f0a1b2c345"
 _AIRDCPP_FOUNDATION_PARENT_REVISION = "q2r3s4t5u678"
+_AIRDCPP_SETTINGS_PARENT_REVISION = "r3s4t5u6v789"
 
 
 @pytest.fixture
@@ -240,6 +242,96 @@ class TestMigrationChain:
 
         with pytest.raises(RuntimeError, match="AirDC\\+\\+ download history"):
             command.downgrade(cfg, _AIRDCPP_FOUNDATION_PARENT_REVISION)
+
+    def test_airdcpp_settings_migration_is_bounded_and_does_not_seed_rows(
+        self,
+        alembic_cfg,
+    ) -> None:
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, _AIRDCPP_SETTINGS_PARENT_REVISION)
+        engine = create_engine(sync_url)
+        try:
+            assert "airdcpp_client_settings" not in inspect(engine).get_table_names()
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                assert (
+                    conn.execute(text("SELECT COUNT(*) FROM airdcpp_client_settings")).scalar_one()
+                    == 0
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO download_client_configs "
+                        "(id, name, client_type, url, enabled, priority) "
+                        "VALUES (1, 'AirDC++', 'AIRDCPP', "
+                        "'http://airdcpp.test:5600', 1, 50)"
+                    )
+                )
+                conn.execute(
+                    text("INSERT INTO airdcpp_client_settings (client_config_id) VALUES (1)")
+                )
+
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT search_enabled, automatic_search_enabled, "
+                        "minimum_search_interval_seconds, manual_collection_seconds, "
+                        "automatic_collection_seconds, max_results, max_retained_routes, "
+                        "max_concurrent_searches, request_timeout_seconds, "
+                        "search_dispatch_deadline_seconds, reconciliation_interval_seconds, "
+                        "hub_allowlist, queue_priority, next_search_allowed_at "
+                        "FROM airdcpp_client_settings"
+                    )
+                ).one()
+            assert tuple(row) == (
+                1,
+                0,
+                45,
+                8,
+                15,
+                200,
+                400,
+                1,
+                15,
+                45,
+                30,
+                "[]",
+                None,
+                None,
+            )
+
+            with (
+                pytest.raises(IntegrityError, match="minimum_search_interval"),
+                engine.begin() as conn,
+            ):
+                conn.execute(
+                    text(
+                        "INSERT INTO download_client_configs "
+                        "(id, name, client_type, url, enabled, priority) "
+                        "VALUES (2, 'Unsafe AirDC++', 'AIRDCPP', "
+                        "'http://unsafe.test:5600', 1, 50)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO airdcpp_client_settings "
+                        "(client_config_id, minimum_search_interval_seconds) "
+                        "VALUES (2, 44)"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, _AIRDCPP_SETTINGS_PARENT_REVISION)
+        engine = create_engine(sync_url)
+        try:
+            assert "airdcpp_client_settings" not in inspect(engine).get_table_names()
+        finally:
+            engine.dispose()
 
     def test_indexer_manager_migration_backfills_prowlarr_identity(
         self,
