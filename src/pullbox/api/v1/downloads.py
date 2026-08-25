@@ -6,11 +6,13 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
+from pullbox.core.acquisition import AcquisitionProtocol
 from pullbox.core.exceptions import NotFoundError
 from pullbox.models.blocklist import BlocklistReason
 from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
 from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
+from pullbox.providers.base import DownloadClient, ProviderRegistry
 from pullbox.providers.download.qbittorrent import QBittorrentError
 from pullbox.providers.indexer.newznab import NewznabError
 from pullbox.schemas.blocklist import BlocklistEntryResponse
@@ -51,6 +53,7 @@ def _enrich_download(download: DownloadHistory) -> dict[str, object]:
         "title": download.title,
         "state": download.state,
         "download_client": download.download_client,
+        "protocol": download.protocol,
         "external_id": download.external_id,
         "file_size": download.file_size,
         "error_message": download.error_message,
@@ -86,6 +89,16 @@ def _blocklist_entry_to_response(entry: object) -> BlocklistEntryResponse:
         created_at=entry.created_at,
         updated_at=entry.updated_at,
     )
+
+
+def _registered_client_for_download(
+    registry: ProviderRegistry,
+    download: DownloadHistory,
+) -> DownloadClient | None:
+    """Resolve exact client identity, with type fallback for historical rows."""
+    if download.download_client_config_id is not None:
+        return registry.get_download_client(download.download_client_config_id)
+    return registry.get_client_for_type(str(download.download_client))
 
 
 # ── Queue ────────────────────────────────────────────────────────────
@@ -245,12 +258,11 @@ async def _cancel_on_client(download: DownloadHistory, session: DbSession) -> No
         return
 
     from pullbox.composition.providers import register_download_clients
-    from pullbox.providers.base import ProviderRegistry
 
     registry = ProviderRegistry()
     await register_download_clients(session, registry)
 
-    client = registry.get_client_for_type(str(download.download_client))
+    client = _registered_client_for_download(registry, download)
 
     if not client:
         logger.warning(
@@ -494,7 +506,6 @@ async def retry_download(
 
     from pullbox.composition.providers import register_download_clients, register_indexers
     from pullbox.composition.services import build_download_service
-    from pullbox.providers.base import ProviderRegistry
 
     download = await session.get(DownloadHistory, download_id)
     if not download:
@@ -547,7 +558,7 @@ async def retry_download(
     await register_download_clients(session, registry)
     await register_indexers(session, registry)
 
-    client = registry.get_client_for_type(str(download.download_client))
+    client = _registered_client_for_download(registry, download)
     if not client:
         raise HTTPException(
             status_code=503,
@@ -555,9 +566,9 @@ async def retry_download(
         )
 
     # Re-send to client
-    dl_type = DownloadClientType(str(download.download_client))
+    protocol = AcquisitionProtocol(download.protocol)
     try:
-        if dl_type.is_torrent:
+        if protocol is AcquisitionProtocol.TORRENT:
             external_id = await build_download_service(registry).add_torrent_to_client(
                 client,
                 url=download.download_url,
@@ -565,15 +576,21 @@ async def retry_download(
                 indexer_id=download.indexer_id,
                 download_id=download.id,
             )
-        else:
+        elif protocol is AcquisitionProtocol.USENET:
             external_id = await client.add_nzb(download.download_url, download.title)
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Unsupported acquisition protocol: {protocol.value}",
+            )
     except (NewznabError, QBittorrentError) as exc:
         logger.warning(
             "download_retry_client_rejected",
             download_id=download.id,
             issue_id=download.issue_id,
             indexer_id=download.indexer_id,
-            client_type=dl_type.value,
+            client_type=str(download.download_client),
+            protocol=protocol.value,
             error=str(exc),
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc

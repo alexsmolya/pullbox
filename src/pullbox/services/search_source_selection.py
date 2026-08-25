@@ -88,12 +88,12 @@ def rank_search_sources(
         indexer_matches = [item for item in outcome.matched if item is not outcome.best_validation]
 
     candidates: list[tuple[str, ValidationResult, DirectValidatedCandidate | None]] = [
-        ("torrent" if item.release.is_torrent else "usenet", item, None) for item in indexer_matches
+        (item.release.protocol.value, item, None) for item in indexer_matches
     ]
     if not ranked and not candidates and outcome.best_validation is not None:
         candidates.append(
             (
-                "torrent" if outcome.best_validation.release.is_torrent else "usenet",
+                outcome.best_validation.release.protocol.value,
                 outcome.best_validation,
                 None,
             )

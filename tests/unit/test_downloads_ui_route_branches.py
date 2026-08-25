@@ -178,6 +178,7 @@ def test_downloads_normalizers_and_filter_helpers_cover_edge_values() -> None:
     assert downloads_routes.normalize_download_history_sort("not-real") == "-updated_at"
     assert len(downloads_routes.get_download_history_order_by("-client")) == 3
     assert downloads_routes.download_client_type_label("sabnzbd") == "SABnzbd"
+    assert downloads_routes.download_client_type_label("airdcpp") == "AirDC++"
     assert downloads_routes.download_client_type_label("custom_client") == "Custom Client"
     assert downloads_routes.normalize_download_queue_client_state(" Repairing ") == "Repairing"
     assert downloads_routes.normalize_download_queue_client_state("   ") is None

@@ -271,6 +271,7 @@ def download_client_type_label(client_type: str) -> str:
         DownloadClientType.TRANSMISSION.value: "Transmission",
         DownloadClientType.DELUGE.value: "Deluge",
         DownloadClientType.DIRECT.value: "Direct Download",
+        DownloadClientType.AIRDCPP.value: "AirDC++",
     }
     return labels.get(client_type, client_type.replace("_", " ").title())
 

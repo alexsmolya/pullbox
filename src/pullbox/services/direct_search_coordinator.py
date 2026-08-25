@@ -14,6 +14,7 @@ from uuid import uuid4
 import structlog
 from sqlalchemy import select
 
+from pullbox.core.acquisition import AcquisitionProtocol
 from pullbox.core.issue_title import collection_title_number
 from pullbox.core.log_sanitizer import sanitize_log_mapping, sanitize_log_string
 from pullbox.core.name_matcher import NameMatcher
@@ -627,7 +628,7 @@ def _candidate_release(
         seeders=None,
         leechers=None,
         grabs=None,
-        is_torrent=False,
+        protocol=AcquisitionProtocol.DIRECT,
         category="Books/Comics",
         published_at=None,
         info_url=_safe_source_reference(candidate.source_reference, provider.source_domains),

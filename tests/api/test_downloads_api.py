@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from pullbox.api.v1 import downloads as downloads_api
 from pullbox.core.exceptions import NotFoundError
 from pullbox.models import Base
+from pullbox.models.client import DownloadClientConfig
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
     DirectAcquisitionState,
@@ -131,6 +132,7 @@ async def _seed_download(
     error_message: str | None = "Download failed",
     completed_at: datetime | None = None,
     indexer_id: int | None = None,
+    download_client_config_id: int | None = None,
 ) -> int:
     async with factory() as session:
         download = DownloadHistory(
@@ -144,12 +146,31 @@ async def _seed_download(
             error_message=error_message,
             completed_at=completed_at,
             indexer_id=indexer_id,
+            download_client_config_id=download_client_config_id,
         )
         session.add(download)
         await session.flush()
         download_id = download.id
         await session.commit()
         return download_id
+
+
+async def _seed_client_config(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    config_id: int,
+    client_type: DownloadClientType,
+) -> None:
+    async with factory() as session:
+        session.add(
+            DownloadClientConfig(
+                id=config_id,
+                name=f"Client {config_id}",
+                client_type=client_type,
+                url=f"http://client-{config_id}.test",
+            )
+        )
+        await session.commit()
 
 
 async def _seed_direct_download_with_routes(
@@ -279,6 +300,7 @@ class TestDownloadQueueAndHistory:
         assert response.status_code == 200
         data = response.json()
         assert {item["state"] for item in data} == {"queued", "finalizing"}
+        assert {item["protocol"] for item in data} == {"usenet"}
         assert data[0]["series_title"] == "Batman"
         assert data[0]["issue_number"] == 4.0
 
@@ -316,6 +338,7 @@ class TestDownloadQueueAndHistory:
         assert data["has_more"] is False
         assert len(data["items"]) == 2
         assert all(item["series_title"] == "Batman" for item in data["items"])
+        assert {item["protocol"] for item in data["items"]} == {"usenet"}
 
 
 class TestDownloadPostProcessingRetry:
@@ -757,6 +780,44 @@ class TestDownloadRouteFunctions:
         assert issue.status == IssueStatus.DOWNLOADING
 
     @pytest.mark.asyncio
+    async def test_retry_download_route_uses_exact_client_config(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_client_config(
+            db_factory,
+            config_id=22,
+            client_type=DownloadClientType.SABNZBD,
+        )
+        issue_id = await _seed_issue(db_factory)
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            downloaded_path=None,
+            download_client_config_id=22,
+        )
+        first = AsyncMock(client_type="sabnzbd")
+        first.add_nzb = AsyncMock(return_value="wrong-client")
+        exact = AsyncMock(client_type="sabnzbd")
+        exact.add_nzb = AsyncMock(return_value="exact-client")
+
+        async with db_factory() as session:
+            with patch(
+                "pullbox.composition.providers.register_download_clients",
+                new_callable=AsyncMock,
+            ) as mock_register:
+
+                async def _register(_session: object, registry: object) -> None:
+                    registry.register_download_client(11, first)  # type: ignore[union-attr]
+                    registry.register_download_client(22, exact)  # type: ignore[union-attr]
+
+                mock_register.side_effect = _register
+                await downloads_api.retry_download(download_id, object(), session)  # type: ignore[arg-type]
+
+        exact.add_nzb.assert_awaited_once()
+        first.add_nzb.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_retry_download_route_sends_torrent(
         self,
         db_factory: async_sessionmaker[AsyncSession],
@@ -908,6 +969,45 @@ class TestDownloadRouteFunctions:
         async with db_factory() as session:
             deleted = await session.get(DownloadHistory, terminal_id)
         assert deleted is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_download_route_uses_exact_client_config(
+        self,
+        db_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_client_config(
+            db_factory,
+            config_id=22,
+            client_type=DownloadClientType.SABNZBD,
+        )
+        issue_id = await _seed_issue(db_factory, status=IssueStatus.DOWNLOADING)
+        download_id = await _seed_download(
+            db_factory,
+            issue_id,
+            state=DownloadState.DOWNLOADING,
+            error_message=None,
+            download_client_config_id=22,
+        )
+        first = AsyncMock(client_type="sabnzbd")
+        first.remove_download = AsyncMock(return_value=True)
+        exact = AsyncMock(client_type="sabnzbd")
+        exact.remove_download = AsyncMock(return_value=True)
+
+        async with db_factory() as session:
+            with patch(
+                "pullbox.composition.providers.register_download_clients",
+                new_callable=AsyncMock,
+            ) as mock_register:
+
+                async def _register(_session: object, registry: object) -> None:
+                    registry.register_download_client(11, first)  # type: ignore[union-attr]
+                    registry.register_download_client(22, exact)  # type: ignore[union-attr]
+
+                mock_register.side_effect = _register
+                await downloads_api.cancel_download(download_id, object(), session)  # type: ignore[arg-type]
+
+        exact.remove_download.assert_awaited_once()
+        first.remove_download.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cancel_download_routes_direct_rows_to_native_runner(

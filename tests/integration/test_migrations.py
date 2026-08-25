@@ -6,6 +6,7 @@ and verifies that Phase 2 columns and config keys exist.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 # Path to the alembic directory (relative to this test file)
 _ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"
 _DIRECT_ACQUISITION_PARENT_REVISION = "d9f0a1b2c345"
+_AIRDCPP_FOUNDATION_PARENT_REVISION = "q2r3s4t5u678"
 
 
 @pytest.fixture
@@ -90,6 +92,30 @@ def _seed_reader_state_owner(conn: Connection, *, slug: str) -> tuple[int, int]:
     )
     issue_id = conn.execute(text("SELECT last_insert_rowid()")).scalar_one()
     return user_id, issue_id
+def _get_indexes(sync_url: str, table: str) -> dict[str, list[str]]:
+    """Get index names and ordered columns for a table."""
+    engine = create_engine(sync_url)
+    try:
+        inspector = inspect(engine)
+        return {
+            index["name"]: list(index["column_names"]) for index in inspector.get_indexes(table)
+        }
+    finally:
+        engine.dispose()
+
+
+def _insert_download_history_issue(conn) -> None:
+    """Seed the minimum valid parent rows for download-history fixtures."""
+    conn.execute(
+        text(
+            "INSERT INTO series "
+            "(id, title, sort_title, status, issue_count, monitored) "
+            "VALUES (1, 'Migration Fixture', 'migration fixture', 'UNKNOWN', 0, 0)"
+        )
+    )
+    conn.execute(
+        text("INSERT INTO issues (id, series_id, issue_number, status) VALUES (1, 1, 1, 'UNKNOWN')")
+    )
 
 
 class TestMigrationChain:
@@ -109,6 +135,111 @@ class TestMigrationChain:
             assert "system_config" in tables
         finally:
             engine.dispose()
+
+    def test_airdcpp_foundation_backfills_populated_history_and_source_order(
+        self,
+        alembic_cfg,
+    ) -> None:
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, _AIRDCPP_FOUNDATION_PARENT_REVISION)
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                _insert_download_history_issue(conn)
+                conn.execute(
+                    text(
+                        "INSERT INTO download_history "
+                        "(issue_id, title, download_url, download_client, state) VALUES "
+                        "(1, 'Usenet', 'https://example.test/nzb', 'SABNZBD', 'QUEUED'), "
+                        "(1, 'Torrent', 'https://example.test/torrent', "
+                        "'QBITTORRENT', 'QUEUED'), "
+                        "(1, 'Direct', 'pullbox-direct://attempt/1', 'DIRECT', 'QUEUED')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO system_config (key, value, value_type) VALUES "
+                        '(\'source_priority\', \'["direct", "torrent", "usenet"]\', '
+                        "'string')"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        columns = _get_columns(sync_url, "download_history")
+        assert {"protocol", "download_client_config_id"}.issubset(columns)
+        indexes = _get_indexes(sync_url, "download_history")
+        assert indexes["ix_download_history_protocol_state"] == ["protocol", "state"]
+        assert indexes["ix_download_history_client_config_state"] == [
+            "download_client_config_id",
+            "state",
+        ]
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT download_client, protocol, download_client_config_id "
+                        "FROM download_history ORDER BY id"
+                    )
+                ).fetchall()
+                source_priority = conn.execute(
+                    text("SELECT value FROM system_config WHERE key = 'source_priority'")
+                ).scalar_one()
+        finally:
+            engine.dispose()
+
+        assert [tuple(row) for row in rows] == [
+            ("SABNZBD", "usenet", None),
+            ("QBITTORRENT", "torrent", None),
+            ("DIRECT", "direct", None),
+        ]
+        assert json.loads(source_priority) == ["direct", "torrent", "usenet", "dc"]
+
+        command.downgrade(cfg, _AIRDCPP_FOUNDATION_PARENT_REVISION)
+
+        columns = _get_columns(sync_url, "download_history")
+        assert "protocol" not in columns
+        assert "download_client_config_id" not in columns
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                clients = conn.execute(
+                    text("SELECT download_client FROM download_history ORDER BY id")
+                ).scalars()
+                source_priority = conn.execute(
+                    text("SELECT value FROM system_config WHERE key = 'source_priority'")
+                ).scalar_one()
+                assert list(clients) == ["SABNZBD", "QBITTORRENT", "DIRECT"]
+        finally:
+            engine.dispose()
+
+        assert json.loads(source_priority) == ["direct", "torrent", "usenet"]
+
+    def test_airdcpp_foundation_downgrade_refuses_dc_history(self, alembic_cfg) -> None:
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                _insert_download_history_issue(conn)
+                conn.execute(
+                    text(
+                        "INSERT INTO download_history "
+                        "(issue_id, title, download_url, download_client, protocol, state) "
+                        "VALUES (1, 'DC', 'airdcpp://result/opaque', "
+                        "'AIRDCPP', 'dc', 'QUEUED')"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        with pytest.raises(RuntimeError, match="AirDC\\+\\+ download history"):
+            command.downgrade(cfg, _AIRDCPP_FOUNDATION_PARENT_REVISION)
 
     def test_indexer_manager_migration_backfills_prowlarr_identity(
         self,
