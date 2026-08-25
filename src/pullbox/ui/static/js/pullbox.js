@@ -10872,6 +10872,7 @@ function issueSearchResultActions(config) {
       }
 
       var directAttemptId = parseInt(button.dataset.directAttempt, 10) || 0;
+      var dcRouteToken = button.dataset.dcRouteToken || "";
       var endpoint = "/api/v1/issues/" + cfg.issueId + "/grab";
       var payload = {
         download_url: button.dataset.url,
@@ -10885,6 +10886,9 @@ function issueSearchResultActions(config) {
       if (directAttemptId) {
         endpoint = "/api/v1/issues/" + cfg.issueId + "/direct-grab";
         payload = { direct_attempt_id: directAttemptId };
+      } else if (dcRouteToken) {
+        endpoint = "/api/v1/issues/" + cfg.issueId + "/dc-grab";
+        payload = { dc_route_token: dcRouteToken };
       }
 
       self.grabbing = true;
@@ -10899,7 +10903,9 @@ function issueSearchResultActions(config) {
         .then(function (response) {
           if (response.ok) {
             self.dispatchToast(
-              directAttemptId ? "Direct download queued" : "Grabbed successfully",
+              directAttemptId || dcRouteToken
+                ? "Direct download queued"
+                : "Grabbed successfully",
               "success"
             );
             self.grabbing = false;

@@ -209,3 +209,24 @@ class DirectGrabResponse(BaseModel):
     artifact_id: int
     title: str
     status: str
+
+
+class DcGrabRequest(BaseModel):
+    """Queue one server-owned transient Direct Connect route."""
+
+    dc_route_token: str = Field(
+        min_length=20,
+        max_length=200,
+        description="Opaque server-side Direct Connect route grant",
+    )
+
+
+class DcGrabResponse(BaseModel):
+    """Durable acknowledgement for one Direct Connect queue intent."""
+
+    issue_id: int
+    acquisition_id: int
+    download_id: int
+    bundle_id: int | None
+    title: str
+    status: str

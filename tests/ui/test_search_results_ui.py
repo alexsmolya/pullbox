@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -27,20 +28,32 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from pullbox.core.acquisition import AcquisitionProtocol
 from pullbox.models import Base
+from pullbox.models.airdcpp import AirDcppClientSettings
+from pullbox.models.client import DownloadClientConfig
 from pullbox.models.direct_acquisition import (
     DirectProviderConfig,
     DirectProviderState,
     DirectProviderTrustLevel,
 )
+from pullbox.models.download import DownloadClientType, DownloadHistory, DownloadState
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.models.user import APIKey, User
+from pullbox.providers.airdcpp.supervisor import AirDcppSupervisorState
 from pullbox.providers.base import ReleaseResult
 from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
-from pullbox.services.airdcpp_search_types import DcSearchOutcome
+from pullbox.services.airdcpp_route_tokens import get_airdcpp_route_token_store
+from pullbox.services.airdcpp_search_types import (
+    DcMetrics,
+    DcRoute,
+    DcSearchOutcome,
+    DcValidatedCandidate,
+)
 from pullbox.services.auth_service import AuthService
 from pullbox.services.direct_search_coordinator import (
     DirectSearchOutcome,
@@ -71,6 +84,18 @@ def test_manual_direct_connect_cooldown_ui_contract() -> None:
     assert "/dc-search-status" in script
     assert "/dc-search-results" in script
     assert "AbortController" in script
+
+
+def test_manual_direct_connect_result_uses_opaque_queue_route() -> None:
+    root = Path(__file__).resolve().parents[2]
+    result = (root / "src/pullbox/ui/templates/partials/issue_dc_search_results.html").read_text()
+    script = (root / "src/pullbox/ui/static/js/pullbox.js").read_text()
+
+    assert 'data-dc-route-token="{{ row.route_token }}"' in result
+    assert '@click="grabRelease($el)"' in result
+    assert "AirDC++ queueing is enabled in the next acquisition stage" not in result
+    assert 'endpoint = "/api/v1/issues/" + cfg.issueId + "/dc-grab"' in script
+    assert "payload = { dc_route_token: dcRouteToken }" in script
 
 
 @pytest.mark.asyncio
@@ -263,6 +288,103 @@ async def _create_issue(
         session.add(issue)
         await session.commit()
         return issue.id
+
+
+def _dc_candidate(config_id: int) -> DcValidatedCandidate:
+    tth = "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y"
+    release = ReleaseResult(
+        title="Batman 001 (2016).cbz",
+        indexer_name="Dedicated Air",
+        download_url=f"airdcpp://client/{config_id}/tth/{tth}",
+        size_bytes=100_000_000,
+        age_days=None,
+        seeders=None,
+        leechers=None,
+        grabs=None,
+        is_torrent=False,
+        category=None,
+        published_at=None,
+        protocol=AcquisitionProtocol.DC,
+    )
+    validation = ReleaseValidator().validate_all_results(
+        [release],
+        wanted_series="Batman",
+        wanted_issue=1,
+        wanted_year=2016,
+    )[0][0]
+    return DcValidatedCandidate(
+        release=release,
+        validation=validation,
+        route=DcRoute(
+            client_config_id=config_id,
+            client_identity=f"airdcpp:{config_id}",
+            search_instance_id=44,
+            grouped_result_id="opaque-result",
+            result_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            tth=tth,
+            size_bytes=100_000_000,
+        ),
+        metrics=DcMetrics(2, 1, 2, 1_000_000),
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_direct_connect_grab_persists_exact_client_queue_intent(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    issue_id = await _create_issue(_db_factory)
+    async with _db_factory() as session:
+        config = DownloadClientConfig(
+            name="Dedicated Air",
+            client_type=DownloadClientType.AIRDCPP,
+            url="http://air.example.test:5600",
+            enabled=True,
+            priority=20,
+        )
+        session.add(config)
+        await session.flush()
+        session.add(AirDcppClientSettings(client_config_id=config.id))
+        user_id = (await session.execute(select(User.id))).scalar_one()
+        await session.commit()
+        config_id = config.id
+
+    token = get_airdcpp_route_token_store().issue(
+        _dc_candidate(config_id),
+        issue_id=issue_id,
+        user_id=user_id,
+        search_log_id=None,
+    )
+    api = AsyncMock()
+    api.download_search_result.return_value = SimpleNamespace(id=91, merged=False)
+    supervisor = SimpleNamespace(
+        state=AirDcppSupervisorState.READY,
+        api_client=api,
+    )
+    registry = SimpleNamespace(get=lambda selected: supervisor if selected == config_id else None)
+
+    with (
+        patch(
+            "pullbox.api.v1.issues.get_airdcpp_supervisor_registry",
+            return_value=registry,
+        ),
+        patch(
+            "pullbox.api.v1.issues.get_settings",
+            return_value=SimpleNamespace(airdcpp_enabled=True),
+        ),
+    ):
+        response = await client.post(
+            f"/api/v1/issues/{issue_id}/dc-grab",
+            json={"dc_route_token": token},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["bundle_id"] == 91
+    api.download_search_result.assert_awaited_once()
+    async with _db_factory() as session:
+        history = (await session.execute(select(DownloadHistory))).scalar_one()
+        assert history.download_client_config_id == config_id
+        assert history.state is DownloadState.SENT
 
 
 # ── Tests ──────────────────────────────────────────────────────────────

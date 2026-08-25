@@ -254,6 +254,63 @@ async def _cancel_on_client(download: DownloadHistory, session: DbSession) -> No
         )
         return
 
+    if download.download_client is DownloadClientType.AIRDCPP:
+        from pullbox.composition.airdcpp import get_airdcpp_supervisor_registry
+        from pullbox.models.airdcpp import AirDcppAcquisition
+        from pullbox.providers.airdcpp.errors import AirDcppEntityNotFoundError
+        from pullbox.providers.airdcpp.supervisor import AirDcppSupervisorState
+
+        acquisition = (
+            await session.execute(
+                select(AirDcppAcquisition).where(
+                    AirDcppAcquisition.download_history_id == download.id
+                )
+            )
+        ).scalar_one_or_none()
+        if acquisition is None or acquisition.bundle_id is None:
+            logger.warning("cancel_airdcpp_reference_invalid", download_id=download.id)
+            return
+        air_registry = get_airdcpp_supervisor_registry()
+        supervisor = (
+            air_registry.get(acquisition.client_config_id)
+            if air_registry is not None and acquisition.client_config_id is not None
+            else None
+        )
+        if supervisor is None or supervisor.state is not AirDcppSupervisorState.READY:
+            acquisition.client_state = "cancel_requested"
+            logger.warning(
+                "cancel_airdcpp_client_unavailable",
+                download_id=download.id,
+                client_config_id=acquisition.client_config_id,
+            )
+            return
+        bundle_id = acquisition.bundle_id
+        # Release the route transaction before the external mutation.
+        await session.commit()
+        try:
+            await supervisor.api_client.remove_queue_bundle(bundle_id)
+        except AirDcppEntityNotFoundError:
+            pass
+        except Exception:
+            acquisition.client_state = "cancel_requested"
+            logger.warning(
+                "cancel_airdcpp_failed",
+                download_id=download.id,
+                client_config_id=acquisition.client_config_id,
+                exc_info=True,
+            )
+            return
+        acquisition.client_state = "cancelled"
+        acquisition.next_retry_at = None
+        acquisition.reconciliation_error = None
+        logger.info(
+            "airdcpp_bundle_cancelled",
+            download_id=download.id,
+            bundle_id=bundle_id,
+            client_config_id=acquisition.client_config_id,
+        )
+        return
+
     if not download.external_id:
         return
 
@@ -550,6 +607,44 @@ async def retry_download(
             "direct_download_retry_queued",
             download_id=download.id,
             acquisition_id=attempt_id,
+        )
+        return {"status": "sent"}
+
+    if download.download_client is DownloadClientType.AIRDCPP:
+        from pullbox.models.airdcpp import AirDcppAcquisition
+
+        acquisition = (
+            await session.execute(
+                select(AirDcppAcquisition).where(
+                    AirDcppAcquisition.download_history_id == download.id
+                )
+            )
+        ).scalar_one_or_none()
+        if acquisition is None or acquisition.bundle_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The AirDC++ queue provenance is unavailable.",
+            )
+        now = datetime.now(UTC)
+        acquisition.client_state = "source_search_pending"
+        acquisition.retry_count = 0
+        acquisition.next_retry_at = now
+        acquisition.reconciliation_error = None
+        download.state = DownloadState.RETRY_PENDING
+        download.retry_count = 0
+        download.next_retry_at = now
+        download.error_message = None
+        download.completed_at = None
+        issue = await session.get(Issue, download.issue_id)
+        if issue and issue.status in (IssueStatus.WANTED, IssueStatus.OWNED):
+            issue.status = IssueStatus.DOWNLOADING
+        await session.flush()
+        logger.info(
+            "airdcpp_download_retry_queued",
+            download_id=download.id,
+            acquisition_id=acquisition.id,
+            bundle_id=acquisition.bundle_id,
+            client_config_id=acquisition.client_config_id,
         )
         return {"status": "sent"}
 

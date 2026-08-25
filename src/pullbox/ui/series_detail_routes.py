@@ -26,6 +26,7 @@ from pullbox.core.page_sources import SUPPORTED_READER_FORMATS
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile
 from pullbox.models.series import Series
+from pullbox.services.airdcpp_route_tokens import get_airdcpp_route_token_store
 from pullbox.services.airdcpp_search_types import AirDcppSearchProgress
 from pullbox.services.reader_state_service import load_reader_state
 from pullbox.services.reading_query_service import (
@@ -531,6 +532,19 @@ async def htmx_issue_dc_search_results(
                         await progress_task
 
             outcome = await search_task
+            route_store = get_airdcpp_route_token_store()
+            dc_rows = [
+                {
+                    "candidate": candidate,
+                    "route_token": route_store.issue(
+                        candidate,
+                        issue_id=target.issue_id,
+                        user_id=user.id,
+                        search_log_id=None,
+                    ),
+                }
+                for candidate in outcome.matched
+            ]
             html = template.render(
                 _ctx(
                     request,
@@ -541,6 +555,7 @@ async def htmx_issue_dc_search_results(
                         "issue_number": target.issue_number,
                     },
                     outcome=outcome,
+                    dc_rows=dc_rows,
                 )
             )
             result_count = len(outcome.matched) + len(outcome.rejected)

@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
     from pullbox.providers.airdcpp.contracts import (
         AirDcppAuthenticationInfo,
+        AirDcppQueueBundleAddInfo,
+        AirDcppQueueFile,
         AirDcppSession,
         AirDcppSystemInfo,
     )
@@ -33,6 +35,14 @@ _REQUIRED_PERMISSIONS = frozenset(
 )
 _API_VERSION = 1
 _MINIMUM_FEATURE_LEVEL = 10
+_QUEUE_LISTENER_PATHS = (
+    "/queue/listeners/queue_bundle_added",
+    "/queue/listeners/queue_bundle_status",
+    "/queue/listeners/queue_bundle_priority",
+    "/queue/listeners/queue_bundle_tick",
+    "/queue/listeners/queue_bundle_sources",
+    "/queue/listeners/queue_bundle_removed",
+)
 
 
 class AirDcppSupervisorState(StrEnum):
@@ -97,6 +107,28 @@ class AirDcppSupervisorApi(Protocol):
 
     async def get_settings(self, keys: list[str]) -> list[str | bool | int]: ...
 
+    async def download_search_result(
+        self,
+        instance_id: int,
+        result_id: str,
+        *,
+        target_name: str,
+        priority: int | None,
+    ) -> AirDcppQueueBundleAddInfo: ...
+
+    async def get_queue_files_by_tth(self, tth: str) -> list[AirDcppQueueFile]: ...
+
+    async def create_file_bundle(
+        self,
+        *,
+        tth: str,
+        size: int,
+        target_name: str,
+        priority: int | None,
+    ) -> AirDcppQueueBundleAddInfo: ...
+
+    async def remove_queue_bundle(self, bundle_id: int) -> None: ...
+
     async def delete_current_session(self) -> None: ...
 
     async def aclose(self) -> None: ...
@@ -134,6 +166,9 @@ class AirDcppSupervisor:
         self._sleep = sleep
         self._jitter = jitter or _default_jitter
         self._runner: asyncio.Task[None] | None = None
+        self._reconciliation_task: asyncio.Task[None] | None = None
+        self._reconciliation_pending = False
+        self._queue_subscriptions_installed = False
         self._state_changed = asyncio.Condition()
         self._health = AirDcppSupervisorHealth(last_state_change_at=_now())
         self._authorized = False
@@ -149,7 +184,10 @@ class AirDcppSupervisor:
 
     @property
     def background_task_count(self) -> int:
-        return int(self._runner is not None and not self._runner.done())
+        return sum(
+            task is not None and not task.done()
+            for task in (self._runner, self._reconciliation_task)
+        )
 
     def start(self) -> None:
         """Schedule connection work without waiting on the remote service."""
@@ -173,6 +211,12 @@ class AirDcppSupervisor:
             runner.cancel()
             await asyncio.gather(runner, return_exceptions=True)
         self._runner = None
+        reconciliation_task = self._reconciliation_task
+        if reconciliation_task is not None and not reconciliation_task.done():
+            reconciliation_task.cancel()
+            await asyncio.gather(reconciliation_task, return_exceptions=True)
+        self._reconciliation_task = None
+        self._reconciliation_pending = False
         await self._end_session()
         with suppress(Exception):
             await self.socket_client.close()
@@ -201,6 +245,7 @@ class AirDcppSupervisor:
     async def _run(self) -> None:
         reconnect_attempt = 0
         try:
+            await self._install_queue_subscriptions()
             while not self._stopping:
                 await self._set_state(AirDcppSupervisorState.CONNECTING)
                 try:
@@ -295,6 +340,33 @@ class AirDcppSupervisor:
         finally:
             await self._end_session()
 
+    async def _install_queue_subscriptions(self) -> None:
+        if self._queue_subscriptions_installed:
+            return
+        for path in _QUEUE_LISTENER_PATHS:
+            await self.socket_client.subscribe(path, self._queue_event)
+        self._queue_subscriptions_installed = True
+
+    async def _queue_event(self, _data: object) -> None:
+        """Coalesce queue-event bursts into one bounded REST reconciliation."""
+        if self._stopping:
+            return
+        self._reconciliation_pending = True
+        task = self._reconciliation_task
+        if task is None or task.done():
+            self._reconciliation_task = asyncio.create_task(
+                self._drain_reconciliation(),
+                name=f"airdcpp-reconcile-{self.config.config_id}",
+            )
+
+    async def _drain_reconciliation(self) -> None:
+        # Give one event-loop turn to collect a typical AirDC++ tick/status burst.
+        await asyncio.sleep(0)
+        while self._reconciliation_pending and not self._stopping:
+            self._reconciliation_pending = False
+            with suppress(Exception):
+                await self._reconcile(self.config.config_id)
+
     def _validate_compatibility(
         self,
         auth: AirDcppAuthenticationInfo,
@@ -337,6 +409,12 @@ class AirDcppSupervisor:
 
 class RegistrySupervisor(Protocol):
     config: AirDcppSupervisorConfig
+
+    @property
+    def state(self) -> AirDcppSupervisorState: ...
+
+    @property
+    def api_client(self) -> AirDcppSupervisorApi: ...
 
     def start(self) -> None: ...
 

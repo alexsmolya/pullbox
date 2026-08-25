@@ -137,6 +137,54 @@ class AirDcppQueueBundle(AirDcppWireModel):
         return self
 
 
+class AirDcppQueueBundleAddInfo(AirDcppWireModel):
+    """Stable identity returned for both new and merged queue bundles."""
+
+    id: PositiveInt
+    merged: StrictBool
+
+
+class AirDcppSearchDownloadResponse(AirDcppWireModel):
+    """File-only projection of the grouped search-result download response."""
+
+    bundle_info: AirDcppQueueBundleAddInfo | None = None
+    directory_downloads: list[dict[str, object]] | None = None
+
+    @model_validator(mode="after")
+    def validate_file_response(self) -> AirDcppSearchDownloadResponse:
+        if self.bundle_info is None or self.directory_downloads is not None:
+            raise ValueError("AirDC++ did not return an individual file bundle")
+        return self
+
+
+class AirDcppQueueFile(AirDcppWireModel):
+    """Queue file identity used only for exact-TTH mutation recovery."""
+
+    id: PositiveInt
+    name: BoundedString
+    target: SecretStr = Field(repr=False)
+    type: AirDcppFileItemType
+    bundle_id: PositiveInt = Field(alias="bundle")
+    size: PositiveInt
+    downloaded_bytes: NonNegativeInt
+    priority: AirDcppQueuePriority
+    time_added: NonNegativeInt
+    time_finished: NonNegativeInt
+    speed: NonNegativeInt
+    seconds_left: NonNegativeInt
+    sources: AirDcppQueueSourceInfo
+    status: AirDcppQueueStatus
+    tth: Annotated[StrictStr, Field(pattern=r"^[A-Z2-7]{39}$")]
+
+    @model_validator(mode="after")
+    def validate_progress(self) -> AirDcppQueueFile:
+        if self.downloaded_bytes > self.size:
+            raise ValueError("downloaded bytes cannot exceed file size")
+        if self.type.id != "file":
+            raise ValueError("AirDC++ queue recovery supports file items only")
+        return self
+
+
 class AirDcppSearchInstance(AirDcppWireModel):
     """One temporary AirDC++ result collection instance."""
 

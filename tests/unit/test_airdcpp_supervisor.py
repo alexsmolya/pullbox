@@ -148,6 +148,15 @@ async def test_supervisor_start_is_nonblocking_and_projects_ready_health() -> No
     assert health.reconnect_attempts == 0
     assert health.last_ready_at is not None
     assert socket.subscriptions[0][0] == "/queue/listeners/bundle_updated"
+    queue_paths = {path for path, _handler in socket.subscriptions}
+    assert {
+        "/queue/listeners/queue_bundle_added",
+        "/queue/listeners/queue_bundle_status",
+        "/queue/listeners/queue_bundle_priority",
+        "/queue/listeners/queue_bundle_tick",
+        "/queue/listeners/queue_bundle_sources",
+        "/queue/listeners/queue_bundle_removed",
+    }.issubset(queue_paths)
     assert reconciliations == [7]
     assert supervisor.background_task_count == 1
 
@@ -157,6 +166,37 @@ async def test_supervisor_start_is_nonblocking_and_projects_ready_health() -> No
     assert socket.close_calls == 1
     assert api.deleted == 1
     assert api.closed is True
+
+
+@pytest.mark.asyncio
+async def test_queue_event_storm_coalesces_to_one_owned_reconciliation() -> None:
+    api = _FakeApi()
+    socket = _FakeSocket()
+    reconciliations: list[int] = []
+
+    async def reconcile(config_id: int) -> None:
+        reconciliations.append(config_id)
+
+    supervisor = AirDcppSupervisor(
+        config=_config(),
+        api_client=api,
+        socket_client=socket,
+        reconcile=reconcile,
+    )
+    supervisor.start()
+    await supervisor.wait_for_state(AirDcppSupervisorState.READY, timeout_seconds=1)
+    handler = next(
+        handler
+        for path, handler in socket.subscriptions
+        if path == "/queue/listeners/queue_bundle_tick"
+    )
+
+    await asyncio.gather(*(handler({"id": 91}) for _ in range(100)))
+    await asyncio.sleep(0)
+
+    assert reconciliations == [7, 7]
+    await supervisor.stop()
+    assert supervisor.background_task_count == 0
 
 
 @pytest.mark.asyncio

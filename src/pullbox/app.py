@@ -827,7 +827,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler.shutdown()
     if airdcpp_registry is not None:
         try:
-            await airdcpp_registry.stop()
+            from pullbox.composition.airdcpp import stop_airdcpp_supervisor_registry
+
+            await stop_airdcpp_supervisor_registry(airdcpp_registry)
         except Exception:
             logger.warning(
                 "airdcpp_supervisor_shutdown_failed",

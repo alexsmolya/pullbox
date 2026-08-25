@@ -9,6 +9,7 @@ import pytest
 
 from pullbox.composition.airdcpp import (
     build_airdcpp_supervisor_configs,
+    get_airdcpp_reconciliation_task_count,
     get_airdcpp_search_coordinator,
     load_airdcpp_search_clients,
     start_airdcpp_supervisor_registry,
@@ -113,6 +114,7 @@ async def test_feature_off_starts_no_session_query_or_supervisors(
 
     assert calls == []
     assert registry is None
+    assert get_airdcpp_reconciliation_task_count() == 0
 
 
 @pytest.mark.asyncio
@@ -129,7 +131,9 @@ async def test_feature_on_loads_configs_and_schedules_registry(
     assert len(registry.applied) == 1
     assert session.execute_calls == 1
     assert get_airdcpp_search_coordinator() is not None
+    assert get_airdcpp_reconciliation_task_count() == 1
     await stop_airdcpp_supervisor_registry()
+    assert get_airdcpp_reconciliation_task_count() == 0
 
 
 @pytest.mark.asyncio

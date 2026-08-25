@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -14,6 +15,9 @@ from pullbox.providers.airdcpp.contracts import (
     AirDcppConnectivityInfo,
     AirDcppHub,
     AirDcppQueueBundle,
+    AirDcppQueueBundleAddInfo,
+    AirDcppQueueFile,
+    AirDcppSearchDownloadResponse,
     AirDcppSearchInstance,
     AirDcppSearchResult,
     AirDcppSession,
@@ -163,6 +167,91 @@ class AirDcppApiClient:
         if not isinstance(payload, list):
             raise AirDcppResponseError("AirDC++ returned an invalid queue response")
         return [self._validate(AirDcppQueueBundle, item) for item in payload]
+
+    async def get_queue_bundle(self, bundle_id: int) -> AirDcppQueueBundle:
+        if bundle_id <= 0:
+            raise ValueError("Invalid AirDC++ bundle ID")
+        return self._validate(
+            AirDcppQueueBundle,
+            await self._request_json("GET", f"/queue/bundles/{bundle_id}"),
+        )
+
+    async def get_queue_files_by_tth(self, tth: str) -> list[AirDcppQueueFile]:
+        if not re.fullmatch(r"[A-Z2-7]{39}", tth):
+            raise ValueError("Invalid AirDC++ TTH")
+        payload = await self._request_json("GET", f"/queue/files/{tth}")
+        if not isinstance(payload, list) or len(payload) > 100:
+            raise AirDcppResponseError("AirDC++ returned an invalid queue-file response")
+        return [self._validate(AirDcppQueueFile, item) for item in payload]
+
+    async def download_search_result(
+        self,
+        instance_id: int,
+        result_id: str,
+        *,
+        target_name: str,
+        priority: int | None,
+    ) -> AirDcppQueueBundleAddInfo:
+        if instance_id <= 0 or not 1 <= len(result_id) <= 1000:
+            raise ValueError("Invalid AirDC++ search route")
+        if not target_name or len(target_name) > 255 or "/" in target_name or "\\" in target_name:
+            raise ValueError("Invalid AirDC++ target name")
+        if priority is not None and not -1 <= priority <= 6:
+            raise ValueError("Invalid AirDC++ queue priority")
+        body: dict[str, object] = {"target_name": target_name}
+        if priority is not None:
+            body["priority"] = priority
+        payload = await self._request_json(
+            "POST",
+            f"/search/{instance_id}/results/{quote(result_id, safe='')}/download",
+            json=body,
+        )
+        response = self._validate(AirDcppSearchDownloadResponse, payload)
+        if response.bundle_info is None:  # pragma: no cover - enforced by model validation
+            raise AirDcppResponseError("AirDC++ returned an invalid file download response")
+        return response.bundle_info
+
+    async def create_file_bundle(
+        self,
+        *,
+        tth: str,
+        size: int,
+        target_name: str,
+        priority: int | None,
+    ) -> AirDcppQueueBundleAddInfo:
+        if not re.fullmatch(r"[A-Z2-7]{39}", tth) or size <= 0:
+            raise ValueError("Invalid AirDC++ file identity")
+        if not target_name or len(target_name) > 255 or "/" in target_name or "\\" in target_name:
+            raise ValueError("Invalid AirDC++ target name")
+        if priority is not None and not -1 <= priority <= 6:
+            raise ValueError("Invalid AirDC++ queue priority")
+        body: dict[str, object] = {
+            "tth": tth,
+            "size": size,
+            "target_name": target_name,
+        }
+        if priority is not None:
+            body["priority"] = priority
+        return self._validate(
+            AirDcppQueueBundleAddInfo,
+            await self._request_json("POST", "/queue/bundles/file", json=body),
+        )
+
+    async def search_queue_bundle(self, bundle_id: int) -> None:
+        if bundle_id <= 0:
+            raise ValueError("Invalid AirDC++ bundle ID")
+        await self._request_no_content("POST", f"/queue/bundles/{bundle_id}/search")
+
+    async def remove_queue_bundle(self, bundle_id: int) -> None:
+        if bundle_id <= 0:
+            raise ValueError("Invalid AirDC++ bundle ID")
+        response = await self._request(
+            "POST",
+            f"/queue/bundles/{bundle_id}/remove",
+            json={"remove_finished": False},
+        )
+        if response.status_code != 204:
+            raise AirDcppResponseError("AirDC++ returned an unexpected response")
 
     async def create_search_instance(
         self,

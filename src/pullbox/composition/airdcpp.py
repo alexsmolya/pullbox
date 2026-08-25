@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from typing import TYPE_CHECKING, cast
 
+import structlog
 from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -18,6 +21,10 @@ from pullbox.providers.airdcpp.supervisor import (
     AirDcppSupervisorConfig,
     AirDcppSupervisorRegistry,
     AirDcppSupervisorState,
+)
+from pullbox.services.airdcpp_reconciliation import (
+    AirDcppReconciler,
+    AirDcppReconciliationApi,
 )
 from pullbox.services.airdcpp_search_cooldown import AirDcppSearchCooldown
 from pullbox.services.airdcpp_search_coordinator import (
@@ -34,6 +41,9 @@ if TYPE_CHECKING:
 
 _registry: AirDcppSupervisorRegistry | None = None
 _search_coordinator: AirDcppSearchCoordinator | None = None
+_reconciler: AirDcppReconciler | None = None
+_reconciliation_task: asyncio.Task[None] | None = None
+logger = structlog.get_logger(__name__)
 
 
 async def load_airdcpp_search_clients(
@@ -123,18 +133,26 @@ async def start_airdcpp_supervisor_registry(
     enabled: bool,
 ) -> AirDcppSupervisorRegistry | None:
     """Load local config and schedule remote work without delaying app readiness."""
-    global _registry, _search_coordinator
+    global _reconciler, _reconciliation_task, _registry, _search_coordinator
     if not enabled:
         _registry = None
         _search_coordinator = None
+        _reconciler = None
+        _reconciliation_task = None
         return None
 
     registry = AirDcppSupervisorRegistry(supervisor_factory=_build_supervisor)
+    cooldown = AirDcppSearchCooldown(session_factory)
+    _registry = registry
+    _reconciler = AirDcppReconciler(session_factory, cooldown=cooldown)
+    _search_coordinator = AirDcppSearchCoordinator(cooldown=cooldown)
     async with session_factory() as session:
         configs = await build_airdcpp_supervisor_configs(session)
     await registry.apply(configs)
-    _registry = registry
-    _search_coordinator = AirDcppSearchCoordinator(cooldown=AirDcppSearchCooldown(session_factory))
+    _reconciliation_task = asyncio.create_task(
+        _run_periodic_reconciliation(),
+        name="airdcpp-reconciliation",
+    )
     return registry
 
 
@@ -146,6 +164,12 @@ def get_airdcpp_supervisor_registry() -> AirDcppSupervisorRegistry | None:
 def get_airdcpp_search_coordinator() -> AirDcppSearchCoordinator | None:
     """Return the process-wide coordinator sharing exact-client concurrency."""
     return _search_coordinator
+
+
+def get_airdcpp_reconciliation_task_count() -> int:
+    """Expose the single bounded scheduler ownership count for diagnostics/tests."""
+    task = _reconciliation_task
+    return int(task is not None and not task.done())
 
 
 async def refresh_airdcpp_supervisor_registry(
@@ -160,14 +184,25 @@ async def refresh_airdcpp_supervisor_registry(
     await registry.apply(configs)
 
 
-async def stop_airdcpp_supervisor_registry() -> None:
+async def stop_airdcpp_supervisor_registry(
+    registry_override: AirDcppSupervisorRegistry | None = None,
+) -> None:
     """Stop and clear the process registry, if it was enabled."""
-    global _registry, _search_coordinator
+    global _reconciler, _reconciliation_task, _registry, _search_coordinator
     registry = _registry
+    task = _reconciliation_task
     _registry = None
     _search_coordinator = None
+    _reconciler = None
+    _reconciliation_task = None
+    if task is not None and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
     if registry is not None:
         await registry.stop()
+    if registry_override is not None and registry_override is not registry:
+        await registry_override.stop()
 
 
 def _build_supervisor(config: AirDcppSupervisorConfig) -> AirDcppSupervisor:
@@ -185,4 +220,45 @@ def _build_supervisor(config: AirDcppSupervisorConfig) -> AirDcppSupervisor:
         config=config,
         api_client=api_client,
         socket_client=socket_client,
+        reconcile=_reconcile_ready_client,
     )
+
+
+async def _reconcile_ready_client(config_id: int) -> None:
+    registry = _registry
+    reconciler = _reconciler
+    supervisor = registry.get(config_id) if registry is not None else None
+    if (
+        reconciler is None
+        or supervisor is None
+        or not isinstance(supervisor, AirDcppSupervisor)
+        or supervisor.state is not AirDcppSupervisorState.READY
+    ):
+        return
+    await reconciler.reconcile_client(
+        config_id,
+        cast("AirDcppReconciliationApi", supervisor.api_client),
+    )
+
+
+async def _run_periodic_reconciliation() -> None:
+    """Use one process task for all ready exact-client queue snapshots."""
+    try:
+        while True:
+            await asyncio.sleep(10)
+            registry = _registry
+            if registry is None:
+                return
+            for config_id in registry.config_ids:
+                try:
+                    await _reconcile_ready_client(config_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning(
+                        "airdcpp_reconciliation_failed",
+                        client_config_id=config_id,
+                        exc_info=True,
+                    )
+    except asyncio.CancelledError:
+        raise
