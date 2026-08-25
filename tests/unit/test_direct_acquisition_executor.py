@@ -289,6 +289,19 @@ class _SuccessfulTransport:
         )
 
 
+class _InitialProgressTransport(_SuccessfulTransport):
+    def __init__(self, attempt: DirectAcquisitionAttempt) -> None:
+        super().__init__()
+        self._attempt = attempt
+        self.initial_progress: dict[str, object] | None = None
+        self.initial_etag: str | None = None
+
+    async def transfer(self, **kwargs: Any) -> ArtifactTransferResult:
+        self.initial_progress = dict(self._attempt.progress_snapshot)
+        self.initial_etag = self._attempt.artifact_attempts[0].etag
+        return await super().transfer(**kwargs)
+
+
 class _FailingTransport:
     def __init__(self, error: BaseException, *, write_partial: bool = False) -> None:
         self.error = error
@@ -492,6 +505,45 @@ async def test_executor_completes_with_durable_redacted_progress(
     assert refreshed_history.final_path == "/library/Issue 1.cbz"
     assert refreshed_history.imported_at == NOW
     assert refreshed_history.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_executor_publishes_known_size_before_first_transfer_byte(
+    session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt()
+    artifact = attempt.artifact_attempts[0]
+    artifact.expected_size = 59_247_008
+    artifact.etag = None
+    session.add(attempt)
+    await session.commit()
+    transport = _InitialProgressTransport(attempt)
+
+    await _executor(
+        tmp_path,
+        transport=transport,
+        post_processor=_successful_post_processor,
+    ).execute(
+        session,
+        acquisition_id=attempt.id,
+        artifact_id=artifact.id,
+        source_factory=_async_source,
+    )
+
+    assert transport.initial_progress == {
+        "schema_version": 1,
+        "stage": "downloading",
+        "artifact_attempt_id": artifact.id,
+        "host_kind": "generic_https",
+        "bytes_transferred": 0,
+        "total_bytes": 59_247_008,
+        "percent": 0,
+        "bytes_per_second": None,
+        "eta_seconds": None,
+        "source_slow": False,
+    }
+    assert transport.initial_etag == '"stable"'
 
 
 @pytest.mark.asyncio
