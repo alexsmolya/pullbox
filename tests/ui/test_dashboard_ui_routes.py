@@ -359,6 +359,30 @@ class TestDashboardRouteContracts:
         assert "Open reading queue" in response.text
         assert 'hx-trigger="every 3s"' not in response.text
 
+    async def test_reader_gate_hides_dashboard_continue_shelf(
+        self,
+        authenticated_client,
+        sec_db,
+        sec_user,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from tests.ui.test_reading_ui_routes import _seed_reading_items
+
+        await _seed_reading_items(sec_db, sec_user, count=1, mode="continue")
+        monkeypatch.setattr(
+            dashboard_routes,
+            "get_settings",
+            lambda: SimpleNamespace(reader_enabled=False),
+            raising=False,
+        )
+
+        response = await authenticated_client.get("/")
+
+        assert response.status_code == 200
+        assert 'data-testid="dashboard-continue-reading"' not in response.text
+        assert 'data-reading-action="want-to-read"' not in response.text
+        assert 'data-reading-action="completion"' not in response.text
+
     async def test_dashboard_storage_strip_measures_enabled_library_root(
         self,
         sec_db,

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy import select
 
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import FileFormat, LibraryFile, LibraryRoot, MatchConfidence
@@ -87,6 +89,27 @@ async def _seed_reading_items(
 
 @pytest.mark.asyncio
 class TestReadingWorkspaceRoutes:
+    async def test_reader_gate_disables_workspace_route(
+        self,
+        authenticated_client,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.ui import reading_routes
+
+        monkeypatch.setattr(
+            reading_routes,
+            "get_settings",
+            lambda: SimpleNamespace(reader_enabled=False),
+            raising=False,
+        )
+
+        response = await authenticated_client.get("/reading")
+
+        assert response.status_code == 404
+        assert 'data-testid="reading-card"' not in response.text
+        assert 'data-reading-action="want-to-read"' not in response.text
+        assert 'data-reading-action="completion"' not in response.text
+
     async def test_default_workspace_renders_continue_empty_contract_and_active_sidebar(
         self,
         authenticated_client,
@@ -165,6 +188,36 @@ class TestReadingWorkspaceRoutes:
         assert response.text.count('data-testid="reading-card"') == 24
         assert 'data-testid="reading-pagination"' in response.text
         assert "view=want-to-read&amp;per_page=24&amp;page=2" in response.text
+
+    async def test_workspace_clamps_a_stale_page_after_its_last_item_is_removed(
+        self,
+        authenticated_client,
+        sec_db,
+        sec_user,
+    ) -> None:  # type: ignore[no-untyped-def]
+        issue_ids = await _seed_reading_items(sec_db, sec_user, count=25, mode="want")
+        async with sec_db() as session:
+            state = (
+                await session.execute(
+                    select(IssueReaderState).where(
+                        IssueReaderState.user_id == sec_user.id,
+                        IssueReaderState.issue_id == issue_ids[0],
+                    )
+                )
+            ).scalar_one()
+            state.want_to_read = False
+            await session.commit()
+
+        response = await authenticated_client.get(
+            "/reading?view=want-to-read&per_page=24&page=2",
+            headers={"HX-Request": "true"},
+        )
+
+        assert response.status_code == 200
+        assert response.text.count('data-testid="reading-card"') == 24
+        assert 'data-reading-refresh-url="/reading?view=want-to-read&per_page=24&page=1"' in (
+            response.text
+        )
 
     async def test_htmx_workspace_request_returns_only_results_and_footer(
         self,

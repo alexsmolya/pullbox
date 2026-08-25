@@ -72,7 +72,7 @@
           {% if issue.series.year_start %}
           <span class="pill pill-neutral">{{ issue.series.year_start }}</span>
           {% endif %}
-          {% if issue_reading.state_label %}
+          {% if reader_enabled and issue_reading.state_label %}
           <span data-testid="issue-reading-state" class="pill pill-info">
             {{ issue_reading.state_label }}
           </span>

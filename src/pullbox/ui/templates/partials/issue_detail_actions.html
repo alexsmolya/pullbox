@@ -46,6 +46,7 @@
   </a>
   {% endif %}
 
+  {% if reader_enabled %}
   <button
     type="button"
     data-testid="issue-action-want-to-read"
@@ -66,6 +67,7 @@
   >
     {{ issue_reading.completion_action_label }}
   </button>
+  {% endif %}
   {% endif %}
 
   <span

@@ -255,6 +255,43 @@ async def test_continue_is_readable_incomplete_bounded_and_user_private(
 
 
 @pytest.mark.asyncio
+async def test_reading_lists_deduplicate_issues_with_multiple_registered_files(
+    db_session: AsyncSession,
+    reading_catalog: dict[str, object],
+) -> None:
+    user = reading_catalog["user"]
+    issues = reading_catalog["issues"]
+    series = reading_catalog["series"]
+    assert isinstance(user, User)
+    assert isinstance(issues, list)
+    assert isinstance(series, Series)
+    original_file = (
+        await db_session.execute(select(LibraryFile).where(LibraryFile.issue_id == issues[1].id))
+    ).scalar_one()
+    db_session.add(
+        LibraryFile(
+            file_path="/comics/issue-2-duplicate.pdf",
+            file_name="issue-2-duplicate.pdf",
+            file_size=2048,
+            file_format=FileFormat.PDF,
+            file_modified_at=datetime.now(UTC),
+            match_confidence=MatchConfidence.HIGH,
+            issue_id=issues[1].id,
+            library_root_id=original_file.library_root_id,
+        )
+    )
+    await db_session.flush()
+
+    continued = await list_continue_reading(db_session, user_id=user.id, page=1, per_page=24)
+    wanted = await list_want_to_read(db_session, user_id=user.id, page=1, per_page=24)
+
+    assert continued.total == 2
+    assert [item.issue_id for item in continued.items].count(issues[1].id) == 1
+    assert wanted.total == 3
+    assert [item.issue_id for item in wanted.items].count(issues[1].id) == 1
+
+
+@pytest.mark.asyncio
 async def test_want_and_read_keep_unavailable_items_and_stable_order(
     db_session: AsyncSession,
     reading_catalog: dict[str, object],

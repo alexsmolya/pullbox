@@ -15,6 +15,7 @@ from sqlalchemy.orm import joinedload
 from starlette.responses import Response
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
+from pullbox.config import get_settings
 from pullbox.models.download import DownloadHistory, DownloadState
 from pullbox.models.import_job import ImportJob, ImportJobStatus
 from pullbox.models.issue import Issue, IssueStatus
@@ -210,6 +211,8 @@ async def load_dashboard_continue_reading(
     user_id: int,
 ) -> tuple[ReadingIssueCardView, ...]:
     """Load the bounded dashboard shelf without coupling it to operations data."""
+    if not get_settings().reader_enabled:
+        return ()
     page = await list_continue_reading(
         session,
         user_id=user_id,

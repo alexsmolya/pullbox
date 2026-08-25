@@ -67,7 +67,7 @@
   </td>
   <td class="c">
     <span class="series-mission-control-owned">{{ owned_count }}/{{ item.total_issues }}</span>
-    {% if item.readable_count > 0 %}
+    {% if reader_enabled and item.readable_count > 0 %}
     <span data-testid="series-list-reading" class="series-mission-control-reading">
       Read {{ item.read_count }}/{{ item.readable_count }}
     </span>

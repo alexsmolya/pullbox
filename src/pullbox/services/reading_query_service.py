@@ -162,7 +162,6 @@ async def list_continue_reading(
         IssueReaderState.last_page_index < IssueReaderState.page_count - 1,
         IssueReaderState.completed_at.is_(None),
         Issue.status == IssueStatus.OWNED,
-        LibraryFile.file_format.in_(SUPPORTED_READER_FORMATS),
     )
     return await _list_reading_issues(
         session,
@@ -396,6 +395,18 @@ async def _list_reading_issues(
 ) -> ReadingPage:
     issue_join = IssueReaderState.issue_id == Issue.id
     count_statement = select(func.count(IssueReaderState.id)).join(Issue, issue_join)
+    canonical_file = (
+        select(
+            LibraryFile.issue_id.label("issue_id"),
+            func.min(LibraryFile.id).label("file_id"),
+        )
+        .where(
+            LibraryFile.issue_id.is_not(None),
+            LibraryFile.file_format.in_(SUPPORTED_READER_FORMATS),
+        )
+        .group_by(LibraryFile.issue_id)
+        .subquery()
+    )
     item_statement = (
         select(Issue, Series, LibraryFile, IssueReaderState)
         .join(Issue, issue_join)
@@ -403,21 +414,23 @@ async def _list_reading_issues(
     )
     if require_file:
         count_statement = count_statement.join(
-            LibraryFile,
-            LibraryFile.issue_id == Issue.id,
+            canonical_file,
+            canonical_file.c.issue_id == Issue.id,
         )
         item_statement = item_statement.join(
+            canonical_file,
+            canonical_file.c.issue_id == Issue.id,
+        ).join(
             LibraryFile,
-            LibraryFile.issue_id == Issue.id,
+            LibraryFile.id == canonical_file.c.file_id,
         )
     else:
-        count_statement = count_statement.outerjoin(
-            LibraryFile,
-            LibraryFile.issue_id == Issue.id,
-        )
         item_statement = item_statement.outerjoin(
+            canonical_file,
+            canonical_file.c.issue_id == Issue.id,
+        ).outerjoin(
             LibraryFile,
-            LibraryFile.issue_id == Issue.id,
+            LibraryFile.id == canonical_file.c.file_id,
         )
     total = int((await session.execute(count_statement.where(*filters))).scalar_one())
     rows = (

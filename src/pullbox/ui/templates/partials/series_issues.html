@@ -108,9 +108,11 @@
             {{ sort_header("issue_number", "#", width="w-16") }}
             {{ sort_header("title", "Title") }}
             {{ sort_header("release_date", "Released", extra_classes="hidden sm:table-cell", width="w-28") }}
+            {% if reader_enabled %}
             <th class="table-head-cell table-head-cell-tight hidden sm:table-cell">
               Reading<span class="sr-only"> state</span>
             </th>
+            {% endif %}
             {{ sort_header("status", "Status", width="w-24") }}
             <th class="series-domain-table-head r hidden sm:table-cell">Actions</th>
           </tr>

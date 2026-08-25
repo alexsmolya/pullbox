@@ -20,6 +20,7 @@ from starlette.responses import Response
 
 import pullbox
 from pullbox.api.deps import load_sidebar_health_counts
+from pullbox.config import get_settings
 from pullbox.core.naming import (
     resolve_collection_non_standard_file_template,
     resolve_single_non_standard_file_template,
@@ -231,6 +232,7 @@ def _ctx(request: Request, user: object | None = None, **kwargs: object) -> dict
         "user": user,
         "csrf_token": csrf_token,
         "display_config": display_config,
+        "reader_enabled": get_settings().reader_enabled,
         **sidebar_context,
         **kwargs,
     }

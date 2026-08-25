@@ -396,6 +396,8 @@ class TestIssueDetailRouteContracts:
 
         assert response.status_code == 200
         assert 'data-testid="issue-action-read"' not in response.text
+        assert 'data-testid="issue-action-want-to-read"' not in response.text
+        assert 'data-testid="issue-action-completion"' not in response.text
         assert 'data-testid="comic-reader-dialog"' not in response.text
 
     async def test_missing_issue_metadata_uses_persistent_comicvine_cache(

@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -152,6 +153,26 @@ class TestSidebarShellRouteContracts:
         assert SETTINGS_ICON_PATH in response.text
         assert "window.__autoSearching" not in response.text
         assert 'x-data="{ sidebarOpen:' not in response.text
+
+    async def test_reader_gate_hides_reading_sidebar_entry(
+        self,
+        authenticated_client,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        from pullbox.ui import routes
+
+        monkeypatch.setattr(
+            routes,
+            "get_settings",
+            lambda: SimpleNamespace(reader_enabled=False),
+            raising=False,
+        )
+
+        response = await authenticated_client.get("/series")
+
+        assert response.status_code == 200
+        assert 'data-testid="sidebar-link-reading"' not in response.text
+        assert 'data-nav-path="/reading"' not in response.text
 
     async def test_app_shell_fonts_use_stable_urls_and_swap_loading(
         self,

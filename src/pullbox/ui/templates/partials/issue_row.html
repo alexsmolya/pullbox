@@ -30,6 +30,7 @@
     >
       {% if issue.title %}{{ issue.title }}{% else %}<span class="text-pb-text-dim italic">No title available</span>{% endif %}
     </a>
+    {% if reader_enabled %}
     <div class="series-domain-issue-reading-mobile sm:hidden" data-testid="series-issue-reading-mobile">
       {% if reading and reading.state_label %}
         {{ reading.progress_label or reading.state_label }}
@@ -38,10 +39,12 @@
         <span aria-hidden="true">—</span><span class="sr-only">No reading state</span>
       {% endif %}
     </div>
+    {% endif %}
   </td>
   <td class="series-domain-issue-date hidden sm:table-cell">
     {{ issue.release_date or "—" }}
   </td>
+  {% if reader_enabled %}
   <td class="series-domain-issue-reading hidden sm:table-cell" data-testid="series-issue-reading">
     {% if reading and reading.completed %}
       <span class="pill pill-success">Read</span>
@@ -59,12 +62,13 @@
       <span class="series-domain-reading-queue">Want to Read</span>
     {% endif %}
   </td>
+  {% endif %}
   <td class="series-domain-issue-status">
     {{ status_badge(issue.status.value) }}
   </td>
   <td class="series-domain-issue-actions-cell hidden sm:table-cell">
     <div class="series-domain-issue-actions">
-    {% if reading and reading.primary_label %}
+    {% if reader_enabled and reading and reading.primary_label %}
       <a
         href="/issues/{{ issue.id }}?read=1"
         hx-boost="false"
@@ -112,6 +116,7 @@
         </svg>
       </button>
     {% endif %}
+      {% if reader_enabled %}
       <div
         data-testid="series-issue-reading-menu"
         data-reading-interaction
@@ -155,6 +160,7 @@
           >{{ reading.queue_action_label }}</button>
         </div>
       </div>
+      {% endif %}
       <span
         x-show="statusMessage"
         x-text="statusMessage"

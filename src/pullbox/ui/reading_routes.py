@@ -6,11 +6,12 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Annotated, Literal
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from pullbox.api.deps import AuthenticatedUser, DbSession  # noqa: TC001
+from pullbox.config import get_settings
 from pullbox.services.reading_query_service import (
     ReadingPage,
     list_continue_reading,
@@ -129,6 +130,8 @@ async def reading_workspace(
     per_page: Annotated[int, Query(ge=1, le=100)] = 24,
 ) -> Response:
     """Render one private, URL-addressable Reading workspace view."""
+    if not get_settings().reader_enabled:
+        raise HTTPException(status_code=404, detail="Not Found")
     view_value = normalize_reading_view(view)
     page_size = normalize_reading_page_size(per_page)
     result = await load_reading_page(
@@ -138,6 +141,15 @@ async def reading_workspace(
         page=page,
         per_page=page_size,
     )
+    total_pages = max(result.page_count, 1)
+    if result.page > total_pages:
+        result = await load_reading_page(
+            session,
+            user_id=user.id,
+            view=view_value,
+            page=total_pages,
+            per_page=page_size,
+        )
     cards = present_reading_issues(result.items)
     total_pages = max(result.page_count, 1)
     base_url = "/reading?" + urlencode(
