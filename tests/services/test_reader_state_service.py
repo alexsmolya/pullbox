@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -145,6 +145,48 @@ async def test_load_reader_state_is_private_to_user_and_issue(db_session: AsyncS
     assert own is not None
     assert own.last_page_index == 2
     assert absent is None
+
+
+@pytest.mark.asyncio
+async def test_reader_state_can_persist_queue_intent_without_progress(
+    db_session: AsyncSession,
+) -> None:
+    user_id, issue_id = await _seed_user_and_issue(db_session)
+    queued_at = datetime.now(UTC)
+    state = IssueReaderState(
+        user_id=user_id,
+        issue_id=issue_id,
+        want_to_read=True,
+        want_to_read_updated_at=queued_at,
+    )
+
+    db_session.add(state)
+    await db_session.flush()
+
+    assert state.last_page_index is None
+    assert state.content_revision is None
+    assert state.page_count is None
+    assert state.progress_updated_at is None
+    assert state.last_opened_at is None
+    assert state.completed_at is None
+    assert state.completion_updated_at is None
+    assert state.want_to_read is True
+    assert state.want_to_read_updated_at == queued_at
+    assert state.state_version == 1
+
+
+def test_reader_state_model_exposes_nullable_progress_and_bounded_query_indexes() -> None:
+    table = IssueReaderState.__table__
+
+    assert table.c.last_page_index.nullable is True
+    assert table.c.content_revision.nullable is True
+    assert table.c.page_count.nullable is True
+    assert table.c.want_to_read.nullable is False
+    assert table.c.state_version.nullable is False
+    assert {index.name for index in table.indexes} >= {
+        "ix_issue_reader_states_user_last_opened",
+        "ix_issue_reader_states_user_want_updated",
+    }
 
 
 @pytest.mark.asyncio

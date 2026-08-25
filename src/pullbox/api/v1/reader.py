@@ -126,6 +126,7 @@ async def reader_manifest(
         state is not None
         and state.content_revision == manifest.revision
         and state.page_count == manifest.page_count
+        and state.last_page_index is not None
     ):
         initial_page_index = min(state.last_page_index, manifest.page_count - 1)
     response = ReaderManifestResponse(

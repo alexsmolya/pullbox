@@ -28,9 +28,9 @@ class ReaderStateValidationError(Exception):
 class ReaderStateSnapshot:
     """Detached private reader state safe to use after the DB session closes."""
 
-    last_page_index: int
-    content_revision: str
-    page_count: int
+    last_page_index: int | None
+    content_revision: str | None
+    page_count: int | None
     completed_at: datetime | None
     updated_at: datetime
 

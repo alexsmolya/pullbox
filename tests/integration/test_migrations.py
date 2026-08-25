@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from alembic.config import Config
 from sqlalchemy import MetaData, Table, create_engine, func, inspect, select, text
 
 from alembic import command
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
 
 # Path to the alembic directory (relative to this test file)
 _ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"
@@ -49,6 +53,43 @@ def _get_columns(sync_url: str, table: str) -> set[str]:
         return {col["name"] for col in inspector.get_columns(table)}
     finally:
         engine.dispose()
+
+
+def _seed_reader_state_owner(conn: Connection, *, slug: str) -> tuple[int, int]:
+    conn.execute(
+        text(
+            "INSERT INTO users (username, password_hash, is_active) "
+            "VALUES (:username, 'not-used', 1)"
+        ),
+        {"username": f"reader-{slug}"},
+    )
+    user_id = conn.execute(text("SELECT last_insert_rowid()")).scalar_one()
+    conn.execute(
+        text(
+            "INSERT INTO series "
+            "(title, sort_title, status, issue_count, monitored, series_type, "
+            "alternate_names, created_at, updated_at) "
+            "VALUES (:title, :sort_title, 'CONTINUING', 1, 1, "
+            "'STANDARD', '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ),
+        {
+            "title": f"Reader {slug.title()}",
+            "sort_title": f"reader {slug}",
+        },
+    )
+    series_id = conn.execute(text("SELECT last_insert_rowid()")).scalar_one()
+    conn.execute(
+        text(
+            "INSERT INTO issues "
+            "(series_id, issue_number, status, issue_type, manual_skip, "
+            "created_at, updated_at) "
+            "VALUES (:series_id, 1.0, 'OWNED', 'ISSUE', 0, "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ),
+        {"series_id": series_id},
+    )
+    issue_id = conn.execute(text("SELECT last_insert_rowid()")).scalar_one()
+    return user_id, issue_id
 
 
 class TestMigrationChain:
@@ -218,6 +259,112 @@ class TestMigrationChain:
         columns = _get_columns(sync_url, "series")
         assert "path" in columns
         assert "library_root_id" in columns
+
+    def test_reader_state_migration_backfills_dimension_clocks_and_defaults(
+        self,
+        alembic_cfg,
+    ) -> None:
+        """Existing reader progress gains independent semantic clocks."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "o0p1q2r3s456")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                user_id, issue_id = _seed_reader_state_owner(conn, slug="migration")
+                conn.execute(
+                    text(
+                        "INSERT INTO issue_reader_states "
+                        "(user_id, issue_id, last_page_index, content_revision, page_count, "
+                        "completed_at, created_at, updated_at) "
+                        "VALUES (:user_id, :issue_id, 4, 'revision-a', 5, "
+                        "'2026-08-20 12:00:00', '2026-08-19 11:00:00', "
+                        "'2026-08-21 13:00:00')"
+                    ),
+                    {"user_id": user_id, "issue_id": issue_id},
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        columns = _get_columns(sync_url, "issue_reader_states")
+        assert {
+            "progress_updated_at",
+            "last_opened_at",
+            "completion_updated_at",
+            "want_to_read",
+            "want_to_read_updated_at",
+            "state_version",
+        }.issubset(columns)
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT progress_updated_at, last_opened_at, completed_at, "
+                        "completion_updated_at, want_to_read, want_to_read_updated_at, "
+                        "state_version FROM issue_reader_states"
+                    )
+                ).one()
+            assert row.progress_updated_at == row.last_opened_at
+            assert row.progress_updated_at == "2026-08-21 13:00:00"
+            assert row.completion_updated_at == row.completed_at
+            assert row.want_to_read == 0
+            assert row.want_to_read_updated_at is None
+            assert row.state_version == 1
+        finally:
+            engine.dispose()
+
+    def test_reader_state_migration_downgrade_discards_intent_only_rows(
+        self,
+        alembic_cfg,
+    ) -> None:
+        """Downgrade explicitly drops rows the previous schema cannot represent."""
+        cfg, sync_url = alembic_cfg
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.begin() as conn:
+                user_id, issue_id = _seed_reader_state_owner(conn, slug="intent")
+                conn.execute(
+                    text(
+                        "INSERT INTO issue_reader_states "
+                        "(user_id, issue_id, want_to_read, want_to_read_updated_at) "
+                        "VALUES (:user_id, :issue_id, 1, CURRENT_TIMESTAMP)"
+                    ),
+                    {"user_id": user_id, "issue_id": issue_id},
+                )
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "o0p1q2r3s456")
+
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                remaining = conn.execute(
+                    text("SELECT COUNT(*) FROM issue_reader_states")
+                ).scalar_one()
+            assert remaining == 0
+        finally:
+            engine.dispose()
+        engine = create_engine(sync_url)
+        try:
+            columns = inspect(engine).get_columns("issue_reader_states")
+        finally:
+            engine.dispose()
+        progress_columns = {
+            column["name"]: column["nullable"]
+            for column in columns
+            if column["name"] in {"last_page_index", "content_revision", "page_count"}
+        }
+        assert progress_columns == {
+            "last_page_index": False,
+            "content_revision": False,
+            "page_count": False,
+        }
 
     def test_import_jobs_has_materialization_audit_fields(self, alembic_cfg) -> None:
         """Import jobs record the effective materialization policy for auditability."""
