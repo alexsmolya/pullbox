@@ -47,6 +47,8 @@ def _record(source: Path, root: Path) -> ReaderSourceRecord:
         issue_id=7,
         issue_title="A Reader Issue",
         issue_number="1",
+        issue_number_value=1.0,
+        series_id=3,
         series_title="Reader Series",
         library_file_id=11,
         file_path=str(source),

@@ -135,6 +135,14 @@ class AdjacentIssues:
     next: AdjacentIssueReference | None
 
 
+@dataclass(frozen=True, slots=True)
+class ReaderIssueAccess:
+    """Path-free catalog existence and readability authorization facts."""
+
+    issue_id: int
+    readable: bool
+
+
 async def list_continue_reading(
     session: AsyncSession,
     *,
@@ -337,6 +345,37 @@ async def load_adjacent_readable_issues(
         previous=_adjacent_reference(previous_result.one_or_none()),
         next=_adjacent_reference(next_result.one_or_none()),
     )
+
+
+async def load_reader_issue_access(
+    session: AsyncSession,
+    *,
+    issue_id: int,
+) -> ReaderIssueAccess | None:
+    """Load existence and registered-format readability in one bounded query."""
+    readable_file = case(
+        (
+            and_(
+                Issue.status == IssueStatus.OWNED,
+                LibraryFile.file_format.in_(SUPPORTED_READER_FORMATS),
+            ),
+            LibraryFile.id,
+        )
+    )
+    row = (
+        await session.execute(
+            select(
+                Issue.id,
+                func.count(readable_file),
+            )
+            .outerjoin(LibraryFile, LibraryFile.issue_id == Issue.id)
+            .where(Issue.id == issue_id)
+            .group_by(Issue.id)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return ReaderIssueAccess(issue_id=int(row[0]), readable=int(row[1]) > 0)
 
 
 def _validate_page(*, page: int, per_page: int) -> None:

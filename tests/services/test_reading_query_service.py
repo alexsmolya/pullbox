@@ -19,6 +19,7 @@ from pullbox.services.reading_query_service import (
     list_read_issues,
     list_want_to_read,
     load_adjacent_readable_issues,
+    load_reader_issue_access,
     load_series_reading_aggregates,
     load_visible_issue_states,
 )
@@ -486,3 +487,22 @@ async def test_adjacency_skips_unreadable_missing_and_unowned_issues(
     assert around_six.next.issue_id == issues[7].id
     assert not hasattr(around_six.next, "manifest_url")
     assert not hasattr(around_six.next, "file_path")
+
+
+@pytest.mark.asyncio
+async def test_reader_issue_access_distinguishes_supported_registered_files(
+    db_session: AsyncSession,
+    reading_catalog: dict[str, object],
+) -> None:
+    issues = reading_catalog["issues"]
+    assert isinstance(issues, list)
+
+    readable = await load_reader_issue_access(db_session, issue_id=issues[2].id)
+    unsupported = await load_reader_issue_access(db_session, issue_id=issues[3].id)
+    unowned = await load_reader_issue_access(db_session, issue_id=issues[6].id)
+    missing = await load_reader_issue_access(db_session, issue_id=999999)
+
+    assert readable is not None and readable.readable is True
+    assert unsupported is not None and unsupported.readable is False
+    assert unowned is not None and unowned.readable is False
+    assert missing is None
