@@ -181,6 +181,46 @@ async def test_airdcpp_create_update_list_and_disable_preserve_encrypted_configu
 
 
 @pytest.mark.asyncio
+async def test_multiple_airdcpp_clients_can_be_enabled_independently(
+    authenticated_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        clients_api,
+        "get_settings",
+        lambda: SimpleNamespace(airdcpp_enabled=True),
+    )
+
+    first = await authenticated_client.post(
+        "/api/v1/clients",
+        json=_airdcpp_payload(name="Primary AirDC++"),
+        headers=_csrf_header_for(authenticated_client),
+    )
+    second = await authenticated_client.post(
+        "/api/v1/clients",
+        json=_airdcpp_payload(
+            name="Secondary AirDC++",
+            url="http://airdcpp-secondary:5600/",
+            airdcpp={
+                "minimum_search_interval_seconds": 45,
+                "hub_allowlist": [],
+            },
+        ),
+        headers=_csrf_header_for(authenticated_client),
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    listed = (await authenticated_client.get("/api/v1/clients")).json()
+    air_clients = [item for item in listed if item["client_type"] == "airdcpp"]
+    assert [item["name"] for item in air_clients] == [
+        "Primary AirDC++",
+        "Secondary AirDC++",
+    ]
+    assert all(item["enabled"] is True for item in air_clients)
+
+
+@pytest.mark.asyncio
 async def test_airdcpp_create_requires_password_and_default_off_flag_blocks_activation(
     authenticated_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

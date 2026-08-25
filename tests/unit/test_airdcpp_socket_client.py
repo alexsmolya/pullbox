@@ -276,16 +276,16 @@ async def test_event_storm_and_malformed_or_unknown_frames_remain_bounded() -> N
 
     await socket.event("bundle_updated", {"sequence": 0})
     await asyncio.wait_for(handler_started.wait(), timeout=1)
-    for sequence in range(1, 11):
+    for sequence in range(1, 10_001):
         await socket.event("bundle_updated", {"sequence": sequence})
     await socket.incoming.put("not-json")
     await socket.event("future_additive_event", {"ignored": True})
-    async with asyncio.timeout(1):
+    async with asyncio.timeout(5):
         while client.dropped_event_count == 0 or client.malformed_frame_count == 0:
             await asyncio.sleep(0)
 
     assert client.event_queue_size <= 2
-    assert client.dropped_event_count >= 8
+    assert client.dropped_event_count >= 9_998
     assert client.malformed_frame_count == 1
 
     release_handler.set()

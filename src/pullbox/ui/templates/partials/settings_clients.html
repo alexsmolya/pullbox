@@ -403,15 +403,13 @@
           {% if airdcpp_enabled %}
           <button @click="form.client_type = 'airdcpp'"
                   data-testid="settings-clients-picker-airdcpp"
-                  :disabled="existingTypes.includes('airdcpp')"
-                  :class="existingTypes.includes('airdcpp') ? 'opacity-40 cursor-not-allowed' : '{{ client_picker_hover_map['airdcpp'] }}'"
-                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all">
+                  class="rounded-xl border border-pb-border-hover p-5 text-left transition-all {{ client_picker_hover_map['airdcpp'] }}">
             <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg {{ client_accent_map['airdcpp'] }} text-xs font-bold">
               ADC
             </div>
             <p class="text-sm font-semibold text-pb-text">AirDC++</p>
             <p class="text-[11px] mt-0.5 text-pb-text-dim"
-               x-text="existingTypes.includes('airdcpp') ? 'Already configured' : 'Direct Connect client'"></p>
+               x-text="existingTypes.includes('airdcpp') ? 'Another Direct Connect client' : 'Direct Connect client'"></p>
           </button>
           {% endif %}
         </div>

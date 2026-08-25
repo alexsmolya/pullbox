@@ -158,6 +158,10 @@ class TestSettingsRouteContracts:
         assert "body.airdcpp =" in enabled.text
         assert "minimum_search_interval_seconds" in enabled.text
         assert "actual transfer reachability is validated during a real download" in enabled.text
+        picker_start = enabled.text.index('data-testid="settings-clients-picker-airdcpp"')
+        picker_end = enabled.text.index("</button>", picker_start)
+        assert ":disabled=" not in enabled.text[picker_start:picker_end]
+        assert "Another Direct Connect client" in enabled.text[picker_start:picker_end]
 
     async def test_settings_client_bulk_tests_are_serialized_to_avoid_write_storm(
         self,

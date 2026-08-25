@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import joinedload
 
 from pullbox.core.acquisition import AcquisitionProtocol
 from pullbox.models import Base
@@ -16,7 +18,7 @@ from pullbox.models.download import DownloadClientType, DownloadHistory, Downloa
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.providers.airdcpp.contracts import AirDcppQueueBundle, AirDcppQueueFile
-from pullbox.services.airdcpp_reconciliation import AirDcppReconciler
+from pullbox.services.airdcpp_reconciliation import AirDcppReconciler, apply_airdcpp_bundle
 from pullbox.services.airdcpp_search_cooldown import AirDcppCooldownReservation
 
 if TYPE_CHECKING:
@@ -105,6 +107,7 @@ async def _seed(
 
 def _bundle(
     *,
+    bundle_id: int = 91,
     status_id: str = "queued",
     downloaded_bytes: int = 0,
     downloaded: bool = False,
@@ -113,7 +116,7 @@ def _bundle(
 ) -> AirDcppQueueBundle:
     return AirDcppQueueBundle.model_validate(
         {
-            "id": 91,
+            "id": bundle_id,
             "name": "Example Comic 001 (2026).cbz",
             "target": "/Downloads/Example Comic 001 (2026).cbz",
             "type": {"id": "file"},
@@ -258,8 +261,125 @@ async def test_reconciliation_is_bounded_and_terminal_import_never_regresses(
         assert history is not None
         assert history.state is DownloadState.IMPORTED
         assert history.imported_at is not None
-    assert first.processed == second.processed == 1
-    assert api.calls == [(0, 100), (0, 100)]
+    assert first.processed == second.processed == 0
+    assert api.calls == []
+
+
+@pytest.mark.asyncio
+async def test_completed_unimported_download_is_not_repolled_or_regressed(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    client_id, history_id, _ = await _seed(
+        db_factory,
+        state=DownloadState.COMPLETED,
+    )
+    api = _FakeApi([[_bundle(status_id="queued")]])
+
+    result = await AirDcppReconciler(db_factory).reconcile_client(client_id, api)
+
+    async with db_factory() as session:
+        history = await session.get(DownloadHistory, history_id)
+        assert history is not None
+        assert history.state is DownloadState.COMPLETED
+        assert history.imported_at is None
+    assert result.processed == 0
+    assert api.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_processes_one_hundred_active_rows_in_bounded_pages(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    client_id, _history_id, _ = await _seed(db_factory)
+    async with db_factory() as session:
+        first = (
+            await session.execute(
+                select(DownloadHistory).where(
+                    DownloadHistory.download_client_config_id == client_id
+                )
+            )
+        ).scalar_one()
+        for offset in range(1, 100):
+            bundle_id = 91 + offset
+            history = DownloadHistory(
+                issue_id=first.issue_id,
+                download_client_config_id=client_id,
+                title=f"Example Comic {offset + 1:03d} (2026).cbz",
+                download_url=f"airdcpp://intent/bounded-{offset}",
+                download_client=DownloadClientType.AIRDCPP,
+                protocol=AcquisitionProtocol.DC,
+                external_id=f"airdcpp:{client_id}:bundle:{bundle_id}",
+                state=DownloadState.SENT,
+                file_size=100_000_000,
+                sent_at=datetime.now(UTC),
+            )
+            session.add(history)
+            await session.flush()
+            session.add(
+                AirDcppAcquisition(
+                    download_history_id=history.id,
+                    request_key=f"bounded-{offset}",
+                    client_config_id=client_id,
+                    client_identity=f"airdcpp:{client_id}",
+                    tth=_TTH,
+                    size_bytes=100_000_000,
+                    original_name=history.title,
+                    bundle_id=bundle_id,
+                    client_state="queued",
+                )
+            )
+        await session.commit()
+    api = _FakeApi([[_bundle(bundle_id=bundle_id) for bundle_id in range(91, 191)], []])
+
+    result = await AirDcppReconciler(db_factory).reconcile_client(client_id, api)
+
+    assert result.processed == 100
+    assert result.pages == 2
+    assert result.partial is False
+    assert api.calls == [(0, 100), (100, 100)]
+
+
+@pytest.mark.asyncio
+async def test_unchanged_progress_persistence_is_throttled_to_five_seconds(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _client_id, _history_id, acquisition_id = await _seed(db_factory)
+    started_at = datetime.now(UTC)
+    async with db_factory() as session:
+        acquisition = (
+            await session.execute(
+                select(AirDcppAcquisition)
+                .options(joinedload(AirDcppAcquisition.download_history))
+                .where(AirDcppAcquisition.id == acquisition_id)
+            )
+        ).scalar_one()
+        first = _bundle(downloaded_bytes=10_000_000)
+        assert apply_airdcpp_bundle(acquisition, first, at=started_at) is True
+        assert acquisition.route_snapshot["queue"]["downloaded_bytes"] == 10_000_000
+
+        too_soon = _bundle(downloaded_bytes=20_000_000)
+        assert (
+            apply_airdcpp_bundle(
+                acquisition,
+                too_soon,
+                at=started_at + timedelta(seconds=4),
+            )
+            is False
+        )
+        assert acquisition.route_snapshot["queue"]["downloaded_bytes"] == 10_000_000
+        assert acquisition.last_reconciled_at == started_at
+
+        due = _bundle(downloaded_bytes=30_000_000)
+        assert (
+            apply_airdcpp_bundle(
+                acquisition,
+                due,
+                at=started_at + timedelta(seconds=5),
+            )
+            is True
+        )
+        assert acquisition.route_snapshot["queue"]["downloaded_bytes"] == 30_000_000
+        assert acquisition.last_reconciled_at == started_at + timedelta(seconds=5)
 
 
 @pytest.mark.asyncio

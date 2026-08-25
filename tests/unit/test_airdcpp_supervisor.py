@@ -191,7 +191,7 @@ async def test_queue_event_storm_coalesces_to_one_owned_reconciliation() -> None
         if path == "/queue/listeners/queue_bundle_tick"
     )
 
-    await asyncio.gather(*(handler({"id": 91}) for _ in range(100)))
+    await asyncio.gather(*(handler({"id": 91}) for _ in range(10_000)))
     await asyncio.sleep(0)
 
     assert reconciliations == [7, 7]

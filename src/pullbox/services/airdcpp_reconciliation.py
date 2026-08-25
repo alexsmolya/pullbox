@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Protocol
 
@@ -24,8 +24,10 @@ if TYPE_CHECKING:
 _PAGE_SIZE = 100
 _MAX_PAGES = 10
 _MAX_PRE_ID_LOOKUPS = 10
+_PROGRESS_WRITE_INTERVAL = timedelta(seconds=5)
 _TERMINAL_STATES = frozenset(
     {
+        DownloadState.COMPLETED,
         DownloadState.IMPORTED,
         DownloadState.FAILED,
     }
@@ -91,7 +93,11 @@ class AirDcppReconciler:
                 await session.execute(
                     select(AirDcppAcquisition)
                     .join(DownloadHistory)
-                    .where(AirDcppAcquisition.client_config_id == client_config_id)
+                    .where(
+                        AirDcppAcquisition.client_config_id == client_config_id,
+                        DownloadHistory.imported_at.is_(None),
+                        DownloadHistory.state.not_in(_TERMINAL_STATES),
+                    )
                     .order_by(AirDcppAcquisition.id)
                     .limit(_PAGE_SIZE)
                 )
@@ -254,37 +260,49 @@ def apply_airdcpp_bundle(
 ) -> bool:
     """Apply one REST or event observation with monotonic terminal semantics."""
     history = acquisition.download_history
-    previous = (
-        DownloadState(history.state),
-        acquisition.client_state,
-        acquisition.remote_target,
-        history.error_message,
+    current = DownloadState(history.state)
+    next_state = current
+    next_error = history.error_message
+    if history.imported_at is None and current not in _TERMINAL_STATES:
+        next_state = _download_state(bundle)
+        next_error = _failure_summary(bundle) if next_state is DownloadState.FAILED else None
+    remote_target = bundle.target.get_secret_value()
+    observation_changed = (
+        current is not next_state
+        or acquisition.client_state != bundle.status.id
+        or acquisition.remote_target != remote_target
+        or history.error_message != next_error
     )
+    last_reconciled_at = acquisition.last_reconciled_at
+    progress_due = last_reconciled_at is None or at - last_reconciled_at >= _PROGRESS_WRITE_INTERVAL
+    if not observation_changed and not progress_due:
+        return False
+
     acquisition.client_state = bundle.status.id
-    acquisition.remote_target = bundle.target.get_secret_value()
+    acquisition.remote_target = remote_target
+    route_snapshot = dict(acquisition.route_snapshot or {})
+    route_snapshot["queue"] = {
+        "version": 1,
+        "downloaded_bytes": bundle.downloaded_bytes,
+        "size_bytes": bundle.size,
+        "speed_bytes": bundle.speed,
+        "eta_seconds": bundle.seconds_left,
+        "status_id": bundle.status.id,
+        "sources_online": bundle.sources.online,
+        "sources_total": bundle.sources.total,
+    }
+    acquisition.route_snapshot = route_snapshot
     acquisition.last_reconciled_at = at
     acquisition.reconciliation_error = None
     history.file_size = bundle.size
 
-    current = DownloadState(history.state)
     if history.imported_at is None and current not in _TERMINAL_STATES:
-        next_state = _download_state(bundle)
         history.state = next_state
         if next_state is DownloadState.COMPLETED:
             history.completed_at = history.completed_at or at
-            history.downloaded_path = bundle.target.get_secret_value()
-            history.error_message = None
-        elif next_state is DownloadState.FAILED:
-            history.error_message = _failure_summary(bundle)
-        else:
-            history.error_message = None
-    current_values = (
-        DownloadState(history.state),
-        acquisition.client_state,
-        acquisition.remote_target,
-        history.error_message,
-    )
-    return previous != current_values
+            history.downloaded_path = remote_target
+        history.error_message = next_error
+    return True
 
 
 def _download_state(bundle: AirDcppQueueBundle) -> DownloadState:
