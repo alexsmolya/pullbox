@@ -469,6 +469,23 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
             exc_info=True,
         )
 
+    # Start exact-client AirDC++ supervisors without waiting for remote I/O.
+    # The feature-off path creates no session, pool, socket, or background task.
+    from pullbox.composition.airdcpp import start_airdcpp_supervisor_registry
+
+    airdcpp_registry = None
+    try:
+        airdcpp_registry = await start_airdcpp_supervisor_registry(
+            get_session_factory(),
+            enabled=settings.airdcpp_enabled,
+        )
+    except Exception:
+        logger.warning(
+            "airdcpp_supervisor_startup_failed",
+            subsystem="airdcpp",
+            exc_info=True,
+        )
+
     # Resume deferred import metadata work from imports that completed before
     # the app stopped. This is background-only so startup stays fast.
     try:
@@ -808,6 +825,15 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         await asyncio.gather(*remaining_startup_tasks, return_exceptions=True)
 
     scheduler.shutdown()
+    if airdcpp_registry is not None:
+        try:
+            await airdcpp_registry.stop()
+        except Exception:
+            logger.warning(
+                "airdcpp_supervisor_shutdown_failed",
+                subsystem="airdcpp",
+                exc_info=True,
+            )
     if direct_runner is not None:
         try:
             await direct_runner.aclose()
