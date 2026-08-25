@@ -78,6 +78,7 @@ class TestSidebarShellRouteContracts:
         assert 'data-testid="sidebar-link-dashboard"' in response.text
         assert 'data-testid="sidebar-link-series"' in response.text
         assert 'data-testid="sidebar-link-library"' in response.text
+        assert 'data-testid="sidebar-link-reading"' in response.text
         assert 'data-testid="sidebar-link-pull-list"' in response.text
         assert 'data-testid="sidebar-link-whats-new"' in response.text
         assert 'data-testid="sidebar-link-import"' in response.text
@@ -92,6 +93,7 @@ class TestSidebarShellRouteContracts:
         assert ":title=\"sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'\"" not in response.text
         assert 'data-nav-link="true"' in response.text
         assert 'data-nav-path="/series"' in response.text
+        assert 'data-nav-path="/reading"' in response.text
         assert 'data-nav-path="/pull-list"' in response.text
         assert 'data-nav-path="/whats-new"' in response.text
         assert 'data-nav-match="prefix"' in response.text

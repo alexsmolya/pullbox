@@ -41,6 +41,7 @@ def test_login_page_has_no_wcag_aa_violations(
         ("/post-processing?tab=queue", "[data-testid='post-processing-page']"),
         ("/import", "[data-testid='import-page']"),
         ("/library", "[data-testid='library-page']"),
+        ("/reading", "[data-testid='reading-page']"),
         ("/series/1", "[data-testid='series-detail-page']"),
         ("/issues/1", "[data-testid='issue-detail-page']"),
         ("/utilities/permissions", "[data-testid='utilities-permissions-page']"),

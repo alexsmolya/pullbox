@@ -797,6 +797,75 @@ function readCsrfTokenFromBody() {
   }
 }
 
+function readingStateActions() {
+  return {
+    busy: false,
+    statusMessage: "",
+    statusIsError: false,
+
+    issueId: function () {
+      return this.$root.getAttribute("data-reading-issue-id") || "";
+    },
+
+    setCompletion: function (_button, completed) {
+      return this.updateReadingState("completion", { completed: completed });
+    },
+
+    setWantToRead: function (_button, wantToRead) {
+      return this.updateReadingState("want-to-read", { want_to_read: wantToRead });
+    },
+
+    updateReadingState: async function (action, payload) {
+      if (this.busy || !this.issueId()) {
+        return;
+      }
+
+      this.busy = true;
+      this.statusMessage = "Saving…";
+      this.statusIsError = false;
+      try {
+        var response = await fetch(
+          "/api/v1/reader/issues/" + this.issueId() + "/" + action,
+          {
+            method: "PUT",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": readCsrfTokenFromBody(),
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+        if (!response.ok) {
+          throw new Error("reading-state-update-failed");
+        }
+        this.statusMessage = "Saved";
+        await this.refreshReadingSurface();
+      } catch (_error) {
+        this.statusMessage = "That reading update didn’t save. Try again.";
+        this.statusIsError = true;
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    refreshReadingSurface: function () {
+      var root = this.$root.closest("[data-reading-refresh-root]");
+      if (!root || !window.htmx) {
+        return Promise.resolve();
+      }
+      var url = root.getAttribute("data-reading-refresh-url");
+      if (!url) {
+        return Promise.resolve();
+      }
+      return window.htmx.ajax("GET", url, {
+        target: root,
+        swap: "outerHTML",
+      });
+    },
+  };
+}
+
 function resolveHtmxSwapTarget(target) {
   if (!target) {
     return null;

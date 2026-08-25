@@ -336,14 +336,20 @@ async def _seed_series_library_data() -> None:
     from pullbox.models.matching_suggestion import MatchingSuggestion, SuggestionStatus
     from pullbox.models.pending_match import PendingMatch, PendingMatchStatus
     from pullbox.models.publisher import Publisher
+    from pullbox.models.reader import IssueReaderState
     from pullbox.models.search_log import SearchLog, SearchType
     from pullbox.models.series import Series, SeriesStatus
+    from pullbox.models.user import User
 
     factory = get_session_factory()
     async with factory() as session:
         existing_series = await session.scalar(select(Series.id).limit(1))
         if existing_series is not None:
             return
+
+        reader_user = await session.scalar(select(User).where(User.username == "admin"))
+        if reader_user is None:
+            raise RuntimeError("E2E reader state requires the seeded admin user.")
 
         test_cover_url = (
             "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 180'%3E"
@@ -474,6 +480,17 @@ async def _seed_series_library_data() -> None:
                         file_format=FileFormat.CBZ,
                         file_modified_at=datetime(2024, 1, 1, tzinfo=UTC),
                         match_confidence=MatchConfidence.MANUAL,
+                    )
+                )
+                session.add(
+                    IssueReaderState(
+                        user_id=reader_user.id,
+                        issue_id=owned_issue.id,
+                        last_page_index=1,
+                        content_revision="e2e-reading-revision",
+                        page_count=3,
+                        progress_updated_at=datetime.now(tz=UTC),
+                        last_opened_at=datetime.now(tz=UTC),
                     )
                 )
                 session.add(

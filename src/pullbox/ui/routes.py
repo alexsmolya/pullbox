@@ -42,6 +42,7 @@ from pullbox.ui import (
     post_processing_routes,
     public_routes,
     pull_list_routes,
+    reading_routes,
     search_history_routes,
     security_routes,
     series_detail_routes,
@@ -749,6 +750,15 @@ pull_list_routes.configure_pull_list_routes(
 router.include_router(pull_list_routes.router)
 
 pull_list = pull_list_routes.pull_list
+
+
+reading_routes.configure_reading_routes(
+    get_templates=lambda: templates,
+    build_context=_ctx,
+)
+router.include_router(reading_routes.router)
+
+reading_workspace = reading_routes.reading_workspace
 
 
 router.include_router(series_routes.htmx_router)
