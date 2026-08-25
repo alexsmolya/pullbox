@@ -165,7 +165,7 @@ def test_comic_reader_dialog_has_no_wcag_aa_violations_and_contains_focus(
     issue.open_reader()
 
     assert issue.reader_dialog.get_attribute("aria-labelledby") == "comic-reader-title"
-    assert issue.reader_page.get_attribute("alt") == "Page 1 of 3"
+    assert issue.reader_page.get_attribute("alt") == "Page 2 of 3"
     assert issue.reader_dialog.evaluate("dialog => dialog.matches(':modal')") is True
     assert issue.reader_dialog.evaluate("dialog => dialog.contains(document.activeElement)") is True
 
@@ -177,6 +177,26 @@ def test_comic_reader_dialog_has_no_wcag_aa_violations_and_contains_focus(
 
     issue.close_reader()
     assert issue.read_button.evaluate("element => element === document.activeElement") is True
+
+
+def test_comic_reader_completion_and_issue_controls_have_no_wcag_aa_violations(
+    authed_page,
+    seeded_server: str,  # type: ignore[no-untyped-def]
+) -> None:
+    issue = IssueDetailPage(authed_page, seeded_server)
+    issue.goto(1)
+    issue.open_reader()
+
+    authed_page.keyboard.press("End")
+    authed_page.locator("[data-testid='comic-reader-completion']").wait_for(
+        state="visible", timeout=5000
+    )
+
+    assert_no_axe_violations(
+        authed_page,
+        name="comic reader completion and issue controls",
+        include=["[data-testid='comic-reader-dialog']"],
+    )
 
 
 def test_settings_library_permissions_card_has_no_wcag_aa_violations(

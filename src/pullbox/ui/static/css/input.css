@@ -8842,7 +8842,7 @@ input[type="range"].range-pb::-moz-range-thumb {
 
 .comic-reader__topbar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.75rem;
   min-height: 58px;
@@ -8880,6 +8880,7 @@ input[type="range"].range-pb::-moz-range-thumb {
 }
 
 .comic-reader__top-actions,
+.comic-reader__issue-navigation,
 .comic-reader__navigation,
 .comic-reader__sizing,
 .comic-reader__state-actions,
@@ -8889,10 +8890,19 @@ input[type="range"].range-pb::-moz-range-thumb {
 }
 
 .comic-reader__top-actions,
+.comic-reader__issue-navigation,
 .comic-reader__navigation,
 .comic-reader__sizing,
 .comic-reader__state-actions {
   gap: 0.4rem;
+}
+
+.comic-reader__issue-navigation {
+  min-width: 0;
+}
+
+.comic-reader__issue-navigation .comic-reader__button {
+  gap: 0.35rem;
 }
 
 .comic-reader__button,
@@ -9059,6 +9069,32 @@ input[type="range"].range-pb::-moz-range-thumb {
   justify-content: center;
   flex-wrap: wrap;
   margin-top: 0.5rem;
+}
+
+.comic-reader__completion {
+  position: absolute;
+  z-index: 9;
+  right: max(0.75rem, env(safe-area-inset-right, 0px));
+  bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  width: min(24rem, calc(100% - 1.5rem));
+  padding: 0.85rem;
+  border: 1px solid rgba(143, 185, 238, 0.42);
+  border-radius: 0.8rem;
+  background: rgba(13, 20, 30, 0.96);
+  color: var(--pb-reader-text-muted);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.42);
+}
+
+.comic-reader__completion strong {
+  display: block;
+  color: var(--pb-reader-text);
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-size: 1rem;
+}
+
+.comic-reader__completion p {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
 }
 
 .comic-reader__page-busy {
@@ -9257,6 +9293,15 @@ input[type="range"].range-pb::-moz-range-thumb {
 }
 
 @media (max-width: 900px) {
+  .comic-reader__issue-navigation .comic-reader__button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
   .comic-reader__fit-page,
   .comic-reader__fit-wide {
     display: none;
@@ -9269,8 +9314,20 @@ input[type="range"].range-pb::-moz-range-thumb {
 
 @media (max-width: 600px) {
   .comic-reader__topbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
     min-height: 54px;
     gap: 0.5rem;
+  }
+
+  .comic-reader__issue-navigation {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: center;
+  }
+
+  .comic-reader__top-actions {
+    grid-column: 3;
+    grid-row: 1;
   }
 
   .comic-reader__desktop-action {
