@@ -14,6 +14,8 @@ from pullbox.providers.airdcpp.contracts import (
     AirDcppConnectivityInfo,
     AirDcppHub,
     AirDcppQueueBundle,
+    AirDcppSearchInstance,
+    AirDcppSearchResult,
     AirDcppSession,
     AirDcppSystemInfo,
 )
@@ -161,6 +163,56 @@ class AirDcppApiClient:
         if not isinstance(payload, list):
             raise AirDcppResponseError("AirDC++ returned an invalid queue response")
         return [self._validate(AirDcppQueueBundle, item) for item in payload]
+
+    async def create_search_instance(
+        self,
+        *,
+        expiration_minutes: int,
+        owner_suffix: str,
+    ) -> AirDcppSearchInstance:
+        if not 1 <= expiration_minutes <= 60 or not re.fullmatch(r"[a-z0-9_-]{1,32}", owner_suffix):
+            raise ValueError("Invalid AirDC++ search instance options")
+        return self._validate(
+            AirDcppSearchInstance,
+            await self._request_json(
+                "POST",
+                "/search",
+                json={
+                    "expiration": expiration_minutes,
+                    "owner_suffix": owner_suffix,
+                },
+            ),
+        )
+
+    async def get_search_instance(self, instance_id: int) -> AirDcppSearchInstance:
+        if instance_id <= 0:
+            raise ValueError("Invalid AirDC++ search instance ID")
+        return self._validate(
+            AirDcppSearchInstance,
+            await self._request_json("GET", f"/search/{instance_id}"),
+        )
+
+    async def get_search_results(
+        self,
+        instance_id: int,
+        *,
+        start: int,
+        count: int,
+    ) -> list[AirDcppSearchResult]:
+        if instance_id <= 0 or start < 0 or not 1 <= count <= 100:
+            raise ValueError("Invalid AirDC++ search result page")
+        payload = await self._request_json(
+            "GET",
+            f"/search/{instance_id}/results/{start}/{count}",
+        )
+        if not isinstance(payload, list):
+            raise AirDcppResponseError("AirDC++ returned an invalid search results response")
+        return [self._validate(AirDcppSearchResult, item) for item in payload]
+
+    async def delete_search_instance(self, instance_id: int) -> None:
+        if instance_id <= 0:
+            raise ValueError("Invalid AirDC++ search instance ID")
+        await self._request_no_content("DELETE", f"/search/{instance_id}")
 
     async def aclose(self) -> None:
         self._auth_token = None

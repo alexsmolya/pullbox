@@ -135,3 +135,55 @@ class AirDcppQueueBundle(AirDcppWireModel):
         if self.downloaded_bytes > self.size:
             raise ValueError("downloaded bytes cannot exceed bundle size")
         return self
+
+
+class AirDcppSearchInstance(AirDcppWireModel):
+    """One temporary AirDC++ result collection instance."""
+
+    id: PositiveInt
+    expires_in: NonNegativeInt
+    current_search_id: NonNegativeInt
+    owner: BoundedString
+    queue_time: NonNegativeInt
+    queued_count: NonNegativeInt
+    result_count: NonNegativeInt
+    searches_sent_ago: NonNegativeInt
+
+
+class AirDcppSearchUsers(AirDcppWireModel):
+    """Bounded grouped-source count; peer identity is deliberately ignored."""
+
+    count: NonNegativeInt
+
+
+class AirDcppSearchSlots(AirDcppWireModel):
+    free: NonNegativeInt
+    total: NonNegativeInt
+    str: Annotated[StrictStr, Field(max_length=100)]
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> AirDcppSearchSlots:
+        if self.free > self.total:
+            raise ValueError("free slot count cannot exceed total")
+        return self
+
+
+class AirDcppSearchResult(AirDcppWireModel):
+    """Grouped result without retained peer identity or source path output."""
+
+    id: BoundedString
+    name: BoundedString
+    relevance: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    hits: NonNegativeInt
+    users: AirDcppSearchUsers
+    type: AirDcppFileItemType
+    path: SecretStr = Field(repr=False)
+    tth: Annotated[StrictStr, Field(pattern=r"^[A-Z2-7]{39}$")] | None
+    time: NonNegativeInt
+    slots: AirDcppSearchSlots
+    connection: NonNegativeInt
+    size: NonNegativeInt
+
+    @property
+    def file_result(self) -> bool:
+        return self.type.id == "file"

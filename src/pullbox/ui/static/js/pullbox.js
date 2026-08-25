@@ -16679,6 +16679,129 @@ function issueSearchModal() {
     searchSeriesYear: "",
     searching: false,
     swapListener: null,
+    dcSearching: false,
+    dcVisualMessage: "",
+    dcLiveMessage: "",
+    dcAbortController: null,
+
+    clearDcSearch: function () {
+      if (this.dcAbortController) {
+        this.dcAbortController.abort();
+        this.dcAbortController = null;
+      }
+      this.dcSearching = false;
+      this.dcVisualMessage = "";
+      this.dcLiveMessage = "";
+      var results = document.getElementById("issue-search-dc-results");
+      if (results) {
+        results.innerHTML = "";
+      }
+    },
+
+    applyDcProgress: function (progress) {
+      var state = progress && progress.state;
+      if (state === "cooldown") {
+        var seconds = Number(progress.remaining_seconds) || 0;
+        var template = "Direct Connect search will resume in {seconds} seconds to respect the 45-second hub cooldown.";
+        this.dcVisualMessage = template.replace("{seconds}", String(seconds));
+        if (!this.dcLiveMessage || this.dcLiveMessage.indexOf("cooldown") === -1) {
+          this.dcLiveMessage = this.dcVisualMessage;
+        }
+        return;
+      }
+      if (state === "starting") {
+        this.dcVisualMessage = "Waiting for AirDC++ to send the search…";
+        this.dcLiveMessage = "Direct Connect search started.";
+      } else if (state === "queued") {
+        this.dcVisualMessage = "AirDC++ queued this search to protect its hub connections. Pullbox will keep collecting results when it is sent.";
+      } else if (state === "collecting") {
+        this.dcVisualMessage = "Collecting Direct Connect results…";
+      } else if (state === "finishing") {
+        this.dcVisualMessage = "Finishing the search…";
+      } else if (state === "zero_hubs") {
+        this.dcVisualMessage = "AirDC++ is connected, but it doesn't have any open hubs to search. Open AirDC++ to check your hub connections.";
+      } else if (state === "failed") {
+        this.dcVisualMessage = "Direct Connect search is temporarily unavailable. Existing results are still available.";
+      }
+    },
+
+    consumeDcStream: async function (response) {
+      if (!response.body) {
+        throw new Error("Direct Connect search stream is unavailable");
+      }
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        var frames = buffer.split("\n\n");
+        buffer = frames.pop() || "";
+        for (var i = 0; i < frames.length; i += 1) {
+          var dataLine = frames[i].split("\n").find(function (line) {
+            return line.indexOf("data: ") === 0;
+          });
+          if (!dataLine) continue;
+          var event = JSON.parse(dataLine.slice(6));
+          if (event.kind === "progress") {
+            this.applyDcProgress(event.progress);
+          } else if (event.kind === "results") {
+            var target = document.getElementById("issue-search-dc-results");
+            if (target) {
+              target.innerHTML = event.html;
+              if (window.htmx) window.htmx.process(target);
+              if (window.Alpine && typeof window.Alpine.initTree === "function") {
+                window.Alpine.initTree(target);
+              }
+            }
+            this.dcLiveMessage = event.summary;
+          }
+        }
+      }
+    },
+
+    startDcSearch: async function () {
+      this.clearDcSearch();
+      this.dcAbortController = new AbortController();
+      var signal = this.dcAbortController.signal;
+      var base = "/htmx/issues/" + this.searchIssueId;
+      try {
+        var statusResponse = await fetch(base + "/dc-search-status", {
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+          signal: signal,
+        });
+        if (!statusResponse.ok) return;
+        var status = await statusResponse.json();
+        if (!status.available) return;
+        this.dcSearching = true;
+        if (status.remaining_seconds > 0) {
+          this.applyDcProgress({
+            state: "cooldown",
+            remaining_seconds: status.remaining_seconds,
+          });
+        } else {
+          this.applyDcProgress({ state: "starting" });
+        }
+        var response = await fetch(base + "/dc-search-results", {
+          credentials: "same-origin",
+          headers: { Accept: "text/event-stream" },
+          signal: signal,
+        });
+        if (!response.ok) throw new Error("Direct Connect search failed");
+        await this.consumeDcStream(response);
+      } catch (error) {
+        if (!signal.aborted) {
+          this.applyDcProgress({ state: "failed" });
+        }
+      } finally {
+        if (!signal.aborted) {
+          this.dcSearching = false;
+        }
+        this.dcAbortController = null;
+      }
+    },
 
     resetMeta: function () {
       var stats = document.getElementById("issue-search-modal-stats");
@@ -16704,6 +16827,7 @@ function issueSearchModal() {
         window.pbHideTooltip();
       }
       this.clearSwapListener();
+      this.clearDcSearch();
       this.searchIssueId = detail.issueId;
       this.searchIssueNum = detail.issueNum;
       this.searchSeriesTitle = detail.seriesTitle;
@@ -16720,6 +16844,7 @@ function issueSearchModal() {
         if (event.detail && event.detail.target && event.detail.target.id === "issue-search-modal-body") {
           self.searching = false;
           self.clearSwapListener();
+          self.startDcSearch();
         }
       };
       document.addEventListener("htmx:afterSwap", this.swapListener);
@@ -16735,6 +16860,7 @@ function issueSearchModal() {
       this.searchOpen = false;
       this.searching = false;
       this.clearSwapListener();
+      this.clearDcSearch();
       this.resetMeta();
     },
   };

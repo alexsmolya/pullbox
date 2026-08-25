@@ -211,3 +211,73 @@ def test_client_uses_explicit_timeouts_and_bounded_pool() -> None:
     assert client.timeout.read == 15
     assert client.max_connections == 4
     assert client.max_keepalive_connections == 2
+
+
+async def test_search_instance_lifecycle_uses_bounded_exact_rest_paths() -> None:
+    calls: list[tuple[str, str, object | None]] = []
+    grouped_result = {
+        "id": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "name": "Example Comic 001.cbz",
+        "relevance": 1.0,
+        "hits": 1,
+        "users": {"count": 1},
+        "type": {"id": "file"},
+        "path": "/private/peer/path",
+        "tth": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "time": 0,
+        "slots": {"free": 1, "total": 1, "str": "1/1"},
+        "connection": 1,
+        "size": 100,
+    }
+    instance = {
+        "id": 44,
+        "expires_in": 60_000,
+        "current_search_id": 0,
+        "owner": "session:123:pullbox",
+        "queue_time": 0,
+        "queued_count": 0,
+        "result_count": 1,
+        "searches_sent_ago": 0,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else None
+        calls.append((request.method, request.url.path, body))
+        if request.url.path == "/api/v1/sessions/authorize":
+            return httpx.Response(200, json=_auth())
+        if request.url.path == "/api/v1/search" and request.method == "POST":
+            return httpx.Response(200, json=instance)
+        if request.url.path == "/api/v1/search/44" and request.method == "GET":
+            return httpx.Response(200, json=instance)
+        if request.url.path == "/api/v1/search/44/results/0/100":
+            return httpx.Response(200, json=[grouped_result])
+        if request.url.path == "/api/v1/search/44" and request.method == "DELETE":
+            return httpx.Response(204)
+        raise AssertionError(f"Unexpected request: {request.method} {request.url.path}")
+
+    client = _client(handler)
+    await client.authorize()
+    created = await client.create_search_instance(expiration_minutes=5, owner_suffix="pullbox")
+    loaded = await client.get_search_instance(created.id)
+    results = await client.get_search_results(created.id, start=0, count=100)
+    await client.delete_search_instance(created.id)
+    await client.aclose()
+
+    assert loaded.result_count == 1
+    assert results[0].tth == "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y"
+    assert calls[1] == (
+        "POST",
+        "/api/v1/search",
+        {"expiration": 5, "owner_suffix": "pullbox"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("start", "count"),
+    [(-1, 10), (0, 0), (0, 101)],
+)
+async def test_search_result_page_rejects_unbounded_ranges(start: int, count: int) -> None:
+    client = _client(lambda _request: httpx.Response(200, json=[]))
+    with pytest.raises(ValueError, match="search result page"):
+        await client.get_search_results(1, start=start, count=count)
+    await client.aclose()

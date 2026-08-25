@@ -16,10 +16,12 @@ Run:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -38,6 +40,7 @@ from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.models.user import APIKey, User
 from pullbox.providers.base import ReleaseResult
 from pullbox.providers.direct.contract import DirectCandidate, DirectParsedCandidate
+from pullbox.services.airdcpp_search_types import DcSearchOutcome
 from pullbox.services.auth_service import AuthService
 from pullbox.services.direct_search_coordinator import (
     DirectSearchOutcome,
@@ -52,6 +55,82 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 os.environ.setdefault("PULLBOX_SECRET_KEY", "test-secret-key-for-search-results-ui")
+
+
+def test_manual_direct_connect_cooldown_ui_contract() -> None:
+    root = Path(__file__).resolve().parents[2]
+    modal = (root / "src/pullbox/ui/templates/partials/issue_search_modal.html").read_text()
+    script = (root / "src/pullbox/ui/static/js/pullbox.js").read_text()
+
+    assert 'data-testid="issue-search-dc-status"' in modal
+    assert 'aria-live="polite"' in modal
+    assert (
+        "Direct Connect search will resume in "
+        "{seconds} seconds to respect the 45-second hub cooldown."
+    ) in script
+    assert "/dc-search-status" in script
+    assert "/dc-search-results" in script
+    assert "AbortController" in script
+
+
+@pytest.mark.asyncio
+async def test_manual_direct_connect_status_and_stream_are_independent_of_indexers(
+    client: AsyncClient,
+    _db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    issue_id = await _create_issue(_db_factory)
+    coordinator = AsyncMock()
+    coordinator.cooldown_status.return_value = {7: 12}
+    coordinator.search.return_value = DcSearchOutcome(
+        matched=(),
+        rejected=(),
+        client_summaries=(),
+        raw_count=0,
+        deduplicated_count=0,
+        dropped_count=0,
+        elapsed_ms=5,
+        partial=False,
+    )
+    operation = SimpleNamespace(config_id=7)
+
+    with (
+        patch(
+            "pullbox.ui.series_detail_routes.get_airdcpp_supervisor_registry",
+            return_value=object(),
+        ),
+        patch(
+            "pullbox.ui.series_detail_routes.get_airdcpp_search_coordinator",
+            return_value=coordinator,
+        ),
+        patch(
+            "pullbox.ui.series_detail_routes.load_airdcpp_search_clients",
+            new_callable=AsyncMock,
+            return_value=(operation,),
+        ),
+        patch(
+            "pullbox.ui.series_detail_routes.get_settings",
+            return_value=SimpleNamespace(airdcpp_enabled=True),
+        ),
+    ):
+        status = await client.get(f"/htmx/issues/{issue_id}/dc-search-status")
+        stream = await client.get(
+            f"/htmx/issues/{issue_id}/dc-search-results",
+            headers={"Accept": "text/event-stream", "X-Api-Key": client.headers["X-Api-Key"]},
+        )
+
+    assert status.status_code == 200
+    assert status.json() == {
+        "available": True,
+        "client_count": 1,
+        "remaining_seconds": 12,
+    }
+    assert stream.status_code == 200
+    assert stream.headers["content-type"].startswith("text/event-stream")
+    frames = [frame for frame in stream.text.split("\n\n") if frame.startswith("data: ")]
+    final = json.loads(frames[-1][6:])
+    assert final["kind"] == "results"
+    assert "0 Direct Connect results" in final["summary"]
+    coordinator.search.assert_awaited_once()
 
 
 # ── Test Data ──────────────────────────────────────────────────────────

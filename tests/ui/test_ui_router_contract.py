@@ -257,6 +257,18 @@ def test_ui_router_manifest_remains_stable_during_decomposition() -> None:
             "htmx_issue_reading_row",
         ),
         (
+            "/htmx/issues/{issue_id}/dc-search-status",
+            ("GET",),
+            "htmx_issue_dc_search_status",
+            "htmx_issue_dc_search_status",
+        ),
+        (
+            "/htmx/issues/{issue_id}/dc-search-results",
+            ("GET",),
+            "htmx_issue_dc_search_results",
+            "htmx_issue_dc_search_results",
+        ),
+        (
             "/htmx/issues/{issue_id}/toggle",
             ("POST",),
             "htmx_toggle_issue_status",

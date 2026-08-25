@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pydantic import SecretStr
 from sqlalchemy import select
@@ -17,6 +17,14 @@ from pullbox.providers.airdcpp.supervisor import (
     AirDcppSupervisor,
     AirDcppSupervisorConfig,
     AirDcppSupervisorRegistry,
+    AirDcppSupervisorState,
+)
+from pullbox.services.airdcpp_search_cooldown import AirDcppSearchCooldown
+from pullbox.services.airdcpp_search_coordinator import (
+    AirDcppSearchApi,
+    AirDcppSearchClient,
+    AirDcppSearchCoordinator,
+    AirDcppSearchSocket,
 )
 
 if TYPE_CHECKING:
@@ -25,6 +33,52 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 _registry: AirDcppSupervisorRegistry | None = None
+_search_coordinator: AirDcppSearchCoordinator | None = None
+
+
+async def load_airdcpp_search_clients(
+    session: AsyncSession,
+    registry: AirDcppSupervisorRegistry,
+) -> tuple[AirDcppSearchClient, ...]:
+    """Detach ready, search-enabled exact clients from ORM state."""
+    result = await session.execute(
+        select(DownloadClientConfig)
+        .where(
+            DownloadClientConfig.client_type == DownloadClientType.AIRDCPP,
+            DownloadClientConfig.enabled.is_(True),
+        )
+        .options(selectinload(DownloadClientConfig.airdcpp_settings))
+        .order_by(DownloadClientConfig.priority, DownloadClientConfig.id)
+    )
+    clients: list[AirDcppSearchClient] = []
+    for client in result.scalars().all():
+        settings = client.airdcpp_settings
+        supervisor = cast("AirDcppSupervisor | None", registry.get(client.id))
+        if (
+            settings is None
+            or not settings.search_enabled
+            or supervisor is None
+            or supervisor.state is not AirDcppSupervisorState.READY
+        ):
+            continue
+        clients.append(
+            AirDcppSearchClient(
+                config_id=client.id,
+                client_identity=f"airdcpp:{client.id}",
+                client_name=client.name,
+                client_priority=client.priority,
+                api_client=cast("AirDcppSearchApi", supervisor.api_client),
+                socket_client=cast("AirDcppSearchSocket", supervisor.socket_client),
+                manual_collection_seconds=settings.manual_collection_seconds,
+                automatic_collection_seconds=settings.automatic_collection_seconds,
+                max_results=settings.max_results,
+                max_retained_routes=settings.max_retained_routes,
+                max_concurrent_searches=settings.max_concurrent_searches,
+                search_dispatch_deadline_seconds=(settings.search_dispatch_deadline_seconds),
+                hub_allowlist=tuple(settings.hub_allowlist),
+            )
+        )
+    return tuple(clients)
 
 
 async def build_airdcpp_supervisor_configs(
@@ -66,9 +120,10 @@ async def start_airdcpp_supervisor_registry(
     enabled: bool,
 ) -> AirDcppSupervisorRegistry | None:
     """Load local config and schedule remote work without delaying app readiness."""
-    global _registry
+    global _registry, _search_coordinator
     if not enabled:
         _registry = None
+        _search_coordinator = None
         return None
 
     registry = AirDcppSupervisorRegistry(supervisor_factory=_build_supervisor)
@@ -76,12 +131,18 @@ async def start_airdcpp_supervisor_registry(
         configs = await build_airdcpp_supervisor_configs(session)
     await registry.apply(configs)
     _registry = registry
+    _search_coordinator = AirDcppSearchCoordinator(cooldown=AirDcppSearchCooldown(session_factory))
     return registry
 
 
 def get_airdcpp_supervisor_registry() -> AirDcppSupervisorRegistry | None:
     """Return the process registry for search, queue, and health services."""
     return _registry
+
+
+def get_airdcpp_search_coordinator() -> AirDcppSearchCoordinator | None:
+    """Return the process-wide coordinator sharing exact-client concurrency."""
+    return _search_coordinator
 
 
 async def refresh_airdcpp_supervisor_registry(
@@ -98,9 +159,10 @@ async def refresh_airdcpp_supervisor_registry(
 
 async def stop_airdcpp_supervisor_registry() -> None:
     """Stop and clear the process registry, if it was enabled."""
-    global _registry
+    global _registry, _search_coordinator
     registry = _registry
     _registry = None
+    _search_coordinator = None
     if registry is not None:
         await registry.stop()
 

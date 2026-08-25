@@ -10,6 +10,8 @@ from pullbox.providers.airdcpp.contracts import (
     AirDcppConnectivityInfo,
     AirDcppHub,
     AirDcppQueueBundle,
+    AirDcppSearchInstance,
+    AirDcppSearchResult,
     AirDcppSession,
     AirDcppSystemInfo,
 )
@@ -173,3 +175,74 @@ def test_queue_bundle_contract_requires_authoritative_progress_fields() -> None:
                 "name": "Incomplete",
             }
         )
+
+
+def test_search_instance_and_grouped_file_result_contracts_are_strict_and_additive() -> None:
+    instance = AirDcppSearchInstance.model_validate(
+        {
+            "id": 44,
+            "expires_in": 60_000,
+            "current_search_id": 0,
+            "owner": "session:123:pullbox",
+            "queue_time": 0,
+            "queued_count": 0,
+            "result_count": 1,
+            "searches_sent_ago": 0,
+            "future_field": True,
+        }
+    )
+    result = AirDcppSearchResult.model_validate(
+        {
+            "id": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+            "name": "Example Comic 001 (2026).cbz",
+            "relevance": 1.34,
+            "hits": 4,
+            "users": {"count": 4, "user": {"cid": "must-not-be-retained"}},
+            "type": {"id": "file", "str": "File"},
+            "path": "/private/peer/path/Example Comic 001.cbz",
+            "tth": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+            "dupe": None,
+            "time": 1,
+            "slots": {"free": 2, "total": 11, "str": "2/11"},
+            "connection": 42_500_000,
+            "size": 62_523_525_626,
+            "future_field": "accepted",
+        }
+    )
+
+    assert instance.id == 44
+    assert result.file_result is True
+    assert result.slots.free == 2
+    assert result.users.count == 4
+    assert "private/peer/path" not in repr(result)
+    assert "must-not-be-retained" not in repr(result)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tth": "not-a-tth"},
+        {"size": -1},
+        {"slots": {"free": 12, "total": 11, "str": "12/11"}},
+        {"users": {"count": -1}},
+        {"type": {"id": 1}},
+    ],
+)
+def test_grouped_search_result_rejects_incompatible_fields(overrides: dict[str, object]) -> None:
+    payload: dict[str, object] = {
+        "id": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "name": "Example Comic 001.cbz",
+        "relevance": 1.0,
+        "hits": 1,
+        "users": {"count": 1},
+        "type": {"id": "file"},
+        "path": "/private/peer/path",
+        "tth": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "time": 0,
+        "slots": {"free": 1, "total": 1, "str": "1/1"},
+        "connection": 1,
+        "size": 1,
+    }
+    payload.update(overrides)
+    with pytest.raises(ValidationError):
+        AirDcppSearchResult.model_validate(payload)

@@ -9,8 +9,12 @@ import pytest
 
 from pullbox.composition.airdcpp import (
     build_airdcpp_supervisor_configs,
+    get_airdcpp_search_coordinator,
+    load_airdcpp_search_clients,
     start_airdcpp_supervisor_registry,
+    stop_airdcpp_supervisor_registry,
 )
+from pullbox.providers.airdcpp.supervisor import AirDcppSupervisorState
 
 
 class _Scalars:
@@ -124,3 +128,47 @@ async def test_feature_on_loads_configs_and_schedules_registry(
     assert isinstance(registry, _Registry)
     assert len(registry.applied) == 1
     assert session.execute_calls == 1
+    assert get_airdcpp_search_coordinator() is not None
+    await stop_airdcpp_supervisor_registry()
+
+
+@pytest.mark.asyncio
+async def test_search_composition_uses_only_ready_search_enabled_exact_clients() -> None:
+    ready_api = object()
+    ready_socket = object()
+    ready = SimpleNamespace(
+        state=AirDcppSupervisorState.READY,
+        api_client=ready_api,
+        socket_client=ready_socket,
+    )
+    unavailable = SimpleNamespace(
+        state=AirDcppSupervisorState.UNAVAILABLE,
+        api_client=object(),
+        socket_client=object(),
+    )
+    clients = []
+    for config_id, search_enabled in ((1, True), (2, True), (3, False)):
+        client = _client()
+        client.id = config_id
+        client.priority = 10 + config_id
+        client.airdcpp_settings.search_enabled = search_enabled
+        client.airdcpp_settings.manual_collection_seconds = 8
+        client.airdcpp_settings.automatic_collection_seconds = 15
+        client.airdcpp_settings.max_results = 200
+        client.airdcpp_settings.max_retained_routes = 400
+        client.airdcpp_settings.max_concurrent_searches = 1
+        client.airdcpp_settings.search_dispatch_deadline_seconds = 45
+        client.airdcpp_settings.hub_allowlist = []
+        clients.append(client)
+    registry = SimpleNamespace(get=lambda config_id: {1: ready, 2: unavailable}.get(config_id))
+
+    operations = await load_airdcpp_search_clients(  # type: ignore[arg-type]
+        _Session(clients),
+        registry,
+    )
+
+    assert len(operations) == 1
+    assert operations[0].config_id == 1
+    assert operations[0].api_client is ready_api
+    assert operations[0].socket_client is ready_socket
+    assert operations[0].max_concurrent_searches == 1
