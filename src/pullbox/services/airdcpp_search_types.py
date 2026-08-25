@@ -33,6 +33,7 @@ class AirDcppSearchProgressState(StrEnum):
 
 class DcClientSearchStatus(StrEnum):
     COMPLETED = "completed"
+    DEFERRED_COOLDOWN = "deferred_cooldown"
     ZERO_HUBS = "zero_hubs"
     DISPATCH_TIMEOUT = "dispatch_timeout"
     UNAVAILABLE = "unavailable"

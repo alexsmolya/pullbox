@@ -172,3 +172,37 @@ async def test_search_composition_uses_only_ready_search_enabled_exact_clients()
     assert operations[0].api_client is ready_api
     assert operations[0].socket_client is ready_socket
     assert operations[0].max_concurrent_searches == 1
+
+
+@pytest.mark.asyncio
+async def test_automatic_search_composition_requires_per_client_opt_in() -> None:
+    clients = []
+    supervisors: dict[int, object] = {}
+    for config_id, automatic in ((1, False), (2, True)):
+        client = _client()
+        client.id = config_id
+        client.priority = 20
+        client.airdcpp_settings.search_enabled = True
+        client.airdcpp_settings.automatic_search_enabled = automatic
+        client.airdcpp_settings.manual_collection_seconds = 8
+        client.airdcpp_settings.automatic_collection_seconds = 15
+        client.airdcpp_settings.max_results = 200
+        client.airdcpp_settings.max_retained_routes = 400
+        client.airdcpp_settings.max_concurrent_searches = 1
+        client.airdcpp_settings.search_dispatch_deadline_seconds = 45
+        client.airdcpp_settings.hub_allowlist = []
+        clients.append(client)
+        supervisors[config_id] = SimpleNamespace(
+            state=AirDcppSupervisorState.READY,
+            api_client=object(),
+            socket_client=object(),
+        )
+    registry = SimpleNamespace(get=supervisors.get)
+
+    operations = await load_airdcpp_search_clients(  # type: ignore[arg-type]
+        _Session(clients),
+        registry,
+        automatic=True,
+    )
+
+    assert [operation.config_id for operation in operations] == [2]

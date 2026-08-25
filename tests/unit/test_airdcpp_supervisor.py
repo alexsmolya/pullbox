@@ -22,7 +22,17 @@ from pullbox.providers.airdcpp.supervisor import (
 )
 
 
-def _auth(*, permissions: tuple[str, ...] = ("search", "download", "queue_view", "queue_edit")):
+def _auth(
+    *,
+    permissions: tuple[str, ...] = (
+        "search",
+        "download",
+        "queue_view",
+        "queue_edit",
+        "hubs_view",
+        "settings_view",
+    ),
+):
     return SimpleNamespace(
         auth_token=SecretStr("ephemeral-token"),
         system_info=SimpleNamespace(api_version=1, api_feature_level=10),
@@ -33,10 +43,17 @@ def _auth(*, permissions: tuple[str, ...] = ("search", "download", "queue_view",
 class _FakeApi:
     instances: ClassVar[list[_FakeApi]] = []
 
-    def __init__(self, *, authorize_error: Exception | None = None, auth: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        authorize_error: Exception | None = None,
+        auth: Any = None,
+        minimum_search_interval: int = 45,
+    ) -> None:
         self.authorize_error = authorize_error
         self.auth = auth or _auth()
         self.authorize_calls = 0
+        self.minimum_search_interval = minimum_search_interval
         self.deleted = 0
         self.closed = False
         self.__class__.instances.append(self)
@@ -52,6 +69,9 @@ class _FakeApi:
 
     async def get_system_info(self):
         return self.auth.system_info
+
+    async def get_settings(self, _keys: list[str]):
+        return [self.minimum_search_interval]
 
     async def delete_current_session(self) -> None:
         self.deleted += 1
@@ -164,6 +184,28 @@ async def test_supervisor_retries_unavailable_socket_with_one_owned_runner() -> 
     assert delays == [1.0]
     assert supervisor.health.reconnect_attempts == 1
     assert supervisor.background_task_count == 1
+    await supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_supervisor_fails_closed_when_airdcpp_hub_interval_is_below_45() -> None:
+    api = _FakeApi(minimum_search_interval=31)
+    socket = _FakeSocket()
+    supervisor = AirDcppSupervisor(
+        config=_config(),
+        api_client=api,
+        socket_client=socket,
+    )
+
+    supervisor.start()
+    await supervisor.wait_for_state(
+        AirDcppSupervisorState.UNSAFE_SEARCH_INTERVAL,
+        timeout_seconds=1,
+    )
+
+    assert supervisor.health.remote_min_search_interval_seconds == 31
+    assert supervisor.health.last_error_code == "unsafe_search_interval"
+    assert socket.connect_calls == 0
     await supervisor.stop()
 
 

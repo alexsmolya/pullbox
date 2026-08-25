@@ -179,12 +179,18 @@ class _FakeCooldown:
         return result
 
 
-def _client(api: _FakeApi, socket: _FakeSocket) -> AirDcppSearchClient:
+def _client(
+    api: _FakeApi,
+    socket: _FakeSocket,
+    *,
+    config_id: int = 7,
+    client_priority: int = 20,
+) -> AirDcppSearchClient:
     return AirDcppSearchClient(
-        config_id=7,
-        client_identity="airdcpp:7",
-        client_name="Dedicated Air",
-        client_priority=20,
+        config_id=config_id,
+        client_identity=f"airdcpp:{config_id}",
+        client_name=f"Dedicated Air {config_id}",
+        client_priority=client_priority,
         api_client=api,
         socket_client=socket,
         manual_collection_seconds=1,
@@ -346,3 +352,101 @@ async def test_socket_loss_after_sent_uses_bounded_final_rest_snapshot() -> None
     assert outcome.client_summaries[0].status is DcClientSearchStatus.PARTIAL
     assert api.pages == [(44, 0, 100)]
     assert api.deleted == [44]
+
+
+@pytest.mark.asyncio
+async def test_automatic_search_defers_once_during_cooldown_without_queueing() -> None:
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+    cooldown = _FakeCooldown(
+        [AirDcppCooldownReservation(7, False, now, now + timedelta(seconds=45), 45)]
+    )
+    socket = _FakeSocket()
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    outcome = await AirDcppSearchCoordinator(cooldown=cooldown, sleep=sleep).search(
+        (_client(_FakeApi(), socket),),
+        _target(),
+        manual=False,
+    )
+
+    assert outcome.client_summaries[0].status is DcClientSearchStatus.DEFERRED_COOLDOWN
+    assert cooldown.reserve_calls == 1
+    assert socket.calls == []
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_automatic_search_uses_low_airdcpp_priority() -> None:
+    socket = _FakeSocket(emit_result=False)
+    await AirDcppSearchCoordinator(
+        cooldown=_FakeCooldown(),
+        sleep=lambda _s: asyncio.sleep(0),
+    ).search((_client(_FakeApi(), socket),), _target(), manual=False)
+
+    request = next(call for call in socket.calls if call[0] == "POST")
+    assert request[2]["priority"] == 2
+
+
+@pytest.mark.asyncio
+async def test_identical_concurrent_manual_queries_share_one_remote_search() -> None:
+    api = _FakeApi([_result()])
+    socket = _FakeSocket(emit_result=False)
+    cooldown = _FakeCooldown()
+    collecting = asyncio.Event()
+    release_collection = asyncio.Event()
+
+    async def sleep(_seconds: float) -> None:
+        collecting.set()
+        await release_collection.wait()
+
+    coordinator = AirDcppSearchCoordinator(cooldown=cooldown, sleep=sleep)
+    first = asyncio.create_task(coordinator.search((_client(api, socket),), _target(), manual=True))
+    await asyncio.wait_for(collecting.wait(), timeout=1)
+    second = asyncio.create_task(
+        coordinator.search((_client(api, socket),), _target(), manual=True)
+    )
+    await asyncio.sleep(0)
+    release_collection.set()
+    first_outcome, second_outcome = await asyncio.gather(first, second)
+
+    assert api.created == 1
+    assert cooldown.reserve_calls == 1
+    assert len(first_outcome.matched) == len(second_outcome.matched) == 1
+
+
+@pytest.mark.asyncio
+async def test_cross_client_route_prefers_free_slot_and_retains_stable_fallback() -> None:
+    primary_api = _FakeApi([_result(free=1)])
+    fallback_api = _FakeApi([_result(free=0)])
+    primary = _client(
+        primary_api,
+        _FakeSocket(emit_result=False),
+        config_id=8,
+        client_priority=20,
+    )
+    fallback = _client(
+        fallback_api,
+        _FakeSocket(emit_result=False),
+        config_id=7,
+        client_priority=20,
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+    cooldown = _FakeCooldown(
+        [
+            AirDcppCooldownReservation(7, True, now, now + timedelta(seconds=45), 0),
+            AirDcppCooldownReservation(8, True, now, now + timedelta(seconds=45), 0),
+        ]
+    )
+
+    outcome = await AirDcppSearchCoordinator(
+        cooldown=cooldown,
+        sleep=lambda _s: asyncio.sleep(0),
+    ).search((fallback, primary), _target(), manual=True)
+
+    assert len(outcome.matched) == 1
+    candidate = outcome.matched[0]
+    assert candidate.route.client_config_id == 8
+    assert [route.client_config_id for route in candidate.alternate_routes] == [7]

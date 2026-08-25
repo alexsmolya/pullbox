@@ -339,8 +339,10 @@ class TestSettingsRouteContracts:
 
         assert response.status_code == 200
         assert "Direct Downloads" in response.text
+        assert "dc: 'Direct Connect'" in response.text
         assert "Coming soon" not in response.text
         assert "item === 'direct'" in response.text
+        assert "const supported = ['usenet', 'torrent', 'direct', 'dc'];" in response.text
         assert "JSON.stringify(this.order)" in response.text
 
     async def test_settings_indexer_bulk_tests_are_serialized_to_avoid_write_storm(

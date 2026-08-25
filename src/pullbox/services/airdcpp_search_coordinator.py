@@ -40,6 +40,10 @@ _PAGE_SIZE = 100
 _MAX_CLIENT_FANOUT = 4
 
 
+class _AutomaticSearchDeferredError(Exception):
+    """Internal control flow for a bounded, non-queued automatic deferral."""
+
+
 class AirDcppSearchApi(Protocol):
     async def create_search_instance(
         self,
@@ -122,6 +126,13 @@ class _ClientResult:
     partial: bool
 
 
+@dataclass(slots=True)
+class _SharedClientSearch:
+    task: asyncio.Task[_ClientResult]
+    callbacks: dict[int, Callable[[AirDcppSearchProgress], Awaitable[None]]]
+    waiters: int = 0
+
+
 class AirDcppSearchCoordinator:
     """Search ready clients independently and return one bounded DC outcome."""
 
@@ -136,6 +147,8 @@ class AirDcppSearchCoordinator:
         self._sleep = sleep
         self._now = now or (lambda: datetime.now(UTC))
         self._client_semaphores: dict[int, tuple[int, asyncio.Semaphore]] = {}
+        self._inflight: dict[tuple[object, ...], _SharedClientSearch] = {}
+        self._inflight_lock = asyncio.Lock()
 
     async def cooldown_status(self, config_ids: Sequence[int]) -> dict[int, int]:
         """Read per-client remaining seconds without reserving hub searches."""
@@ -158,9 +171,8 @@ class AirDcppSearchCoordinator:
         semaphore = asyncio.Semaphore(_MAX_CLIENT_FANOUT)
 
         async def run(client: AirDcppSearchClient) -> _ClientResult:
-            client_semaphore = self._client_semaphore(client)
-            async with semaphore, client_semaphore:
-                return await self._search_client(
+            async with semaphore:
+                return await self._coalesced_search_client(
                     client,
                     target,
                     manual=manual,
@@ -214,6 +226,75 @@ class AirDcppSearchCoordinator:
             )
             return semaphore
         return current[1]
+
+    async def _coalesced_search_client(
+        self,
+        client: AirDcppSearchClient,
+        target: IssueSearchTarget,
+        *,
+        manual: bool,
+        on_progress: Callable[[AirDcppSearchProgress], Awaitable[None]] | None,
+    ) -> _ClientResult:
+        collection_seconds = (
+            client.manual_collection_seconds if manual else client.automatic_collection_seconds
+        )
+        key: tuple[object, ...] = (
+            client.config_id,
+            manual,
+            _query_pattern(target),
+            client.hub_allowlist,
+            collection_seconds,
+            client.max_results,
+        )
+        waiter_token = id(asyncio.current_task())
+        async with self._inflight_lock:
+            shared = self._inflight.get(key)
+            if shared is None:
+                callbacks: dict[
+                    int,
+                    Callable[[AirDcppSearchProgress], Awaitable[None]],
+                ] = {}
+
+                async def broadcast(progress: AirDcppSearchProgress) -> None:
+                    current_callbacks = tuple(callbacks.values())
+                    if current_callbacks:
+                        await asyncio.gather(
+                            *(callback(progress) for callback in current_callbacks),
+                            return_exceptions=True,
+                        )
+
+                async def run_limited() -> _ClientResult:
+                    async with self._client_semaphore(client):
+                        return await self._search_client(
+                            client,
+                            target,
+                            manual=manual,
+                            on_progress=broadcast,
+                        )
+
+                shared = _SharedClientSearch(
+                    task=asyncio.create_task(run_limited()),
+                    callbacks=callbacks,
+                )
+                self._inflight[key] = shared
+            shared.waiters += 1
+            if on_progress is not None:
+                shared.callbacks[waiter_token] = on_progress
+
+        cancel_task = False
+        try:
+            return await asyncio.shield(shared.task)
+        finally:
+            async with self._inflight_lock:
+                shared.callbacks.pop(waiter_token, None)
+                shared.waiters -= 1
+                if shared.waiters == 0:
+                    self._inflight.pop(key, None)
+                    cancel_task = not shared.task.done()
+                    if cancel_task:
+                        shared.task.cancel()
+            if cancel_task:
+                await asyncio.gather(shared.task, return_exceptions=True)
 
     async def _search_client(
         self,
@@ -285,7 +366,8 @@ class AirDcppSearchCoordinator:
             raw_results.append(result)
 
         try:
-            await self._wait_for_reservation(client, progress)
+            if not await self._wait_for_reservation(client, progress, manual=manual):
+                raise _AutomaticSearchDeferredError
             await progress(AirDcppSearchProgressState.STARTING)
             instance = await client.api_client.create_search_instance(
                 expiration_minutes=5,
@@ -350,6 +432,8 @@ class AirDcppSearchCoordinator:
                 await progress(AirDcppSearchProgressState.COMPLETE)
         except asyncio.CancelledError:
             raise
+        except _AutomaticSearchDeferredError:
+            status = DcClientSearchStatus.DEFERRED_COOLDOWN
         except TimeoutError:
             partial = True
             status = DcClientSearchStatus.DISPATCH_TIMEOUT
@@ -392,11 +476,15 @@ class AirDcppSearchCoordinator:
         self,
         client: AirDcppSearchClient,
         progress: Callable[[AirDcppSearchProgressState, int | None], Awaitable[None]],
-    ) -> None:
+        *,
+        manual: bool,
+    ) -> bool:
         while True:
             reservation = await self._cooldown.reserve(client.config_id)
             if reservation.granted:
-                return
+                return True
+            if not manual:
+                return False
             for remaining in range(reservation.wait_seconds, 0, -1):
                 await progress(AirDcppSearchProgressState.COOLDOWN, remaining)
                 await self._sleep(1)
@@ -499,8 +587,10 @@ def _deduplicate_routes(routes: Sequence[_RawRoute]) -> tuple[list[_RawRoute], i
         items.sort(
             key=lambda item: (
                 item.release.ranking_priority,
-                -item.metrics.source_count,
+                0 if item.metrics.free_slots > 0 else 1,
                 -item.metrics.free_slots,
+                -item.metrics.source_count,
+                -(item.metrics.aggregate_connection_bytes_per_second or 0),
                 item.route.client_config_id,
                 item.route.grouped_result_id,
             )

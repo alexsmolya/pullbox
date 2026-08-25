@@ -28,7 +28,9 @@ if TYPE_CHECKING:
     )
     from pullbox.providers.airdcpp.socket_client import AirDcppEventHandler
 
-_REQUIRED_PERMISSIONS = frozenset({"search", "download", "queue_view", "queue_edit"})
+_REQUIRED_PERMISSIONS = frozenset(
+    {"search", "download", "queue_view", "queue_edit", "hubs_view", "settings_view"}
+)
 _API_VERSION = 1
 _MINIMUM_FEATURE_LEVEL = 10
 
@@ -45,6 +47,7 @@ class AirDcppSupervisorState(StrEnum):
     INCOMPATIBLE = "incompatible"
     AUTHENTICATION_FAILED = "authentication_failed"
     PERMISSION_FAILED = "permission_failed"
+    UNSAFE_SEARCH_INTERVAL = "unsafe_search_interval"
     UNAVAILABLE = "unavailable"
     STOPPING = "stopping"
 
@@ -82,6 +85,7 @@ class AirDcppSupervisorHealth:
     last_ready_at: datetime | None = None
     last_state_change_at: datetime | None = None
     last_error_code: str | None = None
+    remote_min_search_interval_seconds: int | None = None
 
 
 class AirDcppSupervisorApi(Protocol):
@@ -90,6 +94,8 @@ class AirDcppSupervisorApi(Protocol):
     async def get_current_session(self) -> AirDcppSession: ...
 
     async def get_system_info(self) -> AirDcppSystemInfo: ...
+
+    async def get_settings(self, keys: list[str]) -> list[str | bool | int]: ...
 
     async def delete_current_session(self) -> None: ...
 
@@ -203,12 +209,30 @@ class AirDcppSupervisor:
                     session = await self.api_client.get_current_session()
                     system = await self.api_client.get_system_info()
                     self._validate_compatibility(auth, session, system)
+                    remote_settings = await self.api_client.get_settings(["min_search_interval"])
+                    remote_interval = (
+                        remote_settings[0]
+                        if len(remote_settings) == 1 and type(remote_settings[0]) is int
+                        else None
+                    )
+                    if remote_interval is None or remote_interval < 45:
+                        await self._set_health(
+                            state=AirDcppSupervisorState.UNSAFE_SEARCH_INTERVAL,
+                            compatible=True,
+                            api_version=system.api_version,
+                            api_feature_level=system.api_feature_level,
+                            remote_min_search_interval_seconds=remote_interval,
+                            last_error_code="unsafe_search_interval",
+                        )
+                        await self._end_session()
+                        return
                     await self._set_health(
                         state=AirDcppSupervisorState.COMPATIBLE_REST,
                         compatible=True,
                         api_version=system.api_version,
                         api_feature_level=system.api_feature_level,
                         missing_permissions=(),
+                        remote_min_search_interval_seconds=remote_interval,
                         last_error_code=None,
                     )
                 except AirDcppAuthenticationError:

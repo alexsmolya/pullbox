@@ -39,6 +39,8 @@ _search_coordinator: AirDcppSearchCoordinator | None = None
 async def load_airdcpp_search_clients(
     session: AsyncSession,
     registry: AirDcppSupervisorRegistry,
+    *,
+    automatic: bool = False,
 ) -> tuple[AirDcppSearchClient, ...]:
     """Detach ready, search-enabled exact clients from ORM state."""
     result = await session.execute(
@@ -57,6 +59,7 @@ async def load_airdcpp_search_clients(
         if (
             settings is None
             or not settings.search_enabled
+            or (automatic and not settings.automatic_search_enabled)
             or supervisor is None
             or supervisor.state is not AirDcppSupervisorState.READY
         ):
