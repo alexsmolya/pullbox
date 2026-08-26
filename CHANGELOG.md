@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-08-26
+
+Patch release that makes release notifications and browser validation more reliable.
+
+### Fixed
+
+- Preserve successful Discord release delivery records so later channel posts and
+  workflow reruns do not create duplicate messages.
+- Record Discord delivery state against the exact release commit.
+- Stabilize the utilities export footer check in Firefox by targeting the
+  dedicated fields value.
+
 ## [1.1.1] - 2026-08-23
 
 Patch release improving direct-download reliability for collected issue packs.
