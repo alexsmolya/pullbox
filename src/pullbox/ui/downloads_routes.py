@@ -376,6 +376,7 @@ def build_download_queue_row_view(
     client_state = normalize_download_queue_client_state(
         raw_client_state if isinstance(raw_client_state, str) else None
     )
+    client_state_token = download_queue_client_state_token(client_state)
     is_finalizing = is_download_queue_finalization_state(client_state)
     progress_fraction = snapshot_progress(progress)
     progress_pct = round(progress_fraction * 100, 1)
@@ -433,7 +434,12 @@ def build_download_queue_row_view(
             speed_bytes = None
             eta_seconds = None
         else:
-            primary_phase = client_state or "Downloading"
+            primary_phase = (
+                "Downloading"
+                if download.state == DownloadState.DOWNLOADING
+                and client_state_token in {"queued", "sent"}
+                else client_state or "Downloading"
+            )
             status_pill = "pill-info"
             progress_tone = "is-blue"
             if progress_indeterminate:
