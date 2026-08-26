@@ -269,10 +269,13 @@ async def persist_direct_search_discoveries(
             **primary_attempt.candidate_snapshot,
             "alternate_attempt_ids": [attempt.id for attempt in alternate_attempts],
         }
-        for alternate_attempt in alternate_attempts:
+        for index, alternate_attempt in enumerate(alternate_attempts):
             alternate_attempt.candidate_snapshot = {
                 **alternate_attempt.candidate_snapshot,
                 "primary_attempt_id": primary_attempt.id,
+                "alternate_attempt_ids": [
+                    attempt.id for attempt in alternate_attempts[index + 1 :]
+                ],
             }
     return tuple(
         DirectSearchDiscovery(attempt_id=attempt.id, result=result, visible=visible)

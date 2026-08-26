@@ -186,16 +186,25 @@ class HttpArtifactTransport:
         refreshed = False
         restarted_bad_range = False
         stream_retries = 0
+        started_at = time.monotonic()
+        deadline = started_at + self._policy.total_timeout_seconds
 
         while True:
-            response = await _await_with_cancel(
-                partial(
-                    self._open_response,
-                    active,
-                    resume_offset=resume_offset,
-                ),
-                cancel_event,
-            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _timeout_error("artifact_transfer_total_timeout")
+            try:
+                response = await _await_with_cancel(
+                    partial(
+                        self._open_response,
+                        active,
+                        resume_offset=resume_offset,
+                    ),
+                    cancel_event,
+                    timeout=remaining,
+                )
+            except TimeoutError as exc:
+                raise _timeout_error("artifact_transfer_total_timeout") from exc
             try:
                 if response.status_code in _EXPIRED_URL_STATUSES and refresh_transfer is not None:
                     if refreshed:
@@ -236,6 +245,8 @@ class HttpArtifactTransport:
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
                         pause_event=pause_event,
+                        started_at=started_at,
+                        deadline=deadline,
                     )
                 except ArtifactTransferError as exc:
                     if not active.prefer_single_response or not _can_retry_range_failure(
@@ -251,7 +262,7 @@ class HttpArtifactTransport:
                     ):
                         raise _object_changed_error() from exc
                     made_progress = partial_size > resume_offset
-                    stream_retries = 0 if made_progress else stream_retries + 1
+                    stream_retries += 1
                     checkpoint = HttpTransferCheckpoint(
                         bytes_transferred=partial_size,
                         expected_size=active.expected_size,
@@ -364,6 +375,8 @@ class HttpArtifactTransport:
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
                         pause_event=pause_event,
+                        started_at=started_at,
+                        deadline=deadline,
                     )
                 if not _valid_bounded_response(
                     response,
@@ -623,6 +636,8 @@ class HttpArtifactTransport:
         progress_callback: ProgressCallback | None,
         cancel_event: asyncio.Event | None,
         pause_event: asyncio.Event | None,
+        started_at: float,
+        deadline: float,
     ) -> ArtifactTransferResult:
         total = _response_total(response, resume_offset=resume_offset)
         expected = total if total is not None else resolved.expected_size
@@ -647,10 +662,8 @@ class HttpArtifactTransport:
         )
 
         transferred = resume_offset
-        start_time = time.monotonic()
-        last_progress_at = start_time
+        last_progress_at = time.monotonic()
         last_progress_bytes = transferred
-        deadline = start_time + self._policy.total_timeout_seconds
         etag = response.headers.get("etag") or resolved.etag
         last_modified = response.headers.get("last-modified") or resolved.last_modified
         filename = (
@@ -729,7 +742,7 @@ class HttpArtifactTransport:
                         progress_callback,
                         transferred=transferred,
                         total=expected,
-                        started_at=start_time,
+                        started_at=started_at,
                         now=now,
                     )
                     last_progress_at = now
@@ -744,7 +757,7 @@ class HttpArtifactTransport:
             progress_callback,
             transferred=transferred,
             total=expected,
-            started_at=start_time,
+            started_at=started_at,
             now=time.monotonic(),
         )
         return ArtifactTransferResult(

@@ -885,7 +885,11 @@ async def test_fingerprint_alternates_are_persisted_but_only_primary_is_visible(
             status=IssueStatus.WANTED,
         )
     )
-    for provider_id, identity in ((10, "pullbox.libgen"), (20, "pullbox.annas_archive")):
+    for provider_id, identity in (
+        (10, "pullbox.libgen"),
+        (20, "pullbox.annas_archive"),
+        (30, "pullbox.getcomics"),
+    ):
         db_session.add(
             DirectProviderConfig(
                 id=provider_id,
@@ -902,6 +906,7 @@ async def test_fingerprint_alternates_are_persisted_but_only_primary_is_visible(
 
     primary_provider = _provider("pullbox.libgen", 10)
     alternate_provider = _provider("pullbox.annas_archive", 20)
+    final_provider = _provider("pullbox.getcomics", 30)
     fingerprint = f"md5:{'4' * 32}"
     _reset()
     _Client.responses = {
@@ -919,27 +924,41 @@ async def test_fingerprint_alternates_are_persisted_but_only_primary_is_visible(
                 content_fingerprint=fingerprint,
             )
         ],
+        final_provider.provider_identity: [
+            _candidate(
+                final_provider,
+                "Absolute Superman 009 (2025)",
+                content_fingerprint=fingerprint,
+            )
+        ],
     }
     outcome = await search_direct_issue_target(
         _target(),
-        [primary_provider, alternate_provider],
+        [primary_provider, alternate_provider, final_provider],
         client_factory=_factory,
     )
 
     discoveries = await persist_direct_search_discoveries(db_session, _target(), outcome)
 
-    assert len(discoveries) == 2
-    assert [discovery.visible for discovery in discoveries] == [True, False]
+    assert len(discoveries) == 3
+    assert [discovery.visible for discovery in discoveries] == [True, False, False]
     assert [discovery.result.provider.provider_identity for discovery in discoveries] == [
         "pullbox.libgen",
         "pullbox.annas_archive",
+        "pullbox.getcomics",
     ]
     primary = await db_session.get(DirectAcquisitionAttempt, discoveries[0].attempt_id)
     alternate = await db_session.get(DirectAcquisitionAttempt, discoveries[1].attempt_id)
+    final = await db_session.get(DirectAcquisitionAttempt, discoveries[2].attempt_id)
     assert primary is not None
     assert alternate is not None
+    assert final is not None
     assert primary.candidate_snapshot["visible"] is True
-    assert primary.candidate_snapshot["alternate_attempt_ids"] == [alternate.id]
+    assert primary.candidate_snapshot["alternate_attempt_ids"] == [alternate.id, final.id]
     assert alternate.candidate_snapshot["visible"] is False
     assert alternate.candidate_snapshot["primary_attempt_id"] == primary.id
+    assert alternate.candidate_snapshot["alternate_attempt_ids"] == [final.id]
+    assert final.candidate_snapshot["visible"] is False
+    assert final.candidate_snapshot["primary_attempt_id"] == primary.id
+    assert final.candidate_snapshot["alternate_attempt_ids"] == []
     assert fingerprint not in json.dumps(primary.candidate_snapshot, sort_keys=True)

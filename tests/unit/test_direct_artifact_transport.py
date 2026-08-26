@@ -177,6 +177,52 @@ async def test_http_transport_resumes_single_response_after_protocol_disconnect(
 
 
 @pytest.mark.asyncio
+async def test_http_transport_limits_retries_when_single_response_host_restarts_partial(
+    tmp_path: Path,
+) -> None:
+    payload = b"abcdefghijkl"
+    seen_ranges: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_ranges.append(request.headers.get("range"))
+        return httpx.Response(
+            200,
+            headers={
+                "content-length": str(len(payload)),
+                "etag": '"stable"',
+            },
+            stream=_PartialThenProtocolErrorStream(payload[:4]),
+        )
+
+    root, destination = _quarantine_paths(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ArtifactTransferError) as captured:
+            async with asyncio.timeout(0.5):
+                await HttpArtifactTransport(
+                    client=client,
+                    resolver=_public_resolver,
+                    policy=ArtifactTransferPolicy(
+                        chunk_size_bytes=4,
+                        range_stall_retries=2,
+                        range_retry_backoff_seconds=0,
+                    ),
+                ).transfer(
+                    resolved=_resolved(
+                        expected_size=len(payload),
+                        etag='"stable"',
+                        checksum=f"md5:{hashlib.md5(payload, usedforsecurity=False).hexdigest()}",
+                        range_supported=True,
+                        prefer_single_response=True,
+                    ),
+                    destination=destination,
+                    quarantine_root=root,
+                )
+
+    assert captured.value.code == "artifact_host_unavailable"
+    assert seen_ranges == [None, "bytes=4-", "bytes=4-"]
+
+
+@pytest.mark.asyncio
 async def test_http_transport_reports_intermediate_progress_for_single_response_host(
     tmp_path: Path,
 ) -> None:
