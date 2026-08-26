@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any, Protocol
 from pydantic import ValidationError
 
 from pullbox.core.acquisition import AcquisitionProtocol
-from pullbox.providers.airdcpp.contracts import AirDcppSearchResult
+from pullbox.providers.airdcpp.contracts import (
+    AirDcppSearchResult,
+    AirDcppSearchResultEvent,
+    AirDcppSearchSentEvent,
+)
 from pullbox.providers.base import ReleaseResult
 from pullbox.services.airdcpp_search_types import (
     AirDcppSearchProgress,
@@ -333,37 +337,31 @@ class AirDcppSearchCoordinator:
 
         async def on_sent(payload: object) -> None:
             nonlocal dropped, sent_count
-            if not isinstance(payload, dict):
+            try:
+                event = AirDcppSearchSentEvent.model_validate(payload)
+            except ValidationError:
                 dropped += 1
                 return
-            sent = payload.get("sent")
-            search_id = payload.get("search_id")
-            if type(sent) is not int or sent < 0 or type(search_id) is not int:
-                dropped += 1
-                return
-            sent_count = sent
+            sent_count = event.sent
             await self._cooldown.extend_from_sent(client.config_id)
             sent_event.set()
             await progress(
                 AirDcppSearchProgressState.ZERO_HUBS
-                if sent == 0
+                if event.sent == 0
                 else AirDcppSearchProgressState.COLLECTING
             )
 
         async def on_result(payload: object) -> None:
             nonlocal dropped
-            if not isinstance(payload, dict):
-                dropped += 1
-                return
             try:
-                result = AirDcppSearchResult.model_validate(payload.get("result"))
+                event = AirDcppSearchResultEvent.model_validate(payload)
             except ValidationError:
                 dropped += 1
                 return
             if len(raw_results) >= client.max_results:
                 dropped += 1
                 return
-            raw_results.append(result)
+            raw_results.append(event.result)
 
         try:
             if not await self._wait_for_reservation(client, progress, manual=manual):

@@ -145,11 +145,15 @@ class _FakeSocket:
         if self.block_send:
             await asyncio.Event().wait()
         await self.handlers["/search/44/listeners/search_hub_searches_sent"](
-            {"sent": self.sent, "search_id": 88, "query": {"pattern": "Example Comic 1"}}
+            {
+                "sent": self.sent,
+                "search_id": "active-search-id",
+                "query": {"pattern": "Example Comic 1"},
+            }
         )
         if self.emit_result:
             await self.handlers["/search/44/listeners/search_result_added"](
-                {"result": _result(free=0).model_dump(), "search_id": 88}
+                {"result": _result(free=0).model_dump(), "search_id": "active-search-id"}
             )
         if self.fail_after_sent:
             raise ConnectionError("socket disconnected")

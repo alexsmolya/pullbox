@@ -12,6 +12,8 @@ from pullbox.providers.airdcpp.contracts import (
     AirDcppQueueBundle,
     AirDcppSearchInstance,
     AirDcppSearchResult,
+    AirDcppSearchResultEvent,
+    AirDcppSearchSentEvent,
     AirDcppSession,
     AirDcppSystemInfo,
 )
@@ -252,6 +254,80 @@ def test_search_instance_and_grouped_file_result_contracts_are_strict_and_additi
     assert result.users.count == 4
     assert "private/peer/path" not in repr(result)
     assert "must-not-be-retained" not in repr(result)
+
+
+def test_search_instance_accepts_live_string_search_ids_and_empty_sentinel() -> None:
+    payload = {
+        "id": 44,
+        "expires_in": 60_000,
+        "current_search_id": "",
+        "owner": "session:123:pullbox",
+        "queue_time": 0,
+        "queued_count": 0,
+        "result_count": 0,
+        "searches_sent_ago": 0,
+    }
+
+    instance = AirDcppSearchInstance.model_validate(payload)
+    active = AirDcppSearchInstance.model_validate(
+        {**payload, "current_search_id": "active-search-id"}
+    )
+
+    assert instance.current_search_id == 0
+    assert active.current_search_id == "active-search-id"
+    with pytest.raises(ValidationError):
+        AirDcppSearchInstance.model_validate({**payload, "current_search_id": "x" * 1001})
+
+
+def test_search_events_accept_live_string_ids_and_whole_number_floats() -> None:
+    result_payload: dict[str, object] = {
+        "id": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "name": "Example Comic 001.cbz",
+        "relevance": 1.0,
+        "hits": 4.0,
+        "users": {"count": 4},
+        "type": {"id": "file"},
+        "path": "/private/peer/path",
+        "tth": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "time": 1.0,
+        "slots": {"free": 2, "total": 11, "str": "2/11"},
+        "connection": 42_500_000.0,
+        "size": 62_523_525_626.0,
+    }
+
+    sent = AirDcppSearchSentEvent.model_validate(
+        {"sent": 3, "search_id": "active-search-id", "query": {}}
+    )
+    result = AirDcppSearchResultEvent.model_validate(
+        {"result": result_payload, "search_id": "active-search-id"}
+    )
+
+    assert sent.sent == 3
+    assert result.result.hits == 4
+    assert result.result.time == 1
+    assert result.result.connection == 42_500_000
+    assert result.result.size == 62_523_525_626
+
+
+@pytest.mark.parametrize("invalid", [1.5, float("inf"), float("nan"), True])
+def test_search_result_rejects_non_integral_or_non_finite_counters(invalid: object) -> None:
+    payload: dict[str, object] = {
+        "id": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "name": "Example Comic 001.cbz",
+        "relevance": 1.0,
+        "hits": invalid,
+        "users": {"count": 1},
+        "type": {"id": "file"},
+        "path": "/private/peer/path",
+        "tth": "CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+        "time": 0.0,
+        "slots": {"free": 1, "total": 1, "str": "1/1"},
+        "connection": 1.0,
+        "size": 1.0,
+    }
+
+    with pytest.raises(ValidationError):
+        AirDcppSearchResult.model_validate(payload)
 
 
 @pytest.mark.parametrize(

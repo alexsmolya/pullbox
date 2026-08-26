@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isfinite
 from typing import Annotated
 
 from pydantic import (
@@ -24,10 +25,32 @@ def _normalize_port(value: object) -> object:
     return value
 
 
+def _normalize_current_search_id(value: object) -> object:
+    """Map AirDC++'s pre-dispatch empty sentinel to the internal zero value."""
+    return 0 if value == "" else value
+
+
+def _normalize_whole_number(value: object) -> object:
+    """Normalize AirDC++ whole-number JSON floats without truncating fractions."""
+    if type(value) is float and isfinite(value) and value.is_integer():
+        return int(value)
+    return value
+
+
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
 Port = Annotated[StrictInt, BeforeValidator(_normalize_port), Field(ge=0, le=65535)]
 BoundedString = Annotated[StrictStr, Field(min_length=1, max_length=1000)]
+SearchId = BoundedString | PositiveInt
+CurrentSearchId = Annotated[
+    BoundedString | NonNegativeInt,
+    BeforeValidator(_normalize_current_search_id),
+]
+SearchCounter = Annotated[
+    StrictInt,
+    BeforeValidator(_normalize_whole_number),
+    Field(ge=0, le=2**63 - 1),
+]
 
 
 class AirDcppWireModel(BaseModel):
@@ -199,7 +222,7 @@ class AirDcppSearchInstance(AirDcppWireModel):
 
     id: PositiveInt
     expires_in: NonNegativeInt
-    current_search_id: NonNegativeInt
+    current_search_id: CurrentSearchId
     owner: BoundedString
     queue_time: NonNegativeInt
     queued_count: NonNegativeInt
@@ -231,16 +254,30 @@ class AirDcppSearchResult(AirDcppWireModel):
     id: BoundedString
     name: BoundedString
     relevance: Annotated[float, Field(ge=0, allow_inf_nan=False)]
-    hits: NonNegativeInt
+    hits: SearchCounter
     users: AirDcppSearchUsers
     type: AirDcppFileItemType
     path: SecretStr = Field(repr=False)
     tth: Annotated[StrictStr, Field(pattern=r"^[A-Z2-7]{39}$")] | None
-    time: NonNegativeInt
+    time: SearchCounter
     slots: AirDcppSearchSlots
-    connection: NonNegativeInt
-    size: NonNegativeInt
+    connection: SearchCounter
+    size: SearchCounter
 
     @property
     def file_result(self) -> bool:
         return self.type.id == "file"
+
+
+class AirDcppSearchSentEvent(AirDcppWireModel):
+    """Hub-dispatch acknowledgement for one temporary search instance."""
+
+    sent: NonNegativeInt
+    search_id: SearchId
+
+
+class AirDcppSearchResultEvent(AirDcppWireModel):
+    """Grouped search result wrapper emitted by the AirDC++ socket."""
+
+    result: AirDcppSearchResult
+    search_id: SearchId
