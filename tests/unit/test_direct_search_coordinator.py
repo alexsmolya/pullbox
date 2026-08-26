@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ClassVar
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
+from pullbox.core.acquisition import AcquisitionProtocol
 from pullbox.core.encryption import _get_fernet
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
@@ -222,6 +223,7 @@ async def test_fanout_is_concurrent_and_completion_order_does_not_change_results
         "pullbox.getcomics",
     ]
     assert all(item.validation.confidence is MatchConfidence.HIGH for item in outcome.matched)
+    assert all(item.release.protocol is AcquisitionProtocol.DIRECT for item in outcome.matched)
     assert outcome.failures == ()
 
 

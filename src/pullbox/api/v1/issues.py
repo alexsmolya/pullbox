@@ -9,17 +9,21 @@ import structlog
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import inspect, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
+from pullbox.composition.airdcpp import get_airdcpp_supervisor_registry
+from pullbox.config import get_settings
 from pullbox.core.exceptions import ConfigurationError, NotFoundError, ValidationError
 from pullbox.core.file_ops import register_library_file
 from pullbox.core.file_safety import classify_resource_safety_exception
+from pullbox.models.client import DownloadClientConfig
 from pullbox.models.direct_acquisition import DirectAcquisitionAttempt
-from pullbox.models.download import DownloadState
+from pullbox.models.download import DownloadClientType, DownloadState
 from pullbox.models.issue import Issue, IssueStatus, IssueType
 from pullbox.models.library import LibraryFile, MatchConfidence
 from pullbox.models.search_log import SearchLog, SearchType
+from pullbox.providers.airdcpp.supervisor import AirDcppSupervisorState
 from pullbox.schemas.issue import (
     IssueFileDeleteResponse,
     IssueResponse,
@@ -29,6 +33,8 @@ from pullbox.schemas.issue import (
     ManualFileImportResponse,
 )
 from pullbox.schemas.search import (
+    DcGrabRequest,
+    DcGrabResponse,
     DirectGrabRequest,
     DirectGrabResponse,
     GrabReleaseRequest,
@@ -39,6 +45,8 @@ from pullbox.schemas.search import (
     RejectedResultItem,
     SearchResultItem,
 )
+from pullbox.services.airdcpp_acquisition import AirDcppQueueAcquisitionService
+from pullbox.services.airdcpp_route_tokens import get_airdcpp_route_token_store
 from pullbox.services.direct_acquisition_planner_service import (
     DirectAcquisitionPlanningError,
     plan_direct_acquisition,
@@ -850,6 +858,97 @@ async def grab_direct_release(
         artifact_id=planned.selected_artifact.id,
         title=title,
         status="queued",
+    )
+
+
+@router.post(
+    "/{issue_id}/dc-grab",
+    status_code=201,
+    response_model=DcGrabResponse,
+)
+async def grab_direct_connect_release(
+    issue_id: int,
+    body: DcGrabRequest,
+    user: AuthenticatedUser,
+    session: DbSession,
+) -> DcGrabResponse:
+    """Persist and queue one opaque, user-bound Direct Connect result."""
+    if not get_settings().airdcpp_enabled:
+        raise NotFoundError("Direct Connect route", issue_id)
+    try:
+        grant = get_airdcpp_route_token_store().resolve(
+            body.dc_route_token,
+            issue_id=issue_id,
+            user_id=user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    route = grant.candidate.route
+    client = (
+        await session.execute(
+            select(DownloadClientConfig)
+            .options(selectinload(DownloadClientConfig.airdcpp_settings))
+            .where(
+                DownloadClientConfig.id == route.client_config_id,
+                DownloadClientConfig.client_type == DownloadClientType.AIRDCPP,
+                DownloadClientConfig.enabled.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if (
+        client is None
+        or client.airdcpp_settings is None
+        or not client.airdcpp_settings.search_enabled
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The selected AirDC++ client is no longer enabled.",
+        )
+    registry = get_airdcpp_supervisor_registry()
+    supervisor = registry.get(client.id) if registry is not None else None
+    if supervisor is None or supervisor.state is not AirDcppSupervisorState.READY:
+        raise HTTPException(
+            status_code=409,
+            detail="The selected AirDC++ client is not ready.",
+        )
+    issue_result = await session.execute(
+        select(Issue).options(joinedload(Issue.library_file)).where(Issue.id == issue_id)
+    )
+    issue = issue_result.unique().scalar_one_or_none()
+    if issue is None:
+        raise NotFoundError("Issue", issue_id)
+    result = await AirDcppQueueAcquisitionService().acquire(
+        session,
+        candidate=grant.candidate,
+        issue_id=issue_id,
+        request_key=grant.request_key,
+        search_log_id=grant.search_log_id,
+        api_client=supervisor.api_client,
+        queue_priority=client.airdcpp_settings.queue_priority,
+        replace_existing_file=issue.library_file is not None,
+    )
+    await _increment_search_log_grabbed(
+        session,
+        issue_id=issue_id,
+        search_log_id=grant.search_log_id,
+    )
+    await session.commit()
+    logger.info(
+        "issue_manual_airdcpp_grab",
+        issue_id=issue_id,
+        acquisition_id=result.acquisition_id,
+        download_id=result.download_history_id,
+        bundle_id=result.bundle_id,
+        client_config_id=route.client_config_id,
+    )
+    return DcGrabResponse(
+        issue_id=issue_id,
+        acquisition_id=result.acquisition_id,
+        download_id=result.download_history_id,
+        bundle_id=result.bundle_id,
+        title=grant.candidate.release.title,
+        status=result.state.value,
     )
 
 

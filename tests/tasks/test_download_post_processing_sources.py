@@ -58,6 +58,32 @@ async def test_resolve_local_download_root_requires_configured_directory() -> No
     assert root is None
 
 
+@pytest.mark.asyncio
+async def test_airdcpp_local_path_uses_exact_client_and_strict_mapper(tmp_path: Path) -> None:
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    local_root = tmp_path / "airdcpp"
+    local_root.mkdir()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = SimpleNamespace(
+        remote_path="/Downloads",
+        download_dir=str(local_root),
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.AIRDCPP,
+        download_client_config_id=22,
+        downloaded_path="/Downloads/Example.cbz",
+    )
+
+    mapped = await _resolve_local_path(session, download)
+
+    assert mapped == str((local_root / "Example.cbz").resolve(strict=False))
+    statement = session.execute.await_args.args[0]
+    assert 22 in statement.compile().params.values()
+
+
 def test_post_processing_integrity_exception_distinguishes_missing_source() -> None:
     """Transient missing files should stay typed separately from bad releases."""
     from pullbox.tasks import download_post_processing_sources

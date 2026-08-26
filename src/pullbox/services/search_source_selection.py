@@ -15,6 +15,7 @@ from pullbox.services.search_scoring import (
 
 if TYPE_CHECKING:
     from pullbox.providers.base import ReleaseResult
+    from pullbox.services.airdcpp_search_types import DcValidatedCandidate
     from pullbox.services.direct_search_coordinator import DirectValidatedCandidate
     from pullbox.services.release_validator import ValidationResult
     from pullbox.services.search_targets import IssueSearchOutcome
@@ -25,10 +26,19 @@ if TYPE_CHECKING:
 class SearchSourceSelection:
     """The highest-ranked candidate plus the adapter needed to acquire it."""
 
-    source_kind: Literal["indexer", "direct"]
+    source_kind: Literal["indexer", "direct", "dc"]
     release: ReleaseResult
     validation: ValidationResult
     direct_result: DirectValidatedCandidate | None = None
+    dc_result: DcValidatedCandidate | None = None
+
+    def __post_init__(self) -> None:
+        if (self.source_kind == "direct") is (self.direct_result is None):
+            raise ValueError("Direct source selection must carry exactly one direct result")
+        if (self.source_kind == "dc") is (self.dc_result is None):
+            raise ValueError("DC source selection must carry exactly one DC result")
+        if self.direct_result is not None and self.dc_result is not None:
+            raise ValueError("Search source selection cannot mix acquisition adapters")
 
 
 def select_search_source(
@@ -67,10 +77,12 @@ def rank_search_sources(
         if outcome.direct_outcome
         else ()
     )
+    dc_matches = outcome.dc_outcome.matched if outcome.dc_outcome else ()
     ranked: list[SearchSourceSelection] = []
     indexer_matches = outcome.matched
     if (
         not direct_matches
+        and not dc_matches
         and outcome.best_validation is not None
         and outcome.best_release is not None
     ):
@@ -87,18 +99,25 @@ def rank_search_sources(
             return tuple(ranked)
         indexer_matches = [item for item in outcome.matched if item is not outcome.best_validation]
 
-    candidates: list[tuple[str, ValidationResult, DirectValidatedCandidate | None]] = [
-        ("torrent" if item.release.is_torrent else "usenet", item, None) for item in indexer_matches
-    ]
+    candidates: list[
+        tuple[
+            str,
+            ValidationResult,
+            DirectValidatedCandidate | None,
+            DcValidatedCandidate | None,
+        ]
+    ] = [(item.release.protocol.value, item, None, None) for item in indexer_matches]
     if not ranked and not candidates and outcome.best_validation is not None:
         candidates.append(
             (
-                "torrent" if outcome.best_validation.release.is_torrent else "usenet",
+                outcome.best_validation.release.protocol.value,
                 outcome.best_validation,
+                None,
                 None,
             )
         )
-    candidates.extend(("direct", item.validation, item) for item in direct_matches)
+    candidates.extend(("direct", item.validation, item, None) for item in direct_matches)
+    candidates.extend(("dc", item.validation, None, item) for item in dc_matches)
     normalized_priority = normalize_source_priority(source_priority)
     if normalized_priority is not None:
         priority_map = {source: index for index, source in enumerate(normalized_priority)}
@@ -123,8 +142,23 @@ def rank_search_sources(
         )
 
     def _preferred_direct_candidate(
-        items: list[tuple[str, ValidationResult, DirectValidatedCandidate | None]],
-    ) -> tuple[str, ValidationResult, DirectValidatedCandidate | None] | None:
+        items: list[
+            tuple[
+                str,
+                ValidationResult,
+                DirectValidatedCandidate | None,
+                DcValidatedCandidate | None,
+            ]
+        ],
+    ) -> (
+        tuple[
+            str,
+            ValidationResult,
+            DirectValidatedCandidate | None,
+            DcValidatedCandidate | None,
+        ]
+        | None
+    ):
         direct_items = [item for item in items if item[2] is not None]
         semantic_provider_keys = sorted(
             {
@@ -154,6 +188,54 @@ def rank_search_sources(
                 return next(item for item in group if item[1] is selected)
         return None
 
+    def _preferred_dc_candidate(
+        items: list[
+            tuple[
+                str,
+                ValidationResult,
+                DirectValidatedCandidate | None,
+                DcValidatedCandidate | None,
+            ]
+        ],
+    ) -> (
+        tuple[
+            str,
+            ValidationResult,
+            DirectValidatedCandidate | None,
+            DcValidatedCandidate | None,
+        ]
+        | None
+    ):
+        dc_items = [item for item in items if item[3] is not None]
+        if not dc_items:
+            return None
+
+        def route_key(
+            item: tuple[
+                str,
+                ValidationResult,
+                DirectValidatedCandidate | None,
+                DcValidatedCandidate | None,
+            ],
+        ) -> tuple[int, float, int, int, int, int, int, int, str]:
+            dc = item[3]
+            if dc is None:  # pragma: no cover - filtered above
+                raise RuntimeError("DC candidate is unavailable")
+            connection = dc.metrics.aggregate_connection_bytes_per_second or 0
+            return (
+                match_confidence_rank(item[1].confidence),
+                -item[1].series_similarity,
+                dc.release.ranking_priority,
+                0 if dc.metrics.free_slots > 0 else 1,
+                -dc.metrics.free_slots,
+                -dc.metrics.source_count,
+                -connection,
+                dc.route.client_config_id,
+                dc.route.grouped_result_id,
+            )
+
+        return min(dc_items, key=route_key)
+
     remaining = list(candidates)
     while remaining and (limit is None or len(ranked) < limit):
         selected = _select([item[1] for item in remaining])
@@ -165,16 +247,28 @@ def rank_search_sources(
             if preferred_direct is not None:
                 selected_item = preferred_direct
                 selected = preferred_direct[1]
+        elif selected_item[3] is not None:
+            preferred_dc = _preferred_dc_candidate(remaining)
+            if preferred_dc is not None:
+                selected_item = preferred_dc
+                selected = preferred_dc[1]
         selected_index = next(
             index for index, item in enumerate(remaining) if item is selected_item
         )
-        _, _, direct_result = remaining.pop(selected_index)
+        _, _, direct_result, dc_result = remaining.pop(selected_index)
         ranked.append(
             SearchSourceSelection(
-                source_kind="direct" if direct_result is not None else "indexer",
+                source_kind=(
+                    "direct"
+                    if direct_result is not None
+                    else "dc"
+                    if dc_result is not None
+                    else "indexer"
+                ),
                 release=selected.release,
                 validation=selected,
                 direct_result=direct_result,
+                dc_result=dc_result,
             )
         )
     return tuple(ranked)

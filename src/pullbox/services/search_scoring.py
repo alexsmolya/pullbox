@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 DEFAULT_MIN_SIZE_MB = 50
 DEFAULT_MAX_SIZE_MB = 2000
 PREFERRED_FORMATS: dict[str, int] = {"cbz": 100, "cbr": 80, "cb7": 60}
-DEFAULT_SOURCE_PRIORITY: tuple[str, ...] = ("usenet", "torrent", "direct")
+DEFAULT_SOURCE_PRIORITY: tuple[str, ...] = ("usenet", "torrent", "direct", "dc")
 
 _FORMAT_RE = re.compile(r"\.(cbz|cbr|cb7|pdf|epub)\b", re.IGNORECASE)
 _TAG_RE = re.compile(r"\b(cbz|cbr|cb7)\b", re.IGNORECASE)
@@ -371,11 +371,7 @@ def _sort_by_source_priority(
     default_rank = len(normalized)
 
     def _rank(result: ReleaseResult) -> int:
-        if result.download_url.startswith("direct://"):
-            proto = "direct"
-        else:
-            proto = "torrent" if result.is_torrent else "usenet"
-        return priority_map.get(proto, default_rank)
+        return priority_map.get(result.protocol.value, default_rank)
 
     return sorted(results, key=_rank)
 

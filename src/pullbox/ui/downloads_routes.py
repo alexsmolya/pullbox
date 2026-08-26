@@ -271,6 +271,7 @@ def download_client_type_label(client_type: str) -> str:
         DownloadClientType.TRANSMISSION.value: "Transmission",
         DownloadClientType.DELUGE.value: "Deluge",
         DownloadClientType.DIRECT.value: "Direct Download",
+        DownloadClientType.AIRDCPP.value: "AirDC++",
     }
     return labels.get(client_type, client_type.replace("_", " ").title())
 
@@ -375,6 +376,7 @@ def build_download_queue_row_view(
     client_state = normalize_download_queue_client_state(
         raw_client_state if isinstance(raw_client_state, str) else None
     )
+    client_state_token = download_queue_client_state_token(client_state)
     is_finalizing = is_download_queue_finalization_state(client_state)
     progress_fraction = snapshot_progress(progress)
     progress_pct = round(progress_fraction * 100, 1)
@@ -432,7 +434,12 @@ def build_download_queue_row_view(
             speed_bytes = None
             eta_seconds = None
         else:
-            primary_phase = client_state or "Downloading"
+            primary_phase = (
+                "Downloading"
+                if download.state == DownloadState.DOWNLOADING
+                and client_state_token in {"queued", "sent"}
+                else client_state or "Downloading"
+            )
             status_pill = "pill-info"
             progress_tone = "is-blue"
             if progress_indeterminate:
@@ -601,10 +608,58 @@ async def load_download_progress_map(
                 ),
                 source_slow=snapshot.get("source_slow") is True,
             )
+    air_items = {
+        item.id for item in queue_items if item.download_client is DownloadClientType.AIRDCPP
+    }
+    if air_items:
+        from pullbox.models.airdcpp import AirDcppAcquisition
+
+        acquisitions = (
+            await session.execute(
+                select(AirDcppAcquisition).where(
+                    AirDcppAcquisition.download_history_id.in_(air_items)
+                )
+            )
+        ).scalars()
+        for acquisition in acquisitions:
+            queue = (acquisition.route_snapshot or {}).get("queue")
+            if not isinstance(queue, Mapping):
+                continue
+            size = queue.get("size_bytes")
+            transferred = queue.get("downloaded_bytes")
+            speed = queue.get("speed_bytes")
+            eta = queue.get("eta_seconds")
+            status_id = queue.get("status_id")
+            size_bytes = int(size) if isinstance(size, int | float) and size > 0 else None
+            transferred_bytes = (
+                int(transferred)
+                if isinstance(transferred, int | float) and transferred >= 0
+                else None
+            )
+            progress = (
+                min(transferred_bytes / size_bytes, 1.0)
+                if transferred_bytes is not None and size_bytes is not None
+                else 0.0
+            )
+            client_state = (
+                status_id.replace("_", " ").title()
+                if isinstance(status_id, str) and status_id
+                else acquisition.client_state
+            )
+            progress_map[acquisition.download_history_id] = ProgressSnapshot(
+                progress=progress,
+                speed_bytes=int(speed) if isinstance(speed, int | float) and speed > 0 else None,
+                eta_seconds=int(eta) if isinstance(eta, int | float) and eta > 0 else None,
+                size_bytes=size_bytes,
+                updated_at=time.monotonic(),
+                client_state=client_state,
+                source_label="AirDC++",
+                bytes_transferred=transferred_bytes,
+            )
     pollable_items = [
         item
         for item in queue_items
-        if item.download_client is not DownloadClientType.DIRECT
+        if item.download_client not in {DownloadClientType.DIRECT, DownloadClientType.AIRDCPP}
         and is_download_queue_pollable_state(item.state)
         and item.external_id
     ]

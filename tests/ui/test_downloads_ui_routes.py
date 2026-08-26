@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select
 
 import pullbox.ui.routes as ui_routes
+from pullbox.models.airdcpp import AirDcppAcquisition
 from pullbox.models.client import DownloadClientConfig
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
@@ -1112,6 +1113,76 @@ class TestDownloadsRouteContracts:
             )
             == "Using TRAWL (required by DataNodes)"
         )
+
+    async def test_airdcpp_progress_map_uses_durable_reconciliation_snapshot(
+        self,
+        sec_db,
+        monkeypatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        import pullbox.composition.providers as registry_module
+
+        await _seed_download_queue_contract_data(sec_db)
+        async with sec_db() as session:
+            issue = (await session.execute(select(Issue).limit(1))).scalar_one()
+            history = DownloadHistory(
+                issue_id=issue.id,
+                title="Air Issue 001.cbz",
+                download_url="airdcpp://intent/ui-progress",
+                download_client=DownloadClientType.AIRDCPP,
+                external_id="airdcpp:12:bundle:91",
+                state=DownloadState.DOWNLOADING,
+                file_size=100_000_000,
+            )
+            session.add(history)
+            await session.flush()
+            session.add(
+                AirDcppAcquisition(
+                    download_history_id=history.id,
+                    request_key="ui-progress",
+                    client_config_id=None,
+                    client_identity="airdcpp:12",
+                    tth="CUO74LMZUQMQCBR5UKTIFJPO32LVUH5VZBOL54Y",
+                    size_bytes=100_000_000,
+                    original_name=history.title,
+                    bundle_id=91,
+                    client_state="downloading",
+                    route_snapshot={
+                        "queue": {
+                            "version": 1,
+                            "downloaded_bytes": 25_000_000,
+                            "size_bytes": 100_000_000,
+                            "speed_bytes": 1_500_000,
+                            "eta_seconds": 50,
+                            "status_id": "downloading",
+                            "sources_online": 1,
+                            "sources_total": 2,
+                        }
+                    },
+                )
+            )
+            await session.commit()
+
+        register = AsyncMock()
+        monkeypatch.setattr(registry_module, "register_download_clients", register)
+        async with sec_db() as session:
+            queue_item = (
+                await session.execute(
+                    select(DownloadHistory).where(DownloadHistory.title == "Air Issue 001.cbz")
+                )
+            ).scalar_one()
+            progress_map = await ui_routes._load_download_progress_map(
+                session,
+                [queue_item],
+                fallback_progress={},
+            )
+
+        snapshot = progress_map[queue_item.id]
+        assert snapshot.progress == pytest.approx(0.25)
+        assert snapshot.speed_bytes == 1_500_000
+        assert snapshot.eta_seconds == 50
+        assert snapshot.client_state == "Downloading"
+        assert snapshot.source_label == "AirDC++"
+        register.assert_not_awaited()
 
     async def test_download_progress_map_preserves_unknown_total_direct_activity(
         self,

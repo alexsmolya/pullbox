@@ -1164,6 +1164,7 @@ def _running_live_server() -> Generator[str, None, None]:
         # The session-scoped browser suite intentionally sends far more traffic
         # than one real client would within a minute. Keep rate limiting active
         # while preventing unrelated E2E modules from exhausting shared quotas.
+        "PULLBOX_RATE_LIMIT_ENABLED": "true",
         "PULLBOX_RATE_LIMIT_TIER1": "10000",
         "PULLBOX_RATE_LIMIT_TIER2": "10000",
         "PULLBOX_RATE_LIMIT_TIER3": "10000",

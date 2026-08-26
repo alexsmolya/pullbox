@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import or_, select, update
 
+from pullbox.core.acquisition import AcquisitionProtocol
 from pullbox.models.blocklist import BlocklistEntry
 from pullbox.models.direct_acquisition import (
     DirectAcquisitionAttempt,
@@ -90,6 +91,7 @@ async def ensure_direct_download_history(
         title=display_title,
         download_url=download_url,
         download_client=DownloadClientType.DIRECT,
+        protocol=AcquisitionProtocol.DIRECT,
         external_id=external_id,
         state=DownloadState.QUEUED,
         file_size=artifact.expected_size,

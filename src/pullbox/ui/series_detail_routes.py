@@ -1,28 +1,39 @@
 """Series and issue detail UI routes."""
 
-from collections.abc import Callable, Mapping
+import asyncio
+import json
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import suppress
 from typing import Annotated
 from urllib.parse import unquote, urlsplit
 
 import structlog
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 from starlette.responses import Response
 
 from pullbox.api.deps import AuthenticatedUser, DbSession
+from pullbox.composition.airdcpp import (
+    get_airdcpp_search_coordinator,
+    get_airdcpp_supervisor_registry,
+    load_airdcpp_search_clients,
+)
 from pullbox.config import get_settings
 from pullbox.core.page_sources import SUPPORTED_READER_FORMATS
 from pullbox.models.issue import Issue, IssueStatus
 from pullbox.models.library import LibraryFile
 from pullbox.models.series import Series
+from pullbox.services.airdcpp_route_tokens import get_airdcpp_route_token_store
+from pullbox.services.airdcpp_search_types import AirDcppSearchProgress
 from pullbox.services.reader_state_service import load_reader_state
 from pullbox.services.reading_query_service import (
     load_series_reading_aggregates,
     load_visible_issue_states,
 )
+from pullbox.services.search_service import load_issue_search_target
 from pullbox.services.series_service import SeriesService
 from pullbox.ui.comicvine_series_search import wrap_comicvine_provider_for_ui_cache
 from pullbox.ui.reading_presenters import IssueReadingView, present_issue_reading
@@ -422,6 +433,158 @@ async def htmx_issue_reading_row(
             series_reading_aggregate=aggregates.get(issue.series_id),
         ),
     )
+
+
+@issue_router.get(
+    "/htmx/issues/{issue_id}/dc-search-status",
+    response_class=JSONResponse,
+    include_in_schema=False,
+)
+async def htmx_issue_dc_search_status(
+    issue_id: int,
+    user: AuthenticatedUser,
+    session: DbSession,
+) -> JSONResponse:
+    """Return a secret-free cooldown projection without reserving a search."""
+    del user
+    if not get_settings().airdcpp_enabled or await session.get(Issue, issue_id) is None:
+        return JSONResponse({"available": False, "client_count": 0, "remaining_seconds": 0})
+    registry = get_airdcpp_supervisor_registry()
+    coordinator = get_airdcpp_search_coordinator()
+    if registry is None or coordinator is None:
+        return JSONResponse({"available": False, "client_count": 0, "remaining_seconds": 0})
+    clients = await load_airdcpp_search_clients(session, registry)
+    await session.commit()
+    waits = await coordinator.cooldown_status(tuple(client.config_id for client in clients))
+    return JSONResponse(
+        {
+            "available": bool(clients),
+            "client_count": len(clients),
+            "remaining_seconds": max(waits.values(), default=0),
+        }
+    )
+
+
+@issue_router.get(
+    "/htmx/issues/{issue_id}/dc-search-results",
+    response_class=StreamingResponse,
+    include_in_schema=False,
+)
+async def htmx_issue_dc_search_results(
+    request: Request,
+    issue_id: int,
+    user: AuthenticatedUser,
+    session: DbSession,
+) -> Response:
+    """Stream DC-only progress after existing source results have rendered."""
+    if not get_settings().airdcpp_enabled:
+        return Response(status_code=404)
+    target = await load_issue_search_target(session, issue_id)
+    if target is None:
+        return Response(status_code=404)
+    registry = get_airdcpp_supervisor_registry()
+    coordinator = get_airdcpp_search_coordinator()
+    if registry is None or coordinator is None:
+        return Response(status_code=404)
+    clients = await load_airdcpp_search_clients(session, registry)
+    await session.commit()
+    if not clients:
+        return Response(status_code=404)
+
+    template = _templates().get_template("partials/issue_dc_search_results.html")
+
+    async def stream() -> AsyncIterator[str]:
+        progress_queue: asyncio.Queue[AirDcppSearchProgress] = asyncio.Queue(maxsize=64)
+
+        async def on_progress(progress: AirDcppSearchProgress) -> None:
+            await progress_queue.put(progress)
+
+        search_task = asyncio.create_task(
+            coordinator.search(
+                clients,
+                target,
+                manual=True,
+                on_progress=on_progress,
+            )
+        )
+        try:
+            while not search_task.done() or not progress_queue.empty():
+                progress_task = asyncio.create_task(progress_queue.get())
+                done, _pending = await asyncio.wait(
+                    {progress_task, search_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if progress_task in done:
+                    progress = progress_task.result()
+                    yield _sse_frame(
+                        {
+                            "kind": "progress",
+                            "progress": {
+                                "config_id": progress.config_id,
+                                "state": progress.state.value,
+                                "remaining_seconds": progress.remaining_seconds,
+                            },
+                        }
+                    )
+                else:
+                    progress_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await progress_task
+
+            outcome = await search_task
+            route_store = get_airdcpp_route_token_store()
+            dc_rows = [
+                {
+                    "candidate": candidate,
+                    "route_token": route_store.issue(
+                        candidate,
+                        issue_id=target.issue_id,
+                        user_id=user.id,
+                        search_log_id=None,
+                    ),
+                }
+                for candidate in outcome.matched
+            ]
+            html = template.render(
+                _ctx(
+                    request,
+                    user,
+                    issue={
+                        "id": target.issue_id,
+                        "series_id": target.series_id,
+                        "issue_number": target.issue_number,
+                    },
+                    outcome=outcome,
+                    dc_rows=dc_rows,
+                )
+            )
+            result_count = len(outcome.matched) + len(outcome.rejected)
+            qualifier = " partial" if outcome.partial else ""
+            yield _sse_frame(
+                {
+                    "kind": "results",
+                    "html": html,
+                    "summary": f"{result_count} Direct Connect results{qualifier}.",
+                }
+            )
+        finally:
+            if not search_task.done():
+                search_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await search_task
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse_frame(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
 @issue_router.post(

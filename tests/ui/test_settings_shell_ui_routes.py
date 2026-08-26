@@ -131,6 +131,38 @@ class TestSettingsRouteContracts:
         assert 'placeholder="/downloads"' in response.text
         assert 'placeholder="/data/downloads"' in response.text
 
+    async def test_settings_clients_feature_flags_airdcpp_picker_and_renders_contract(
+        self,
+        authenticated_client,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:  # type: ignore[no-untyped-def]
+        monkeypatch.setenv("PULLBOX_AIRDCPP_ENABLED", "false")
+        get_settings.cache_clear()
+        disabled = await authenticated_client.get("/settings?tab=clients")
+        assert disabled.status_code == 200
+        assert 'data-testid="settings-clients-picker-airdcpp"' not in disabled.text
+
+        monkeypatch.setenv("PULLBOX_AIRDCPP_ENABLED", "true")
+        get_settings.cache_clear()
+        enabled = await authenticated_client.get("/settings?tab=clients")
+        get_settings.cache_clear()
+
+        assert enabled.status_code == 200
+        assert 'data-testid="settings-clients-picker-airdcpp"' in enabled.text
+        assert "AirDC++" in enabled.text
+        assert "Direct Connect" in enabled.text
+        assert 'data-testid="settings-clients-airdcpp-fields"' in enabled.text
+        assert "Minimum Search Interval" in enabled.text
+        assert 'min="45"' in enabled.text
+        assert "Leave this empty to search every hub currently connected" in enabled.text
+        assert "body.airdcpp =" in enabled.text
+        assert "minimum_search_interval_seconds" in enabled.text
+        assert "actual transfer reachability is validated during a real download" in enabled.text
+        picker_start = enabled.text.index('data-testid="settings-clients-picker-airdcpp"')
+        picker_end = enabled.text.index("</button>", picker_start)
+        assert ":disabled=" not in enabled.text[picker_start:picker_end]
+        assert "Another Direct Connect client" in enabled.text[picker_start:picker_end]
+
     async def test_settings_client_bulk_tests_are_serialized_to_avoid_write_storm(
         self,
         authenticated_client,
@@ -311,8 +343,10 @@ class TestSettingsRouteContracts:
 
         assert response.status_code == 200
         assert "Direct Downloads" in response.text
+        assert "dc: 'Direct Connect'" in response.text
         assert "Coming soon" not in response.text
         assert "item === 'direct'" in response.text
+        assert "const supported = ['usenet', 'torrent', 'direct', 'dc'];" in response.text
         assert "JSON.stringify(this.order)" in response.text
 
     async def test_settings_indexer_bulk_tests_are_serialized_to_avoid_write_storm(
