@@ -35,6 +35,7 @@ jobs:
     permissions:
       actions: read
       contents: write
+      deployments: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,6 +81,12 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.0$ ]]; then
+            echo "announcement=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "announcement=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract version info
@@ -257,11 +264,20 @@ jobs:
           draft: false
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
 
-      - name: Post release notifications to Discord
+      - name: Reserve changelog Discord delivery
         if: steps.release.outputs.skip != 'true' && steps.version.outputs.prerelease != 'true'
+        id: reserve-changelog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH=src python3 -m pullbox.release_discord_delivery reserve \
+            --channel changelog \
+            --version "${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Post changelog to Discord
+        if: steps.reserve-changelog.outputs.skip != 'true'
         env:
           DISCORD_WEBHOOK_CHANGELOG: ${{ secrets.DISCORD_WEBHOOK_CHANGELOG }}
-          DISCORD_WEBHOOK_ANNOUNCEMENTS: ${{ secrets.DISCORD_WEBHOOK_ANNOUNCEMENTS }}
         run: |
           set -euo pipefail
           if [ -z "${DISCORD_WEBHOOK_CHANGELOG}" ]; then
@@ -271,7 +287,7 @@ jobs:
           release_url="https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag }}"
           PYTHONPATH=src python3 -m pullbox.release_discord_notifications \
             --kind changelog \
-            --version "${{ steps.version.outputs.version }}" \
+            --version "${{ steps.release.outputs.version }}" \
             --changelog curated_changelog.md \
             --release-url "${release_url}" > discord-changelog.json
           curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 2 \
@@ -279,18 +295,53 @@ jobs:
             --data @discord-changelog.json \
             "${DISCORD_WEBHOOK_CHANGELOG}?wait=true"
 
-          if [[ "${{ steps.version.outputs.version }}" =~ ^[0-9]+\.[0-9]+\.0$ ]]; then
-            if [ -z "${DISCORD_WEBHOOK_ANNOUNCEMENTS}" ]; then
-              echo "::error::DISCORD_WEBHOOK_ANNOUNCEMENTS is required for major and minor releases."
-              exit 1
-            fi
-            PYTHONPATH=src python3 -m pullbox.release_discord_notifications \
-              --kind announcement \
-              --version "${{ steps.version.outputs.version }}" \
-              --changelog curated_changelog.md \
-              --release-url "${release_url}" > discord-announcement.json
-            curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 2 \
-              --header 'Content-Type: application/json' \
-              --data @discord-announcement.json \
-              "${DISCORD_WEBHOOK_ANNOUNCEMENTS}?wait=true"
+      - name: Record changelog Discord delivery
+        if: success() && steps.reserve-changelog.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH=src python3 -m pullbox.release_discord_delivery success \
+            --channel changelog \
+            --version "${{ steps.release.outputs.version }}" \
+            --deployment-id "${{ steps.reserve-changelog.outputs.deployment_id }}"
+
+      - name: Reserve announcement Discord delivery
+        if: steps.release.outputs.skip != 'true' && steps.version.outputs.prerelease != 'true' && steps.release.outputs.announcement == 'true'
+        id: reserve-announcement
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH=src python3 -m pullbox.release_discord_delivery reserve \
+            --channel announcements \
+            --version "${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Post announcement to Discord
+        if: steps.reserve-announcement.outputs.skip != 'true'
+        env:
+          DISCORD_WEBHOOK_ANNOUNCEMENTS: ${{ secrets.DISCORD_WEBHOOK_ANNOUNCEMENTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_ANNOUNCEMENTS}" ]; then
+            echo "::error::DISCORD_WEBHOOK_ANNOUNCEMENTS is required for major and minor releases."
+            exit 1
           fi
+          release_url="https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag }}"
+          PYTHONPATH=src python3 -m pullbox.release_discord_notifications \
+            --kind announcement \
+            --version "${{ steps.release.outputs.version }}" \
+            --changelog curated_changelog.md \
+            --release-url "${release_url}" > discord-announcement.json
+          curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 2 \
+            --header 'Content-Type: application/json' \
+            --data @discord-announcement.json \
+            "${DISCORD_WEBHOOK_ANNOUNCEMENTS}?wait=true"
+
+      - name: Record announcement Discord delivery
+        if: success() && steps.reserve-announcement.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH=src python3 -m pullbox.release_discord_delivery success \
+            --channel announcements \
+            --version "${{ steps.release.outputs.version }}" \
+            --deployment-id "${{ steps.reserve-announcement.outputs.deployment_id }}"
