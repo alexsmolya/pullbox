@@ -304,7 +304,14 @@ class DirectAcquisitionExecutor:
                     ),
                     cancel_event,
                 )
-                await _enter_downloading(session, attempt, artifact, workspace, progress)
+                await _enter_downloading(
+                    session,
+                    attempt,
+                    artifact,
+                    workspace,
+                    resolved,
+                    progress,
+                )
                 transfer_result = await self._transfer(
                     session=session,
                     attempt=attempt,
@@ -962,6 +969,7 @@ async def _enter_downloading(
     attempt: DirectAcquisitionAttempt,
     artifact: DirectArtifactAttempt,
     workspace: DirectQuarantineWorkspace,
+    resolved: ResolvedTransfer,
     progress: _ProgressWriter,
 ) -> None:
     if attempt.state is DirectAcquisitionState.RESOLVING:
@@ -969,7 +977,27 @@ async def _enter_downloading(
     if artifact.state is DirectArtifactState.RESOLVING:
         transition_artifact(artifact, DirectArtifactState.TRANSFERRING)
     artifact.quarantine_path = str(workspace.partial_path)
-    await progress.write(stage="downloading", force=True)
+    if resolved.expected_size is not None:
+        artifact.expected_size = resolved.expected_size
+    artifact.etag = resolved.etag
+    artifact.last_modified_at = _parse_last_modified(resolved.last_modified)
+    total = artifact.expected_size
+    transferred = artifact.bytes_transferred
+    await progress.write(
+        stage="downloading",
+        snapshot=TransferProgressSnapshot(
+            bytes_transferred=transferred,
+            total_bytes=total,
+            percent=(
+                min(100, int((transferred * 100) / total))
+                if total is not None and total > 0
+                else None
+            ),
+            bytes_per_second=None,
+            eta_seconds=None,
+        ),
+        force=True,
+    )
 
 
 async def _load_host_credentials(

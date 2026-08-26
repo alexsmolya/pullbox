@@ -288,7 +288,7 @@ def test_ranked_sources_reuse_existing_scorer_for_fallback_order() -> None:
     assert ranked[1].release is indexer
 
 
-def test_direct_provider_priority_precedes_filename_quality_for_automatic_search() -> None:
+def test_direct_filename_quality_precedes_provider_priority_for_automatic_search() -> None:
     indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
     getcomics = _direct_result(
         _release("Batman 001 (2016)", "GetComics", size=100_000_000),
@@ -321,7 +321,39 @@ def test_direct_provider_priority_precedes_filename_quality_for_automatic_search
         source_priority=["direct", "usenet", "torrent"],
     )
 
-    assert [item.direct_result for item in ranked[:2]] == [getcomics, annas]
+    assert [item.direct_result for item in ranked[:2]] == [annas, getcomics]
+
+
+def test_direct_provider_priority_breaks_quality_ties_for_automatic_search() -> None:
+    indexer = _release("Batman 001.cbz", "Indexer", size=25_000_000)
+    preferred = _direct_result(
+        _release("Batman 001 (2016) (Digital).cbz", "GetComics"),
+        provider_identity="pullbox.getcomics",
+        provider_priority=10,
+    )
+    lower_priority = _direct_result(
+        _release("Batman 001 (2016) (Digital).cbz", "LibGen"),
+        provider_identity="pullbox.libgen",
+        provider_priority=20,
+    )
+    outcome = replace(
+        _outcome(indexer, preferred),
+        direct_outcome=DirectSearchOutcome(
+            matched=(lower_priority, preferred),
+            rejected=(),
+            failures=(),
+            providers_searched=2,
+            elapsed_ms=1,
+        ),
+    )
+
+    ranked = rank_search_sources(
+        outcome,
+        {},
+        source_priority=["direct", "usenet", "torrent"],
+    )
+
+    assert [item.direct_result for item in ranked[:2]] == [preferred, lower_priority]
 
 
 def test_fingerprint_alternate_remains_available_for_acquisition_fallback() -> None:

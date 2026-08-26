@@ -225,13 +225,17 @@ async def persist_direct_search_discoveries(
 ) -> tuple[DirectSearchDiscovery, ...]:
     """Persist redacted candidate evidence and return server-issued IDs."""
     pending: list[tuple[DirectAcquisitionAttempt, DirectValidatedCandidate, bool]] = []
+    fingerprint_groups: list[tuple[DirectAcquisitionAttempt, list[DirectAcquisitionAttempt]]] = []
     issue_number = f"{target.issue_number:g}"
     volume = _target_volume(target)
     for primary in (*outcome.matched, *outcome.rejected):
+        group_attempts: list[DirectAcquisitionAttempt] = []
         for result, visible in (
             (primary, True),
             *((alternate, False) for alternate in primary.alternate_results),
         ):
+            candidate_snapshot = _candidate_snapshot(result)
+            candidate_snapshot["visible"] = visible
             attempt = DirectAcquisitionAttempt(
                 request_key=f"direct-search:{uuid4().hex}",
                 issue_id=target.issue_id,
@@ -245,7 +249,7 @@ async def persist_direct_search_discoveries(
                     "issue_type": target.issue_type.value,
                     "volume": volume,
                 },
-                candidate_snapshot=_candidate_snapshot(result),
+                candidate_snapshot=candidate_snapshot,
                 plan_snapshot={},
                 progress_snapshot={
                     "schema_version": 1,
@@ -254,8 +258,25 @@ async def persist_direct_search_discoveries(
             )
             session.add(attempt)
             pending.append((attempt, result, visible))
+            group_attempts.append(attempt)
+        fingerprint_groups.append((group_attempts[0], group_attempts[1:]))
     if pending:
         await session.flush()
+    for primary_attempt, alternate_attempts in fingerprint_groups:
+        if not alternate_attempts:
+            continue
+        primary_attempt.candidate_snapshot = {
+            **primary_attempt.candidate_snapshot,
+            "alternate_attempt_ids": [attempt.id for attempt in alternate_attempts],
+        }
+        for index, alternate_attempt in enumerate(alternate_attempts):
+            alternate_attempt.candidate_snapshot = {
+                **alternate_attempt.candidate_snapshot,
+                "primary_attempt_id": primary_attempt.id,
+                "alternate_attempt_ids": [
+                    attempt.id for attempt in alternate_attempts[index + 1 :]
+                ],
+            }
     return tuple(
         DirectSearchDiscovery(attempt_id=attempt.id, result=result, visible=visible)
         for attempt, result, visible in pending
@@ -683,8 +704,8 @@ def _matched_order_key(item: DirectValidatedCandidate) -> tuple[object, ...]:
     return (
         match_confidence_rank(item.validation.confidence),
         -item.validation.series_similarity,
-        item.provider.provider_priority,
         -item.candidate.provider_confidence,
+        item.provider.provider_priority,
         item.provider.provider_identity,
         item.candidate.provider_candidate_id,
     )
