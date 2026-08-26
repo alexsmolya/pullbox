@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pullbox.release_discord_delivery import delivery_task
 from pullbox.release_discord_notifications import (
     announcement_payload,
@@ -33,6 +35,14 @@ def test_prereleases_never_send_public_notifications() -> None:
 def test_delivery_tasks_are_stable_per_channel() -> None:
     assert delivery_task("changelog") == "pullbox-discord-changelog"
     assert delivery_task("announcements") == "pullbox-discord-announcements"
+
+
+def test_release_workflow_only_posts_after_a_successful_reservation() -> None:
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert "steps.reserve-changelog.outcome == 'success'" in workflow
+    assert "steps.reserve-announcement.outcome == 'success'" in workflow
+    assert "--retry-all-errors" not in workflow
 
 
 def test_changelog_payload_is_an_embed_with_mentions_disabled() -> None:
