@@ -797,6 +797,76 @@ function readCsrfTokenFromBody() {
   }
 }
 
+function readingStateActions() {
+  return {
+    busy: false,
+    readingMenuOpen: false,
+    statusMessage: "",
+    statusIsError: false,
+
+    issueId: function () {
+      return this.$root.getAttribute("data-reading-issue-id") || "";
+    },
+
+    setCompletion: function (_button, completed) {
+      return this.updateReadingState("completion", { completed: completed });
+    },
+
+    setWantToRead: function (_button, wantToRead) {
+      return this.updateReadingState("want-to-read", { want_to_read: wantToRead });
+    },
+
+    updateReadingState: async function (action, payload) {
+      if (this.busy || !this.issueId()) {
+        return;
+      }
+
+      this.busy = true;
+      this.statusMessage = "Saving…";
+      this.statusIsError = false;
+      try {
+        var response = await fetch(
+          "/api/v1/reader/issues/" + this.issueId() + "/" + action,
+          {
+            method: "PUT",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": readCsrfTokenFromBody(),
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+        if (!response.ok) {
+          throw new Error("reading-state-update-failed");
+        }
+        this.statusMessage = "Saved";
+        await this.refreshReadingSurface();
+      } catch (_error) {
+        this.statusMessage = "That reading update didn’t save. Try again.";
+        this.statusIsError = true;
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    refreshReadingSurface: function () {
+      var root = this.$root.closest("[data-reading-refresh-root]");
+      if (!root || !window.htmx) {
+        return Promise.resolve();
+      }
+      var url = root.getAttribute("data-reading-refresh-url");
+      if (!url) {
+        return Promise.resolve();
+      }
+      return window.htmx.ajax("GET", url, {
+        target: root,
+        swap: "outerHTML",
+      });
+    },
+  };
+}
+
 function resolveHtmxSwapTarget(target) {
   if (!target) {
     return null;
@@ -14737,8 +14807,14 @@ function readerMixin(config) {
     readerErrorTitle: "Pullbox could not open this comic.",
     readerErrorMessage: "",
     readerManifest: null,
+    readerActiveIssueId: null,
     readerTitle: "",
     readerIssueLabel: "",
+    readerIssueTransitioning: false,
+    readerIssueStatusMessage: "",
+    readerIssueSwitchError: "",
+    readerCompletionVisible: false,
+    readerCompletionUpdating: false,
     readerPageIndex: 0,
     readerPageCount: 0,
     readerPageDraft: "1",
@@ -14756,6 +14832,7 @@ function readerMixin(config) {
     readerProgressSaveFailed: false,
     readerLastSettledPage: null,
     readerLastSettledCompletion: false,
+    readerRereadPending: false,
     readerLastSavedSignature: "",
     readerCurrentUserInitiated: false,
     readerFailedPageIndex: null,
@@ -14764,6 +14841,7 @@ function readerMixin(config) {
     readerSavedScrollY: 0,
     readerManifestController: null,
     readerProgressController: null,
+    readerIssueGeneration: 0,
     readerLoadGeneration: 0,
     readerSettledTimer: null,
     readerControlsTimer: null,
@@ -14779,7 +14857,9 @@ function readerMixin(config) {
         if (!self.readerOpen) return;
         if (document.visibilityState === "hidden") {
           self.clearReaderTimer("readerSettledTimer");
-          self.saveReaderProgress(true);
+          self.saveReaderProgress(true).catch(function () {
+            return null;
+          });
           return;
         }
         if (!self.readerPageLoading && !self.readerFatalError && self.readerPageCount) {
@@ -14790,6 +14870,23 @@ function readerMixin(config) {
         }
       };
       document.addEventListener("visibilitychange", self.readerVisibilityHandler);
+      if (cfg.openReaderOnLoad && typeof self.$nextTick === "function") {
+        cfg.openReaderOnLoad = false;
+        self.$nextTick(function () {
+          var opener = self.$root
+            ? self.$root.querySelector("[data-testid='issue-action-read']")
+            : null;
+          if (!opener || !self.$refs.readerDialog) return;
+          var currentUrl = new URL(window.location.href);
+          currentUrl.searchParams.delete("read");
+          window.history.replaceState(
+            window.history.state,
+            "",
+            currentUrl.pathname + currentUrl.search + currentUrl.hash
+          );
+          self.openReader({ currentTarget: opener });
+        });
+      }
     },
 
     destroy: function () {
@@ -14822,33 +14919,12 @@ function readerMixin(config) {
         });
       }
 
-      self.readerManifestController = new AbortController();
-      fetch(cfg.readerManifestUrl, {
-        method: "GET",
-        signal: self.readerManifestController.signal,
-      })
-        .then(function (response) {
-          if (!response.ok) {
-            return responseMessage(response, "The comic could not be prepared.").then(
-              function (message) {
-                throw new Error(message);
-              }
-            );
-          }
-          return response.json();
-        })
+      var generation = self.readerIssueGeneration + 1;
+      self.readerIssueGeneration = generation;
+      self.fetchReaderManifest(cfg.readerManifestUrl, generation)
         .then(function (manifest) {
-          if (!self.readerOpen) return;
-          var pageCount = Number(manifest.page_count);
-          if (!Number.isInteger(pageCount) || pageCount < 1 || !manifest.page_url_template) {
-            throw new Error("This comic does not contain any readable pages.");
-          }
-          self.readerManifest = manifest;
-          self.readerTitle = String(manifest.title || cfg.seriesTitle || "Comic reader");
-          self.readerIssueLabel = String(manifest.issue_label || cfg.issueLabel || "");
-          self.readerPageCount = pageCount;
-          var initialPage = clampPage(Number(manifest.initial_page_index) || 0, pageCount);
-          return self.loadReaderPage(initialPage, false);
+          if (!manifest) return false;
+          return self.activateReaderManifest(manifest, false);
         })
         .catch(function (error) {
           if (error && error.name === "AbortError") return;
@@ -14863,14 +14939,29 @@ function readerMixin(config) {
 
     resetReaderSession: function () {
       this.clearReaderWork();
+      this.readerFitMode = "page";
+      this.readerZoomPercent = 100;
+      this.readerDirection = "ltr";
+      this.readerControlsVisible = true;
+      this.readerHelpVisible = false;
+      this.resetReaderIssue();
+    },
+
+    resetReaderIssue: function () {
       this.readerLoading = false;
       this.readerPageLoading = false;
       this.readerFatalError = false;
       this.readerErrorTitle = "Pullbox could not open this comic.";
       this.readerErrorMessage = "";
       this.readerManifest = null;
+      this.readerActiveIssueId = null;
       this.readerTitle = "";
       this.readerIssueLabel = "";
+      this.readerIssueTransitioning = false;
+      this.readerIssueStatusMessage = "";
+      this.readerIssueSwitchError = "";
+      this.readerCompletionVisible = false;
+      this.readerCompletionUpdating = false;
       this.readerPageIndex = 0;
       this.readerPageCount = 0;
       this.readerPageDraft = "1";
@@ -14878,14 +14969,10 @@ function readerMixin(config) {
       this.readerImageUrl = "";
       this.readerImageNaturalWidth = 0;
       this.readerImageNaturalHeight = 0;
-      this.readerFitMode = "page";
-      this.readerZoomPercent = 100;
-      this.readerDirection = "ltr";
-      this.readerControlsVisible = true;
-      this.readerHelpVisible = false;
       this.readerProgressSaveFailed = false;
       this.readerLastSettledPage = null;
       this.readerLastSettledCompletion = false;
+      this.readerRereadPending = false;
       this.readerLastSavedSignature = "";
       this.readerCurrentUserInitiated = false;
       this.readerFailedPageIndex = null;
@@ -14893,13 +14980,18 @@ function readerMixin(config) {
     },
 
     clearReaderWork: function () {
-      if (this.readerManifestController) {
-        this.readerManifestController.abort();
-        this.readerManifestController = null;
-      }
+      this.readerIssueGeneration += 1;
+      this.clearReaderIssueWork();
       if (this.readerProgressController) {
         this.readerProgressController.abort();
         this.readerProgressController = null;
+      }
+    },
+
+    clearReaderIssueWork: function () {
+      if (this.readerManifestController) {
+        this.readerManifestController.abort();
+        this.readerManifestController = null;
       }
       this.readerLoadGeneration += 1;
       this.clearReaderTimer("readerSettledTimer");
@@ -14941,7 +15033,9 @@ function readerMixin(config) {
 
     closeReaderDialog: function () {
       var dialog = this.$refs.readerDialog;
-      this.saveReaderProgress(true);
+      this.saveReaderProgress(true).catch(function () {
+        return null;
+      });
       this.readerOpen = false;
       this.clearReaderWork();
       if (dialog && dialog.open) dialog.close();
@@ -14975,6 +15069,61 @@ function readerMixin(config) {
         "{page_index}",
         encodeURIComponent(String(pageIndex))
       );
+    },
+
+    fetchReaderManifest: async function (url, generation) {
+      if (!url) throw new Error("The comic could not be prepared.");
+      if (this.readerManifestController) this.readerManifestController.abort();
+      var controller = new AbortController();
+      this.readerManifestController = controller;
+      try {
+        var response = await fetch(url, {
+          method: "GET",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          var message = await responseMessage(response, "The comic could not be prepared.");
+          throw new Error(message);
+        }
+        var manifest = await response.json();
+        if (generation !== this.readerIssueGeneration || !this.readerOpen) return null;
+        var pageCount = Number(manifest.page_count);
+        if (!Number.isInteger(pageCount) || pageCount < 1 || !manifest.page_url_template) {
+          throw new Error("This comic does not contain any readable pages.");
+        }
+        return manifest;
+      } finally {
+        if (this.readerManifestController === controller) {
+          this.readerManifestController = null;
+        }
+      }
+    },
+
+    activateReaderManifest: async function (manifest, announce) {
+      this.clearReaderIssueWork();
+      this.resetReaderIssue();
+      this.readerManifest = manifest;
+      this.readerRereadPending = Boolean(
+        manifest.state && manifest.state.completed_at
+      );
+      this.readerActiveIssueId = Number(manifest.issue_id) || null;
+      this.readerTitle = String(manifest.title || cfg.seriesTitle || "Comic reader");
+      this.readerIssueLabel = String(manifest.issue_label || cfg.issueLabel || "");
+      this.readerPageCount = Number(manifest.page_count);
+      this.readerLoading = true;
+      var initialPage = clampPage(
+        Number(manifest.initial_page_index) || 0,
+        this.readerPageCount
+      );
+      var loaded = await this.loadReaderPage(initialPage, false);
+      if (!loaded) return false;
+      if (announce) {
+        this.readerIssueStatusMessage =
+          "Opened " + this.readerIssueLabel + ", page " +
+          String(this.readerPageIndex + 1) + " of " + String(this.readerPageCount);
+      }
+      if (this.$refs.readerViewport) this.$refs.readerViewport.focus();
+      return true;
     },
 
     loadReaderPage: function (pageIndex, userInitiated) {
@@ -15063,11 +15212,13 @@ function readerMixin(config) {
         self.readerLastSettledPage = pageIndex;
         self.readerLastSettledCompletion =
           Boolean(userInitiated) && pageIndex === self.readerPageCount - 1;
-        self.saveReaderProgress(false);
+        self.saveReaderProgress(false).catch(function () {
+          return null;
+        });
       }, 750);
     },
 
-    saveReaderProgress: function (keepalive) {
+    saveReaderProgress: async function (keepalive) {
       var self = this;
       var manifest = self.readerManifest;
       if (
@@ -15076,48 +15227,235 @@ function readerMixin(config) {
         !manifest.progress_url ||
         !manifest.revision
       ) {
-        return;
+        return manifest && manifest.state ? manifest.state : null;
       }
       var payload = {
         revision: String(manifest.revision),
         page_index: self.readerLastSettledPage,
         page_count: self.readerPageCount,
         completion_candidate: Boolean(self.readerLastSettledCompletion),
+        reread_started: Boolean(
+          self.readerRereadPending &&
+          self.readerLastSettledPage === 0 &&
+          !self.readerLastSettledCompletion
+        ),
       };
       var signature = JSON.stringify(payload);
       if (!self.readerProgressSaveFailed && signature === self.readerLastSavedSignature) {
-        return;
+        return manifest.state || null;
       }
 
       if (!keepalive && self.readerProgressController) {
         self.readerProgressController.abort();
       }
       var controller = keepalive ? null : new AbortController();
-      self.readerProgressController = controller;
-      fetch(manifest.progress_url, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": self.csrfToken(),
-        },
-        body: signature,
-        keepalive: Boolean(keepalive),
-        signal: controller ? controller.signal : undefined,
-      })
-        .then(function (response) {
-          if (!response.ok) throw new Error("Reading position was not saved.");
-          self.readerLastSavedSignature = signature;
-          self.readerProgressSaveFailed = false;
-        })
-        .catch(function (error) {
-          if (error && error.name === "AbortError") return;
-          self.readerProgressSaveFailed = true;
-        })
-        .finally(function () {
-          if (self.readerProgressController === controller) {
-            self.readerProgressController = null;
-          }
+      if (controller) self.readerProgressController = controller;
+      try {
+        var response = await fetch(manifest.progress_url, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.csrfToken(),
+          },
+          body: signature,
+          keepalive: Boolean(keepalive),
+          signal: controller ? controller.signal : undefined,
         });
+        if (!response.ok) throw new Error("Reading position was not saved.");
+        var canonical = await response.json();
+        self.readerProgressSaveFailed = false;
+        if (canonical.state) manifest.state = canonical.state;
+        if (
+          payload.reread_started &&
+          canonical.state &&
+          !canonical.state.completed_at
+        ) {
+          self.readerRereadPending = false;
+          self.readerCompletionVisible = false;
+          self.readerLastSavedSignature = JSON.stringify({
+            revision: payload.revision,
+            page_index: payload.page_index,
+            page_count: payload.page_count,
+            completion_candidate: payload.completion_candidate,
+            reread_started: false,
+          });
+        } else {
+          self.readerLastSavedSignature = signature;
+        }
+        if (
+          payload.completion_candidate &&
+          canonical.state &&
+          canonical.state.completed_at
+        ) {
+          self.readerCompletionVisible = true;
+          self.readerIssueStatusMessage = "Finished " + self.readerIssueLabel;
+        }
+        return canonical.state || canonical;
+      } catch (error) {
+        if (!error || error.name !== "AbortError") self.readerProgressSaveFailed = true;
+        throw error;
+      } finally {
+        if (controller && self.readerProgressController === controller) {
+          self.readerProgressController = null;
+        }
+      }
+    },
+
+    readerAdjacentIssue: function (direction) {
+      if (!this.readerManifest) return null;
+      return direction === "previous"
+        ? this.readerManifest.previous_issue
+        : this.readerManifest.next_issue;
+    },
+
+    readerIssueControlLabel: function (direction) {
+      var adjacent = this.readerAdjacentIssue(direction);
+      var action = direction === "previous" ? "Previous issue" : "Next issue";
+      return adjacent && adjacent.issue_label
+        ? action + ", " + String(adjacent.issue_label)
+        : action;
+    },
+
+    readerPreviousIssue: function () {
+      return this.switchReaderIssue("previous");
+    },
+
+    readerNextIssue: function () {
+      return this.switchReaderIssue("next");
+    },
+
+    captureReaderIssue: function () {
+      return {
+        manifest: this.readerManifest,
+        activeIssueId: this.readerActiveIssueId,
+        title: this.readerTitle,
+        issueLabel: this.readerIssueLabel,
+        pageIndex: this.readerPageIndex,
+        pageCount: this.readerPageCount,
+        pageDraft: this.readerPageDraft,
+        imageUrl: this.readerImageUrl,
+        imageNaturalWidth: this.readerImageNaturalWidth,
+        imageNaturalHeight: this.readerImageNaturalHeight,
+        lastSettledPage: this.readerLastSettledPage,
+        lastSettledCompletion: this.readerLastSettledCompletion,
+        lastSavedSignature: this.readerLastSavedSignature,
+        currentUserInitiated: this.readerCurrentUserInitiated,
+        completionVisible: this.readerCompletionVisible,
+        rereadPending: this.readerRereadPending,
+      };
+    },
+
+    restoreReaderIssue: function (snapshot) {
+      this.readerManifest = snapshot.manifest;
+      this.readerActiveIssueId = snapshot.activeIssueId;
+      this.readerTitle = snapshot.title;
+      this.readerIssueLabel = snapshot.issueLabel;
+      this.readerPageIndex = snapshot.pageIndex;
+      this.readerPageCount = snapshot.pageCount;
+      this.readerPageDraft = snapshot.pageDraft;
+      this.readerImageUrl = snapshot.imageUrl;
+      this.readerImageNaturalWidth = snapshot.imageNaturalWidth;
+      this.readerImageNaturalHeight = snapshot.imageNaturalHeight;
+      this.readerLastSettledPage = snapshot.lastSettledPage;
+      this.readerLastSettledCompletion = snapshot.lastSettledCompletion;
+      this.readerLastSavedSignature = snapshot.lastSavedSignature;
+      this.readerCurrentUserInitiated = snapshot.currentUserInitiated;
+      this.readerCompletionVisible = snapshot.completionVisible;
+      this.readerRereadPending = snapshot.rereadPending;
+      this.readerLoading = false;
+      this.readerPageLoading = false;
+      this.readerFatalError = false;
+      this.readerFailedPageIndex = null;
+      this.readerErrorTitle = "Pullbox could not open this comic.";
+      this.readerErrorMessage = "";
+      if (this.readerManifest) this.prefetchReaderNeighbors(this.readerPageIndex);
+    },
+
+    switchReaderIssue: async function (direction) {
+      if (
+        this.readerIssueTransitioning ||
+        this.readerCompletionUpdating ||
+        this.readerLoading ||
+        this.readerPageLoading
+      ) {
+        return false;
+      }
+      var adjacent = this.readerAdjacentIssue(direction);
+      if (!adjacent || !adjacent.manifest_url) return false;
+
+      this.readerIssueTransitioning = true;
+      this.readerIssueSwitchError = "";
+      this.readerIssueStatusMessage =
+        "Opening " + String(adjacent.issue_label || "another issue") + "…";
+      this.clearReaderTimer("readerSettledTimer");
+      try {
+        await this.saveReaderProgress(false);
+      } catch (_saveError) {
+        this.readerIssueSwitchError =
+          "Your reading position hasn’t saved yet. Try again before changing issues.";
+        this.readerIssueStatusMessage = this.readerIssueSwitchError;
+        this.readerIssueTransitioning = false;
+        this.showReaderControls();
+        return false;
+      }
+
+      var previousIssue = this.captureReaderIssue();
+      var generation = this.readerIssueGeneration + 1;
+      this.readerIssueGeneration = generation;
+      try {
+        var manifest = await this.fetchReaderManifest(adjacent.manifest_url, generation);
+        if (!manifest) return false;
+        var loaded = await this.activateReaderManifest(manifest, true);
+        if (!loaded) {
+          this.clearReaderIssueWork();
+          this.restoreReaderIssue(previousIssue);
+          throw new Error("The next comic page could not be displayed.");
+        }
+        this.readerIssueTransitioning = false;
+        this.showReaderControls();
+        return loaded;
+      } catch (error) {
+        if (error && error.name === "AbortError") return false;
+        this.readerIssueSwitchError =
+          (error && error.message) || "The next comic could not be opened.";
+        this.readerIssueStatusMessage = this.readerIssueSwitchError;
+        this.readerIssueTransitioning = false;
+        this.showReaderControls();
+        return false;
+      }
+    },
+
+    readerMarkUnread: async function () {
+      if (
+        this.readerCompletionUpdating ||
+        !this.readerManifest ||
+        !this.readerManifest.completion_url
+      ) {
+        return;
+      }
+      this.readerCompletionUpdating = true;
+      try {
+        var response = await fetch(this.readerManifest.completion_url, {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": this.csrfToken(),
+          },
+          body: JSON.stringify({ completed: false }),
+        });
+        if (!response.ok) throw new Error("Reading status was not saved.");
+        var canonical = await response.json();
+        if (canonical.state) this.readerManifest.state = canonical.state;
+        this.readerRereadPending = false;
+        this.readerCompletionVisible = false;
+        this.readerIssueStatusMessage = this.readerIssueLabel + " marked unread";
+      } catch (error) {
+        this.readerIssueSwitchError =
+          (error && error.message) || "Reading status was not saved.";
+      } finally {
+        this.readerCompletionUpdating = false;
+      }
     },
 
     prefetchReaderNeighbors: function (pageIndex) {
@@ -15162,12 +15500,20 @@ function readerMixin(config) {
     },
 
     readerPrevious: function () {
-      if (this.readerPageLoading || this.readerPageIndex <= 0) return;
+      if (
+        this.readerIssueTransitioning ||
+        this.readerPageLoading ||
+        this.readerPageIndex <= 0
+      ) return;
       this.loadReaderPage(this.readerPageIndex - 1, true);
     },
 
     readerNext: function () {
-      if (this.readerPageLoading || this.readerPageIndex >= this.readerPageCount - 1) return;
+      if (
+        this.readerIssueTransitioning ||
+        this.readerPageLoading ||
+        this.readerPageIndex >= this.readerPageCount - 1
+      ) return;
       this.loadReaderPage(this.readerPageIndex + 1, true);
     },
 
@@ -16313,6 +16659,16 @@ function seriesIssuesPanel() {
     },
   };
 }
+
+window.pullboxSeriesIssuesCanPoll = function () {
+  if (!window.pullboxLiveUpdatesEnabled()) return false;
+  var active = document.activeElement;
+  return !(
+    active &&
+    active.closest &&
+    active.closest("#series-issues-panel [data-reading-interaction]")
+  );
+};
 
 function issueSearchModal() {
   return {
