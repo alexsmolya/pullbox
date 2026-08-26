@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pullbox.release_discord_delivery import delivery_task
 from pullbox.release_discord_notifications import (
     announcement_payload,
     changelog_payload,
@@ -27,6 +28,11 @@ def test_final_releases_always_send_a_changelog_notification() -> None:
 
 def test_prereleases_never_send_public_notifications() -> None:
     assert notification_channels("1.2.0-rc.1") == ()
+
+
+def test_delivery_tasks_are_stable_per_channel() -> None:
+    assert delivery_task("changelog") == "pullbox-discord-changelog"
+    assert delivery_task("announcements") == "pullbox-discord-announcements"
 
 
 def test_changelog_payload_is_an_embed_with_mentions_disabled() -> None:
