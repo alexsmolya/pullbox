@@ -19,7 +19,11 @@
       </span>
       <span class="page-dock-status-item">
         <span class="page-dock-status-label">fields</span>
-        <strong class="page-dock-status-value" x-text="fields">{{ export_default_fields|length }}</strong>
+        <strong
+          class="page-dock-status-value"
+          data-testid="utilities-export-footer-fields"
+          x-text="fields"
+        >{{ export_default_fields|length }}</strong>
       </span>
       <span class="page-dock-status-item">
         <span class="page-dock-status-label">dest</span>
