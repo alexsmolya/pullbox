@@ -287,10 +287,11 @@ async def test_completed_unimported_download_is_not_repolled_or_regressed(
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_processes_one_hundred_active_rows_in_bounded_pages(
+async def test_reconciliation_rotates_past_one_hundred_active_rows_in_bounded_cycles(
     db_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     client_id, _history_id, _ = await _seed(db_factory)
+    newest_history_id = 0
     async with db_factory() as session:
         first = (
             await session.execute(
@@ -299,7 +300,7 @@ async def test_reconciliation_processes_one_hundred_active_rows_in_bounded_pages
                 )
             )
         ).scalar_one()
-        for offset in range(1, 100):
+        for offset in range(1, 101):
             bundle_id = 91 + offset
             history = DownloadHistory(
                 issue_id=first.issue_id,
@@ -315,6 +316,8 @@ async def test_reconciliation_processes_one_hundred_active_rows_in_bounded_pages
             )
             session.add(history)
             await session.flush()
+            if offset == 100:
+                newest_history_id = history.id
             session.add(
                 AirDcppAcquisition(
                     download_history_id=history.id,
@@ -329,14 +332,30 @@ async def test_reconciliation_processes_one_hundred_active_rows_in_bounded_pages
                 )
             )
         await session.commit()
-    api = _FakeApi([[_bundle(bundle_id=bundle_id) for bundle_id in range(91, 191)], []])
+    api = _FakeApi(
+        [
+            [_bundle(bundle_id=bundle_id) for bundle_id in range(91, 191)],
+            [_bundle(bundle_id=191, status_id="completed", downloaded=True, completed=True)],
+        ]
+    )
+    reconciler = AirDcppReconciler(db_factory)
 
-    result = await AirDcppReconciler(db_factory).reconcile_client(client_id, api)
+    first = await reconciler.reconcile_client(client_id, api)
+    async with db_factory() as session:
+        newest = await session.get(DownloadHistory, newest_history_id)
+        assert newest is not None
+        assert newest.state is DownloadState.SENT
 
-    assert result.processed == 100
-    assert result.pages == 2
-    assert result.partial is False
-    assert api.calls == [(0, 100), (100, 100)]
+    second = await reconciler.reconcile_client(client_id, api)
+    async with db_factory() as session:
+        newest = await session.get(DownloadHistory, newest_history_id)
+        assert newest is not None
+        assert newest.state is DownloadState.COMPLETED
+
+    assert first.processed == second.processed == 100
+    assert first.pages == second.pages == 2
+    assert first.partial is second.partial is False
+    assert api.calls == [(0, 100), (100, 100), (0, 100), (100, 100)]
 
 
 @pytest.mark.asyncio

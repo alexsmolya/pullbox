@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePath
@@ -81,27 +82,57 @@ class AirDcppReconciler:
     ) -> None:
         self._session_factory = session_factory
         self._cooldown = cooldown
+        self._client_locks: dict[int, asyncio.Lock] = {}
+        self._reconciliation_cursors: dict[int, int] = {}
 
     async def reconcile_client(
         self,
         client_config_id: int,
         api_client: AirDcppReconciliationApi,
     ) -> AirDcppReconciliationResult:
+        lock = self._client_locks.setdefault(client_config_id, asyncio.Lock())
+        async with lock:
+            return await self._reconcile_client(client_config_id, api_client)
+
+    async def _reconcile_client(
+        self,
+        client_config_id: int,
+        api_client: AirDcppReconciliationApi,
+    ) -> AirDcppReconciliationResult:
         await self._request_due_alternate(client_config_id, api_client)
         async with self._session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(AirDcppAcquisition)
-                    .join(DownloadHistory)
-                    .where(
-                        AirDcppAcquisition.client_config_id == client_config_id,
-                        DownloadHistory.imported_at.is_(None),
-                        DownloadHistory.state.not_in(_TERMINAL_STATES),
-                    )
-                    .order_by(AirDcppAcquisition.id)
-                    .limit(_PAGE_SIZE)
+            active_query = (
+                select(AirDcppAcquisition)
+                .join(DownloadHistory)
+                .where(
+                    AirDcppAcquisition.client_config_id == client_config_id,
+                    DownloadHistory.imported_at.is_(None),
+                    DownloadHistory.state.not_in(_TERMINAL_STATES),
                 )
-            ).scalars()
+                .order_by(AirDcppAcquisition.id)
+            )
+            cursor = self._reconciliation_cursors.get(client_config_id, 0)
+            rows = list(
+                (
+                    await session.execute(
+                        active_query.where(AirDcppAcquisition.id > cursor).limit(_PAGE_SIZE)
+                    )
+                ).scalars()
+            )
+            if cursor > 0 and len(rows) < _PAGE_SIZE:
+                rows.extend(
+                    (
+                        await session.execute(
+                            active_query.where(AirDcppAcquisition.id <= cursor).limit(
+                                _PAGE_SIZE - len(rows)
+                            )
+                        )
+                    ).scalars()
+                )
+            if rows:
+                self._reconciliation_cursors[client_config_id] = rows[-1].id
+            else:
+                self._reconciliation_cursors.pop(client_config_id, None)
             snapshots = tuple(
                 _ActiveSnapshot(
                     row.id,

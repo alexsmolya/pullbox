@@ -315,6 +315,7 @@ class AirDcppSearchCoordinator:
         dropped = 0
         partial = False
         status = DcClientSearchStatus.FAILED
+        cancelled = False
         sent_event = asyncio.Event()
         sent_count: int | None = None
 
@@ -429,6 +430,7 @@ class AirDcppSearchCoordinator:
                 status = DcClientSearchStatus.PARTIAL if partial else DcClientSearchStatus.COMPLETED
                 await progress(AirDcppSearchProgressState.COMPLETE)
         except asyncio.CancelledError:
+            cancelled = True
             raise
         except _AutomaticSearchDeferredError:
             status = DcClientSearchStatus.DEFERRED_COOLDOWN
@@ -444,7 +446,10 @@ class AirDcppSearchCoordinator:
             for path in reversed(listener_paths):
                 with suppress(Exception):
                     await client.socket_client.unsubscribe(path)
-            if instance is not None:
+            # Successful result routes remain backed by AirDC++ until its
+            # bounded search-instance expiry. Empty and abandoned searches can
+            # be reclaimed immediately.
+            if instance is not None and (cancelled or not raw_results):
                 with suppress(Exception):
                     await client.api_client.delete_search_instance(instance.id)
 

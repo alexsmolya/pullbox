@@ -239,7 +239,7 @@ async def test_search_subscribes_before_send_extends_from_event_and_deduplicates
     assert outcome.matched[0].route.tth == _TTH
     assert outcome.matched[0].metrics.free_slots == 1
     assert outcome.client_summaries[0].status is DcClientSearchStatus.COMPLETED
-    assert api.deleted == [44]
+    assert api.deleted == []
     assert len(socket.unsubscribed) == 4
 
 
@@ -355,7 +355,7 @@ async def test_socket_loss_after_sent_uses_bounded_final_rest_snapshot() -> None
     assert outcome.partial is True
     assert outcome.client_summaries[0].status is DcClientSearchStatus.PARTIAL
     assert api.pages == [(44, 0, 100)]
-    assert api.deleted == [44]
+    assert api.deleted == []
 
 
 @pytest.mark.asyncio

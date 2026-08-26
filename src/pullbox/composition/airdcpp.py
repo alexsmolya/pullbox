@@ -176,11 +176,18 @@ async def refresh_airdcpp_supervisor_registry(
     session_factory: async_sessionmaker[AsyncSession] | Callable[[], AsyncSession],
 ) -> None:
     """Apply committed config changes to only the affected supervisors."""
+    async with session_factory() as session:
+        await refresh_airdcpp_supervisor_registry_from_session(session)
+
+
+async def refresh_airdcpp_supervisor_registry_from_session(
+    session: AsyncSession,
+) -> None:
+    """Apply committed client state using an existing request session."""
     registry = _registry
     if registry is None:
         return
-    async with session_factory() as session:
-        configs = await build_airdcpp_supervisor_configs(session)
+    configs = await build_airdcpp_supervisor_configs(session)
     await registry.apply(configs)
 
 

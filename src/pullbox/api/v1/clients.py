@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import selectinload
 
 from pullbox.api.deps import DbSession, InteractiveOperatorUser
+from pullbox.composition.airdcpp import refresh_airdcpp_supervisor_registry_from_session
 from pullbox.config import get_settings
 from pullbox.core.encryption import decrypt_secret, encrypt_secret
 from pullbox.core.exceptions import NotFoundError, ProviderError, ValidationError
@@ -295,6 +296,9 @@ async def add_client(
         client.airdcpp_settings = AirDcppClientSettings(**body.airdcpp.model_dump())
     session.add(client)
     await session.flush()
+    if body.client_type is DownloadClientType.AIRDCPP:
+        await session.commit()
+        await refresh_airdcpp_supervisor_registry_from_session(session)
     return ClientResponse.model_validate(_redact_client(client))
 
 
@@ -374,6 +378,9 @@ async def update_client(
         .execution_options(populate_existing=True)
     )
     client = refreshed.scalar_one()
+    if client.client_type is DownloadClientType.AIRDCPP:
+        await session.commit()
+        await refresh_airdcpp_supervisor_registry_from_session(session)
     return ClientResponse.model_validate(_redact_client(client))
 
 
@@ -419,6 +426,9 @@ async def delete_client(
                 "Disable it and wait for active work to reach a terminal state."
             )
     await session.delete(client)
+    if client.client_type is DownloadClientType.AIRDCPP:
+        await session.commit()
+        await refresh_airdcpp_supervisor_registry_from_session(session)
 
 
 # ── Test Connection ──────────────────────────────────────────────────

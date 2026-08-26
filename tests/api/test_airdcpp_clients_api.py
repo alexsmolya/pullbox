@@ -221,6 +221,60 @@ async def test_multiple_airdcpp_clients_can_be_enabled_independently(
 
 
 @pytest.mark.asyncio
+async def test_airdcpp_mutations_refresh_runtime_registry_after_commit(
+    authenticated_client: AsyncClient,
+    sec_db: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        clients_api,
+        "get_settings",
+        lambda: SimpleNamespace(airdcpp_enabled=True),
+    )
+    observed: list[tuple[tuple[int, bool], ...]] = []
+
+    async def _observe_committed_configuration(_session: AsyncSession) -> None:
+        async with sec_db() as observer:
+            rows = (
+                await observer.execute(
+                    select(DownloadClientConfig)
+                    .where(DownloadClientConfig.client_type == DownloadClientType.AIRDCPP)
+                    .order_by(DownloadClientConfig.id)
+                )
+            ).scalars()
+            observed.append(tuple((row.id, row.enabled) for row in rows))
+
+    monkeypatch.setattr(
+        clients_api,
+        "refresh_airdcpp_supervisor_registry_from_session",
+        _observe_committed_configuration,
+        raising=False,
+    )
+
+    created = await authenticated_client.post(
+        "/api/v1/clients",
+        json=_airdcpp_payload(),
+        headers=_csrf_header_for(authenticated_client),
+    )
+    assert created.status_code == 201, created.text
+    client_id = created.json()["id"]
+
+    updated = await authenticated_client.put(
+        f"/api/v1/clients/{client_id}",
+        json={"enabled": False},
+        headers=_csrf_header_for(authenticated_client),
+    )
+    assert updated.status_code == 200, updated.text
+
+    deleted = await authenticated_client.delete(
+        f"/api/v1/clients/{client_id}",
+        headers=_csrf_header_for(authenticated_client),
+    )
+    assert deleted.status_code == 204, deleted.text
+    assert observed == [((client_id, True),), ((client_id, False),), ()]
+
+
+@pytest.mark.asyncio
 async def test_airdcpp_create_requires_password_and_default_off_flag_blocks_activation(
     authenticated_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
