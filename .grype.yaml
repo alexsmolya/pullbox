@@ -19,17 +19,17 @@ ignore:
   - vulnerability: CVE-2026-14456
     package:
       name: libssl3t64
-      version: 3.5.6-1~deb13u2+dhi3
+      version: 3.5.7-1~deb13u2+dhi0
       type: deb
   - vulnerability: CVE-2026-14456
     package:
       name: openssl
-      version: 3.5.6-1~deb13u2+dhi3
+      version: 3.5.7-1~deb13u2+dhi0
       type: deb
   - vulnerability: CVE-2026-14456
     package:
       name: openssl-provider-legacy
-      version: 3.5.6-1~deb13u2+dhi3
+      version: 3.5.7-1~deb13u2+dhi0
       type: deb
 
   # CPython 3.14.6 binary findings. Grype reports either no fixed version or a
