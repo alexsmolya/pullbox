@@ -1,7 +1,7 @@
 """Add restart-safe post-processing claims.
 
-Revision ID: s4t5u6v7w890
-Revises: r3s4t5u6v789
+Revision ID: u6v7w8x9y012
+Revises: t5u6v7w8x901
 Create Date: 2026-08-25
 """
 
@@ -16,8 +16,8 @@ from alembic import op
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-revision: str = "s4t5u6v7w890"
-down_revision: str | Sequence[str] | None = "r3s4t5u6v789"
+revision: str = "u6v7w8x9y012"
+down_revision: str | Sequence[str] | None = "t5u6v7w8x901"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

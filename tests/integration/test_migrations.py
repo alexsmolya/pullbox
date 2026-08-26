@@ -94,6 +94,8 @@ def _seed_reader_state_owner(conn: Connection, *, slug: str) -> tuple[int, int]:
     )
     issue_id = conn.execute(text("SELECT last_insert_rowid()")).scalar_one()
     return user_id, issue_id
+
+
 def _get_indexes(sync_url: str, table: str) -> dict[str, list[str]]:
     """Get index names and ordered columns for a table."""
     engine = create_engine(sync_url)

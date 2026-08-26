@@ -1,7 +1,7 @@
 """Add durable AirDC++ acquisition provenance.
 
-Revision ID: r3s4t5u6v789
-Revises: q2r3s4t5u678
+Revision ID: t5u6v7w8x901
+Revises: s4t5u6v7w890
 Create Date: 2026-08-25
 """
 
@@ -16,8 +16,8 @@ from alembic import op
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-revision: str = "r3s4t5u6v789"
-down_revision: str | Sequence[str] | None = "q2r3s4t5u678"
+revision: str = "t5u6v7w8x901"
+down_revision: str | Sequence[str] | None = "s4t5u6v7w890"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
