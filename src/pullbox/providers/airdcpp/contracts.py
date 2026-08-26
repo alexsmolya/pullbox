@@ -6,6 +6,7 @@ from typing import Annotated
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     SecretStr,
@@ -15,9 +16,17 @@ from pydantic import (
     model_validator,
 )
 
+
+def _normalize_port(value: object) -> object:
+    """Normalize AirDC++'s numeric-string listener ports at the wire boundary."""
+    if isinstance(value, str) and 1 <= len(value) <= 5 and value.isascii() and value.isdigit():
+        return int(value)
+    return value
+
+
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
-Port = Annotated[StrictInt, Field(ge=0, le=65535)]
+Port = Annotated[StrictInt, BeforeValidator(_normalize_port), Field(ge=0, le=65535)]
 BoundedString = Annotated[StrictStr, Field(min_length=1, max_length=1000)]
 
 

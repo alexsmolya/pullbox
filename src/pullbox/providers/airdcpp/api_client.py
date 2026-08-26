@@ -428,4 +428,22 @@ class AirDcppApiClient:
         try:
             return model.model_validate(payload)
         except ValidationError as exc:
-            raise AirDcppResponseError("AirDC++ returned an incompatible response") from exc
+            errors = exc.errors(
+                include_url=False,
+                include_context=False,
+                include_input=False,
+            )
+            first_error = errors[0] if errors else None
+            location = ".".join(
+                str(part)
+                for part in (first_error["loc"] if first_error is not None else ())
+                if isinstance(part, int)
+                or (isinstance(part, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", part))
+            )
+            error_type = first_error["type"] if first_error is not None else "validation_error"
+            if not isinstance(error_type, str) or not re.fullmatch(r"[a-z0-9_]{1,100}", error_type):
+                error_type = "validation_error"
+            detail = f" ({location}: {error_type})" if location else ""
+            raise AirDcppResponseError(
+                f"AirDC++ returned an incompatible {model.__name__} response{detail}"
+            ) from exc

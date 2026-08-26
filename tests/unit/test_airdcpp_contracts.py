@@ -139,6 +139,42 @@ def test_connectivity_contract_requires_valid_ports_and_statuses() -> None:
         )
 
 
+def test_connectivity_contract_normalizes_airdcpp_string_ports() -> None:
+    connectivity = AirDcppConnectivityInfo.model_validate(
+        {
+            "status_v4": {
+                "auto_detect": False,
+                "enabled": True,
+                "text": "Active mode",
+                "bind_address": "0.0.0.0",
+                "external_ip": "203.0.113.10",
+            },
+            "status_v6": {
+                "auto_detect": False,
+                "enabled": False,
+                "text": "Disabled",
+                "bind_address": "::",
+                "external_ip": "::",
+            },
+            "tcp_port": "21248",
+            "tls_port": "21249",
+            "udp_port": "21248",
+        }
+    )
+
+    assert connectivity.tcp_port == 21248
+    assert connectivity.tls_port == 21249
+    assert connectivity.udp_port == 21248
+
+    with pytest.raises(ValidationError):
+        AirDcppConnectivityInfo.model_validate(
+            {
+                **connectivity.model_dump(),
+                "tcp_port": "70000",
+            }
+        )
+
+
 def test_queue_bundle_contract_requires_authoritative_progress_fields() -> None:
     bundle = AirDcppQueueBundle.model_validate(
         {

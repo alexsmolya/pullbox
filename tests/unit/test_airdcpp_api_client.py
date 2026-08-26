@@ -178,6 +178,28 @@ async def test_invalid_responses_fail_closed_without_body_leak(
     assert "other.test" not in str(raised.value)
 
 
+async def test_incompatible_response_reports_only_safe_contract_location() -> None:
+    payload = _auth()
+    payload["user"] = {
+        "username": "pullbox",
+        "permissions": ["search", {"private_value": "must-not-leak"}],
+    }
+    client = _client(lambda _request: httpx.Response(200, json=payload))
+
+    with pytest.raises(AirDcppResponseError) as raised:
+        await client.authorize()
+    await client.aclose()
+
+    message = str(raised.value)
+    assert message == (
+        "AirDC++ returned an incompatible AirDcppAuthenticationInfo response "
+        "(user.permissions.1: string_type)"
+    )
+    assert "private_value" not in message
+    assert "must-not-leak" not in message
+    assert "server-bearer-token" not in message
+
+
 async def test_oversized_response_fails_before_json_parsing() -> None:
     client = _client(
         lambda _request: httpx.Response(200, content=b"x" * 65),
