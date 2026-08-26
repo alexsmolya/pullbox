@@ -256,3 +256,41 @@ jobs:
           body_path: release_notes.md
           draft: false
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+
+      - name: Post release notifications to Discord
+        if: steps.release.outputs.skip != 'true' && steps.version.outputs.prerelease != 'true'
+        env:
+          DISCORD_WEBHOOK_CHANGELOG: ${{ secrets.DISCORD_WEBHOOK_CHANGELOG }}
+          DISCORD_WEBHOOK_ANNOUNCEMENTS: ${{ secrets.DISCORD_WEBHOOK_ANNOUNCEMENTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_CHANGELOG}" ]; then
+            echo "::error::DISCORD_WEBHOOK_CHANGELOG is required for final releases."
+            exit 1
+          fi
+          release_url="https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag }}"
+          PYTHONPATH=src python3 -m pullbox.release_discord_notifications \
+            --kind changelog \
+            --version "${{ steps.version.outputs.version }}" \
+            --changelog curated_changelog.md \
+            --release-url "${release_url}" > discord-changelog.json
+          curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 2 \
+            --header 'Content-Type: application/json' \
+            --data @discord-changelog.json \
+            "${DISCORD_WEBHOOK_CHANGELOG}?wait=true"
+
+          if [[ "${{ steps.version.outputs.version }}" =~ ^[0-9]+\.[0-9]+\.0$ ]]; then
+            if [ -z "${DISCORD_WEBHOOK_ANNOUNCEMENTS}" ]; then
+              echo "::error::DISCORD_WEBHOOK_ANNOUNCEMENTS is required for major and minor releases."
+              exit 1
+            fi
+            PYTHONPATH=src python3 -m pullbox.release_discord_notifications \
+              --kind announcement \
+              --version "${{ steps.version.outputs.version }}" \
+              --changelog curated_changelog.md \
+              --release-url "${release_url}" > discord-announcement.json
+            curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 2 \
+              --header 'Content-Type: application/json' \
+              --data @discord-announcement.json \
+              "${DISCORD_WEBHOOK_ANNOUNCEMENTS}?wait=true"
+          fi
