@@ -154,11 +154,12 @@ class AirDcppApiClient:
             "/settings/get",
             json={"keys": requested},
         )
-        if not isinstance(payload, list) or len(payload) != len(requested):
+        if not isinstance(payload, dict) or set(payload) != set(requested):
             raise AirDcppResponseError("AirDC++ returned an invalid settings response")
-        if any(type(value) not in {str, bool, int} for value in payload):
+        values = [payload[key] for key in requested]
+        if any(type(value) not in {str, bool, int} for value in values):
             raise AirDcppResponseError("AirDC++ returned an invalid settings value")
-        return payload
+        return values
 
     async def get_queue_bundles(self, *, start: int, count: int) -> list[AirDcppQueueBundle]:
         if start < 0 or not 1 <= count <= 1000:

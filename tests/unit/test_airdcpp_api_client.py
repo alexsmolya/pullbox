@@ -92,7 +92,7 @@ async def test_authorize_uses_exact_path_and_bearer_for_read_methods() -> None:
             return httpx.Response(200, json=[])
         if request.url.path == "/api/v1/settings/get":
             assert json.loads(request.content) == {"keys": ["min_search_interval"]}
-            return httpx.Response(200, json=[45])
+            return httpx.Response(200, json={"min_search_interval": 45})
         if request.url.path == "/api/v1/queue/bundles/0/1":
             return httpx.Response(200, json=[])
         if request.url.path == "/api/v1/sessions/self" and request.method == "DELETE":
@@ -117,6 +117,50 @@ async def test_authorize_uses_exact_path_and_bearer_for_read_methods() -> None:
     assert bundles == []
     assert requests[0] == ("POST", "/api/v1/sessions/authorize", None)
     assert all(auth_header == "Bearer server-bearer-token" for _, _, auth_header in requests[1:])
+
+
+async def test_get_settings_normalizes_keyed_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/sessions/authorize":
+            return httpx.Response(200, json=_auth())
+        assert request.url.path == "/api/v1/settings/get"
+        assert json.loads(request.content) == {"keys": ["min_search_interval"]}
+        return httpx.Response(200, json={"min_search_interval": 45})
+
+    client = _client(handler)
+    await client.authorize()
+    settings = await client.get_settings(["min_search_interval"])
+    await client.aclose()
+
+    assert settings == [45]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ([45], "invalid settings response"),
+        ({}, "invalid settings response"),
+        (
+            {"min_search_interval": 45, "unexpected": 1},
+            "invalid settings response",
+        ),
+        ({"min_search_interval": None}, "invalid settings value"),
+    ],
+)
+async def test_get_settings_rejects_noncanonical_responses(
+    payload: object,
+    message: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/sessions/authorize":
+            return httpx.Response(200, json=_auth())
+        return httpx.Response(200, json=payload)
+
+    client = _client(handler)
+    await client.authorize()
+    with pytest.raises(AirDcppResponseError, match=message):
+        await client.get_settings(["min_search_interval"])
+    await client.aclose()
 
 
 @pytest.mark.parametrize(
