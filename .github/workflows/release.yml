@@ -269,6 +269,7 @@ jobs:
         id: reserve-changelog
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PULLBOX_RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           PYTHONPATH=src python3 -m pullbox.release_discord_delivery reserve \
             --channel changelog \
@@ -310,6 +311,7 @@ jobs:
         id: reserve-announcement
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PULLBOX_RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           PYTHONPATH=src python3 -m pullbox.release_discord_delivery reserve \
             --channel announcements \

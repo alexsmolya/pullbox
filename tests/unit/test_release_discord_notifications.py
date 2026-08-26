@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pullbox import release_discord_delivery as delivery
 from pullbox.release_discord_delivery import delivery_task
 from pullbox.release_discord_notifications import (
     announcement_payload,
@@ -43,6 +44,35 @@ def test_release_workflow_only_posts_after_a_successful_reservation() -> None:
     assert "steps.reserve-changelog.outcome == 'success'" in workflow
     assert "steps.reserve-announcement.outcome == 'success'" in workflow
     assert "--retry-all-errors" not in workflow
+    assert "PULLBOX_RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}" in workflow
+
+
+def test_successful_delivery_does_not_inactivate_prior_discord_records(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request(method, url, token, payload=None):
+        captured.update({"method": method, "url": url, "payload": payload})
+        return {}
+
+    monkeypatch.setattr(delivery, "_request", fake_request)
+
+    delivery.record_delivery(
+        api_url="https://api.github.test",
+        repository="pullboxapp/pullbox",
+        token="token",
+        deployment_id=42,
+        state="success",
+        run_url="https://github.test/run/1",
+        description="Posted Discord changelog",
+    )
+
+    assert captured["payload"] == {
+        "state": "success",
+        "environment": "pullbox-discord",
+        "log_url": "https://github.test/run/1",
+        "description": "Posted Discord changelog",
+        "auto_inactive": False,
+    }
 
 
 def test_changelog_payload_is_an_embed_with_mentions_disabled() -> None:

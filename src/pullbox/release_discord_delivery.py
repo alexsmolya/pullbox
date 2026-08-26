@@ -120,6 +120,7 @@ def record_delivery(
             "environment": "pullbox-discord",
             "log_url": run_url,
             "description": description,
+            "auto_inactive": False,
         },
     )
 
@@ -143,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             api_url=api_url,
             repository=repository,
             token=token,
-            ref=os.environ["GITHUB_SHA"],
+            ref=os.environ["PULLBOX_RELEASE_SHA"],
             run_url=run_url,
             version=args.version,
             channel=args.channel,
