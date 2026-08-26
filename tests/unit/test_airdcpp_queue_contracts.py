@@ -22,13 +22,13 @@ def _queue_file_payload() -> dict[str, object]:
         "target": "/Downloads/Example Comic 001 (2026).cbz",
         "type": {"id": "file", "content_type": "file"},
         "bundle": 91,
-        "size": 100_000_000,
-        "downloaded_bytes": 25_000_000,
+        "size": 100_000_000.0,
+        "downloaded_bytes": 25_000_000.0,
         "priority": {"id": 3, "str": "Normal", "auto": False},
-        "time_added": 1,
-        "time_finished": 0,
-        "speed": 1_000_000,
-        "seconds_left": 75,
+        "time_added": 1.0,
+        "time_finished": 0.0,
+        "speed": 1_000_000.0,
+        "seconds_left": 75.0,
         "sources": {"online": 1, "total": 2, "str": "1/2"},
         "status": {
             "id": "queued",
@@ -50,6 +50,9 @@ def test_queue_mutation_contracts_require_typed_bundle_and_file_identity() -> No
     assert response.directory_downloads is None
     assert queue_file.tth == _TTH
     assert queue_file.bundle_id == 91
+    assert queue_file.size == 100_000_000
+    assert queue_file.downloaded_bytes == 25_000_000
+    assert queue_file.speed == 1_000_000
     assert queue_file.target.get_secret_value().startswith("/Downloads/")
 
 

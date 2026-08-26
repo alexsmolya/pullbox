@@ -46,10 +46,15 @@ CurrentSearchId = Annotated[
     BoundedString | NonNegativeInt,
     BeforeValidator(_normalize_current_search_id),
 ]
-SearchCounter = Annotated[
+WholeNonNegativeInt = Annotated[
     StrictInt,
     BeforeValidator(_normalize_whole_number),
     Field(ge=0, le=2**63 - 1),
+]
+WholePositiveInt = Annotated[
+    StrictInt,
+    BeforeValidator(_normalize_whole_number),
+    Field(gt=0, le=2**63 - 1),
 ]
 
 
@@ -152,13 +157,13 @@ class AirDcppQueueBundle(AirDcppWireModel):
     name: BoundedString
     target: SecretStr = Field(repr=False)
     type: AirDcppFileItemType
-    size: PositiveInt
-    downloaded_bytes: NonNegativeInt
+    size: WholePositiveInt
+    downloaded_bytes: WholeNonNegativeInt
     priority: AirDcppQueuePriority
-    time_added: NonNegativeInt
-    time_finished: NonNegativeInt
-    speed: NonNegativeInt
-    seconds_left: NonNegativeInt
+    time_added: WholeNonNegativeInt
+    time_finished: WholeNonNegativeInt
+    speed: WholeNonNegativeInt
+    seconds_left: WholeNonNegativeInt
     sources: AirDcppQueueSourceInfo
     status: AirDcppQueueStatus
 
@@ -197,13 +202,13 @@ class AirDcppQueueFile(AirDcppWireModel):
     target: SecretStr = Field(repr=False)
     type: AirDcppFileItemType
     bundle_id: PositiveInt = Field(alias="bundle")
-    size: PositiveInt
-    downloaded_bytes: NonNegativeInt
+    size: WholePositiveInt
+    downloaded_bytes: WholeNonNegativeInt
     priority: AirDcppQueuePriority
-    time_added: NonNegativeInt
-    time_finished: NonNegativeInt
-    speed: NonNegativeInt
-    seconds_left: NonNegativeInt
+    time_added: WholeNonNegativeInt
+    time_finished: WholeNonNegativeInt
+    speed: WholeNonNegativeInt
+    seconds_left: WholeNonNegativeInt
     sources: AirDcppQueueSourceInfo
     status: AirDcppQueueStatus
     tth: Annotated[StrictStr, Field(pattern=r"^[A-Z2-7]{39}$")]
@@ -254,15 +259,15 @@ class AirDcppSearchResult(AirDcppWireModel):
     id: BoundedString
     name: BoundedString
     relevance: Annotated[float, Field(ge=0, allow_inf_nan=False)]
-    hits: SearchCounter
+    hits: WholeNonNegativeInt
     users: AirDcppSearchUsers
     type: AirDcppFileItemType
     path: SecretStr = Field(repr=False)
     tth: Annotated[StrictStr, Field(pattern=r"^[A-Z2-7]{39}$")] | None
-    time: SearchCounter
+    time: WholeNonNegativeInt
     slots: AirDcppSearchSlots
-    connection: SearchCounter
-    size: SearchCounter
+    connection: WholeNonNegativeInt
+    size: WholeNonNegativeInt
 
     @property
     def file_result(self) -> bool:

@@ -215,6 +215,41 @@ def test_queue_bundle_contract_requires_authoritative_progress_fields() -> None:
         )
 
 
+def test_queue_bundle_contract_normalizes_live_whole_number_floats() -> None:
+    payload: dict[str, object] = {
+        "id": 83425443,
+        "name": "Example Comic 001.cbz",
+        "target": "/Downloads/Example Comic 001.cbz",
+        "type": {"id": "file"},
+        "size": 1000.0,
+        "downloaded_bytes": 250.0,
+        "priority": {"id": 4, "str": "Normal", "auto": False},
+        "time_added": 1.0,
+        "time_finished": 0.0,
+        "speed": 10.0,
+        "seconds_left": 75.0,
+        "sources": {"online": 1, "total": 2, "str": "1/2 online"},
+        "status": {
+            "id": "queued",
+            "failed": False,
+            "downloaded": False,
+            "completed": False,
+            "str": "Running (25%)",
+        },
+    }
+
+    bundle = AirDcppQueueBundle.model_validate(payload)
+
+    assert bundle.size == 1000
+    assert bundle.downloaded_bytes == 250
+    assert bundle.time_added == 1
+    assert bundle.time_finished == 0
+    assert bundle.speed == 10
+    assert bundle.seconds_left == 75
+    with pytest.raises(ValidationError):
+        AirDcppQueueBundle.model_validate({**payload, "speed": 10.5})
+
+
 def test_search_instance_and_grouped_file_result_contracts_are_strict_and_additive() -> None:
     instance = AirDcppSearchInstance.model_validate(
         {
