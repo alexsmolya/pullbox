@@ -275,7 +275,7 @@ jobs:
             --version "${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Post changelog to Discord
-        if: steps.reserve-changelog.outputs.skip != 'true'
+        if: steps.reserve-changelog.outcome == 'success' && steps.reserve-changelog.outputs.skip != 'true'
         env:
           DISCORD_WEBHOOK_CHANGELOG: ${{ secrets.DISCORD_WEBHOOK_CHANGELOG }}
         run: |
@@ -290,13 +290,13 @@ jobs:
             --version "${{ steps.release.outputs.version }}" \
             --changelog curated_changelog.md \
             --release-url "${release_url}" > discord-changelog.json
-          curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 2 \
+          curl --fail-with-body \
             --header 'Content-Type: application/json' \
             --data @discord-changelog.json \
             "${DISCORD_WEBHOOK_CHANGELOG}?wait=true"
 
       - name: Record changelog Discord delivery
-        if: success() && steps.reserve-changelog.outputs.skip != 'true'
+        if: success() && steps.reserve-changelog.outcome == 'success' && steps.reserve-changelog.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -316,7 +316,7 @@ jobs:
             --version "${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Post announcement to Discord
-        if: steps.reserve-announcement.outputs.skip != 'true'
+        if: steps.reserve-announcement.outcome == 'success' && steps.reserve-announcement.outputs.skip != 'true'
         env:
           DISCORD_WEBHOOK_ANNOUNCEMENTS: ${{ secrets.DISCORD_WEBHOOK_ANNOUNCEMENTS }}
         run: |
@@ -331,13 +331,13 @@ jobs:
             --version "${{ steps.release.outputs.version }}" \
             --changelog curated_changelog.md \
             --release-url "${release_url}" > discord-announcement.json
-          curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 2 \
+          curl --fail-with-body \
             --header 'Content-Type: application/json' \
             --data @discord-announcement.json \
             "${DISCORD_WEBHOOK_ANNOUNCEMENTS}?wait=true"
 
       - name: Record announcement Discord delivery
-        if: success() && steps.reserve-announcement.outputs.skip != 'true'
+        if: success() && steps.reserve-announcement.outcome == 'success' && steps.reserve-announcement.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
