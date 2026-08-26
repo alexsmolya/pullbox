@@ -499,6 +499,7 @@ class TestIssueDetailPage:
         self,
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
+        seeded_reader_state_guard: None,
     ) -> None:
         issue = IssueDetailPage(authed_page, seeded_server)
         issue.goto(1)

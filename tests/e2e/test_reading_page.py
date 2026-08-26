@@ -9,7 +9,10 @@ import pytest
 if TYPE_CHECKING:
     from playwright.sync_api import Page
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.usefixtures("seeded_reader_state_guard"),
+]
 
 
 def _goto_reading(page: Page, base_url: str, *, view: str = "continue") -> None:

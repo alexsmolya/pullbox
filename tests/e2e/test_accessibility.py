@@ -159,6 +159,7 @@ def test_donation_modal_has_no_wcag_aa_violations(
 def test_comic_reader_dialog_has_no_wcag_aa_violations_and_contains_focus(
     authed_page,
     seeded_server: str,  # type: ignore[no-untyped-def]
+    seeded_reader_state_guard: None,
 ) -> None:
     issue = IssueDetailPage(authed_page, seeded_server)
     issue.goto(1)
@@ -182,6 +183,7 @@ def test_comic_reader_dialog_has_no_wcag_aa_violations_and_contains_focus(
 def test_comic_reader_completion_and_issue_controls_have_no_wcag_aa_violations(
     authed_page,
     seeded_server: str,  # type: ignore[no-untyped-def]
+    seeded_reader_state_guard: None,
 ) -> None:
     issue = IssueDetailPage(authed_page, seeded_server)
     issue.goto(1)

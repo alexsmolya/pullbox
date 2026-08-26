@@ -111,6 +111,7 @@ class TestSeriesDetailPage:
         self,
         authed_page,
         seeded_server: str,  # type: ignore[no-untyped-def]
+        seeded_reader_state_guard: None,
     ) -> None:
         series = SeriesDetailPage(authed_page, seeded_server)
         series.goto(1)

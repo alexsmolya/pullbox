@@ -1085,6 +1085,48 @@ async def _seed_usage_stats_choice() -> None:
         await session.commit()
 
 
+async def _reset_seeded_reader_state() -> None:
+    """Restore the mutable Batman reader row shared by seeded E2E tests."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from pullbox.database import get_session_factory
+    from pullbox.models.issue import Issue
+    from pullbox.models.reader import IssueReaderState
+    from pullbox.models.series import Series
+    from pullbox.models.user import User
+
+    factory = get_session_factory()
+    async with factory() as session:
+        state = await session.scalar(
+            select(IssueReaderState)
+            .join(User, User.id == IssueReaderState.user_id)
+            .join(Issue, Issue.id == IssueReaderState.issue_id)
+            .join(Series, Series.id == Issue.series_id)
+            .where(
+                User.username == "admin",
+                Series.title == "Batman",
+                Issue.issue_number == 1.0,
+            )
+        )
+        if state is None:
+            raise RuntimeError("Seeded Batman reader state is missing.")
+
+        now = datetime.now(tz=UTC)
+        state.last_page_index = 1
+        state.content_revision = "e2e-reading-revision"
+        state.page_count = 3
+        state.progress_updated_at = now
+        state.last_opened_at = now
+        state.completed_at = None
+        state.completion_updated_at = None
+        state.want_to_read = False
+        state.want_to_read_updated_at = None
+        state.state_version = 1
+        await session.commit()
+
+
 # ── Server Fixtures ───────────────────────────────────────────────────
 
 
@@ -1341,6 +1383,16 @@ def seeded_server(live_server: str) -> Generator[str, None, None]:
     _run_async_blocking(_seed_usage_stats_choice())
 
     yield live_server
+
+
+@pytest.fixture
+def seeded_reader_state_guard(seeded_server: str) -> Generator[None, None, None]:
+    """Prevent reader mutations from leaking through the session-scoped E2E seed."""
+    _run_async_blocking(_reset_seeded_reader_state())
+    try:
+        yield
+    finally:
+        _run_async_blocking(_reset_seeded_reader_state())
 
 
 @pytest.fixture(scope="session")
