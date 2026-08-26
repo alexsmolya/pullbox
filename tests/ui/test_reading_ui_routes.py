@@ -167,12 +167,78 @@ class TestReadingWorkspaceRoutes:
         assert 'data-testid="reading-state-' in response.text
         assert "Not started" in response.text
         assert "File unavailable" in response.text
-        assert "Remove from Want to Read" in response.text
+        assert ">Remove</button>" in response.text
         assert f'href="/issues/{issue_ids[-1]}"' in response.text
         assert 'data-reading-action="want-to-read"' in response.text
         assert 'data-reading-action="completion"' in response.text
         assert 'x-data="readingStateActions()"' in response.text
         assert "x-bind:aria-live=\"statusIsError ? 'assertive' : 'polite'\"" in response.text
+
+    async def test_issue_card_state_actions_use_shared_button_contract(
+        self,
+        authenticated_client,
+        sec_db,
+        sec_user,
+    ) -> None:  # type: ignore[no-untyped-def]
+        await _seed_reading_items(sec_db, sec_user, count=1, mode="want")
+
+        response = await authenticated_client.get("/reading?view=want-to-read")
+
+        assert response.status_code == 200
+        completion_start = response.text.index('data-reading-action="completion"')
+        completion_markup = response.text[completion_start : completion_start + 180]
+        queue_start = response.text.index('data-reading-action="want-to-read"')
+        queue_markup = response.text[queue_start : queue_start + 220]
+        assert 'class="btn-primary btn-sm reading-card-primary-action"' in response.text
+        assert 'class="btn-ghost btn-sm reading-card-completion-action"' in completion_markup
+        assert 'class="btn-ghost btn-sm reading-card-queue-action"' in queue_markup
+        assert "btn-secondary" not in response.text
+
+    async def test_view_context_controls_queue_and_reread_actions(
+        self,
+        authenticated_client,
+        sec_db,
+        sec_user,
+    ) -> None:  # type: ignore[no-untyped-def]
+        await _seed_reading_items(sec_db, sec_user, count=1, mode="continue")
+        await _seed_reading_items(sec_db, sec_user, count=1, mode="want")
+        await _seed_reading_items(sec_db, sec_user, count=1, mode="read")
+
+        continue_response = await authenticated_client.get("/reading?view=continue")
+        want_response = await authenticated_client.get("/reading?view=want-to-read")
+        read_response = await authenticated_client.get("/reading?view=read")
+
+        assert ">Want to Read</button>" in continue_response.text
+        assert ">Remove</button>" in want_response.text
+        assert ">Reread</a>" in read_response.text
+        assert "reading-card-view-read" in read_response.text
+
+    async def test_cards_reserve_queue_action_space_when_continue_item_is_already_queued(
+        self,
+        authenticated_client,
+        sec_db,
+        sec_user,
+    ) -> None:  # type: ignore[no-untyped-def]
+        issue_ids = await _seed_reading_items(sec_db, sec_user, count=1, mode="continue")
+        async with sec_db() as session:
+            state = (
+                await session.execute(
+                    select(IssueReaderState).where(
+                        IssueReaderState.user_id == sec_user.id,
+                        IssueReaderState.issue_id == issue_ids[0],
+                    )
+                )
+            ).scalar_one()
+            state.want_to_read = True
+            state.want_to_read_updated_at = datetime.now(UTC)
+            await session.commit()
+
+        response = await authenticated_client.get("/reading?view=continue")
+
+        assert response.status_code == 200
+        assert 'class="reading-card-state-region"' in response.text
+        assert 'class="reading-card-queue-action-placeholder"' in response.text
+        assert 'data-reading-action="want-to-read"' not in response.text
 
     async def test_workspace_pagination_preserves_view_and_page_size(
         self,

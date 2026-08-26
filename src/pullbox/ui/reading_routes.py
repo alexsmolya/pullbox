@@ -150,7 +150,7 @@ async def reading_workspace(
             page=total_pages,
             per_page=page_size,
         )
-    cards = present_reading_issues(result.items)
+    cards = present_reading_issues(result.items, view=view_value)
     total_pages = max(result.page_count, 1)
     base_url = "/reading?" + urlencode(
         {

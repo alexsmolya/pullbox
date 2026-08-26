@@ -53,13 +53,47 @@ class TestReadingPage:
     ) -> None:
         _goto_reading(authed_page, seeded_server)
 
-        add_button = authed_page.get_by_role("button", name="Add to Want to Read")
+        primary_before = authed_page.locator("[data-testid='reading-card']").get_by_role(
+            "link", name="Continue", exact=True
+        )
+        primary_before_box = primary_before.bounding_box()
+        assert primary_before_box is not None
+        add_button = authed_page.get_by_role("button", name="Want to Read")
         add_button.click()
-        authed_page.get_by_role("button", name="Remove from Want to Read").wait_for(state="visible")
+        add_button.wait_for(state="detached")
+        primary_after_box = (
+            authed_page.locator("[data-testid='reading-card']")
+            .get_by_role("link", name="Continue", exact=True)
+            .bounding_box()
+        )
+        assert primary_after_box is not None
+        assert abs(primary_after_box["y"] - primary_before_box["y"]) < 1
+        continue_card_box = authed_page.locator("[data-testid='reading-card']").bounding_box()
+        continue_actions_box = authed_page.locator(
+            "[data-testid='reading-card'] .reading-card-actions"
+        ).bounding_box()
+        assert continue_card_box is not None
+        assert continue_actions_box is not None
 
         _goto_reading(authed_page, seeded_server, view="want-to-read")
-        remove_button = authed_page.get_by_role("button", name="Remove from Want to Read")
+        remove_button = authed_page.get_by_role("button", name="Remove", exact=True)
         assert remove_button.is_visible()
+        want_card_box = authed_page.locator("[data-testid='reading-card']").bounding_box()
+        want_actions_box = authed_page.locator(
+            "[data-testid='reading-card'] .reading-card-actions"
+        ).bounding_box()
+        assert want_card_box is not None
+        assert want_actions_box is not None
+        continue_action_offset = continue_actions_box["y"] - continue_card_box["y"]
+        want_action_offset = want_actions_box["y"] - want_card_box["y"]
+        assert abs(continue_card_box["height"] - want_card_box["height"]) < 1
+        assert abs(continue_action_offset - want_action_offset) < 1, (
+            continue_card_box,
+            continue_actions_box,
+            want_card_box,
+            want_actions_box,
+        )
+        assert continue_action_offset >= continue_card_box["height"] * 0.5
         remove_button.click()
 
         authed_page.get_by_text("Your reading queue is clear.", exact=True).wait_for(
@@ -84,3 +118,45 @@ class TestReadingPage:
         error.wait_for(state="visible")
         assert error.get_attribute("role") == "alert"
         assert authed_page.locator("[data-testid='reading-card']").count() == 1
+
+    def test_read_actions_share_baseline_and_keep_labels_on_one_line(
+        self,
+        authed_page: Page,
+        seeded_server: str,
+    ) -> None:
+        _goto_reading(authed_page, seeded_server)
+        authed_page.get_by_role("button", name="Mark read", exact=True).click()
+        authed_page.get_by_text("Nothing to pick up yet.", exact=True).wait_for(state="visible")
+
+        _goto_reading(authed_page, seeded_server, view="read")
+        card = authed_page.locator("[data-testid='reading-card']")
+        actions = card.locator(".reading-card-actions")
+        reread = card.get_by_role("link", name="Reread", exact=True)
+        mark_unread = card.get_by_role("button", name="Mark unread", exact=True)
+        want_to_read = card.get_by_role("button", name="Want to Read", exact=True)
+        card_box = card.bounding_box()
+        actions_box = actions.bounding_box()
+        reread_box = reread.bounding_box()
+        mark_unread_box = mark_unread.bounding_box()
+        want_to_read_box = want_to_read.bounding_box()
+
+        assert card_box is not None
+        assert actions_box is not None
+        assert reread_box is not None
+        assert mark_unread_box is not None
+        assert want_to_read_box is not None
+        assert abs(reread_box["y"] - mark_unread_box["y"]) < 1
+        assert abs(reread_box["height"] - mark_unread_box["height"]) < 1
+        assert abs(reread_box["x"] - want_to_read_box["x"]) < 1
+        assert (
+            abs(
+                mark_unread_box["x"]
+                + mark_unread_box["width"]
+                - want_to_read_box["x"]
+                - want_to_read_box["width"]
+            )
+            < 1
+        )
+        assert actions_box["y"] - card_box["y"] >= card_box["height"] * 0.5
+        assert reread.evaluate("element => getComputedStyle(element).whiteSpace") == "nowrap"
+        assert mark_unread.evaluate("element => getComputedStyle(element).whiteSpace") == "nowrap"

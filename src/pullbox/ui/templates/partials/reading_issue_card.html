@@ -1,7 +1,7 @@
 <article
   data-testid="reading-card"
   data-reading-issue-id="{{ reading_card.issue_id }}"
-  class="reading-card{% if reading_card.density == 'dashboard' %} reading-card-dashboard{% endif %}"
+  class="reading-card reading-card-view-{{ reading_card.view }}{% if reading_card.density == 'dashboard' %} reading-card-dashboard{% endif %}"
   x-data="readingStateActions()"
 >
   <a
@@ -37,7 +37,7 @@
       </p>
     </div>
 
-    <div>
+    <div class="reading-card-state-region">
       <p data-testid="reading-state-{{ reading_card.issue_id }}" class="reading-card-state">
         {{ reading_card.state_label }}
       </p>
@@ -56,23 +56,27 @@
     </div>
 
     <div class="reading-card-actions">
-      <a href="{{ reading_card.primary_url }}" hx-boost="false" class="btn-primary btn-sm">{{ reading_card.primary_label }}</a>
+      <a href="{{ reading_card.primary_url }}" hx-boost="false" class="btn-primary btn-sm reading-card-primary-action">{{ reading_card.primary_label }}</a>
       {% if reading_card.completion_action_label %}
         <button
           type="button"
           data-reading-action="completion"
-          class="btn-secondary btn-sm"
+          class="btn-ghost btn-sm reading-card-completion-action"
           x-bind:disabled="busy"
           @click="setCompletion($el, {{ 'true' if reading_card.completion_action_value else 'false' }})"
         >{{ reading_card.completion_action_label }}</button>
       {% endif %}
-      <button
-        type="button"
-        data-reading-action="want-to-read"
-        class="btn-ghost btn-sm reading-card-queue-action"
-        x-bind:disabled="busy"
-        @click="setWantToRead($el, {{ 'true' if reading_card.queue_action_value else 'false' }})"
-      >{{ reading_card.queue_action_label }}</button>
+      {% if reading_card.queue_action_label %}
+        <button
+          type="button"
+          data-reading-action="want-to-read"
+          class="btn-ghost btn-sm reading-card-queue-action"
+          x-bind:disabled="busy"
+          @click="setWantToRead($el, {{ 'true' if reading_card.queue_action_value else 'false' }})"
+        >{{ reading_card.queue_action_label }}</button>
+      {% else %}
+        <span class="reading-card-queue-action-placeholder" aria-hidden="true"></span>
+      {% endif %}
     </div>
 
     <p

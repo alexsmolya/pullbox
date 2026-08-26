@@ -21,6 +21,7 @@ def _mock_reader(
     *,
     initial_page: int = 0,
     fail_once: set[int] | None = None,
+    completed: bool = False,
 ):  # type: ignore[no-untyped-def]
     progress_writes: list[dict[str, object]] = []
     remaining_failures = set(fail_once or set())
@@ -36,6 +37,9 @@ def _mock_reader(
             "/api/v1/reader/issues/1/pages/{page_index}?revision=reader-test-revision"
         ),
         "progress_url": "/api/v1/reader/issues/1/progress",
+        "state": {
+            "completed_at": "2026-08-03T00:00:00Z" if completed else None,
+        },
     }
     page.route(
         "**/api/v1/reader/issues/1/manifest",
@@ -56,6 +60,8 @@ def _mock_reader(
         payload = json.loads(route.request.post_data or "{}")
         progress_writes.append(payload)
         manifest["initial_page_index"] = int(payload["page_index"])
+        if payload.get("reread_started"):
+            manifest["state"]["completed_at"] = None
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -68,6 +74,7 @@ def _mock_reader(
                         "2026-08-03T00:00:00Z" if payload["completion_candidate"] else None
                     ),
                     "updated_at": "2026-08-03T00:00:00Z",
+                    "state": manifest["state"],
                 }
             ),
         )
@@ -648,6 +655,39 @@ class TestIssueDetailPage:
         issue.close_reader()
         issue.open_reader()
         expect(issue.reader_status).to_have_text("Page 3 of 3")
+
+    def test_completed_issue_leaves_read_only_after_reread_page_settles(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        progress_writes = _mock_reader(authed_page, completed=True)
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.open_reader()
+
+        assert progress_writes == []
+        authed_page.wait_for_timeout(850)
+
+        assert progress_writes[-1]["page_index"] == 0
+        assert progress_writes[-1]["completion_candidate"] is False
+        assert progress_writes[-1]["reread_started"] is True
+
+    def test_failed_reread_page_keeps_completed_state_unchanged(
+        self,
+        authed_page,
+        seeded_server: str,  # type: ignore[no-untyped-def]
+    ) -> None:
+        progress_writes = _mock_reader(authed_page, completed=True, fail_once={0})
+        issue = IssueDetailPage(authed_page, seeded_server)
+        issue.goto(1)
+        issue.read_button.click()
+        issue.reader_dialog.wait_for(state="visible", timeout=5000)
+
+        authed_page.wait_for_timeout(850)
+
+        assert progress_writes == []
+        expect(authed_page.get_by_text("Page 1 could not be displayed.")).to_be_visible()
 
     def test_reader_page_jump_input_is_bounded_and_blocks_shortcuts_while_typing(
         self,

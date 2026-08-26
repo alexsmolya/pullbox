@@ -37,6 +37,7 @@ class ReaderCompletionOrigin(StrEnum):
 
     AUTOMATIC = "automatic"
     MANUAL = "manual"
+    REREAD = "reread"
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,6 +330,7 @@ async def update_reader_progress(
     completion_candidate: bool,
     expected_revision: str,
     expected_page_count: int,
+    reread_started: bool = False,
 ) -> ReaderStateTransition:
     """Validate and persist one explicit settled-page update."""
     _validate_update(
@@ -336,12 +338,15 @@ async def update_reader_progress(
         page_index=page_index,
         page_count=page_count,
         completion_candidate=completion_candidate,
+        reread_started=reread_started,
         expected_revision=expected_revision,
         expected_page_count=expected_page_count,
     )
     before = await load_reader_state(session, user_id=user_id, issue_id=issue_id)
     now = datetime.now(UTC)
+    clear_completion = reread_started and before is not None and before.completed_at is not None
     completed_at = now if completion_candidate else None
+    completion_updated_at = now if completion_candidate or clear_completion else None
     statement = _reader_state_insert(session).values(
         user_id=user_id,
         issue_id=issue_id,
@@ -351,10 +356,36 @@ async def update_reader_progress(
         progress_updated_at=now,
         last_opened_at=now,
         completed_at=completed_at,
-        completion_updated_at=completed_at,
+        completion_updated_at=completion_updated_at,
         updated_at=now,
     )
     excluded = statement.excluded
+    completed_at_update: Any
+    completion_updated_at_update: Any
+    if clear_completion:
+        completed_at_update = None
+        completion_updated_at_update = excluded.completion_updated_at
+    else:
+        completed_at_update = case(
+            (
+                and_(
+                    excluded.completed_at.is_not(None),
+                    IssueReaderState.completed_at.is_(None),
+                ),
+                excluded.completed_at,
+            ),
+            else_=IssueReaderState.completed_at,
+        )
+        completion_updated_at_update = case(
+            (
+                and_(
+                    excluded.completed_at.is_not(None),
+                    IssueReaderState.completed_at.is_(None),
+                ),
+                excluded.completion_updated_at,
+            ),
+            else_=IssueReaderState.completion_updated_at,
+        )
     statement = statement.on_conflict_do_update(
         index_elements=[IssueReaderState.user_id, IssueReaderState.issue_id],
         set_={
@@ -363,26 +394,8 @@ async def update_reader_progress(
             "page_count": excluded.page_count,
             "progress_updated_at": excluded.progress_updated_at,
             "last_opened_at": excluded.last_opened_at,
-            "completed_at": case(
-                (
-                    and_(
-                        excluded.completed_at.is_not(None),
-                        IssueReaderState.completed_at.is_(None),
-                    ),
-                    excluded.completed_at,
-                ),
-                else_=IssueReaderState.completed_at,
-            ),
-            "completion_updated_at": case(
-                (
-                    and_(
-                        excluded.completed_at.is_not(None),
-                        IssueReaderState.completed_at.is_(None),
-                    ),
-                    excluded.completion_updated_at,
-                ),
-                else_=IssueReaderState.completion_updated_at,
-            ),
+            "completed_at": completed_at_update,
+            "completion_updated_at": completion_updated_at_update,
             "want_to_read": case(
                 (excluded.completed_at.is_not(None), False),
                 else_=IssueReaderState.want_to_read,
@@ -408,7 +421,19 @@ async def update_reader_progress(
         issue_id=issue_id,
     )
     events: list[ReaderStateEventDescriptor] = []
-    if after.completion_updated_at == now:
+    if clear_completion:
+        events.append(
+            ReaderStateEventDescriptor(
+                kind=ReaderStateEventKind.COMPLETION_CHANGED,
+                user_id=user_id,
+                issue_id=issue_id,
+                state_version=after.state_version,
+                occurred_at=now,
+                completed=False,
+                origin=ReaderCompletionOrigin.REREAD,
+            )
+        )
+    elif not reread_started and after.completion_updated_at == now:
         events.append(
             ReaderStateEventDescriptor(
                 kind=ReaderStateEventKind.COMPLETION_CHANGED,
@@ -445,6 +470,7 @@ def _validate_update(
     page_index: int,
     page_count: int,
     completion_candidate: bool,
+    reread_started: bool,
     expected_revision: str,
     expected_page_count: int,
 ) -> None:
@@ -458,6 +484,11 @@ def _validate_update(
         raise ReaderStateValidationError(
             "completion_not_final",
             "Completion can only be recorded on the final page.",
+        )
+    if reread_started and (page_index != 0 or completion_candidate):
+        raise ReaderStateValidationError(
+            "reread_not_first_page",
+            "Rereading must start on page one without completing the issue.",
         )
 
 

@@ -288,6 +288,16 @@ async def test_progress_is_explicit_private_and_resumed_from_manifest(
         json=payload,
         headers={"X-CSRF-Token": csrf},
     )
+    reread = await authenticated_client.put(
+        f"/api/v1/reader/issues/{issue_id}/progress",
+        json={
+            **payload,
+            "page_index": 0,
+            "completion_candidate": False,
+            "reread_started": True,
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
     resumed = await authenticated_client.get(f"/api/v1/reader/issues/{issue_id}/manifest")
 
     assert csrf_denied.status_code == 403
@@ -296,11 +306,16 @@ async def test_progress_is_explicit_private_and_resumed_from_manifest(
     assert saved.json()["completed_at"] is not None
     assert saved.json()["state"]["state_version"] == 1
     assert saved.json()["state"]["want_to_read"] is False
+    assert reread.status_code == 200
+    assert reread.json()["completed_at"] is None
+    assert reread.json()["page_index"] == 0
     assert "content_revision" not in saved.json()["state"]
     assert resumed.json()["initial_page_index"] == 0
-    assert len(events) == 1
+    assert len(events) == 2
     assert events[0].completed is True
     assert events[0].origin == "automatic"
+    assert events[1].completed is False
+    assert events[1].origin == "reread"
 
 
 @pytest.mark.asyncio

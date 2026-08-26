@@ -245,6 +245,7 @@ async def reader_progress(
                 completion_candidate=payload.completion_candidate,
                 expected_revision=manifest.revision,
                 expected_page_count=manifest.page_count,
+                reread_started=payload.reread_started,
             )
             await session.commit()
     except ReaderStateValidationError as exc:

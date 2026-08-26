@@ -65,6 +65,75 @@ async def test_resume_moves_both_directions_without_clearing_completion(
 
 
 @pytest.mark.asyncio
+async def test_settled_reread_start_clears_completion_and_preserves_queue(
+    db_session: AsyncSession,
+) -> None:
+    user_id, issue_id = await _seed_user_and_issue(db_session)
+    completed = await update_reader_progress(
+        db_session,
+        user_id=user_id,
+        issue_id=issue_id,
+        revision="revision-a",
+        page_index=4,
+        page_count=5,
+        completion_candidate=True,
+        expected_revision="revision-a",
+        expected_page_count=5,
+    )
+    queued = await set_want_to_read(
+        db_session,
+        user_id=user_id,
+        issue_id=issue_id,
+        enabled=True,
+    )
+
+    reread = await update_reader_progress(
+        db_session,
+        user_id=user_id,
+        issue_id=issue_id,
+        revision="revision-a",
+        page_index=0,
+        page_count=5,
+        completion_candidate=False,
+        expected_revision="revision-a",
+        expected_page_count=5,
+        reread_started=True,
+    )
+
+    assert reread.before == queued.after
+    assert completed.after.completed_at is not None
+    assert reread.after.completed_at is None
+    assert reread.after.last_page_index == 0
+    assert reread.after.is_continue_candidate is True
+    assert reread.after.want_to_read is True
+    assert reread.after.completion_updated_at is not None
+    assert [event.kind for event in reread.events] == [ReaderStateEventKind.COMPLETION_CHANGED]
+    assert reread.events[0].completed is False
+    assert reread.events[0].origin is ReaderCompletionOrigin.REREAD
+
+
+@pytest.mark.asyncio
+async def test_reread_start_requires_page_one_without_completion(
+    db_session: AsyncSession,
+) -> None:
+    user_id, issue_id = await _seed_user_and_issue(db_session)
+
+    with pytest.raises(ReaderStateValidationError, match="Rereading must start on page one"):
+        await update_reader_progress(
+            db_session,
+            user_id=user_id,
+            issue_id=issue_id,
+            revision="revision-a",
+            page_index=1,
+            page_count=5,
+            completion_candidate=False,
+            expected_revision="revision-a",
+            expected_page_count=5,
+            reread_started=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_new_content_revision_preserves_completion_and_updates_progress_clocks(
     db_session: AsyncSession,
 ) -> None:

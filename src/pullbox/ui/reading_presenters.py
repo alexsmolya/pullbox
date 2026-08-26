@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pullbox.ui.formatters import format_issue_number
 
 if TYPE_CHECKING:
     from pullbox.services.reader_state_service import ReaderStateSnapshot
     from pullbox.services.reading_query_service import ReadingIssueRecord, ReadingStateProjection
+
+ReadingCardView = Literal["continue", "want-to-read", "read"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,11 +31,12 @@ class ReadingIssueCardView:
     primary_url: str
     completion_action_label: str | None
     completion_action_value: bool | None
-    queue_action_label: str
-    queue_action_value: bool
+    queue_action_label: str | None
+    queue_action_value: bool | None
     completed: bool
     want_to_read: bool
     density: str
+    view: ReadingCardView
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +111,7 @@ def present_reading_issue(
     record: ReadingIssueRecord,
     *,
     density: str = "workspace",
+    view: ReadingCardView = "continue",
 ) -> ReadingIssueCardView:
     """Convert a query projection into the canonical reading-card contract."""
     state = record.state
@@ -128,6 +132,16 @@ def present_reading_issue(
         completion_action_label = "Mark read"
         completion_action_value = True
 
+    if view == "want-to-read":
+        queue_action_label = "Remove"
+        queue_action_value = False
+    elif state.want_to_read:
+        queue_action_label = None
+        queue_action_value = None
+    else:
+        queue_action_label = "Want to Read"
+        queue_action_value = True
+
     return ReadingIssueCardView(
         issue_id=record.issue_id,
         series_id=record.series_id,
@@ -147,13 +161,12 @@ def present_reading_issue(
         primary_url=primary_url,
         completion_action_label=completion_action_label,
         completion_action_value=completion_action_value,
-        queue_action_label=(
-            "Remove from Want to Read" if state.want_to_read else "Add to Want to Read"
-        ),
-        queue_action_value=not state.want_to_read,
+        queue_action_label=queue_action_label,
+        queue_action_value=queue_action_value,
         completed=state.is_completed,
         want_to_read=state.want_to_read,
         density=density,
+        view=view,
     )
 
 
@@ -161,9 +174,10 @@ def present_reading_issues(
     records: tuple[ReadingIssueRecord, ...],
     *,
     density: str = "workspace",
+    view: ReadingCardView = "continue",
 ) -> tuple[ReadingIssueCardView, ...]:
     """Present a bounded tuple without leaking ORM or content details."""
-    return tuple(present_reading_issue(record, density=density) for record in records)
+    return tuple(present_reading_issue(record, density=density, view=view) for record in records)
 
 
 def _state_label(record: ReadingIssueRecord) -> str:
@@ -186,7 +200,7 @@ def _primary_label(record: ReadingIssueRecord) -> str:
     if not record.readable:
         return "Open issue"
     if record.state.is_completed:
-        return "Read again"
+        return "Reread"
     if record.state.is_continue_candidate:
         return "Continue"
     return "Read"

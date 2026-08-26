@@ -60,6 +60,7 @@ class ReaderProgressUpdate(BaseModel):
     page_index: int = Field(ge=0)
     page_count: int = Field(ge=1)
     completion_candidate: bool = False
+    reread_started: StrictBool = False
 
 
 class ReaderProgressResponse(BaseModel):

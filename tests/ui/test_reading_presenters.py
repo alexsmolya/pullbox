@@ -52,7 +52,14 @@ def _record(
 def test_presenter_uses_state_precedence_and_action_labels() -> None:
     in_progress = present_reading_issue(_record(page_index=1, page_count=5))
     queued = present_reading_issue(_record(want_to_read=True))
-    completed = present_reading_issue(_record(page_index=4, page_count=5, completed=True))
+    completed = present_reading_issue(
+        _record(page_index=4, page_count=5, completed=True),
+        view="read",
+    )
+    queued_in_want_to_read = present_reading_issue(
+        _record(want_to_read=True),
+        view="want-to-read",
+    )
     final_unread = present_reading_issue(
         _record(page_index=4, page_count=5, explicitly_unread=True)
     )
@@ -60,12 +67,16 @@ def test_presenter_uses_state_precedence_and_action_labels() -> None:
     assert in_progress.state_label == "Page 2 of 5 · 40%"
     assert in_progress.primary_label == "Continue"
     assert in_progress.completion_action_label == "Mark read"
-    assert in_progress.queue_action_label == "Add to Want to Read"
+    assert in_progress.queue_action_label == "Want to Read"
     assert queued.state_label == "Not started"
     assert queued.primary_label == "Read"
-    assert queued.queue_action_label == "Remove from Want to Read"
+    assert queued.queue_action_label is None
+    assert queued.queue_action_value is None
+    assert queued_in_want_to_read.queue_action_label == "Remove"
+    assert queued_in_want_to_read.queue_action_value is False
     assert completed.state_label == "Read"
-    assert completed.primary_label == "Read again"
+    assert completed.primary_label == "Reread"
+    assert completed.view == "read"
     assert completed.completion_action_label == "Mark unread"
     assert final_unread.state_label == "Page 5 of 5 · Unread"
     assert final_unread.primary_label == "Read"
@@ -74,7 +85,8 @@ def test_presenter_uses_state_precedence_and_action_labels() -> None:
 def test_presenter_uses_cover_fallbacks_and_unavailable_actions() -> None:
     series_fallback = present_reading_issue(_record(issue_cover=None))
     placeholder = present_reading_issue(
-        _record(issue_cover=None, series_cover=None, readable=False, want_to_read=True)
+        _record(issue_cover=None, series_cover=None, readable=False, want_to_read=True),
+        view="want-to-read",
     )
 
     assert series_fallback.cover_url == "/covers/series.jpg"
@@ -82,7 +94,7 @@ def test_presenter_uses_cover_fallbacks_and_unavailable_actions() -> None:
     assert placeholder.state_label == "File unavailable"
     assert placeholder.primary_label == "Open issue"
     assert placeholder.primary_url == "/issues/7"
-    assert placeholder.queue_action_label == "Remove from Want to Read"
+    assert placeholder.queue_action_label == "Remove"
     assert placeholder.completion_action_label is None
 
 

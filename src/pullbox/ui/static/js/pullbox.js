@@ -14832,6 +14832,7 @@ function readerMixin(config) {
     readerProgressSaveFailed: false,
     readerLastSettledPage: null,
     readerLastSettledCompletion: false,
+    readerRereadPending: false,
     readerLastSavedSignature: "",
     readerCurrentUserInitiated: false,
     readerFailedPageIndex: null,
@@ -14971,6 +14972,7 @@ function readerMixin(config) {
       this.readerProgressSaveFailed = false;
       this.readerLastSettledPage = null;
       this.readerLastSettledCompletion = false;
+      this.readerRereadPending = false;
       this.readerLastSavedSignature = "";
       this.readerCurrentUserInitiated = false;
       this.readerFailedPageIndex = null;
@@ -15101,6 +15103,9 @@ function readerMixin(config) {
       this.clearReaderIssueWork();
       this.resetReaderIssue();
       this.readerManifest = manifest;
+      this.readerRereadPending = Boolean(
+        manifest.state && manifest.state.completed_at
+      );
       this.readerActiveIssueId = Number(manifest.issue_id) || null;
       this.readerTitle = String(manifest.title || cfg.seriesTitle || "Comic reader");
       this.readerIssueLabel = String(manifest.issue_label || cfg.issueLabel || "");
@@ -15229,6 +15234,11 @@ function readerMixin(config) {
         page_index: self.readerLastSettledPage,
         page_count: self.readerPageCount,
         completion_candidate: Boolean(self.readerLastSettledCompletion),
+        reread_started: Boolean(
+          self.readerRereadPending &&
+          self.readerLastSettledPage === 0 &&
+          !self.readerLastSettledCompletion
+        ),
       };
       var signature = JSON.stringify(payload);
       if (!self.readerProgressSaveFailed && signature === self.readerLastSavedSignature) {
@@ -15253,9 +15263,25 @@ function readerMixin(config) {
         });
         if (!response.ok) throw new Error("Reading position was not saved.");
         var canonical = await response.json();
-        self.readerLastSavedSignature = signature;
         self.readerProgressSaveFailed = false;
         if (canonical.state) manifest.state = canonical.state;
+        if (
+          payload.reread_started &&
+          canonical.state &&
+          !canonical.state.completed_at
+        ) {
+          self.readerRereadPending = false;
+          self.readerCompletionVisible = false;
+          self.readerLastSavedSignature = JSON.stringify({
+            revision: payload.revision,
+            page_index: payload.page_index,
+            page_count: payload.page_count,
+            completion_candidate: payload.completion_candidate,
+            reread_started: false,
+          });
+        } else {
+          self.readerLastSavedSignature = signature;
+        }
         if (
           payload.completion_candidate &&
           canonical.state &&
@@ -15315,6 +15341,7 @@ function readerMixin(config) {
         lastSavedSignature: this.readerLastSavedSignature,
         currentUserInitiated: this.readerCurrentUserInitiated,
         completionVisible: this.readerCompletionVisible,
+        rereadPending: this.readerRereadPending,
       };
     },
 
@@ -15334,6 +15361,7 @@ function readerMixin(config) {
       this.readerLastSavedSignature = snapshot.lastSavedSignature;
       this.readerCurrentUserInitiated = snapshot.currentUserInitiated;
       this.readerCompletionVisible = snapshot.completionVisible;
+      this.readerRereadPending = snapshot.rereadPending;
       this.readerLoading = false;
       this.readerPageLoading = false;
       this.readerFatalError = false;
@@ -15419,6 +15447,7 @@ function readerMixin(config) {
         if (!response.ok) throw new Error("Reading status was not saved.");
         var canonical = await response.json();
         if (canonical.state) this.readerManifest.state = canonical.state;
+        this.readerRereadPending = false;
         this.readerCompletionVisible = false;
         this.readerIssueStatusMessage = this.readerIssueLabel + " marked unread";
       } catch (error) {

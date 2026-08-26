@@ -9468,6 +9468,10 @@ input[type="range"].range-pb::-moz-range-thumb {
   box-shadow: var(--pb-shadow-1);
 }
 
+.reading-card:not(.reading-card-dashboard) {
+  min-height: 15.25rem;
+}
+
 .reading-card-cover-link,
 .reading-card-cover-frame {
   display: block;
@@ -9567,19 +9571,45 @@ input[type="range"].range-pb::-moz-range-thumb {
   background: var(--pb-interactive);
 }
 
+.reading-card-state-region {
+  min-height: 1.75rem;
+}
+
 .reading-card-actions {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(2.25rem, auto));
+  align-items: stretch;
   gap: 0.4rem;
-  flex-wrap: wrap;
   margin-top: auto;
 }
 
+.reading-card-view-read .reading-card-actions {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+}
+
+.reading-card-view-read .reading-card-primary-action,
+.reading-card-view-read .reading-card-completion-action {
+  padding-inline: 0.5rem;
+  white-space: nowrap;
+}
+
+.reading-card-primary-action,
+.reading-card-completion-action,
 .reading-card-queue-action {
-  flex-basis: 100%;
-  justify-content: flex-start;
-  padding-inline: 0;
-  color: var(--pb-text-tertiary);
+  width: 100%;
+  min-width: 0;
+}
+
+.reading-card-queue-action {
+  grid-column: 1 / -1;
+}
+
+.reading-card-queue-action-placeholder {
+  grid-column: 1 / -1;
+  min-height: 2.25rem;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .reading-card-mutation-status {

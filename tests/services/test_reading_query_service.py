@@ -14,6 +14,7 @@ from pullbox.models.reader import IssueReaderState
 from pullbox.models.series import Series, SeriesStatus, SeriesType
 from pullbox.models.user import User
 from pullbox.services.auth_service import AuthService
+from pullbox.services.reader_state_service import set_want_to_read, update_reader_progress
 from pullbox.services.reading_query_service import (
     list_continue_reading,
     list_read_issues,
@@ -252,6 +253,46 @@ async def test_continue_is_readable_incomplete_bounded_and_user_private(
     assert not hasattr(result.items[0], "file_path")
     second = await list_continue_reading(db_session, user_id=user.id, page=2, per_page=1)
     assert [item.issue_id for item in second.items] == [issues[0].id]
+
+
+@pytest.mark.asyncio
+async def test_settled_reread_moves_read_issue_to_continue_and_preserves_want(
+    db_session: AsyncSession,
+    reading_catalog: dict[str, object],
+) -> None:
+    user = reading_catalog["user"]
+    issues = reading_catalog["issues"]
+    assert isinstance(user, User)
+    assert isinstance(issues, list)
+    issue = issues[2]
+    assert isinstance(issue, Issue)
+    await set_want_to_read(
+        db_session,
+        user_id=user.id,
+        issue_id=issue.id,
+        enabled=True,
+    )
+
+    await update_reader_progress(
+        db_session,
+        user_id=user.id,
+        issue_id=issue.id,
+        revision="r3",
+        page_index=0,
+        page_count=5,
+        completion_candidate=False,
+        expected_revision="r3",
+        expected_page_count=5,
+        reread_started=True,
+    )
+
+    continued = await list_continue_reading(db_session, user_id=user.id, page=1, per_page=24)
+    wanted = await list_want_to_read(db_session, user_id=user.id, page=1, per_page=24)
+    read = await list_read_issues(db_session, user_id=user.id, page=1, per_page=24)
+
+    assert issue.id in {item.issue_id for item in continued.items}
+    assert issue.id in {item.issue_id for item in wanted.items}
+    assert issue.id not in {item.issue_id for item in read.items}
 
 
 @pytest.mark.asyncio
