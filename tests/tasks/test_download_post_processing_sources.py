@@ -130,6 +130,46 @@ async def test_resolve_local_path_normalizes_unmapped_windows_path() -> None:
     assert "\\" not in resolved
 
 
+@pytest.mark.asyncio
+async def test_resolve_local_path_preserves_posix_literal_backslash() -> None:
+    """POSIX paths may legally contain a literal backslash in a filename."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        remote_path="/remote",
+        download_dir="/downloads/Batman\\Superman",
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.SABNZBD,
+        downloaded_path="/remote/file.cbz",
+    )
+
+    resolved = await _resolve_local_path(session, download)
+
+    assert resolved == "/downloads/Batman\\Superman/file.cbz"
+
+
+@pytest.mark.asyncio
+async def test_resolve_local_download_root_preserves_posix_literal_backslash() -> None:
+    """The configured local cleanup root must not reinterpret POSIX filenames."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_download_root
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        download_dir="/downloads/Batman\\Superman"
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(download_client=DownloadClientType.SABNZBD)
+
+    root = await _resolve_local_download_root(session, download)
+
+    assert root == Path("/downloads/Batman\\Superman").resolve(strict=False)
+
+
 def test_post_processing_integrity_exception_distinguishes_missing_source() -> None:
     """Transient missing files should stay typed separately from bad releases."""
     from pullbox.tasks import download_post_processing_sources

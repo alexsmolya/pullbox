@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING
 
 import structlog
@@ -20,6 +20,12 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _POST_PROCESSING_SOURCE_RETRY_DELAYS = (0.0, 0.5, 1.0, 2.0, 4.0)
+
+
+def _is_windows_origin_path(path: str) -> bool:
+    """Identify configured paths using Windows drive or UNC syntax."""
+    windows_path = PureWindowsPath(path)
+    return bool(windows_path.drive)
 
 
 def _find_comic_file(
@@ -162,8 +168,6 @@ async def _resolve_local_path(
     if not raw_path:
         return None
 
-    raw_path = raw_path.replace("\\", "/")
-
     from pullbox.models.client import DownloadClientConfig
     from pullbox.models.download import DownloadClientType
 
@@ -204,10 +208,16 @@ async def _resolve_local_path(
     client_cfg = result.scalars().first()
 
     if client_cfg and client_cfg.remote_path and client_cfg.download_dir:
-        remote = client_cfg.remote_path.replace("\\", "/").rstrip("/")
-        local = client_cfg.download_dir.replace("\\", "/").rstrip("/")
-        if raw_path.startswith(remote):
-            remainder = raw_path[len(remote) :]
+        windows_origin = _is_windows_origin_path(client_cfg.remote_path)
+        remote = client_cfg.remote_path
+        local = client_cfg.download_dir.rstrip("/")
+        candidate = raw_path
+        if windows_origin:
+            remote = remote.replace("\\", "/")
+            candidate = raw_path.replace("\\", "/")
+        remote = remote.rstrip("/")
+        if candidate.startswith(remote):
+            remainder = candidate[len(remote) :]
             resolved = local + remainder
             logger.info(
                 "path_mapping_applied",
@@ -226,6 +236,8 @@ async def _resolve_local_path(
             "configured Remote Path. Check that Remote Path matches "
             "the root of where the client stores completed downloads.",
         )
+        if windows_origin:
+            return candidate
     elif client_cfg and (client_cfg.remote_path or client_cfg.download_dir):
         logger.warning(
             "path_mapping_incomplete",
