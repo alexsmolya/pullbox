@@ -3689,7 +3689,11 @@ class TestUtilitiesPage:
         page.choose_format("csv")
 
         assert footer.get_by_text("CSV", exact=False).is_visible()
-        assert footer.get_by_text(str(page.selected_field_count()), exact=False).is_visible()
+        assert (
+            footer.locator("[data-testid='utilities-export-footer-fields']")
+            .get_by_text(str(page.selected_field_count()), exact=True)
+            .is_visible()
+        )
 
     def test_export_json_multi_value_controls_select_and_clear_all(
         self,
