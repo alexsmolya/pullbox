@@ -108,8 +108,8 @@ async def test_resolve_local_path_normalizes_windows_remote_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_local_path_normalizes_unmapped_windows_path() -> None:
-    """An unmapped path should still remain a safe POSIX-style probe path."""
+async def test_resolve_local_path_rejects_unmapped_windows_path() -> None:
+    """An unmapped Windows path must fail before container filesystem probing."""
     from pullbox.models.download import DownloadClientType
     from pullbox.tasks.download_post_processing_sources import _resolve_local_path
 
@@ -124,10 +124,94 @@ async def test_resolve_local_path_normalizes_unmapped_windows_path() -> None:
         downloaded_path=r"E:\Temp\Release\file.cbr",
     )
 
+    with pytest.raises(FileNotFoundError, match="does not match the configured Remote Path"):
+        await _resolve_local_path(session, download)
+
+
+@pytest.mark.asyncio
+async def test_resolve_local_path_matches_windows_paths_case_insensitively() -> None:
+    """Windows drive and path casing must not affect a valid mapping."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        remote_path=r"E:\Temp\Pullbox_Downloads",
+        download_dir="/downloads",
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.SABNZBD,
+        downloaded_path=r"e:\temp\pullbox_downloads\Release\file.cbr",
+    )
+
     resolved = await _resolve_local_path(session, download)
 
-    assert resolved == "E:/Temp/Release/file.cbr"
-    assert "\\" not in resolved
+    assert resolved == "/downloads/Release/file.cbr"
+
+
+@pytest.mark.asyncio
+async def test_resolve_local_path_requires_windows_component_boundary() -> None:
+    """A similarly prefixed sibling folder must not map into the download root."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        remote_path=r"E:\Temp\Pullbox_Downloads",
+        download_dir="/downloads",
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.SABNZBD,
+        downloaded_path=r"E:\Temp\Pullbox_Downloads-old\Release\file.cbr",
+    )
+
+    with pytest.raises(FileNotFoundError, match="does not match the configured Remote Path"):
+        await _resolve_local_path(session, download)
+
+
+@pytest.mark.asyncio
+async def test_resolve_local_path_maps_windows_unc_path() -> None:
+    """UNC roots should map with the same component-aware Windows semantics."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        remote_path=r"\\server\share\downloads",
+        download_dir="/downloads",
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.SABNZBD,
+        downloaded_path=r"\\SERVER\SHARE\Downloads\Release\file.cbr",
+    )
+
+    resolved = await _resolve_local_path(session, download)
+
+    assert resolved == "/downloads/Release/file.cbr"
+
+
+@pytest.mark.asyncio
+async def test_resolve_local_path_rejects_windows_parent_traversal() -> None:
+    """A client-reported parent traversal must not escape the local mapping root."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        remote_path=r"E:\Temp\Pullbox_Downloads",
+        download_dir="/downloads",
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.SABNZBD,
+        downloaded_path=r"E:\Temp\Pullbox_Downloads\..\outside\file.cbr",
+    )
+
+    with pytest.raises(FileNotFoundError, match="unsafe parent traversal"):
+        await _resolve_local_path(session, download)
 
 
 @pytest.mark.asyncio

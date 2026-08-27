@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 import structlog
@@ -26,6 +26,41 @@ def _is_windows_origin_path(path: str) -> bool:
     """Identify configured paths using Windows drive or UNC syntax."""
     windows_path = PureWindowsPath(path)
     return bool(windows_path.drive)
+
+
+def _map_configured_download_path(
+    raw_path: str,
+    *,
+    remote_root: str,
+    local_root: str,
+) -> str | None:
+    """Map a client path by path components without weakening POSIX semantics."""
+    windows_origin = _is_windows_origin_path(remote_root)
+    path_type = PureWindowsPath if windows_origin else PurePosixPath
+    candidate = path_type(raw_path)
+    configured_remote = path_type(remote_root)
+
+    try:
+        remainder = candidate.relative_to(configured_remote)
+    except ValueError:
+        return None
+
+    if ".." in remainder.parts:
+        raise FileNotFoundError(
+            "The download client reported an unsafe parent traversal outside "
+            "the configured Remote Path."
+        )
+
+    local_base = Path(local_root)
+    mapped = local_base.joinpath(*remainder.parts)
+    resolved_base = local_base.expanduser().resolve(strict=False)
+    resolved_mapped = mapped.expanduser().resolve(strict=False)
+    if resolved_mapped != resolved_base and not resolved_mapped.is_relative_to(resolved_base):
+        raise FileNotFoundError(
+            "The mapped download path resolves outside the configured Download Directory."
+        )
+
+    return str(mapped)
 
 
 def _find_comic_file(
@@ -209,35 +244,33 @@ async def _resolve_local_path(
 
     if client_cfg and client_cfg.remote_path and client_cfg.download_dir:
         windows_origin = _is_windows_origin_path(client_cfg.remote_path)
-        remote = client_cfg.remote_path
-        local = client_cfg.download_dir.rstrip("/")
-        candidate = raw_path
-        if windows_origin:
-            remote = remote.replace("\\", "/")
-            candidate = raw_path.replace("\\", "/")
-        remote = remote.rstrip("/")
-        if candidate.startswith(remote):
-            remainder = candidate[len(remote) :]
-            resolved = local + remainder
+        resolved = _map_configured_download_path(
+            raw_path,
+            remote_root=client_cfg.remote_path,
+            local_root=client_cfg.download_dir,
+        )
+        if resolved is not None:
             logger.info(
                 "path_mapping_applied",
                 raw=raw_path,
-                remote_prefix=remote,
-                local_prefix=local,
-                remainder=remainder,
+                remote_prefix=client_cfg.remote_path,
+                local_prefix=client_cfg.download_dir,
                 resolved=resolved,
             )
             return resolved
         logger.warning(
             "path_mapping_prefix_mismatch",
             raw=raw_path,
-            remote_prefix=remote,
+            remote_prefix=client_cfg.remote_path,
             hint="The download client's path does not start with the "
             "configured Remote Path. Check that Remote Path matches "
             "the root of where the client stores completed downloads.",
         )
         if windows_origin:
-            return candidate
+            raise FileNotFoundError(
+                "The download client's Windows path does not match the configured Remote Path. "
+                "Verify both paths in Settings > Download Clients."
+            )
     elif client_cfg and (client_cfg.remote_path or client_cfg.download_dir):
         logger.warning(
             "path_mapping_incomplete",
