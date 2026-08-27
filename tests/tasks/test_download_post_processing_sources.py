@@ -254,6 +254,26 @@ async def test_resolve_local_download_root_preserves_posix_literal_backslash() -
     assert root == Path("/downloads/Batman\\Superman").resolve(strict=False)
 
 
+@pytest.mark.asyncio
+async def test_probe_rejects_filesystem_root_before_recursive_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed paths must not invoke recursive discovery against the root."""
+    from pullbox.tasks import download_post_processing_sources as sources
+
+    finder = MagicMock(return_value=None)
+    monkeypatch.setattr(sources, "_POST_PROCESSING_SOURCE_RETRY_DELAYS", (0.0,))
+
+    with pytest.raises(RuntimeError, match="filesystem root"):
+        await sources._probe_post_processing_source(
+            Path("/downloads\\Release\\file.cbr"),
+            {".cbr"},
+            find_comic_file=finder,
+        )
+
+    finder.assert_not_called()
+
+
 def test_post_processing_integrity_exception_distinguishes_missing_source() -> None:
     """Transient missing files should stay typed separately from bad releases."""
     from pullbox.tasks import download_post_processing_sources

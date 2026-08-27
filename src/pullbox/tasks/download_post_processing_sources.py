@@ -109,6 +109,22 @@ def _find_comic_file(
     return None
 
 
+def _reject_filesystem_root_probe(probe_root: Path) -> None:
+    """Fail before recursive discovery can inspect the container filesystem root."""
+    if probe_root.expanduser().resolve(strict=False) != Path("/"):
+        return
+
+    logger.error(
+        "post_processing_root_probe_rejected",
+        probe_root=str(probe_root),
+        hint="Verify Remote Path and Download Directory before retrying post-processing.",
+    )
+    raise RuntimeError(
+        "Refusing to inspect the container filesystem root during post-processing. "
+        "Verify the download client's Remote Path and Download Directory."
+    )
+
+
 @dataclass(frozen=True)
 class PostProcessingSourceProbe:
     """Resolved source visibility for post-processing on local/network storage."""
@@ -172,6 +188,7 @@ async def _probe_post_processing_source(
         last_probe_root = probe_root
 
         if source_exists:
+            _reject_filesystem_root_probe(probe_root)
             comic_file = await get_running_loop().run_in_executor(
                 None,
                 finder,
