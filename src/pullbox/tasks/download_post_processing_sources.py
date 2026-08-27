@@ -162,6 +162,8 @@ async def _resolve_local_path(
     if not raw_path:
         return None
 
+    raw_path = raw_path.replace("\\", "/")
+
     from pullbox.models.client import DownloadClientConfig
     from pullbox.models.download import DownloadClientType
 
@@ -202,8 +204,8 @@ async def _resolve_local_path(
     client_cfg = result.scalars().first()
 
     if client_cfg and client_cfg.remote_path and client_cfg.download_dir:
-        remote = client_cfg.remote_path.rstrip("/")
-        local = client_cfg.download_dir.rstrip("/")
+        remote = client_cfg.remote_path.replace("\\", "/").rstrip("/")
+        local = client_cfg.download_dir.replace("\\", "/").rstrip("/")
         if raw_path.startswith(remote):
             remainder = raw_path[len(remote) :]
             resolved = local + remainder

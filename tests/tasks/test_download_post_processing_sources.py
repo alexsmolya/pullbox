@@ -84,6 +84,52 @@ async def test_airdcpp_local_path_uses_exact_client_and_strict_mapper(tmp_path: 
     assert 22 in statement.compile().params.values()
 
 
+@pytest.mark.asyncio
+async def test_resolve_local_path_normalizes_windows_remote_path() -> None:
+    """Windows client separators must not leak into container paths."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        remote_path=r"E:\Temp\Pullbox_Downloads",
+        download_dir="/downloads",
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.SABNZBD,
+        downloaded_path=r"E:\Temp\Pullbox_Downloads\Release\file.cbr",
+    )
+
+    resolved = await _resolve_local_path(session, download)
+
+    assert resolved == "/downloads/Release/file.cbr"
+    assert "\\" not in resolved
+
+
+@pytest.mark.asyncio
+async def test_resolve_local_path_normalizes_unmapped_windows_path() -> None:
+    """An unmapped path should still remain a safe POSIX-style probe path."""
+    from pullbox.models.download import DownloadClientType
+    from pullbox.tasks.download_post_processing_sources import _resolve_local_path
+
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        remote_path=r"D:\Downloads",
+        download_dir="/downloads",
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    download = SimpleNamespace(
+        download_client=DownloadClientType.SABNZBD,
+        downloaded_path=r"E:\Temp\Release\file.cbr",
+    )
+
+    resolved = await _resolve_local_path(session, download)
+
+    assert resolved == "E:/Temp/Release/file.cbr"
+    assert "\\" not in resolved
+
+
 def test_post_processing_integrity_exception_distinguishes_missing_source() -> None:
     """Transient missing files should stay typed separately from bad releases."""
     from pullbox.tasks import download_post_processing_sources
